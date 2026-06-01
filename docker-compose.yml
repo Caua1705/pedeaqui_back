@@ -1,0 +1,19 @@
+services:
+  pedeaqui-api:
+    build: .
+    container_name: pedeaqui-api
+    restart: always
+    env_file:
+      - .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.pedeaqui-api.rule=Host(`api.pedeaqui.com.br`)"
+      - "traefik.http.routers.pedeaqui-api.entrypoints=websecure"
+      - "traefik.http.routers.pedeaqui-api.tls.certresolver=mytlschallenge"
+      - "traefik.http.services.pedeaqui-api.loadbalancer.server.port=8000"
+    networks:
+      - n8n_default
+
+networks:
+  n8n_default:
+    external: true

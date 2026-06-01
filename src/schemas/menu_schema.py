@@ -19,4 +19,3 @@ class RestaurantMenuResponse(BaseModel):
     coupons: list[CouponResponse]
     categories: list[CategoryResponse]
     products: list[ProductResponse]
-    featured_products: list[ProductResponse]

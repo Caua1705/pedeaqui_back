@@ -17,6 +17,3 @@ class ProductResponse(BaseResponse):
     is_active: bool | None = True
     is_available: bool | None = True
     sort_order: int | None = 0
-    is_featured: bool | None = False
-    badge: str | None = None
-    highlight_order: int | None = 0

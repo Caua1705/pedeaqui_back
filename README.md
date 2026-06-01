@@ -96,6 +96,20 @@ Menu:
 curl http://localhost:8000/restaurants/junior-da-picanha/menu
 ```
 
+Menu response shape:
+
+```json
+{
+  "restaurant": {},
+  "settings": {},
+  "branches": [],
+  "banners": [],
+  "coupons": [],
+  "categories": [],
+  "products": []
+}
+```
+
 Create order:
 
 ```bash

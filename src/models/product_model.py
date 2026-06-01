@@ -27,9 +27,6 @@ class Product(Base):
     sort_order: Mapped[int | None] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
-    is_featured: Mapped[bool | None] = mapped_column(Boolean, default=False)
-    badge: Mapped[str | None] = mapped_column(Text)
-    highlight_order: Mapped[int | None] = mapped_column(Integer, default=0)
 
     restaurant = relationship("Restaurant", back_populates="products")
     category = relationship("Category", back_populates="products")

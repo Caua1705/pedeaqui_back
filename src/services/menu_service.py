@@ -31,7 +31,6 @@ class MenuService:
             coupons=[self._coupon_response(coupon) for coupon in self.menu_repository.get_active_coupons(restaurant.id)],
             categories=[CategoryResponse.model_validate(category) for category in self.menu_repository.get_active_categories(restaurant.id)],
             products=[self._product_response(product) for product in self.menu_repository.get_active_products(restaurant.id)],
-            featured_products=[self._product_response(product) for product in self.menu_repository.get_featured_products(restaurant.id)],
         )
 
     def get_products_by_category(self, restaurant_slug: str, category_slug: str) -> list[ProductResponse]:
@@ -79,9 +78,6 @@ class MenuService:
             is_active=product.is_active,
             is_available=product.is_available,
             sort_order=product.sort_order,
-            is_featured=product.is_featured,
-            badge=product.badge,
-            highlight_order=product.highlight_order,
         )
 
     @staticmethod

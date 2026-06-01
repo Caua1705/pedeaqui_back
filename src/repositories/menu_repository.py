@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from src.models.branch_model import Branch
@@ -47,21 +47,6 @@ class MenuRepository:
                 Category.is_active.is_(True),
             )
             .order_by(Category.sort_order.asc(), Product.sort_order.asc(), Product.name.asc())
-        )
-        return list(self.db.scalars(stmt).all())
-
-    def get_featured_products(self, restaurant_id: uuid.UUID) -> list[Product]:
-        stmt = (
-            select(Product)
-            .join(Category, Product.category_id == Category.id)
-            .where(
-                Product.restaurant_id == restaurant_id,
-                Product.is_active.is_(True),
-                Product.is_available.is_(True),
-                Product.is_featured.is_(True),
-                Category.is_active.is_(True),
-            )
-            .order_by(Product.highlight_order.asc(), Product.sort_order.asc(), Product.name.asc())
         )
         return list(self.db.scalars(stmt).all())
 

@@ -27,7 +27,6 @@ Configure:
 - `SUPABASE_URL`: Supabase project URL.
 - `SUPABASE_STORAGE_BUCKET`: public storage bucket, default `restaurant-assets`.
 - `INTERNAL_API_KEY`: temporary key for admin/internal endpoints.
-- `CORS_ORIGINS`: comma-separated frontend origins.
 
 ## Run Locally
 
@@ -136,7 +135,7 @@ curl -X POST http://localhost:8000/restaurants/junior-da-picanha/orders \
 
 ## Deployment Notes
 
-On the VPS, keep Traefik attached to the same Docker network (`n8n_default`) and set DNS for `api.pedeaqui.com.br` to the server. Secrets should be provided only through `.env` or the deployment environment.
+On the VPS, keep Traefik attached to the same Docker network (`n8n_default`) and set DNS for `api.pederapidex.com` to the server. Secrets should be provided only through `.env` or the deployment environment.
 
 ## TODO
 

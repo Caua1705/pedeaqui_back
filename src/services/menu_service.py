@@ -88,17 +88,12 @@ class MenuService:
     def _banner_response(banner) -> BannerResponse:
         return BannerResponse(
             id=banner.id,
-            title=banner.title,
-            subtitle=banner.subtitle,
+            restaurant_id=banner.restaurant_id,
+            banner_type=banner.banner_type,
             image_path=banner.image_path,
             image_url=build_storage_url(banner.image_path),
-            banner_type=banner.banner_type,
-            action_type=banner.action_type,
-            action_value=banner.action_value,
             sort_order=banner.sort_order,
             is_active=banner.is_active,
-            starts_at=banner.starts_at,
-            ends_at=banner.ends_at,
         )
 
     @staticmethod

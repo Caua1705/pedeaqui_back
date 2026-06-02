@@ -1,7 +1,6 @@
 import uuid
-from datetime import datetime, timezone
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.models.restaurant_banner_model import RestaurantBanner
@@ -15,15 +14,12 @@ class BannerRepository:
         return self.get_banners_by_type(restaurant_id, "hero")
 
     def get_banners_by_type(self, restaurant_id: uuid.UUID, banner_type: str) -> list[RestaurantBanner]:
-        now = datetime.now(timezone.utc)
         stmt = (
             select(RestaurantBanner)
             .where(
                 RestaurantBanner.restaurant_id == restaurant_id,
                 RestaurantBanner.banner_type == banner_type,
                 RestaurantBanner.is_active.is_(True),
-                or_(RestaurantBanner.starts_at.is_(None), RestaurantBanner.starts_at <= now),
-                or_(RestaurantBanner.ends_at.is_(None), RestaurantBanner.ends_at >= now),
             )
             .order_by(RestaurantBanner.sort_order.asc())
         )

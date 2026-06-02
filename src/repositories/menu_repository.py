@@ -50,17 +50,18 @@ class MenuRepository:
         )
         return list(self.db.scalars(stmt).all())
 
-    def get_active_banners(self, restaurant_id: uuid.UUID) -> list[RestaurantBanner]:
+    def get_banners_by_type(self, restaurant_id: uuid.UUID, banner_type: str) -> list[RestaurantBanner]:
         now = datetime.now(timezone.utc)
         stmt = (
             select(RestaurantBanner)
             .where(
                 RestaurantBanner.restaurant_id == restaurant_id,
+                RestaurantBanner.banner_type == banner_type,
                 RestaurantBanner.is_active.is_(True),
                 or_(RestaurantBanner.starts_at.is_(None), RestaurantBanner.starts_at <= now),
                 or_(RestaurantBanner.ends_at.is_(None), RestaurantBanner.ends_at >= now),
             )
-            .order_by(RestaurantBanner.sort_order.asc(), RestaurantBanner.created_at.desc())
+            .order_by(RestaurantBanner.sort_order.asc())
         )
         return list(self.db.scalars(stmt).all())
 

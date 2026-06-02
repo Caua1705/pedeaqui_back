@@ -10,6 +10,7 @@ class BannerResponse(BaseResponse):
     subtitle: str | None = None
     image_path: str
     image_url: str | None = None
+    banner_type: str = "hero"
     action_type: str | None = "none"
     action_value: str | None = None
     sort_order: int | None = 0

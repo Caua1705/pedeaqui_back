@@ -27,7 +27,11 @@ class MenuService:
             restaurant=self.restaurant_service.to_public_response(restaurant),
             settings=self._settings_response(settings) if settings else None,
             branches=[BranchResponse.model_validate(branch) for branch in self.menu_repository.get_active_branches(restaurant.id)],
-            banners=[self._banner_response(banner) for banner in self.menu_repository.get_active_banners(restaurant.id)],
+            banners=[self._banner_response(banner) for banner in self.menu_repository.get_banners_by_type(restaurant.id, "hero")],
+            highlight_banners=[
+                self._banner_response(banner)
+                for banner in self.menu_repository.get_banners_by_type(restaurant.id, "highlight")
+            ],
             coupons=[self._coupon_response(coupon) for coupon in self.menu_repository.get_active_coupons(restaurant.id)],
             categories=[CategoryResponse.model_validate(category) for category in self.menu_repository.get_active_categories(restaurant.id)],
             products=[self._product_response(product) for product in self.menu_repository.get_active_products(restaurant.id)],
@@ -88,6 +92,7 @@ class MenuService:
             subtitle=banner.subtitle,
             image_path=banner.image_path,
             image_url=build_storage_url(banner.image_path),
+            banner_type=banner.banner_type,
             action_type=banner.action_type,
             action_value=banner.action_value,
             sort_order=banner.sort_order,

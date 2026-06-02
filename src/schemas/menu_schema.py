@@ -16,6 +16,7 @@ class RestaurantMenuResponse(BaseModel):
     settings: RestaurantSettingsResponse | None
     branches: list[BranchResponse]
     banners: list[BannerResponse]
+    highlight_banners: list[BannerResponse]
     coupons: list[CouponResponse]
     categories: list[CategoryResponse]
     products: list[ProductResponse]

@@ -17,6 +17,7 @@ class RestaurantBanner(Base):
     title: Mapped[str | None] = mapped_column(Text)
     subtitle: Mapped[str | None] = mapped_column(Text)
     image_path: Mapped[str] = mapped_column(Text, nullable=False)
+    banner_type: Mapped[str] = mapped_column(Text, nullable=False, default="hero")
     action_type: Mapped[str | None] = mapped_column(Text, default="none")
     action_value: Mapped[str | None] = mapped_column(Text)
     sort_order: Mapped[int | None] = mapped_column(Integer, default=0)

@@ -1,7 +1,7 @@
 from src.models.admin_user_model import AdminUser
 from src.models.branch_model import Branch
 from src.models.category_model import Category
-from src.models.coupon_model import Coupon
+from src.models.coupon_model import Coupon, CouponTemplate, RestaurantCoupon
 from src.models.customer_model import Customer
 from src.models.delivery_zone_model import DeliveryZone
 from src.models.order_item_model import OrderItem
@@ -17,6 +17,7 @@ __all__ = [
     "Branch",
     "Category",
     "Coupon",
+    "CouponTemplate",
     "Customer",
     "DeliveryZone",
     "Order",
@@ -24,6 +25,7 @@ __all__ = [
     "OrderStatusHistory",
     "Product",
     "Restaurant",
+    "RestaurantCoupon",
     "RestaurantBanner",
     "RestaurantSetting",
 ]

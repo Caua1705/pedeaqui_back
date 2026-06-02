@@ -1,12 +1,11 @@
 import uuid
-from datetime import datetime, timezone
 
-from sqlalchemy import or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.orm import Session, joinedload
 
 from src.models.branch_model import Branch
 from src.models.category_model import Category
-from src.models.coupon_model import Coupon
+from src.models.coupon_model import CouponTemplate, RestaurantCoupon
 from src.models.product_model import Product
 from src.models.restaurant_banner_model import RestaurantBanner
 from src.models.restaurant_setting_model import RestaurantSetting
@@ -62,16 +61,16 @@ class MenuRepository:
         )
         return list(self.db.scalars(stmt).all())
 
-    def get_active_coupons(self, restaurant_id: uuid.UUID) -> list[Coupon]:
-        now = datetime.now(timezone.utc)
+    def get_active_coupons(self, restaurant_id: uuid.UUID) -> list[RestaurantCoupon]:
         stmt = (
-            select(Coupon)
+            select(RestaurantCoupon)
+            .join(CouponTemplate, CouponTemplate.id == RestaurantCoupon.coupon_template_id)
+            .options(joinedload(RestaurantCoupon.template))
             .where(
-                Coupon.restaurant_id == restaurant_id,
-                Coupon.is_active.is_(True),
-                or_(Coupon.starts_at.is_(None), Coupon.starts_at <= now),
-                or_(Coupon.ends_at.is_(None), Coupon.ends_at >= now),
+                RestaurantCoupon.restaurant_id == restaurant_id,
+                RestaurantCoupon.is_active.is_(True),
+                CouponTemplate.is_active.is_(True),
             )
-            .order_by(Coupon.created_at.desc())
+            .order_by(RestaurantCoupon.sort_order.asc())
         )
         return list(self.db.scalars(stmt).all())

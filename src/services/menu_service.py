@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from src.repositories.menu_repository import MenuRepository
 from src.repositories.product_repository import ProductRepository
 from src.schemas.banner_schema import BannerResponse
-from src.schemas.coupon_schema import CouponResponse
+from src.schemas.coupon_schema import PublicCouponResponse
 from src.schemas.menu_schema import RestaurantMenuResponse
 from src.schemas.product_schema import ProductResponse
 from src.schemas.restaurant_schema import BranchResponse, CategoryResponse, RestaurantSettingsResponse
@@ -97,19 +97,17 @@ class MenuService:
         )
 
     @staticmethod
-    def _coupon_response(coupon) -> CouponResponse:
-        return CouponResponse(
+    def _coupon_response(coupon) -> PublicCouponResponse:
+        template = coupon.template
+        return PublicCouponResponse(
             id=coupon.id,
             code=coupon.code,
-            title=coupon.title,
-            description=coupon.description,
-            discount_type=coupon.discount_type,
-            discount_value=money_to_float(coupon.discount_value),
+            name=template.name,
+            image_path=template.image_path,
+            image_url=build_storage_url(template.image_path),
+            discount_type=template.discount_type,
+            discount_value=money_to_float(template.discount_value),
             min_order_value=money_to_float(coupon.min_order_value),
-            image_path=coupon.image_path,
-            image_url=build_storage_url(coupon.image_path),
-            usage_limit=coupon.usage_limit,
-            is_active=coupon.is_active,
-            starts_at=coupon.starts_at,
-            ends_at=coupon.ends_at,
+            sort_order=coupon.sort_order or 0,
+            is_active=bool(coupon.is_active),
         )

@@ -14,6 +14,14 @@ class Settings(BaseSettings):
     SUPABASE_STORAGE_BUCKET: str = "restaurant-assets"
 
     INTERNAL_API_KEY: str
+    CUSTOMER_AUTH_SECRET: str | None = None
+    CUSTOMER_ACCESS_TOKEN_MINUTES: int = 60 * 24 * 7
+    PASSWORD_RESET_TOKEN_MINUTES: int = 15
+
+    RESEND_API_KEY: str | None = None
+    EMAIL_FROM: str = "Rapidex <no-reply@pederapidex.com>"
+    EMAIL_CODE_SECRET: str | None = None
+    PASSWORD_RESET_SECRET: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",

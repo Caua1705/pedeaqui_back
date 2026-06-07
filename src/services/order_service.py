@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.core.constants import ORDER_STATUSES, ORDER_TYPES
+from src.models.customer_model import Customer
 from src.models.order_item_model import OrderItem
 from src.models.order_model import Order
 from src.models.order_status_history_model import OrderStatusHistory
@@ -37,7 +38,12 @@ class OrderService:
         self.customer_repository = CustomerRepository(db)
         self.order_repository = OrderRepository(db)
 
-    def create_order(self, restaurant_slug: str, payload: CreateOrderRequest) -> CreateOrderResponse:
+    def create_order(
+        self,
+        restaurant_slug: str,
+        payload: CreateOrderRequest,
+        current_customer: Customer | None = None,
+    ) -> CreateOrderResponse:
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
         self._validate_order_type(payload.order_type)
 
@@ -45,23 +51,27 @@ class OrderService:
         if not branch:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Filial inválida para este restaurante")
 
-        self._validate_delivery_address(payload)
+        address = self._resolve_order_address(payload, current_customer)
+        self._validate_customer_snapshot(payload, current_customer)
+        self._validate_delivery_address(payload, address)
         settings = self.menu_repository.get_settings(restaurant.id)
         products_by_id = self._get_valid_products(restaurant.id, [item.product_id for item in payload.items])
 
         subtotal = self._calculate_subtotal(payload, products_by_id)
         service_fee = self._calculate_service_fee(settings)
-        delivery_fee = self._calculate_delivery_fee(restaurant.id, payload, settings)
+        delivery_fee = self._calculate_delivery_fee(restaurant.id, payload, settings, address)
         total = quantize_money(subtotal + service_fee + delivery_fee)
 
         try:
-            customer = self._upsert_customer(payload.customer.name, payload.customer.phone)
+            customer_name = current_customer.name if current_customer else payload.customer.name
+            customer_phone = current_customer.phone if current_customer else payload.customer.phone
             order = Order(
                 restaurant_id=restaurant.id,
                 branch_id=branch.id,
-                customer_id=customer.id,
-                customer_name_snapshot=payload.customer.name,
-                customer_phone_snapshot=payload.customer.phone,
+                customer_id=current_customer.id if current_customer else None,
+                customer_address_id=payload.customer_address_id if current_customer else None,
+                customer_name_snapshot=customer_name,
+                customer_phone_snapshot=customer_phone,
                 order_type=payload.order_type,
                 status="pending",
                 payment_method=payload.payment_method,
@@ -69,11 +79,11 @@ class OrderService:
                 delivery_fee=delivery_fee,
                 service_fee=service_fee,
                 total=total,
-                address_street=payload.address.street if payload.address else None,
-                address_number=payload.address.number if payload.address else None,
-                address_neighborhood=payload.address.neighborhood if payload.address else None,
-                address_complement=payload.address.complement if payload.address else None,
-                address_reference=payload.address.reference if payload.address else None,
+                address_street=address.street if address else None,
+                address_number=address.number if address else None,
+                address_neighborhood=address.neighborhood if address else None,
+                address_complement=address.complement if address else None,
+                address_reference=address.reference if address else None,
                 notes=payload.notes,
             )
             self.order_repository.create_order(order)
@@ -114,14 +124,27 @@ class OrderService:
         if order_type not in ORDER_TYPES:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de pedido inválido")
 
-    def _validate_delivery_address(self, payload: CreateOrderRequest) -> None:
+    def _validate_customer_snapshot(self, payload: CreateOrderRequest, current_customer: Customer | None) -> None:
+        if current_customer or payload.customer:
+            return
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Cliente autenticado obrigatorio")
+
+    def _validate_delivery_address(self, payload: CreateOrderRequest, address) -> None:
         if payload.order_type != "delivery":
             return
-        if not payload.address:
+        if not address:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Endereço é obrigatório para entrega")
-        required_values = [payload.address.street, payload.address.number, payload.address.neighborhood]
+        required_values = [address.street, address.number, address.neighborhood]
         if any(not value or not value.strip() for value in required_values):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Endereço é obrigatório para entrega")
+
+    def _resolve_order_address(self, payload: CreateOrderRequest, current_customer: Customer | None):
+        if current_customer and payload.customer_address_id:
+            address = self.customer_repository.get_address(current_customer.id, payload.customer_address_id)
+            if not address:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endereco nao encontrado")
+            return address
+        return payload.address
 
     def _get_valid_products(self, restaurant_id: UUID, product_ids: list[UUID]) -> dict[UUID, object]:
         unique_ids = list(set(product_ids))
@@ -138,11 +161,11 @@ class OrderService:
             subtotal += to_decimal(product.price) * item.quantity
         return quantize_money(subtotal)
 
-    def _calculate_delivery_fee(self, restaurant_id: UUID, payload: CreateOrderRequest, settings) -> Decimal:
+    def _calculate_delivery_fee(self, restaurant_id: UUID, payload: CreateOrderRequest, settings, address) -> Decimal:
         if payload.order_type == "pickup":
             return ZERO
 
-        neighborhood = payload.address.neighborhood if payload.address else ""
+        neighborhood = address.neighborhood if address else ""
         delivery_zone = self.delivery_zone_repository.get_active_by_neighborhood(
             restaurant_id=restaurant_id,
             branch_id=payload.branch_id,
@@ -156,15 +179,6 @@ class OrderService:
         if not settings or not settings.service_fee_enabled:
             return ZERO
         return quantize_money(to_decimal(settings.service_fee_amount))
-
-    def _upsert_customer(self, name: str, phone: str):
-        customer = self.customer_repository.get_by_phone(phone)
-        if customer:
-            customer.name = name
-            self.db.add(customer)
-            self.db.flush()
-            return customer
-        return self.customer_repository.create(name=name, phone=phone)
 
     @staticmethod
     def _build_order_item(order_id: UUID, product, quantity: int, observation: str | None) -> OrderItem:
@@ -192,6 +206,7 @@ class OrderService:
             restaurant_id=order.restaurant_id,
             branch_id=order.branch_id,
             customer_id=order.customer_id,
+            customer_address_id=order.customer_address_id,
             customer_name_snapshot=order.customer_name_snapshot,
             customer_phone_snapshot=order.customer_phone_snapshot,
             order_type=order.order_type,

@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from src.api.dependencies.customer_auth import get_optional_current_customer
 from src.api.dependencies.database import get_db
+from src.models.customer_model import Customer
 from src.schemas.order_schema import CreateOrderRequest, CreateOrderResponse, OrderDetailResponse
 from src.services.order_service import OrderService
 
@@ -13,9 +15,10 @@ router = APIRouter(prefix="/restaurants", tags=["orders"])
 def create_order(
     restaurant_slug: str,
     payload: CreateOrderRequest,
+    current_customer: Customer | None = Depends(get_optional_current_customer),
     db: Session = Depends(get_db),
 ) -> CreateOrderResponse:
-    return OrderService(db).create_order(restaurant_slug, payload)
+    return OrderService(db).create_order(restaurant_slug, payload, current_customer)
 
 
 @router.get("/{restaurant_slug}/orders/{order_number}", response_model=OrderDetailResponse)

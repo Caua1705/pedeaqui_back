@@ -27,7 +27,8 @@ class OrderItemInput(BaseModel):
 
 class CreateOrderRequest(BaseModel):
     branch_id: UUID
-    customer: CustomerInput
+    customer: CustomerInput | None = None
+    customer_address_id: UUID | None = None
     order_type: str
     payment_method: str | None = None
     address: AddressInput | None = None
@@ -65,6 +66,7 @@ class OrderDetailResponse(BaseResponse):
     restaurant_id: UUID
     branch_id: UUID
     customer_id: UUID | None = None
+    customer_address_id: UUID | None = None
     customer_name_snapshot: str
     customer_phone_snapshot: str
     order_type: str

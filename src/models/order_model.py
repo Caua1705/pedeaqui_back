@@ -18,6 +18,7 @@ class Order(Base):
     restaurant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("restaurants.id"), nullable=False)
     branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"), nullable=False)
     customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("customers.id"))
+    customer_address_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("customer_addresses.id"))
     customer_name_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
     customer_phone_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
     order_type: Mapped[str] = mapped_column(Text, nullable=False)

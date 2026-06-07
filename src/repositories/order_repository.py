@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session, selectinload
 from src.models.order_item_model import OrderItem
 from src.models.order_model import Order
 from src.models.order_status_history_model import OrderStatusHistory
+from src.models.branch_model import Branch
+from src.models.restaurant_model import Restaurant
 
 
 class OrderRepository:
@@ -65,6 +67,17 @@ class OrderRepository:
             .where(Order.id == order_id)
         )
         return self.db.scalar(stmt)
+
+    def list_orders_by_customer(self, customer_id: uuid.UUID) -> list[tuple[Order, str, str]]:
+        stmt = (
+            select(Order, Restaurant.name, Branch.name)
+            .join(Restaurant, Restaurant.id == Order.restaurant_id)
+            .join(Branch, Branch.id == Order.branch_id)
+            .options(selectinload(Order.items))
+            .where(Order.customer_id == customer_id)
+            .order_by(Order.created_at.desc())
+        )
+        return [(row[0], row[1], row[2]) for row in self.db.execute(stmt).all()]
 
     def update_status(self, order: Order, status: str) -> Order:
         order.status = status

@@ -12,6 +12,7 @@ from src.core.config import settings
 
 
 _PASSWORD_ITERATIONS = 390_000
+_BCRYPT_MAX_PASSWORD_BYTES = 72
 _PASSWORD_CONTEXT = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
@@ -23,11 +24,17 @@ class TokenInvalidError(Exception):
     pass
 
 
+class PasswordTooLongError(ValueError):
+    pass
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
 def hash_password(password: str) -> str:
+    if len(password.encode("utf-8")) > _BCRYPT_MAX_PASSWORD_BYTES:
+        raise PasswordTooLongError("Password is too long")
     return _PASSWORD_CONTEXT.hash(password)
 
 

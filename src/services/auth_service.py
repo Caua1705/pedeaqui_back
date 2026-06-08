@@ -25,6 +25,7 @@ from src.schemas.auth_schema import (
 from src.services.email_service import EmailService
 from src.utils.normalization import is_valid_cpf, is_valid_email, normalize_digits, normalize_email
 from src.utils.security import (
+    PasswordTooLongError,
     TokenExpiredError,
     TokenInvalidError,
     create_signed_token,
@@ -65,6 +66,10 @@ class AuthService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CPF invalido")
         if len(payload.password) < 8:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Senha fraca")
+        try:
+            password_hash = hash_password(payload.password)
+        except PasswordTooLongError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Senha muito longa") from exc
         if not payload.privacy_accepted:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Aceite de privacidade obrigatorio")
 
@@ -78,7 +83,7 @@ class AuthService:
                 email=email,
                 phone=phone,
                 cpf=cpf,
-                password_hash=hash_password(payload.password),
+                password_hash=password_hash,
                 birth_date=payload.birth_date,
                 email_verified_at=None,
                 phone_verified_at=None,
@@ -223,6 +228,10 @@ class AuthService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confirmacao de senha nao confere")
         if len(payload.new_password) < 8:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Senha fraca")
+        try:
+            password_hash = hash_password(payload.new_password)
+        except PasswordTooLongError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Senha muito longa") from exc
 
         code_row = self.customer_repository.get_password_reset_by_token_hash(hash_reset_token(payload.reset_token))
         if not self._valid_reset_token(code_row, payload.reset_token):
@@ -232,7 +241,7 @@ class AuthService:
         if not customer:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token invalido ou expirado")
 
-        customer.password_hash = hash_password(payload.new_password)
+        customer.password_hash = password_hash
         code_row.used_at = utcnow()
         self.customer_repository.invalidate_unused_password_reset_codes(customer.id)
         self.db.add(customer)

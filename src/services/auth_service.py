@@ -188,18 +188,20 @@ class AuthService:
     def forgot_password(self, payload: ForgotPasswordRequest) -> MessageResponse:
         email = normalize_email(payload.email)
         customer = self.customer_repository.get_by_email(email)
-        if customer:
-            latest = self.customer_repository.latest_unused_password_reset_code(email)
-            if latest and latest.created_at and (utcnow() - latest.created_at).total_seconds() < RESEND_COOLDOWN_SECONDS:
-                return MessageResponse(message="Se este e-mail estiver cadastrado, enviaremos um codigo de recuperacao.")
-            recent_count = self.customer_repository.count_password_reset_codes_since(
-                email=email,
-                since=utcnow() - timedelta(minutes=RESEND_WINDOW_MINUTES),
-            )
-            if recent_count < MAX_RESENDS:
-                self._create_password_reset_code(customer)
-                self.db.commit()
-        return MessageResponse(message="Se este e-mail estiver cadastrado, enviaremos um codigo de recuperacao.")
+        if not customer:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="E-mail não encontrado.")
+
+        latest = self.customer_repository.latest_unused_password_reset_code(email)
+        if latest and latest.created_at and (utcnow() - latest.created_at).total_seconds() < RESEND_COOLDOWN_SECONDS:
+            return MessageResponse(message="Enviamos um código de recuperação para o seu e-mail.")
+        recent_count = self.customer_repository.count_password_reset_codes_since(
+            email=email,
+            since=utcnow() - timedelta(minutes=RESEND_WINDOW_MINUTES),
+        )
+        if recent_count < MAX_RESENDS:
+            self._create_password_reset_code(customer)
+            self.db.commit()
+        return MessageResponse(message="Enviamos um código de recuperação para o seu e-mail.")
 
     def verify_reset_code(self, payload: VerifyResetCodeRequest) -> VerifyResetCodeResponse:
         code_row = self.customer_repository.latest_unused_password_reset_code(normalize_email(payload.email))

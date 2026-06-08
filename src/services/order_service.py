@@ -139,6 +139,8 @@ class OrderService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Endereço é obrigatório para entrega")
 
     def _resolve_order_address(self, payload: CreateOrderRequest, current_customer: Customer | None):
+        if payload.customer_address_id and not current_customer:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Cliente autenticado obrigatorio")
         if current_customer and payload.customer_address_id:
             address = self.customer_repository.get_address(current_customer.id, payload.customer_address_id)
             if not address:

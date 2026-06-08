@@ -6,3 +6,5 @@ pydantic
 pydantic-settings
 python-dotenv
 resend
+passlib[bcrypt]
+PyJWT

@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from src.api.dependencies.database import get_db
 from src.models.customer_model import Customer
 from src.services.auth_service import AuthService
+from src.utils.security import TokenExpiredError, TokenInvalidError
 
 
 def _extract_bearer_token(authorization: str | None) -> str | None:
@@ -20,12 +21,9 @@ def get_current_customer(
     db: Session = Depends(get_db),
 ) -> Customer:
     token = _extract_bearer_token(authorization)
-    customer = AuthService(db).get_customer_from_token(token) if token else None
-    if not customer:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalido")
-    if not customer.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Conta inativa")
-    return customer
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token ausente")
+    return AuthService(db).get_customer_from_token_or_error(token)
 
 
 def get_optional_current_customer(
@@ -35,7 +33,10 @@ def get_optional_current_customer(
     token = _extract_bearer_token(authorization)
     if not token:
         return None
-    customer = AuthService(db).get_customer_from_token(token)
+    try:
+        customer = AuthService(db).get_customer_from_token(token)
+    except (TokenExpiredError, TokenInvalidError):
+        return None
     if not customer or not customer.is_active:
         return None
     return customer

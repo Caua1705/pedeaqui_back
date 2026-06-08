@@ -25,6 +25,8 @@ from src.schemas.auth_schema import (
 from src.services.email_service import EmailService
 from src.utils.normalization import is_valid_cpf, is_valid_email, normalize_digits, normalize_email
 from src.utils.security import (
+    TokenExpiredError,
+    TokenInvalidError,
     create_signed_token,
     decode_signed_token,
     generate_6_digit_code,
@@ -240,12 +242,25 @@ class AuthService:
 
     def get_customer_from_token(self, token: str) -> Customer | None:
         payload = decode_signed_token(token, "customer_access")
-        if not payload or payload.get("type") != "customer":
+        if payload.get("type") != "customer":
             return None
         try:
             return self.customer_repository.get_by_id(uuid.UUID(payload["sub"]))
         except (ValueError, KeyError):
             return None
+
+    def get_customer_from_token_or_error(self, token: str) -> Customer:
+        try:
+            customer = self.get_customer_from_token(token)
+        except TokenExpiredError as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expirado") from exc
+        except TokenInvalidError as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalido") from exc
+        if not customer:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalido")
+        if not customer.is_active:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Conta inativa")
+        return customer
 
     def _registration_conflict(self, email: str, cpf: str, phone: str) -> str | None:
         if self.customer_repository.get_by_email(email):

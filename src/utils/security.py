@@ -1,16 +1,26 @@
 import base64
 import hashlib
 import hmac
-import json
-import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+import jwt
+from passlib.context import CryptContext
 
 from src.core.config import settings
 
 
 _PASSWORD_ITERATIONS = 390_000
+_PASSWORD_CONTEXT = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+class TokenExpiredError(Exception):
+    pass
+
+
+class TokenInvalidError(Exception):
+    pass
 
 
 def utcnow() -> datetime:
@@ -18,14 +28,17 @@ def utcnow() -> datetime:
 
 
 def hash_password(password: str) -> str:
-    salt = os.urandom(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _PASSWORD_ITERATIONS)
-    return f"pbkdf2_sha256${_PASSWORD_ITERATIONS}${_b64encode(salt)}${_b64encode(digest)}"
+    return _PASSWORD_CONTEXT.hash(password)
 
 
 def verify_password(password: str, password_hash: str | None) -> bool:
     if not password_hash:
         return False
+    if password_hash.startswith("$2"):
+        try:
+            return _PASSWORD_CONTEXT.verify(password, password_hash)
+        except (ValueError, TypeError):
+            return False
     try:
         algorithm, iterations, salt, expected = password_hash.split("$", 3)
         if algorithm != "pbkdf2_sha256":
@@ -77,46 +90,37 @@ def create_signed_token(subject: str, purpose: str, expires_delta: timedelta, ex
     payload: dict[str, Any] = {
         "sub": subject,
         "purpose": purpose,
-        "iat": int(now.timestamp()),
-        "exp": int((now + expires_delta).timestamp()),
+        "iat": now,
+        "exp": now + expires_delta,
     }
     if extra:
         payload.update(extra)
 
-    header = {"alg": "HS256", "typ": "JWT"}
-    signing_input = f"{_json_b64(header)}.{_json_b64(payload)}"
-    signature = hmac.new(_secret(), signing_input.encode("ascii"), hashlib.sha256).digest()
-    return f"{signing_input}.{_b64encode(signature)}"
+    return jwt.encode(payload, _customer_auth_secret(), algorithm="HS256")
 
 
-def decode_signed_token(token: str, purpose: str) -> dict[str, Any] | None:
+def decode_signed_token(token: str, purpose: str) -> dict[str, Any]:
     try:
-        header_b64, payload_b64, signature_b64 = token.split(".", 2)
-        signing_input = f"{header_b64}.{payload_b64}"
-        expected = hmac.new(_secret(), signing_input.encode("ascii"), hashlib.sha256).digest()
-        if not hmac.compare_digest(_b64encode(expected), signature_b64):
-            return None
-        payload = json.loads(_b64decode(payload_b64))
+        payload = jwt.decode(token, _customer_auth_secret(), algorithms=["HS256"])
         if payload.get("purpose") != purpose:
-            return None
-        if int(payload.get("exp", 0)) < int(utcnow().timestamp()):
-            return None
+            raise TokenInvalidError
         return payload
-    except (ValueError, TypeError, json.JSONDecodeError):
-        return None
+    except jwt.ExpiredSignatureError as exc:
+        raise TokenExpiredError from exc
+    except (jwt.InvalidTokenError, ValueError, TypeError) as exc:
+        raise TokenInvalidError from exc
 
 
-def _secret() -> bytes:
-    return (settings.CUSTOMER_AUTH_SECRET or settings.INTERNAL_API_KEY).encode("utf-8")
+def _customer_auth_secret() -> str:
+    secret = settings.CUSTOMER_AUTH_SECRET or settings.CUSTOMER_JWT_SECRET
+    if not secret:
+        raise TokenInvalidError("Customer auth secret is not configured")
+    return secret
 
 
 def _hmac_hex(value: str, secret: str | None) -> str:
     key = (secret or settings.CUSTOMER_AUTH_SECRET or settings.INTERNAL_API_KEY).encode("utf-8")
     return hmac.new(key, value.encode("utf-8"), hashlib.sha256).hexdigest()
-
-
-def _json_b64(value: dict[str, Any]) -> str:
-    return _b64encode(json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8"))
 
 
 def _b64encode(value: bytes) -> str:

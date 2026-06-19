@@ -19,10 +19,16 @@ class AddressInput(BaseModel):
     reference: str | None = None
 
 
+class OrderItemSelectedOptionInput(BaseModel):
+    option_group_id: UUID
+    option_id: UUID
+
+
 class OrderItemInput(BaseModel):
     product_id: UUID
     quantity: int = Field(default=1, ge=1)
     observation: str | None = None
+    selected_options: list[OrderItemSelectedOptionInput] = Field(default_factory=list)
 
 
 class CreateOrderRequest(BaseModel):

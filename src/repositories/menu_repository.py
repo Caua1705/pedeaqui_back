@@ -1,12 +1,13 @@
 import uuid
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from src.models.branch_model import Branch
 from src.models.category_model import Category
 from src.models.coupon_model import CouponTemplate, RestaurantCoupon
 from src.models.product_model import Product
+from src.models.product_option_model import ProductOptionGroup
 from src.models.restaurant_banner_model import RestaurantBanner
 from src.models.restaurant_setting_model import RestaurantSetting
 
@@ -39,6 +40,7 @@ class MenuRepository:
         stmt = (
             select(Product)
             .join(Category, Product.category_id == Category.id)
+            .options(selectinload(Product.option_groups).selectinload(ProductOptionGroup.options))
             .where(
                 Product.restaurant_id == restaurant_id,
                 Product.is_active.is_(True),

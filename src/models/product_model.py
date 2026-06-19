@@ -30,3 +30,4 @@ class Product(Base):
 
     restaurant = relationship("Restaurant", back_populates="products")
     category = relationship("Category", back_populates="products")
+    option_groups = relationship("ProductOptionGroup", back_populates="product")

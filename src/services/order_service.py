@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from src.core.constants import ORDER_STATUSES, ORDER_TYPES
 from src.models.customer_model import Customer
 from src.models.order_item_model import OrderItem
+from src.models.order_item_option_model import OrderItemOption
 from src.models.order_model import Order
 from src.models.order_status_history_model import OrderStatusHistory
 from src.repositories.branch_repository import BranchRepository
@@ -57,7 +58,11 @@ class OrderService:
         settings = self.menu_repository.get_settings(restaurant.id)
         products_by_id = self._get_valid_products(restaurant.id, [item.product_id for item in payload.items])
 
-        subtotal = self._calculate_subtotal(payload, products_by_id)
+        selected_options_by_item = [
+            self._validate_selected_options(products_by_id[item.product_id], item.selected_options)
+            for item in payload.items
+        ]
+        subtotal = self._calculate_subtotal(payload, products_by_id, selected_options_by_item)
         service_fee = self._calculate_service_fee(settings)
         delivery_fee = self._calculate_delivery_fee(restaurant.id, payload, settings, address)
         total = quantize_money(subtotal + service_fee + delivery_fee)
@@ -89,10 +94,23 @@ class OrderService:
             self.order_repository.create_order(order)
 
             order_items = [
-                self._build_order_item(order.id, products_by_id[item.product_id], item.quantity, item.observation)
-                for item in payload.items
+                self._build_order_item(
+                    order.id,
+                    products_by_id[item.product_id],
+                    item.quantity,
+                    item.observation,
+                    selected_options_by_item[index],
+                )
+                for index, item in enumerate(payload.items)
             ]
             self.order_repository.create_order_items(order_items)
+            order_item_options = [
+                self._build_order_item_option(order_item.id, group, option)
+                for order_item, selected_options in zip(order_items, selected_options_by_item)
+                for group, option in selected_options
+            ]
+            if order_item_options:
+                self.order_repository.create_order_item_options(order_item_options)
             self.order_repository.create_status_history(
                 OrderStatusHistory(order_id=order.id, status="pending", changed_by="system", note="Pedido criado")
             )
@@ -156,11 +174,75 @@ class OrderService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Produto inválido ou indisponível")
         return products_by_id
 
-    def _calculate_subtotal(self, payload: CreateOrderRequest, products_by_id: dict[UUID, object]) -> Decimal:
+    def _validate_selected_options(self, product, selected_options: list) -> list[tuple[object, object]]:
+        active_groups = [group for group in product.option_groups if group.is_active]
+        groups_by_id = {group.id: group for group in active_groups}
+        selected_by_group: dict[UUID, list[object]] = {group.id: [] for group in active_groups}
+
+        for selected in selected_options:
+            group = groups_by_id.get(selected.option_group_id)
+            if not group:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Grupo de opcao invalido para este produto",
+                )
+            option = next(
+                (option for option in group.options if option.id == selected.option_id and option.is_active),
+                None,
+            )
+            if not option:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Opcao invalida para este grupo",
+                )
+            if option.id in {item.id for item in selected_by_group[group.id]}:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Opcao duplicada no mesmo produto",
+                )
+            selected_by_group[group.id].append(option)
+
+        for group in active_groups:
+            selected_count = len(selected_by_group[group.id])
+            min_select = group.min_select or 0
+            max_select = group.max_select or 0
+            required_min = max(min_select, 1) if group.is_required else 0
+            if selected_count < required_min:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Opcao obrigatoria nao selecionada: {group.name}",
+                )
+            if selected_count and selected_count < min_select:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Selecione pelo menos {min_select} opcoes em {group.name}",
+                )
+            if max_select and selected_count > max_select:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Selecione no maximo {max_select} opcoes em {group.name}",
+                )
+
+        return [
+            (group, option)
+            for group in active_groups
+            for option in selected_by_group[group.id]
+        ]
+
+    def _calculate_subtotal(
+        self,
+        payload: CreateOrderRequest,
+        products_by_id: dict[UUID, object],
+        selected_options_by_item: list[list[tuple[object, object]]],
+    ) -> Decimal:
         subtotal = ZERO
-        for item in payload.items:
+        for index, item in enumerate(payload.items):
             product = products_by_id[item.product_id]
-            subtotal += to_decimal(product.price) * item.quantity
+            options_total = sum(
+                (to_decimal(option.additional_price) for _, option in selected_options_by_item[index]),
+                ZERO,
+            )
+            subtotal += (to_decimal(product.price) + options_total) * item.quantity
         return quantize_money(subtotal)
 
     def _calculate_delivery_fee(self, restaurant_id: UUID, payload: CreateOrderRequest, settings, address) -> Decimal:
@@ -183,8 +265,15 @@ class OrderService:
         return quantize_money(to_decimal(settings.service_fee_amount))
 
     @staticmethod
-    def _build_order_item(order_id: UUID, product, quantity: int, observation: str | None) -> OrderItem:
-        unit_price = quantize_money(to_decimal(product.price))
+    def _build_order_item(
+        order_id: UUID,
+        product,
+        quantity: int,
+        observation: str | None,
+        selected_options: list[tuple[object, object]],
+    ) -> OrderItem:
+        options_total = sum((to_decimal(option.additional_price) for _, option in selected_options), ZERO)
+        unit_price = quantize_money(to_decimal(product.price) + options_total)
         return OrderItem(
             order_id=order_id,
             product_id=product.id,
@@ -195,6 +284,17 @@ class OrderService:
             quantity=quantity,
             observation=observation,
             total=quantize_money(unit_price * quantity),
+        )
+
+    @staticmethod
+    def _build_order_item_option(order_item_id: UUID, group, option) -> OrderItemOption:
+        return OrderItemOption(
+            order_item_id=order_item_id,
+            option_group_id=group.id,
+            option_id=option.id,
+            option_group_name_snapshot=group.name,
+            option_name_snapshot=option.name,
+            additional_price_snapshot=quantize_money(to_decimal(option.additional_price)),
         )
 
     @staticmethod

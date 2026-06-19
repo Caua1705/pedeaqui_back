@@ -6,7 +6,7 @@ from src.repositories.product_repository import ProductRepository
 from src.schemas.banner_schema import BannerResponse
 from src.schemas.coupon_schema import PublicCouponResponse
 from src.schemas.menu_schema import RestaurantMenuResponse
-from src.schemas.product_schema import ProductResponse
+from src.schemas.product_schema import ProductOptionGroupResponse, ProductOptionResponse, ProductResponse
 from src.schemas.restaurant_schema import BranchResponse, CategoryResponse, RestaurantSettingsResponse
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import money_to_float
@@ -82,6 +82,34 @@ class MenuService:
             is_active=product.is_active,
             is_available=product.is_available,
             sort_order=product.sort_order,
+            option_groups=[
+                ProductOptionGroupResponse(
+                    id=group.id,
+                    name=group.name,
+                    description=group.description,
+                    min_select=group.min_select,
+                    max_select=group.max_select,
+                    is_required=group.is_required,
+                    sort_order=group.sort_order,
+                    options=[
+                        ProductOptionResponse(
+                            id=option.id,
+                            name=option.name,
+                            description=option.description,
+                            additional_price=money_to_float(option.additional_price),
+                            sort_order=option.sort_order,
+                        )
+                        for option in sorted(
+                            (option for option in group.options if option.is_active),
+                            key=lambda option: (option.sort_order or 0, option.name),
+                        )
+                    ],
+                )
+                for group in sorted(
+                    (group for group in product.option_groups if group.is_active),
+                    key=lambda group: (group.sort_order or 0, group.name),
+                )
+            ],
         )
 
     @staticmethod

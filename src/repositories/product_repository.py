@@ -1,10 +1,11 @@
 import uuid
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from src.models.category_model import Category
 from src.models.product_model import Product
+from src.models.product_option_model import ProductOptionGroup
 
 
 class ProductRepository:
@@ -15,6 +16,7 @@ class ProductRepository:
         stmt = (
             select(Product)
             .join(Category, Product.category_id == Category.id)
+            .options(selectinload(Product.option_groups).selectinload(ProductOptionGroup.options))
             .where(
                 Product.restaurant_id == restaurant_id,
                 Category.restaurant_id == restaurant_id,
@@ -39,6 +41,7 @@ class ProductRepository:
         stmt = (
             select(Product)
             .join(Category, Product.category_id == Category.id)
+            .options(selectinload(Product.option_groups).selectinload(ProductOptionGroup.options))
             .where(
                 Product.restaurant_id == restaurant_id,
                 Product.slug == product_slug,
@@ -50,10 +53,14 @@ class ProductRepository:
         return self.db.scalar(stmt)
 
     def list_active_by_ids(self, restaurant_id: uuid.UUID, product_ids: list[uuid.UUID]) -> list[Product]:
-        stmt = select(Product).where(
-            Product.restaurant_id == restaurant_id,
-            Product.id.in_(product_ids),
-            Product.is_active.is_(True),
-            Product.is_available.is_(True),
+        stmt = (
+            select(Product)
+            .options(selectinload(Product.option_groups).selectinload(ProductOptionGroup.options))
+            .where(
+                Product.restaurant_id == restaurant_id,
+                Product.id.in_(product_ids),
+                Product.is_active.is_(True),
+                Product.is_available.is_(True),
+            )
         )
         return list(self.db.scalars(stmt).all())

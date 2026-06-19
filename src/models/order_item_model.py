@@ -26,3 +26,4 @@ class OrderItem(Base):
     created_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
     order = relationship("Order", back_populates="items")
+    options = relationship("OrderItemOption", back_populates="order_item")

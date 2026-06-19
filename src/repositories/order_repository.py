@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from src.models.order_item_model import OrderItem
+from src.models.order_item_option_model import OrderItemOption
 from src.models.order_model import Order
 from src.models.order_status_history_model import OrderStatusHistory
 from src.models.branch_model import Branch
@@ -23,6 +24,11 @@ class OrderRepository:
         self.db.add_all(items)
         self.db.flush()
         return items
+
+    def create_order_item_options(self, options: list[OrderItemOption]) -> list[OrderItemOption]:
+        self.db.add_all(options)
+        self.db.flush()
+        return options
 
     def create_status_history(self, history: OrderStatusHistory) -> OrderStatusHistory:
         self.db.add(history)

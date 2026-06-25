@@ -63,6 +63,7 @@ class OrderService:
             for item in payload.items
         ]
         subtotal = self._calculate_subtotal(payload, products_by_id, selected_options_by_item)
+        self._validate_minimum_order_value(subtotal, settings)
         service_fee = self._calculate_service_fee(settings)
         delivery_fee = self._calculate_delivery_fee(restaurant.id, payload, settings, address)
         total = quantize_money(subtotal + service_fee + delivery_fee)
@@ -263,6 +264,14 @@ class OrderService:
         if not settings or not settings.service_fee_enabled:
             return ZERO
         return quantize_money(to_decimal(settings.service_fee_amount))
+
+    def _validate_minimum_order_value(self, subtotal: Decimal, settings) -> None:
+        minimum_order_value = quantize_money(to_decimal(settings.min_order_value if settings else ZERO))
+        if subtotal < minimum_order_value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Pedido abaixo do valor mínimo do restaurante.",
+            )
 
     @staticmethod
     def _build_order_item(

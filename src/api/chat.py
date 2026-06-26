@@ -1,4 +1,6 @@
 import uuid
+from datetime import datetime, timedelta, timezone
+from typing import TypedDict
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -12,7 +14,21 @@ from src.api.dependencies.database import get_db
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-_SESSION_HISTORY: dict[str, list[dict[str, str]]] = {}
+_MAX_SESSION_MESSAGES = 20
+_SESSION_TTL = timedelta(hours=1)
+
+
+class SessionMessage(TypedDict):
+    role: str
+    content: str
+
+
+class SessionState(TypedDict):
+    messages: list[SessionMessage]
+    last_interaction: datetime
+
+
+_SESSION_HISTORY: dict[str, SessionState] = {}
 
 
 class ChatRequest(BaseModel):
@@ -26,11 +42,15 @@ def chat(
     request: ChatRequest,
     db: Session = Depends(get_db),
 ) -> ChatResponse:
+    now = _utc_now()
+    _cleanup_inactive_sessions(now)
+
     retrieved_products = RetrievalService(db).retrieve_products(
         restaurant_id=request.restaurant_id,
         question=request.message,
     )
-    conversation = _SESSION_HISTORY.get(request.session_id, [])
+    session = _SESSION_HISTORY.get(request.session_id)
+    conversation = session["messages"][-_MAX_SESSION_MESSAGES:] if session else []
 
     response = ChatLLMService().invoke(
         restaurant_context=f"restaurant_id={request.restaurant_id}",
@@ -39,10 +59,30 @@ def chat(
         user_message=request.message,
     )
 
-    _SESSION_HISTORY.setdefault(request.session_id, []).extend(
+    session = _SESSION_HISTORY.setdefault(
+        request.session_id,
+        {"messages": [], "last_interaction": now},
+    )
+    session["messages"].extend(
         [
             {"role": "user", "content": request.message},
             {"role": "assistant", "content": response.message},
         ]
     )
+    session["messages"] = session["messages"][-_MAX_SESSION_MESSAGES:]
+    session["last_interaction"] = now
     return response
+
+
+def _cleanup_inactive_sessions(now: datetime) -> None:
+    expired_session_ids = [
+        session_id
+        for session_id, session in _SESSION_HISTORY.items()
+        if now - session["last_interaction"] > _SESSION_TTL
+    ]
+    for session_id in expired_session_ids:
+        del _SESSION_HISTORY[session_id]
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)

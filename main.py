@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api import chat
 from src.api.endpoints import admin_orders, auth, customers, health, menu, orders, restaurants
 from src.core.config import settings
 
@@ -40,3 +41,4 @@ app.include_router(auth.router)
 app.include_router(customers.router)
 app.include_router(orders.router)
 app.include_router(admin_orders.router)
+app.include_router(chat.router)

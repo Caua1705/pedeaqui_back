@@ -1,7 +1,8 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 
@@ -28,6 +29,7 @@ class AIRepository:
                 p.description,
                 p.price,
                 p.image_path,
+                ape.metadata AS metadata,
                 1 - (ape.embedding <=> CAST(:embedding AS vector)) AS similarity
             FROM ai_product_embeddings ape
             JOIN products p ON p.id = ape.product_id
@@ -54,26 +56,78 @@ class AIRepository:
         self,
         restaurant_id: uuid.UUID,
         product_id: uuid.UUID,
+        content: str,
+        content_hash: str,
+        metadata: dict[str, Any],
         embedding: list[float],
     ) -> None:
         """Insert or update one product embedding."""
-        stmt = text(
-            """
-            INSERT INTO ai_product_embeddings (restaurant_id, product_id, embedding)
-            VALUES (:restaurant_id, :product_id, CAST(:embedding AS vector))
-            ON CONFLICT (restaurant_id, product_id)
-            DO UPDATE SET embedding = EXCLUDED.embedding
-            """
+        stmt = (
+            text(
+                """
+                INSERT INTO ai_product_embeddings (
+                    restaurant_id,
+                    product_id,
+                    content,
+                    content_hash,
+                    metadata,
+                    embedding,
+                    updated_at
+                )
+                VALUES (
+                    :restaurant_id,
+                    :product_id,
+                    :content,
+                    :content_hash,
+                    :metadata,
+                    CAST(:embedding AS vector),
+                    NOW()
+                )
+                ON CONFLICT (restaurant_id, product_id)
+                DO UPDATE SET
+                    embedding = EXCLUDED.embedding,
+                    content = EXCLUDED.content,
+                    content_hash = EXCLUDED.content_hash,
+                    metadata = EXCLUDED.metadata,
+                    updated_at = NOW()
+                """
+            )
+            .bindparams(bindparam("metadata", type_=JSONB))
         )
         self.db.execute(
             stmt,
             {
                 "restaurant_id": restaurant_id,
                 "product_id": product_id,
+                "content": content,
+                "content_hash": content_hash,
+                "metadata": metadata,
                 "embedding": self._format_vector(embedding),
             },
         )
         self.db.commit()
+
+    def get_embedding_by_product(
+        self,
+        restaurant_id: uuid.UUID,
+        product_id: uuid.UUID,
+    ) -> dict[str, Any] | None:
+        """Return sync metadata for one product embedding."""
+        stmt = text(
+            """
+            SELECT content_hash, updated_at
+            FROM ai_product_embeddings
+            WHERE restaurant_id = :restaurant_id AND product_id = :product_id
+            """
+        )
+        row = self.db.execute(
+            stmt,
+            {
+                "restaurant_id": restaurant_id,
+                "product_id": product_id,
+            },
+        ).mappings().one_or_none()
+        return dict(row) if row else None
 
     def delete_embeddings(self, restaurant_id: uuid.UUID, product_id: uuid.UUID | None = None) -> None:
         """Delete embeddings for a restaurant or for a specific product."""

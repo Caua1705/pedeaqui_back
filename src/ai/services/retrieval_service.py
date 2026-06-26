@@ -41,5 +41,6 @@ class RetrievalService:
             "description": product["description"],
             "price": money_to_float(product["price"]),
             "image_url": build_storage_url(product["image_path"]),
+            "metadata": product.get("metadata"),
             "similarity": product["similarity"],
         }

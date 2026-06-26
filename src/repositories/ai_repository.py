@@ -1,9 +1,11 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import bindparam, text
+from sqlalchemy import bindparam, delete, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
+
+from src.models.ai_product_embedding_model import AIProductEmbedding
 
 
 class AIRepository:
@@ -113,49 +115,34 @@ class AIRepository:
         product_id: uuid.UUID,
     ) -> dict[str, Any] | None:
         """Return sync metadata for one product embedding."""
-        stmt = text(
-            """
-            SELECT content_hash, updated_at
-            FROM ai_product_embeddings
-            WHERE restaurant_id = :restaurant_id AND product_id = :product_id
-            """
+        stmt = select(
+            AIProductEmbedding.content_hash,
+            AIProductEmbedding.updated_at,
+        ).where(
+            AIProductEmbedding.restaurant_id == restaurant_id,
+            AIProductEmbedding.product_id == product_id,
         )
-        row = self.db.execute(
-            stmt,
-            {
-                "restaurant_id": restaurant_id,
-                "product_id": product_id,
-            },
-        ).mappings().one_or_none()
+        row = self.db.execute(stmt).mappings().one_or_none()
         return dict(row) if row else None
 
     def delete_embeddings(self, restaurant_id: uuid.UUID, product_id: uuid.UUID | None = None) -> None:
         """Delete embeddings for a restaurant or for a specific product."""
+        stmt = delete(AIProductEmbedding).where(AIProductEmbedding.restaurant_id == restaurant_id)
         if product_id:
-            stmt = text(
-                """
-                DELETE FROM ai_product_embeddings
-                WHERE restaurant_id = :restaurant_id AND product_id = :product_id
-                """
-            )
-            params = {"restaurant_id": restaurant_id, "product_id": product_id}
-        else:
-            stmt = text("DELETE FROM ai_product_embeddings WHERE restaurant_id = :restaurant_id")
-            params = {"restaurant_id": restaurant_id}
+            stmt = stmt.where(AIProductEmbedding.product_id == product_id)
 
-        self.db.execute(stmt, params)
+        self.db.execute(stmt)
         self.db.commit()
 
     def get_restaurant_embeddings(self, restaurant_id: uuid.UUID) -> list[dict[str, Any]]:
         """Return embeddings registered for one restaurant."""
-        stmt = text(
-            """
-            SELECT id, restaurant_id, product_id, embedding
-            FROM ai_product_embeddings
-            WHERE restaurant_id = :restaurant_id
-            """
-        )
-        rows = self.db.execute(stmt, {"restaurant_id": restaurant_id}).mappings()
+        stmt = select(
+            AIProductEmbedding.id,
+            AIProductEmbedding.restaurant_id,
+            AIProductEmbedding.product_id,
+            AIProductEmbedding.embedding,
+        ).where(AIProductEmbedding.restaurant_id == restaurant_id)
+        rows = self.db.execute(stmt).mappings()
         return [dict(row) for row in rows]
 
     @staticmethod

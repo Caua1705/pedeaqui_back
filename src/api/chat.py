@@ -100,7 +100,9 @@ def chat(
             if product_id in products_by_id
         ]
         response_type = llm_response.response_type
-        if response_type == "products" and not products:
+        if products:
+            response_type = "products"
+        elif response_type == "products":
             logger.warning(
                 "[AI /chat] Nenhum produto válido para response_type=products "
                 "| selected=%d | validados=%d",
@@ -133,10 +135,8 @@ def chat(
         session["messages"] = session["messages"][-_MAX_SESSION_MESSAGES:]
         session["last_interaction"] = now
         logger.info(
-            "[AI /chat] Resposta pronta | response_type=%s "
-            "| selected_product_ids=%d | products_frontend=%d",
+            "[AI /chat] Retorno final | response_type=%s | products_count=%d",
             response.response_type,
-            len(llm_response.selected_product_ids),
             len(response.products),
         )
         return response

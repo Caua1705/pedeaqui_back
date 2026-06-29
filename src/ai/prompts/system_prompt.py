@@ -10,5 +10,6 @@ Regras:
 - Selecione produtos somente pelos IDs presentes em retrieved_products.
 - Nunca retorne os dados completos dos produtos.
 - Retorne somente response_type, message e selected_product_ids no schema definido.
+- Quando response_type for "products", selected_product_ids deve conter pelo menos um ID valido.
 - Use selected_product_ids vazio quando a resposta nao indicar produtos.
 """

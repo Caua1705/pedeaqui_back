@@ -77,16 +77,18 @@ def chat(
             llm_response.response_type,
         )
 
-        retrieved_product_ids = {product["id"] for product in retrieved_products}
+        retrieved_product_ids = {
+            uuid.UUID(str(product["id"])) for product in retrieved_products
+        }
         selected_product_ids = list(
             dict.fromkeys(
-                product_id
+                uuid.UUID(str(product_id))
                 for product_id in llm_response.selected_product_ids
-                if product_id in retrieved_product_ids
+                if uuid.UUID(str(product_id)) in retrieved_product_ids
             )
         )
         products_by_id = {
-            product.id: product
+            uuid.UUID(str(product.id)): product
             for product in ProductRepository(db).list_active_by_ids(
                 request.restaurant_id,
                 selected_product_ids,
@@ -97,8 +99,18 @@ def chat(
             for product_id in selected_product_ids
             if product_id in products_by_id
         ]
+        response_type = llm_response.response_type
+        if response_type == "products" and not products:
+            logger.warning(
+                "[AI /chat] Nenhum produto válido para response_type=products "
+                "| selected=%d | validados=%d",
+                len(llm_response.selected_product_ids),
+                len(selected_product_ids),
+            )
+            response_type = "text"
+
         response = ChatResponse(
-            response_type=llm_response.response_type,
+            response_type=response_type,
             message=llm_response.message,
             products=products,
         )
@@ -120,6 +132,13 @@ def chat(
         )
         session["messages"] = session["messages"][-_MAX_SESSION_MESSAGES:]
         session["last_interaction"] = now
+        logger.info(
+            "[AI /chat] Resposta pronta | response_type=%s "
+            "| selected_product_ids=%d | products_frontend=%d",
+            response.response_type,
+            len(llm_response.selected_product_ids),
+            len(response.products),
+        )
         return response
     except Exception:
         logger.exception(

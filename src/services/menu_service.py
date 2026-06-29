@@ -34,7 +34,7 @@ class MenuService:
             ],
             coupons=[self._coupon_response(coupon) for coupon in self.menu_repository.get_active_coupons(restaurant.id)],
             categories=[CategoryResponse.model_validate(category) for category in self.menu_repository.get_active_categories(restaurant.id)],
-            products=[self._product_response(product) for product in self.menu_repository.get_active_products(restaurant.id)],
+            products=[self.product_response(product) for product in self.menu_repository.get_active_products(restaurant.id)],
         )
 
     def get_products_by_category(self, restaurant_slug: str, category_slug: str) -> list[ProductResponse]:
@@ -42,14 +42,14 @@ class MenuService:
         if not self.product_repository.active_category_exists(restaurant.id, category_slug):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Categoria não encontrada")
         products = self.product_repository.list_active_by_category_slug(restaurant.id, category_slug)
-        return [self._product_response(product) for product in products]
+        return [self.product_response(product) for product in products]
 
     def get_product_detail(self, restaurant_slug: str, product_slug: str) -> ProductResponse:
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
         product = self.product_repository.get_active_by_slug(restaurant.id, product_slug)
         if not product:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Produto não encontrado")
-        return self._product_response(product)
+        return self.product_response(product)
 
     @staticmethod
     def _settings_response(settings) -> RestaurantSettingsResponse:
@@ -67,7 +67,7 @@ class MenuService:
         )
 
     @staticmethod
-    def _product_response(product) -> ProductResponse:
+    def product_response(product) -> ProductResponse:
         return ProductResponse(
             id=product.id,
             restaurant_id=product.restaurant_id,

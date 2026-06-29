@@ -1,10 +1,13 @@
+import logging
 from typing import Any
 
 from langchain_openai import ChatOpenAI
 
 from src.ai.prompts.chat_prompt import build_chat_prompt
-from src.ai.schemas.chat_response_schema import ChatResponse
+from src.ai.schemas.chat_response_schema import ChatLLMResponse
 from src.core.config import settings
+
+logger = logging.getLogger("uvicorn.error")
 
 
 class ChatLLMService:
@@ -20,7 +23,7 @@ class ChatLLMService:
     def build_chain(self):
         """Build the Prompt -> ChatOpenAI structured output LCEL chain."""
         prompt = build_chat_prompt()
-        structured_llm = self.llm.with_structured_output(ChatResponse)
+        structured_llm = self.llm.with_structured_output(ChatLLMResponse)
         return prompt | structured_llm
 
     def invoke(
@@ -29,10 +32,11 @@ class ChatLLMService:
         conversation: list[dict[str, str]],
         retrieved_products: list[dict[str, Any]],
         user_message: str,
-    ) -> ChatResponse:
+    ) -> ChatLLMResponse:
         """Invoke the LCEL chain and return a structured chat response."""
         chain = self.build_chain()
-        return chain.invoke(
+        logger.info("[AI LLM] Início da chamada ao LLM")
+        response = chain.invoke(
             {
                 "restaurant_context": restaurant_context,
                 "conversation": conversation,
@@ -40,3 +44,5 @@ class ChatLLMService:
                 "user_message": user_message,
             }
         )
+        logger.info("[AI LLM] Fim da chamada ao LLM")
+        return response

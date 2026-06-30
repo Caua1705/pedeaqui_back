@@ -1,3 +1,4 @@
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.models.ai_feedback_model import AIFeedback
@@ -9,6 +10,21 @@ class AIFeedbackRepository:
         self.db = db
 
     def create(self, feedback: AIFeedbackRequest) -> None:
+        existing_feedback = self.db.scalar(
+            select(AIFeedback).where(
+                AIFeedback.session_id == feedback.session_id,
+                AIFeedback.assistant_message == feedback.assistant_message,
+            )
+        )
+
+        if existing_feedback:
+            if existing_feedback.feedback == feedback.feedback:
+                return
+
+            existing_feedback.feedback = feedback.feedback
+            self.db.commit()
+            return
+
         self.db.add(
             AIFeedback(
                 restaurant_id=feedback.restaurant_id,

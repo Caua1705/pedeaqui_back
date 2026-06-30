@@ -1,4 +1,5 @@
 from src.models.admin_user_model import AdminUser
+from src.models.ai_feedback_model import AIFeedback
 from src.models.ai_product_embedding_model import AIProductEmbedding
 from src.models.branch_model import Branch
 from src.models.category_model import Category
@@ -17,6 +18,7 @@ from src.models.restaurant_setting_model import RestaurantSetting
 
 __all__ = [
     "AdminUser",
+    "AIFeedback",
     "AIProductEmbedding",
     "Branch",
     "Category",

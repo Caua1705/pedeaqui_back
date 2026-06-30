@@ -12,7 +12,9 @@ from src.ai.schemas.chat_response_schema import ChatResponse
 from src.ai.services.chat_llm_service import ChatLLMService
 from src.ai.services.retrieval_service import RetrievalService
 from src.api.dependencies.database import get_db
+from src.repositories.ai_feedback_repository import AIFeedbackRepository
 from src.repositories.product_repository import ProductRepository
+from src.schemas.ai_feedback_schema import AIFeedbackRequest, AIFeedbackResponse
 from src.services.menu_service import MenuService
 
 
@@ -40,6 +42,15 @@ class ChatRequest(BaseModel):
     restaurant_id: uuid.UUID
     session_id: str = Field(min_length=1)
     message: str = Field(min_length=1)
+
+
+@router.post("/feedback", response_model=AIFeedbackResponse)
+def create_feedback(
+    request: AIFeedbackRequest,
+    db: Session = Depends(get_db),
+) -> AIFeedbackResponse:
+    AIFeedbackRepository(db).create(request)
+    return AIFeedbackResponse(success=True)
 
 
 @router.post("", response_model=ChatResponse)

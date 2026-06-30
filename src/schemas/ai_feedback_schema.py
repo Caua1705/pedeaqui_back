@@ -10,7 +10,7 @@ class AIFeedbackRequest(BaseModel):
     user_message: str
     assistant_message: str
     response_type: str
-    selected_product_ids: list[str]
+    selected_product_ids: list[uuid.UUID]
     feedback: Literal['like', 'dislike']
 
 

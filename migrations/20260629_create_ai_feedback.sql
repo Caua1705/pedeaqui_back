@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS ai_feedback (
     user_message TEXT NOT NULL,
     assistant_message TEXT NOT NULL,
     response_type TEXT NOT NULL,
-    selected_product_ids JSONB NOT NULL,
+    selected_product_ids UUID[] NOT NULL,
     feedback TEXT NOT NULL CHECK (feedback IN ('like', 'dislike')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

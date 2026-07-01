@@ -73,6 +73,12 @@ class CurrentCustomerResponse(BaseResponse):
     marketing_opt_in: bool
 
 
+class ChangeCustomerPasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+    confirm_password: str
+
+
 class CustomerOrderHistoryItem(BaseModel):
     id: UUID
     order_number: int

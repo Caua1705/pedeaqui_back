@@ -6,10 +6,16 @@ from sqlalchemy.orm import Session
 from src.models.customer_model import Customer, CustomerAddress
 from src.repositories.customer_repository import CustomerRepository
 from src.repositories.order_repository import OrderRepository
-from src.schemas.customer_schema import CreateCustomerAddressRequest, UpdateCustomerAddressRequest
+from src.schemas.auth_schema import MessageResponse
+from src.schemas.customer_schema import (
+    ChangeCustomerPasswordRequest,
+    CreateCustomerAddressRequest,
+    UpdateCustomerAddressRequest,
+)
 from src.schemas.customer_schema import CurrentCustomerResponse, CustomerOrderHistoryItem
 from src.schemas.order_schema import OrderItemResponse
 from src.utils.money import money_to_float
+from src.utils.security import PasswordTooLongError, hash_password, verify_password
 
 
 class CustomerService:
@@ -29,6 +35,43 @@ class CustomerService:
             email_verified=customer.email_verified_at is not None,
             marketing_opt_in=customer.marketing_opt_in,
         )
+
+    def change_password(
+        self,
+        customer: Customer,
+        payload: ChangeCustomerPasswordRequest,
+    ) -> MessageResponse:
+        if not verify_password(payload.current_password, customer.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Senha atual incorreta",
+            )
+        if payload.new_password != payload.confirm_password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="As senhas não conferem",
+            )
+        if len(payload.new_password) < 8:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A nova senha deve ter pelo menos 8 caracteres",
+            )
+        try:
+            password_hash = hash_password(payload.new_password)
+        except PasswordTooLongError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A nova senha é muito longa",
+            ) from exc
+
+        try:
+            customer.password_hash = password_hash
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+
+        return MessageResponse(message="Senha alterada com sucesso")
 
     def list_orders(self, customer: Customer) -> list[CustomerOrderHistoryItem]:
         rows = self.order_repository.list_orders_by_customer(customer.id)

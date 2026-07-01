@@ -8,6 +8,7 @@ from src.api.dependencies.database import get_db
 from src.models.customer_model import Customer
 from src.schemas.auth_schema import MessageResponse
 from src.schemas.customer_schema import (
+    ChangeCustomerPasswordRequest,
     CreateCustomerAddressRequest,
     CurrentCustomerResponse,
     CustomerAddressResponse,
@@ -26,6 +27,15 @@ def get_me(
     db: Session = Depends(get_db),
 ) -> CurrentCustomerResponse:
     return CustomerService(db).get_me(current_customer)
+
+
+@router.patch("/me/password", response_model=MessageResponse)
+def change_password(
+    payload: ChangeCustomerPasswordRequest,
+    current_customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    return CustomerService(db).change_password(current_customer, payload)
 
 
 @router.get("/me/orders", response_model=list[CustomerOrderHistoryItem])

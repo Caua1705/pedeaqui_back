@@ -4,19 +4,12 @@ import unicodedata
 from copy import deepcopy
 from dataclasses import dataclass
 from time import monotonic
-from typing import Generic, TypeVar
-
-from src.ai.schemas.chat_response_schema import ChatResponse
+from typing import Any, Generic, TypeVar
 
 
 T = TypeVar("T")
-_CACHE_TTL_SECONDS = 300
-_COMMON_MESSAGES = {
-    "me recomenda um prato",
-    "quero gastar ate r$ 50",
-    "pedido para 2 pessoas",
-    "nao estou com muita fome",
-}
+_EMBEDDING_TTL_SECONDS = 60 * 60
+_RETRIEVAL_TTL_SECONDS = 20 * 60
 
 
 @dataclass
@@ -26,10 +19,15 @@ class _CacheEntry(Generic[T]):
 
 
 class ChatCache:
-    def __init__(self, ttl_seconds: int = _CACHE_TTL_SECONDS) -> None:
-        self.ttl_seconds = ttl_seconds
+    def __init__(
+        self,
+        embedding_ttl_seconds: int = _EMBEDDING_TTL_SECONDS,
+        retrieval_ttl_seconds: int = _RETRIEVAL_TTL_SECONDS,
+    ) -> None:
+        self.embedding_ttl_seconds = embedding_ttl_seconds
+        self.retrieval_ttl_seconds = retrieval_ttl_seconds
         self._embeddings: dict[str, _CacheEntry[list[float]]] = {}
-        self._responses: dict[str, _CacheEntry[ChatResponse]] = {}
+        self._retrievals: dict[str, _CacheEntry[list[dict[str, Any]]]] = {}
         self._lock = threading.Lock()
 
     @staticmethod
@@ -45,22 +43,28 @@ class ChatCache:
     def key(self, restaurant_id: object, message: str) -> str:
         return f"{restaurant_id}:{self.normalize_message(message)}"
 
-    def is_cacheable(self, message: str) -> bool:
-        return self.normalize_message(message) in _COMMON_MESSAGES
-
     def get_embedding(self, key: str) -> list[float] | None:
         value = self._get(self._embeddings, key)
         return list(value) if value is not None else None
 
     def set_embedding(self, key: str, embedding: list[float]) -> None:
-        self._set(self._embeddings, key, list(embedding))
+        self._set(
+            self._embeddings,
+            key,
+            list(embedding),
+            self.embedding_ttl_seconds,
+        )
 
-    def get_response(self, key: str) -> ChatResponse | None:
-        value = self._get(self._responses, key)
-        return value.model_copy(deep=True) if value is not None else None
+    def get_retrieval(self, key: str) -> list[dict[str, Any]] | None:
+        return self._get(self._retrievals, key)
 
-    def set_response(self, key: str, response: ChatResponse) -> None:
-        self._set(self._responses, key, response.model_copy(deep=True))
+    def set_retrieval(self, key: str, products: list[dict[str, Any]]) -> None:
+        self._set(
+            self._retrievals,
+            key,
+            products,
+            self.retrieval_ttl_seconds,
+        )
 
     def _get(self, cache: dict[str, _CacheEntry[T]], key: str) -> T | None:
         now = monotonic()
@@ -73,7 +77,13 @@ class ChatCache:
                 return None
             return deepcopy(entry.value)
 
-    def _set(self, cache: dict[str, _CacheEntry[T]], key: str, value: T) -> None:
+    def _set(
+        self,
+        cache: dict[str, _CacheEntry[T]],
+        key: str,
+        value: T,
+        ttl_seconds: int,
+    ) -> None:
         now = monotonic()
         with self._lock:
             expired_keys = [
@@ -85,7 +95,7 @@ class ChatCache:
                 del cache[expired_key]
             cache[key] = _CacheEntry(
                 value=deepcopy(value),
-                expires_at=now + self.ttl_seconds,
+                expires_at=now + ttl_seconds,
             )
 
 

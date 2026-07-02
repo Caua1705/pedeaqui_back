@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.ai.schemas.chat_response_schema import ChatResponse
-from src.ai.services.chat_cache import chat_cache
 from src.ai.services.chat_llm_service import ChatLLMService
 from src.ai.services.retrieval_service import RetrievalService
 from src.api.dependencies.database import get_db
@@ -80,29 +79,17 @@ def chat(
         _cleanup_inactive_sessions(now)
         session = _SESSION_HISTORY.get(session_id)
         conversation = session["messages"][-_MAX_SESSION_MESSAGES:] if session else []
-        cache_key = chat_cache.key(restaurant_id, message)
-        response_cacheable = chat_cache.is_cacheable(message) and not conversation
-        cached_response = (
-            chat_cache.get_response(cache_key) if response_cacheable else None
-        )
-        if cached_response is not None:
-            logger.info("[AI /chat perf] embedding_ms=0.00 cache_hit=True")
-            logger.info("[AI /chat perf] retrieval_ms=0.00 cache_hit=True")
-            logger.info("[AI /chat perf] llm_ms=0.00 cache_hit=True")
-            _store_session_turn(session_id, message, cached_response.message, now)
-            return cached_response
+        logger.info("[AI /chat cache] final_response_cache_hit=false")
 
         retrieved_products = RetrievalService(db).retrieve_products(
             restaurant_id=restaurant_id,
             question=message,
         )
-        llm_products = [_product_for_llm(product) for product in retrieved_products]
-
         llm_started_at = perf_counter()
         llm_response = ChatLLMService().invoke(
             restaurant_context=f"restaurant_id={restaurant_id}",
             conversation=conversation,
-            retrieved_products=llm_products,
+            retrieved_products=retrieved_products,
             user_message=message,
         )
         logger.info(
@@ -170,8 +157,6 @@ def chat(
                 len(response.products),
             )
 
-        if response_cacheable:
-            chat_cache.set_response(cache_key, response)
         _store_session_turn(session_id, message, response.message, now)
         logger.info(
             "[AI /chat] Retorno final | response_type=%s | products_count=%d",
@@ -205,20 +190,6 @@ def _cleanup_inactive_sessions(now: datetime) -> None:
     ]
     for session_id in expired_session_ids:
         del _SESSION_HISTORY[session_id]
-
-
-def _product_for_llm(product: dict) -> dict:
-    metadata = product.get("metadata") or {}
-    description = metadata.get("short_description") or product.get("description") or ""
-    compact_product = {
-        "id": product["id"],
-        "name": product["name"],
-        "short_description": description[:240],
-    }
-    category_name = metadata.get("category_name")
-    if category_name:
-        compact_product["category_name"] = category_name
-    return compact_product
 
 
 def _store_session_turn(

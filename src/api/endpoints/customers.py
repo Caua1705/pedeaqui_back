@@ -13,6 +13,7 @@ from src.schemas.customer_schema import (
     CurrentCustomerResponse,
     CustomerAddressResponse,
     CustomerOrderHistoryItem,
+    UpdateCurrentCustomerRequest,
     UpdateCustomerAddressRequest,
 )
 from src.services.customer_service import CustomerService
@@ -27,6 +28,23 @@ def get_me(
     db: Session = Depends(get_db),
 ) -> CurrentCustomerResponse:
     return CustomerService(db).get_me(current_customer)
+
+
+@router.patch(
+    "/me",
+    response_model=CurrentCustomerResponse,
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"description": "Nao autenticado"},
+        status.HTTP_409_CONFLICT: {"description": "E-mail ou telefone ja esta em uso"},
+        status.HTTP_422_UNPROCESSABLE_ENTITY: {"description": "Dados invalidos"},
+    },
+)
+def update_me(
+    payload: UpdateCurrentCustomerRequest,
+    current_customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+) -> CurrentCustomerResponse:
+    return CustomerService(db).update_me(current_customer, payload)
 
 
 @router.patch("/me/password", response_model=MessageResponse)

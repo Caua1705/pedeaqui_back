@@ -41,6 +41,12 @@ class CustomerRepository:
         self.db.flush()
         return customer
 
+    def update(self, customer: Customer, **values) -> Customer:
+        for field, value in values.items():
+            setattr(customer, field, value)
+        self.db.flush()
+        return customer
+
     def create_email_code(self, **values) -> EmailVerificationCode:
         code = EmailVerificationCode(**values)
         self.db.add(code)

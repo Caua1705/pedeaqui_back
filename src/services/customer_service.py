@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.models.customer_model import Customer, CustomerAddress
@@ -10,6 +11,7 @@ from src.schemas.auth_schema import MessageResponse
 from src.schemas.customer_schema import (
     ChangeCustomerPasswordRequest,
     CreateCustomerAddressRequest,
+    UpdateCurrentCustomerRequest,
     UpdateCustomerAddressRequest,
 )
 from src.schemas.customer_schema import CurrentCustomerResponse, CustomerOrderHistoryItem
@@ -35,6 +37,52 @@ class CustomerService:
             email_verified=customer.email_verified_at is not None,
             marketing_opt_in=customer.marketing_opt_in,
         )
+
+    def update_me(
+        self,
+        customer: Customer,
+        payload: UpdateCurrentCustomerRequest,
+    ) -> CurrentCustomerResponse:
+        email_owner = self.customer_repository.get_by_email(payload.email)
+        if email_owner and email_owner.id != customer.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="E-mail ja esta em uso",
+            )
+
+        phone_owner = self.customer_repository.get_by_phone(payload.phone)
+        if phone_owner and phone_owner.id != customer.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Telefone ja esta em uso",
+            )
+
+        try:
+            self.customer_repository.update(
+                customer,
+                name=payload.name,
+                email=payload.email,
+                phone=payload.phone,
+                birth_date=payload.birth_date,
+            )
+            self.db.commit()
+            self.db.refresh(customer)
+        except IntegrityError as exc:
+            self.db.rollback()
+            email_owner = self.customer_repository.get_by_email(payload.email)
+            if email_owner and email_owner.id != customer.id:
+                detail = "E-mail ja esta em uso"
+            else:
+                detail = "Telefone ja esta em uso"
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=detail,
+            ) from exc
+        except Exception:
+            self.db.rollback()
+            raise
+
+        return self.get_me(customer)
 
     def change_password(
         self,

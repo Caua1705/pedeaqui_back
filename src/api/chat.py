@@ -59,11 +59,19 @@ def chat(
     db: Session = Depends(get_db),
 ) -> ChatResponse:
     started_at = perf_counter()
+    validation_started_at = perf_counter()
+    restaurant_id = request.restaurant_id
+    session_id = request.session_id
+    message = request.message
     logger.info(
-        "[AI /chat] Nova requisição | restaurant_id=%s | session_id=%s | mensagem=%r",
-        request.restaurant_id,
-        request.session_id,
-        request.message,
+        "[AI /chat perf] validation_ms=%.2f",
+        (perf_counter() - validation_started_at) * 1000,
+    )
+    logger.info(
+        "[AI /chat] Nova requisicao | restaurant_id=%s | session_id=%s | mensagem=%r",
+        restaurant_id,
+        session_id,
+        message,
     )
 
     try:
@@ -71,23 +79,29 @@ def chat(
         _cleanup_inactive_sessions(now)
 
         retrieved_products = RetrievalService(db).retrieve_products(
-            restaurant_id=request.restaurant_id,
-            question=request.message,
+            restaurant_id=restaurant_id,
+            question=message,
         )
-        session = _SESSION_HISTORY.get(request.session_id)
+        session = _SESSION_HISTORY.get(session_id)
         conversation = session["messages"][-_MAX_SESSION_MESSAGES:] if session else []
 
+        llm_started_at = perf_counter()
         llm_response = ChatLLMService().invoke(
-            restaurant_context=f"restaurant_id={request.restaurant_id}",
+            restaurant_context=f"restaurant_id={restaurant_id}",
             conversation=conversation,
             retrieved_products=retrieved_products,
-            user_message=request.message,
+            user_message=message,
+        )
+        logger.info(
+            "[AI /chat perf] llm_ms=%.2f",
+            (perf_counter() - llm_started_at) * 1000,
         )
         logger.info(
             "[AI /chat] Structured Output | response_type=%s",
             llm_response.response_type,
         )
 
+        ids_validation_started_at = perf_counter()
         retrieved_product_ids = {
             uuid.UUID(str(product["id"])) for product in retrieved_products
         }
@@ -98,13 +112,23 @@ def chat(
                 if uuid.UUID(str(product_id)) in retrieved_product_ids
             )
         )
+        logger.info(
+            "[AI /chat perf] selected_ids_validation_ms=%.2f",
+            (perf_counter() - ids_validation_started_at) * 1000,
+        )
+        hydration_started_at = perf_counter()
         products_by_id = {
             uuid.UUID(str(product.id)): product
             for product in ProductRepository(db).list_active_by_ids(
-                request.restaurant_id,
+                restaurant_id,
                 selected_product_ids,
             )
         }
+        logger.info(
+            "[AI /chat perf] hydration_ms=%.2f",
+            (perf_counter() - hydration_started_at) * 1000,
+        )
+        response_build_started_at = perf_counter()
         products = [
             MenuService.product_response(products_by_id[product_id])
             for product_id in selected_product_ids
@@ -115,7 +139,7 @@ def chat(
             response_type = "products"
         elif response_type == "products":
             logger.warning(
-                "[AI /chat] Nenhum produto válido para response_type=products "
+                "[AI /chat] Nenhum produto valido para response_type=products "
                 "| selected=%d | validados=%d",
                 len(llm_response.selected_product_ids),
                 len(selected_product_ids),
@@ -134,12 +158,12 @@ def chat(
             )
 
         session = _SESSION_HISTORY.setdefault(
-            request.session_id,
+            session_id,
             {"messages": [], "last_interaction": now},
         )
         session["messages"].extend(
             [
-                {"role": "user", "content": request.message},
+                {"role": "user", "content": message},
                 {"role": "assistant", "content": response.message},
             ]
         )
@@ -150,18 +174,22 @@ def chat(
             response.response_type,
             len(response.products),
         )
+        logger.info(
+            "[AI /chat perf] response_build_ms=%.2f",
+            (perf_counter() - response_build_started_at) * 1000,
+        )
         return response
     except Exception:
         logger.exception(
             "[AI /chat] Erro no pipeline | restaurant_id=%s | session_id=%s",
-            request.restaurant_id,
-            request.session_id,
+            restaurant_id,
+            session_id,
         )
         raise
     finally:
         logger.info(
-            "[AI /chat] Requisição finalizada | tempo_total=%.3fs",
-            perf_counter() - started_at,
+            "[AI /chat perf] total_ms=%.2f",
+            (perf_counter() - started_at) * 1000,
         )
 
 

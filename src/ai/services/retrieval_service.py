@@ -1,5 +1,6 @@
 import logging
 import uuid
+from time import perf_counter
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -26,23 +27,40 @@ class RetrievalService:
         top_k: int = 5,
     ) -> list[dict[str, Any]]:
         """Generate the question embedding and return the top matching products."""
-        logger.info("[AI Retrieval] Início da geração do embedding")
+        logger.info("[AI Retrieval] Inicio da geracao do embedding")
+        embedding_started_at = perf_counter()
         embedding = self.embedding_service.generate_embedding(question)
-        logger.info("[AI Retrieval] Fim da geração do embedding")
+        logger.info(
+            "[AI /chat perf] embedding_ms=%.2f",
+            (perf_counter() - embedding_started_at) * 1000,
+        )
+        logger.info("[AI Retrieval] Fim da geracao do embedding")
 
-        logger.info("[AI Retrieval] Início da busca vetorial (similarity_search)")
+        logger.info("[AI Retrieval] Inicio da busca vetorial (similarity_search)")
+        retrieval_started_at = perf_counter()
         products = self.ai_repository.similarity_search(
             restaurant_id=restaurant_id,
             embedding=embedding,
             top_k=top_k,
         )
+        logger.info(
+            "[AI /chat perf] retrieval_ms=%.2f",
+            (perf_counter() - retrieval_started_at) * 1000,
+        )
         logger.info("[AI Retrieval] Fim da busca vetorial (similarity_search)")
+        logger.info("[AI /chat perf] context_products=%d", len(products))
         logger.info(
             "[AI Retrieval] Produtos encontrados | quantidade=%d | nomes=%s",
             len(products),
             [product["name"] for product in products],
         )
-        return [self._format_product(product) for product in products]
+        context_started_at = perf_counter()
+        retrieved_products = [self._format_product(product) for product in products]
+        logger.info(
+            "[AI /chat perf] context_build_ms=%.2f",
+            (perf_counter() - context_started_at) * 1000,
+        )
+        return retrieved_products
 
     @staticmethod
     def _format_product(product: dict[str, Any]) -> dict[str, Any]:

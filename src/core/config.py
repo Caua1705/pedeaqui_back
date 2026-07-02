@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     PASSWORD_RESET_SECRET: str
 
     OPENAI_API_KEY: str
-    MODEL_NAME: str = "gpt-4o-mini"
+    MODEL_NAME: str = "gpt-5-mini"
     EMBEDDING_MODEL: str = "text-embedding-3-small"
 
     model_config = SettingsConfigDict(

@@ -16,8 +16,11 @@ class ChatLLMService:
     def __init__(self) -> None:
         self.llm = ChatOpenAI(
             api_key=settings.OPENAI_API_KEY,
-            model=settings.MODEL_NAME,
-            temperature=0,
+            model="gpt-5-mini",
+            reasoning_effort="minimal",
+            verbosity="low",
+            max_completion_tokens=300,
+            use_responses_api=True,
         )
 
     def build_chain(self):

@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from src.ai.services.chat_cache import chat_cache
 from src.ai.services.embedding_service import EmbeddingService
 from src.repositories.ai_repository import AIRepository
 from src.utils.money import money_to_float
@@ -28,11 +29,22 @@ class RetrievalService:
     ) -> list[dict[str, Any]]:
         """Generate the question embedding and return the top matching products."""
         logger.info("[AI Retrieval] Inicio da geracao do embedding")
+        cache_key = chat_cache.key(restaurant_id, question)
         embedding_started_at = perf_counter()
-        embedding = self.embedding_service.generate_embedding(question)
+        embedding = (
+            chat_cache.get_embedding(cache_key)
+            if chat_cache.is_cacheable(question)
+            else None
+        )
+        embedding_cache_hit = embedding is not None
+        if embedding is None:
+            embedding = self.embedding_service.generate_embedding(question)
+            if chat_cache.is_cacheable(question):
+                chat_cache.set_embedding(cache_key, embedding)
         logger.info(
-            "[AI /chat perf] embedding_ms=%.2f",
+            "[AI /chat perf] embedding_ms=%.2f cache_hit=%s",
             (perf_counter() - embedding_started_at) * 1000,
+            embedding_cache_hit,
         )
         logger.info("[AI Retrieval] Fim da geracao do embedding")
 

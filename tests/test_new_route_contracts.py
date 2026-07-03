@@ -114,6 +114,15 @@ class AddressImportContractTests(unittest.TestCase):
         self.assertIn("requestBody", operation)
         self.assertEqual(operation["security"], [{"HTTPBearer": []}])
 
+    def test_openapi_documents_cashback_transactions_pagination_and_auth(self):
+        operation = app.openapi()["paths"]["/customers/me/cashback/transactions"]["get"]
+        parameters = {item["name"]: item for item in operation["parameters"]}
+
+        self.assertEqual(operation["security"], [{"HTTPBearer": []}])
+        self.assertEqual(parameters["limit"]["schema"]["default"], 20)
+        self.assertEqual(parameters["limit"]["schema"]["maximum"], 50)
+        self.assertEqual(parameters["offset"]["schema"]["default"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,14 +1,14 @@
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.customer_auth import get_current_customer
 from src.api.dependencies.database import get_db
 from src.models.customer_model import Customer
 from src.schemas.auth_schema import MessageResponse
-from src.schemas.cashback_schema import CashbackBalanceResponse
+from src.schemas.cashback_schema import CashbackBalanceResponse, CashbackTransactionsResponse
 from src.schemas.customer_schema import (
     ChangeCustomerPasswordRequest,
     CreateCustomerAddressRequest,
@@ -46,6 +46,20 @@ def get_cashback_balance(
     db: Session = Depends(get_db),
 ) -> CashbackBalanceResponse:
     return CashbackService(db).get_balance(current_customer)
+
+
+@router.get(
+    "/me/cashback/transactions",
+    response_model=CashbackTransactionsResponse,
+    responses={status.HTTP_401_UNAUTHORIZED: {"description": "Nao autenticado"}},
+)
+def list_cashback_transactions(
+    limit: int = Query(default=20, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
+    current_customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+) -> CashbackTransactionsResponse:
+    return CashbackService(db).list_transactions(current_customer, limit, offset)
 
 
 @router.patch(

@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
@@ -24,6 +25,7 @@ from src.services.cashback_service import CashbackService
 
 
 router = APIRouter(prefix="/customers", tags=["customers"])
+logger = logging.getLogger("uvicorn.error")
 
 
 @router.get("/me", response_model=CurrentCustomerResponse)
@@ -107,6 +109,10 @@ def import_addresses(
     current_customer: Customer = Depends(get_current_customer),
     db: Session = Depends(get_db),
 ) -> ImportCustomerAddressesResponse:
+    logger.info(
+        "[Address import contract] route=customer_address_import addresses_count=%d",
+        len(payload.addresses),
+    )
     return CustomerService(db).import_addresses(current_customer, payload)
 
 @router.patch("/me/addresses/{address_id}", response_model=CustomerAddressResponse)

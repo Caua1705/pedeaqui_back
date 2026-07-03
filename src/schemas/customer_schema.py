@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.schemas.common_schema import BaseResponse
 from src.schemas.order_schema import OrderItemResponse
@@ -64,27 +64,50 @@ class CustomerAddressResponse(BaseResponse):
 
 
 class ImportCustomerAddressRequest(CustomerAddressBase):
+    zipcode: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("zipcode", "zip_code"),
+    )
     client_reference: str | None = Field(default=None, min_length=1, max_length=100)
     street: str = Field(min_length=1)
     number: str = Field(min_length=1)
     neighborhood: str = Field(min_length=1)
     is_default: bool = False
 
-    @field_validator("client_reference")
+    @field_validator("client_reference", mode="before")
     @classmethod
     def normalize_client_reference(cls, value: str | None) -> str | None:
         if value is None:
             return None
         normalized = value.strip()
-        if not normalized:
-            raise ValueError("client_reference nao pode ser vazio")
-        return normalized
+        return normalized or None
+
+    @field_validator("street", "number", "neighborhood", mode="before")
+    @classmethod
+    def normalize_required_address_text(cls, value, info):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{info.field_name} deve ser informado")
+        return value.strip()
+
+    @field_validator("label", "complement", "reference", "city", "state", "zipcode", mode="before")
+    @classmethod
+    def normalize_optional_address_text(cls, value):
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("latitude", "longitude", mode="before")
+    @classmethod
+    def normalize_optional_address_coordinate(cls, value):
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return value
 
 
 class ImportCustomerAddressesRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    addresses: list[ImportCustomerAddressRequest] = Field(min_length=1, max_length=20)
+    addresses: list[ImportCustomerAddressRequest] = Field(max_length=20)
 
     @model_validator(mode="after")
     def validate_single_default(self):

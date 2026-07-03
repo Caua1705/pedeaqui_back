@@ -1,7 +1,9 @@
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api import chat
+from src.api.validation_errors import log_contract_validation_error
 from src.api.endpoints import admin_orders, auth, customers, delivery, health, menu, orders, restaurants
 from src.core.config import settings
 
@@ -11,6 +13,8 @@ app = FastAPI(
     description="Backend API for Rapidex white-label restaurant ordering.",
     version="0.1.0",
 )
+
+app.add_exception_handler(RequestValidationError, log_contract_validation_error)
 
 origins = [
     "https://pederapidex.com",

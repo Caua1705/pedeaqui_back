@@ -20,6 +20,10 @@ class CustomerRepository:
         stmt = select(Customer).where(Customer.id == customer_id)
         return self.db.scalar(stmt)
 
+    def lock_customer(self, customer_id: uuid.UUID) -> Customer | None:
+        stmt = select(Customer).where(Customer.id == customer_id).with_for_update()
+        return self.db.scalar(stmt)
+
     def get_by_email(self, email: str) -> Customer | None:
         stmt = select(Customer).where(Customer.email == email)
         return self.db.scalar(stmt)
@@ -127,7 +131,6 @@ class CustomerRepository:
             CustomerAddress.customer_id == customer_id,
         )
         return self.db.scalar(stmt)
-
     def create_address(self, **values) -> CustomerAddress:
         address = CustomerAddress(**values)
         self.db.add(address)

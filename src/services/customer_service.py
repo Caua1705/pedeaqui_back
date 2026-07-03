@@ -1,3 +1,5 @@
+import re
+import unicodedata
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -11,6 +13,9 @@ from src.schemas.auth_schema import MessageResponse
 from src.schemas.customer_schema import (
     ChangeCustomerPasswordRequest,
     CreateCustomerAddressRequest,
+    IgnoredImportedAddress,
+    ImportCustomerAddressesRequest,
+    ImportCustomerAddressesResponse,
     UpdateCurrentCustomerRequest,
     UpdateCustomerAddressRequest,
 )
@@ -160,20 +165,31 @@ class CustomerService:
 
     def create_address(self, customer: Customer, payload: CreateCustomerAddressRequest) -> CustomerAddress:
         try:
-            if payload.is_default:
+            self.customer_repository.lock_customer(customer.id)
+            existing_addresses = self.customer_repository.list_addresses(customer.id)
+            is_default = payload.is_default or not existing_addresses
+            if is_default:
                 self.customer_repository.unset_default_addresses(customer.id)
             address = self.customer_repository.create_address(
                 customer_id=customer.id,
-                **payload.model_dump(),
+                **payload.model_dump(exclude={"is_default"}),
+                is_default=is_default,
             )
             self.db.commit()
             self.db.refresh(address)
             return address
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Nao foi possivel salvar o endereco",
+            ) from exc
         except Exception:
             self.db.rollback()
             raise
 
     def update_address(self, customer: Customer, address_id: UUID, payload: UpdateCustomerAddressRequest) -> CustomerAddress:
+        self.customer_repository.lock_customer(customer.id)
         address = self._get_owned_address(customer, address_id)
         values = payload.model_dump(exclude_unset=True)
         for required_field in ("street", "number", "neighborhood"):
@@ -190,20 +206,41 @@ class CustomerService:
             self.db.commit()
             self.db.refresh(address)
             return address
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Nao foi possivel atualizar o endereco",
+            ) from exc
         except Exception:
             self.db.rollback()
             raise
 
     def delete_address(self, customer: Customer, address_id: UUID) -> None:
+        self.customer_repository.lock_customer(customer.id)
         address = self._get_owned_address(customer, address_id)
+        was_default = address.is_default
         try:
             self.db.delete(address)
+            self.db.flush()
+            if was_default:
+                remaining_addresses = self.customer_repository.list_addresses(customer.id)
+                if remaining_addresses:
+                    remaining_addresses[0].is_default = True
+                    self.db.add(remaining_addresses[0])
             self.db.commit()
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Nao foi possivel remover o endereco",
+            ) from exc
         except Exception:
             self.db.rollback()
             raise
 
     def set_default_address(self, customer: Customer, address_id: UUID) -> CustomerAddress:
+        self.customer_repository.lock_customer(customer.id)
         address = self._get_owned_address(customer, address_id)
         try:
             self.customer_repository.unset_default_addresses(customer.id)
@@ -212,6 +249,103 @@ class CustomerService:
             self.db.commit()
             self.db.refresh(address)
             return address
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Nao foi possivel definir o endereco padrao",
+            ) from exc
+        except Exception:
+            self.db.rollback()
+            raise
+
+    def import_addresses(
+        self,
+        customer: Customer,
+        payload: ImportCustomerAddressesRequest,
+    ) -> ImportCustomerAddressesResponse:
+        created: list[CustomerAddress] = []
+        existing: list[CustomerAddress] = []
+        ignored: list[IgnoredImportedAddress] = []
+
+        try:
+            self.customer_repository.lock_customer(customer.id)
+            saved_addresses = self.customer_repository.list_addresses(customer.id)
+            by_client_reference = {
+                address.client_reference: address
+                for address in saved_addresses
+                if address.client_reference
+            }
+            by_fingerprint = {
+                self._address_fingerprint(address): address
+                for address in saved_addresses
+            }
+            request_keys: set[tuple[str, str]] = set()
+
+            for imported in payload.addresses:
+                fingerprint = self._address_fingerprint(imported)
+                request_key = (
+                    ("client_reference", imported.client_reference)
+                    if imported.client_reference
+                    else ("fingerprint", fingerprint)
+                )
+                if request_key in request_keys:
+                    ignored.append(
+                        IgnoredImportedAddress(
+                            client_reference=imported.client_reference,
+                            reason="duplicate_in_request",
+                        )
+                    )
+                    continue
+                request_keys.add(request_key)
+
+                matched = (
+                    by_client_reference.get(imported.client_reference)
+                    if imported.client_reference
+                    else by_fingerprint.get(fingerprint)
+                )
+                if matched is not None:
+                    if imported.is_default and not matched.is_default:
+                        self.customer_repository.unset_default_addresses(customer.id)
+                        matched.is_default = True
+                        self.db.add(matched)
+                    existing.append(matched)
+                    continue
+
+                is_default = imported.is_default or not saved_addresses
+                if is_default:
+                    self.customer_repository.unset_default_addresses(customer.id)
+                address = self.customer_repository.create_address(
+                    customer_id=customer.id,
+                    **imported.model_dump(exclude={"is_default"}),
+                    is_default=is_default,
+                )
+                saved_addresses.append(address)
+                if address.client_reference:
+                    by_client_reference[address.client_reference] = address
+                by_fingerprint[fingerprint] = address
+                created.append(address)
+
+            if saved_addresses and not any(address.is_default for address in saved_addresses):
+                saved_addresses[0].is_default = True
+                self.db.add(saved_addresses[0])
+
+            self.db.commit()
+            for address in created:
+                self.db.refresh(address)
+            for address in existing:
+                self.db.refresh(address)
+            return ImportCustomerAddressesResponse(
+                created=created,
+                existing=existing,
+                ignored=ignored,
+            )
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Conflito ao importar enderecos",
+            ) from exc
         except Exception:
             self.db.rollback()
             raise
@@ -221,3 +355,25 @@ class CustomerService:
         if not address:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endereco nao encontrado")
         return address
+
+    @classmethod
+    def _address_fingerprint(cls, address) -> str:
+        fields = (
+            "street",
+            "number",
+            "neighborhood",
+            "city",
+            "state",
+            "zipcode",
+        )
+        return "|".join(cls._normalize_address_value(getattr(address, field, None)) for field in fields)
+
+    @staticmethod
+    def _normalize_address_value(value: object | None) -> str:
+        if value is None:
+            return ""
+        normalized = unicodedata.normalize("NFKD", str(value).strip().lower())
+        normalized = "".join(
+            character for character in normalized if not unicodedata.combining(character)
+        )
+        return re.sub(r"\s+", " ", normalized)

@@ -17,6 +17,7 @@ from src.repositories.delivery_zone_repository import DeliveryZoneRepository
 from src.repositories.menu_repository import MenuRepository
 from src.repositories.order_repository import OrderRepository
 from src.repositories.product_repository import ProductRepository
+from src.schemas.delivery_schema import DeliveryAddressInput, DeliveryEstimateRequest
 from src.schemas.order_schema import (
     CreateOrderRequest,
     CreateOrderResponse,
@@ -24,6 +25,7 @@ from src.schemas.order_schema import (
     OrderItemResponse,
 )
 from src.schemas.common_schema import StatusHistoryResponse
+from src.services.delivery_estimate_service import DeliveryEstimateService
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import ZERO, money_to_float, quantize_money, to_decimal
 
@@ -56,6 +58,12 @@ class OrderService:
         self._validate_customer_snapshot(payload, current_customer)
         self._validate_delivery_address(payload, address)
         settings = self.menu_repository.get_settings(restaurant.id)
+        delivery_estimate = self._estimate_delivery(
+            restaurant_slug,
+            payload,
+            address,
+            current_customer,
+        )
         products_by_id = self._get_valid_products(restaurant.id, [item.product_id for item in payload.items])
 
         selected_options_by_item = [
@@ -65,7 +73,11 @@ class OrderService:
         subtotal = self._calculate_subtotal(payload, products_by_id, selected_options_by_item)
         self._validate_minimum_order_value(subtotal, settings)
         service_fee = self._calculate_service_fee(settings)
-        delivery_fee = self._calculate_delivery_fee(restaurant.id, payload, settings, address)
+        delivery_fee = (
+            quantize_money(to_decimal(delivery_estimate.delivery_fee))
+            if delivery_estimate is not None
+            else self._calculate_delivery_fee(restaurant.id, payload, settings, address)
+        )
         total = quantize_money(subtotal + service_fee + delivery_fee)
 
         try:
@@ -90,6 +102,18 @@ class OrderService:
                 address_neighborhood=address.neighborhood if address else None,
                 address_complement=address.complement if address else None,
                 address_reference=address.reference if address else None,
+                address_city=getattr(address, "city", None) if address else None,
+                address_state=getattr(address, "state", None) if address else None,
+                address_zipcode=getattr(address, "zipcode", None) if address else None,
+                delivery_latitude=delivery_estimate.latitude if delivery_estimate else None,
+                delivery_longitude=delivery_estimate.longitude if delivery_estimate else None,
+                delivery_distance_km=delivery_estimate.distance_km if delivery_estimate else None,
+                delivery_travel_time_min=delivery_estimate.travel_time_min if delivery_estimate else None,
+                delivery_prep_time_min=delivery_estimate.prep_time_min if delivery_estimate else None,
+                delivery_eta_min=delivery_estimate.eta_min if delivery_estimate else None,
+                delivery_eta_max=delivery_estimate.eta_max if delivery_estimate else None,
+                delivery_estimate_provider=delivery_estimate.provider if delivery_estimate else None,
+                delivery_estimated_at=datetime.now(timezone.utc) if delivery_estimate else None,
                 notes=payload.notes,
             )
             self.order_repository.create_order(order)
@@ -167,6 +191,42 @@ class OrderService:
             return address
         return payload.address
 
+    def _estimate_delivery(
+        self,
+        restaurant_slug: str,
+        payload: CreateOrderRequest,
+        address,
+        current_customer: Customer | None,
+    ):
+        if payload.order_type != "delivery":
+            return None
+        inline_address = None
+        if payload.customer_address_id is None:
+            inline_address = DeliveryAddressInput(
+                street=address.street,
+                number=address.number,
+                neighborhood=address.neighborhood,
+                city=getattr(address, "city", None),
+                state=getattr(address, "state", None),
+                zipcode=getattr(address, "zipcode", None),
+                latitude=getattr(address, "latitude", None),
+                longitude=getattr(address, "longitude", None),
+            )
+        estimate = DeliveryEstimateService(self.db).estimate(
+            restaurant_slug,
+            DeliveryEstimateRequest(
+                branch_id=payload.branch_id,
+                address_id=payload.customer_address_id,
+                address=inline_address,
+            ),
+            current_customer,
+        )
+        if not estimate.serviceable:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=estimate.message or estimate.reason or "Endereco fora da area de entrega",
+            )
+        return estimate
     def _get_valid_products(self, restaurant_id: UUID, product_ids: list[UUID]) -> dict[UUID, object]:
         unique_ids = list(set(product_ids))
         products = self.product_repository.list_active_by_ids(restaurant_id, unique_ids)
@@ -332,6 +392,18 @@ class OrderService:
             address_neighborhood=order.address_neighborhood,
             address_complement=order.address_complement,
             address_reference=order.address_reference,
+            address_city=order.address_city,
+            address_state=order.address_state,
+            address_zipcode=order.address_zipcode,
+            delivery_latitude=float(order.delivery_latitude) if order.delivery_latitude is not None else None,
+            delivery_longitude=float(order.delivery_longitude) if order.delivery_longitude is not None else None,
+            delivery_distance_km=money_to_float(order.delivery_distance_km) if order.delivery_distance_km is not None else None,
+            delivery_travel_time_min=order.delivery_travel_time_min,
+            delivery_prep_time_min=order.delivery_prep_time_min,
+            delivery_eta_min=order.delivery_eta_min,
+            delivery_eta_max=order.delivery_eta_max,
+            delivery_estimate_provider=order.delivery_estimate_provider,
+            delivery_estimated_at=order.delivery_estimated_at,
             notes=order.notes,
             created_at=order.created_at,
             updated_at=order.updated_at,

@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -17,6 +18,11 @@ class AddressInput(BaseModel):
     neighborhood: str | None = None
     complement: str | None = None
     reference: str | None = None
+    city: str | None = None
+    state: str | None = None
+    zipcode: str | None = None
+    latitude: Decimal | None = Field(default=None, ge=-90, le=90)
+    longitude: Decimal | None = Field(default=None, ge=-180, le=180)
 
 
 class OrderItemSelectedOptionInput(BaseModel):
@@ -87,6 +93,18 @@ class OrderDetailResponse(BaseResponse):
     address_neighborhood: str | None = None
     address_complement: str | None = None
     address_reference: str | None = None
+    address_city: str | None = None
+    address_state: str | None = None
+    address_zipcode: str | None = None
+    delivery_latitude: float | None = None
+    delivery_longitude: float | None = None
+    delivery_distance_km: float | None = None
+    delivery_travel_time_min: int | None = None
+    delivery_prep_time_min: int | None = None
+    delivery_eta_min: int | None = None
+    delivery_eta_max: int | None = None
+    delivery_estimate_provider: str | None = None
+    delivery_estimated_at: datetime | None = None
     notes: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

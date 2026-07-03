@@ -36,6 +36,7 @@ class CustomerAddress(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
     customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("customers.id"), nullable=False)
+    client_reference: Mapped[str | None] = mapped_column(Text)
     label: Mapped[str | None] = mapped_column(Text)
     street: Mapped[str] = mapped_column(Text, nullable=False)
     number: Mapped[str] = mapped_column(Text, nullable=False)

@@ -28,6 +28,15 @@ class Settings(BaseSettings):
     MODEL_NAME: str = "gpt-5-mini"
     EMBEDDING_MODEL: str = "text-embedding-3-small"
 
+    GOOGLE_MAPS_ROUTES_API_KEY: str = ""
+    GOOGLE_MAPS_ROUTES_BASE_URL: str = "https://routes.googleapis.com"
+    GOOGLE_MAPS_TIMEOUT_SECONDS: float = 5
+    GOOGLE_MAPS_ROUTING_PREFERENCE: str = "TRAFFIC_AWARE"
+    DELIVERY_ESTIMATE_CACHE_TTL_SECONDS: int = 600
+    DELIVERY_ESTIMATE_NEGATIVE_CACHE_TTL_SECONDS: int = 120
+    DELIVERY_ESTIMATE_PROVIDER: str = "google_routes"
+    REDIS_URL: str | None = None
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

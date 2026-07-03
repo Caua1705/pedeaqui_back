@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.schemas.common_schema import BaseResponse
 from src.schemas.order_schema import OrderItemResponse
@@ -10,7 +10,7 @@ from src.utils.normalization import is_valid_email, normalize_digits, normalize_
 
 
 class CustomerAddressBase(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     label: str | None = None
     street: str | None = None
@@ -21,8 +21,8 @@ class CustomerAddressBase(BaseModel):
     city: str | None = None
     state: str | None = None
     zipcode: str | None = None
-    latitude: Decimal | None = None
-    longitude: Decimal | None = None
+    latitude: Decimal | None = Field(default=None, ge=-90, le=90)
+    longitude: Decimal | None = Field(default=None, ge=-180, le=180)
 
     @field_validator("zipcode")
     @classmethod
@@ -46,6 +46,7 @@ class CustomerAddressResponse(BaseResponse):
 
     id: UUID
     customer_id: UUID
+    client_reference: str | None = None
     label: str | None = None
     street: str
     number: str
@@ -55,12 +56,52 @@ class CustomerAddressResponse(BaseResponse):
     city: str | None = None
     state: str | None = None
     zipcode: str | None = None
-    latitude: Decimal | None = None
-    longitude: Decimal | None = None
+    latitude: Decimal | None = Field(default=None, ge=-90, le=90)
+    longitude: Decimal | None = Field(default=None, ge=-180, le=180)
     is_default: bool
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
+
+class ImportCustomerAddressRequest(CustomerAddressBase):
+    client_reference: str | None = Field(default=None, min_length=1, max_length=100)
+    street: str = Field(min_length=1)
+    number: str = Field(min_length=1)
+    neighborhood: str = Field(min_length=1)
+    is_default: bool = False
+
+    @field_validator("client_reference")
+    @classmethod
+    def normalize_client_reference(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("client_reference nao pode ser vazio")
+        return normalized
+
+
+class ImportCustomerAddressesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    addresses: list[ImportCustomerAddressRequest] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_single_default(self):
+        if sum(address.is_default for address in self.addresses) > 1:
+            raise ValueError("Apenas um endereco pode ser definido como padrao")
+        return self
+
+
+class IgnoredImportedAddress(BaseModel):
+    client_reference: str | None = None
+    reason: str
+
+
+class ImportCustomerAddressesResponse(BaseModel):
+    created: list[CustomerAddressResponse] = Field(default_factory=list)
+    existing: list[CustomerAddressResponse] = Field(default_factory=list)
+    ignored: list[IgnoredImportedAddress] = Field(default_factory=list)
 
 class CurrentCustomerResponse(BaseResponse):
     id: UUID

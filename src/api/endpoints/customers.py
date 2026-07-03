@@ -7,16 +7,20 @@ from src.api.dependencies.customer_auth import get_current_customer
 from src.api.dependencies.database import get_db
 from src.models.customer_model import Customer
 from src.schemas.auth_schema import MessageResponse
+from src.schemas.cashback_schema import CashbackBalanceResponse
 from src.schemas.customer_schema import (
     ChangeCustomerPasswordRequest,
     CreateCustomerAddressRequest,
     CurrentCustomerResponse,
     CustomerAddressResponse,
     CustomerOrderHistoryItem,
+    ImportCustomerAddressesRequest,
+    ImportCustomerAddressesResponse,
     UpdateCurrentCustomerRequest,
     UpdateCustomerAddressRequest,
 )
 from src.services.customer_service import CustomerService
+from src.services.cashback_service import CashbackService
 
 
 router = APIRouter(prefix="/customers", tags=["customers"])
@@ -28,6 +32,18 @@ def get_me(
     db: Session = Depends(get_db),
 ) -> CurrentCustomerResponse:
     return CustomerService(db).get_me(current_customer)
+
+
+@router.get(
+    "/me/cashback",
+    response_model=CashbackBalanceResponse,
+    responses={status.HTTP_401_UNAUTHORIZED: {"description": "Nao autenticado"}},
+)
+def get_cashback_balance(
+    current_customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+) -> CashbackBalanceResponse:
+    return CashbackService(db).get_balance(current_customer)
 
 
 @router.patch(
@@ -80,6 +96,18 @@ def create_address(
 ) -> CustomerAddressResponse:
     return CustomerService(db).create_address(current_customer, payload)
 
+
+@router.post(
+    "/me/addresses/import",
+    response_model=ImportCustomerAddressesResponse,
+    status_code=status.HTTP_200_OK,
+)
+def import_addresses(
+    payload: ImportCustomerAddressesRequest,
+    current_customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+) -> ImportCustomerAddressesResponse:
+    return CustomerService(db).import_addresses(current_customer, payload)
 
 @router.patch("/me/addresses/{address_id}", response_model=CustomerAddressResponse)
 def update_address(

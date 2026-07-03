@@ -1,4 +1,7 @@
+from typing import Literal
 from uuid import UUID
+
+from pydantic import BaseModel
 
 from src.schemas.common_schema import BaseResponse
 
@@ -53,3 +56,73 @@ class CategoryResponse(BaseResponse):
     slug: str
     sort_order: int | None = 0
     is_active: bool | None = True
+
+
+class RestaurantInfoRestaurantResponse(BaseModel):
+    id: UUID
+    name: str
+    logo_url: str | None = None
+
+
+class BranchAddressResponse(BaseModel):
+    street: str | None = None
+    number: str | None = None
+    neighborhood: str | None = None
+    city: str | None = None
+    state: str | None = None
+    zipcode: str | None = None
+    full_address: str
+
+
+class RestaurantInfoBranchResponse(BaseModel):
+    id: UUID
+    name: str
+    display_name: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    whatsapp: str | None = None
+    address: BranchAddressResponse
+
+
+class BusinessHourPeriodResponse(BaseModel):
+    opens_at: str
+    closes_at: str
+
+
+class BusinessHourDayResponse(BaseModel):
+    weekday: int
+    day_label: str
+    periods: list[BusinessHourPeriodResponse]
+    is_closed: bool
+
+
+PaymentFlow = Literal["online", "delivery"]
+PaymentMethodType = Literal[
+    "pix", "credit_card", "debit_card", "cash", "voucher", "meal_voucher", "other"
+]
+
+
+class BranchPaymentMethodResponse(BaseModel):
+    id: UUID
+    payment_flow: PaymentFlow
+    method_type: PaymentMethodType
+    brand: str | None = None
+    label: str
+    icon_key: str | None = None
+    enabled: bool
+    requires_gateway: bool
+
+
+class PaymentMethodsResponse(BaseModel):
+    online: list[BranchPaymentMethodResponse]
+    delivery: list[BranchPaymentMethodResponse]
+
+
+class RestaurantInfoResponse(BaseModel):
+    restaurant: RestaurantInfoRestaurantResponse
+    branch: RestaurantInfoBranchResponse
+    business_hours: list[BusinessHourDayResponse]
+    payment_methods: PaymentMethodsResponse
+    timezone: Literal["America/Fortaleza"] = "America/Fortaleza"
+    current_weekday: int
+    current_day_label: str

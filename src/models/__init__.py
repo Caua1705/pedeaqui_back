@@ -2,6 +2,8 @@ from src.models.admin_user_model import AdminUser
 from src.models.ai_feedback_model import AIFeedback
 from src.models.ai_product_embedding_model import AIProductEmbedding
 from src.models.branch_model import Branch
+from src.models.branch_business_hour_model import BranchBusinessHour
+from src.models.branch_payment_method_model import BranchPaymentMethod
 from src.models.cashback_transaction_model import CashbackTransaction
 from src.models.category_model import Category
 from src.models.coupon_model import CouponTemplate, RestaurantCoupon
@@ -22,6 +24,8 @@ __all__ = [
     "AIFeedback",
     "AIProductEmbedding",
     "Branch",
+    "BranchBusinessHour",
+    "BranchPaymentMethod",
     "CashbackTransaction",
     "Category",
     "CouponTemplate",

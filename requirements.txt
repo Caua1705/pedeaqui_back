@@ -13,3 +13,4 @@ langchain-core
 langchain-openai
 httpx
 redis
+psycopg2-binary

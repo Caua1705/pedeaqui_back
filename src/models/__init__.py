@@ -8,7 +8,6 @@ from src.models.cashback_transaction_model import CashbackTransaction
 from src.models.category_model import Category
 from src.models.coupon_model import CouponTemplate, RestaurantCoupon
 from src.models.customer_model import Customer, CustomerAddress, EmailVerificationCode, PasswordResetCode
-from src.models.delivery_zone_model import DeliveryZone
 from src.models.order_item_model import OrderItem
 from src.models.order_item_option_model import OrderItemOption
 from src.models.order_model import Order
@@ -33,7 +32,6 @@ __all__ = [
     "CustomerAddress",
     "EmailVerificationCode",
     "PasswordResetCode",
-    "DeliveryZone",
     "Order",
     "OrderItem",
     "OrderItemOption",

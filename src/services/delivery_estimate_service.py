@@ -20,11 +20,10 @@ from src.integrations.google_maps_routes_client import (
 from src.models.customer_model import Customer
 from src.repositories.branch_repository import BranchRepository
 from src.repositories.customer_repository import CustomerRepository
-from src.repositories.delivery_zone_repository import DeliveryZoneRepository
 from src.repositories.menu_repository import MenuRepository
 from src.schemas.delivery_schema import DeliveryEstimateRequest, DeliveryEstimateResponse
 from src.services.restaurant_service import RestaurantService
-from src.utils.money import money_to_float
+from src.utils.money import money_to_float, quantize_money, to_decimal
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -122,7 +121,6 @@ class DeliveryEstimateService:
         self.restaurant_service = RestaurantService(db)
         self.branch_repository = BranchRepository(db)
         self.customer_repository = CustomerRepository(db)
-        self.delivery_zone_repository = DeliveryZoneRepository(db)
         self.menu_repository = MenuRepository(db)
         self.maps_client = maps_client or GoogleMapsRoutesClient(
             api_key=settings.GOOGLE_MAPS_ROUTES_API_KEY,
@@ -178,62 +176,6 @@ class DeliveryEstimateService:
             getattr(address, "longitude", None),
         )
 
-        zones = self.delivery_zone_repository.list_active_by_branch(
-            restaurant.id,
-            branch.id,
-        )
-        matching_zone = self.delivery_zone_repository.get_active_by_neighborhood(
-            restaurant_id=restaurant.id,
-            branch_id=branch.id,
-            neighborhood=address.neighborhood,
-        )
-        if zones and matching_zone is None:
-            result = self._not_serviceable(
-                "outside_delivery_area",
-                "Endereco fora da area de entrega.",
-            )
-            logger.info(
-                "[Delivery estimate debug] event=delivery_zone neighborhood=%s "
-                "zone_found=false delivery_fee=%s serviceable=%s reason=%s",
-                getattr(address, "neighborhood", None),
-                None,
-                str(result.serviceable).lower(),
-                result.reason,
-            )
-            latitude = self._optional_float(getattr(address, "latitude", None))
-            longitude = self._optional_float(getattr(address, "longitude", None))
-            if latitude is not None and longitude is not None:
-                policy_key = (
-                    self._cache_key(
-                        restaurant_slug,
-                        branch.id,
-                        Coordinates(latitude=latitude, longitude=longitude),
-                        None,
-                        None,
-                    )
-                    + ":outside"
-                )
-                cached = self.cache.get(policy_key)
-                if cached is not None:
-                    self._log_final_result(cached)
-                    return cached
-                self.cache.set(policy_key, result)
-            self._log_final_result(result)
-            return result
-
-        delivery_fee = money_to_float(
-            matching_zone.delivery_fee
-            if matching_zone is not None
-            else getattr(restaurant_settings, "default_delivery_fee", Decimal("0"))
-        )
-        logger.info(
-            "[Delivery estimate debug] event=delivery_zone neighborhood=%s "
-            "zone_found=%s delivery_fee=%s serviceable=true reason=%s",
-            getattr(address, "neighborhood", None),
-            str(matching_zone is not None).lower(),
-            delivery_fee,
-            None,
-        )
         prep_time_min, prep_time_max, prep_time_source, prep_time_weekday = self._resolve_prep_time(
             branch.id
         )
@@ -245,6 +187,13 @@ class DeliveryEstimateService:
             prep_time_max,
             prep_time_source,
         )
+        if prep_time_min is None or prep_time_max is None:
+            result = self._not_serviceable(
+                "prep_time_unavailable",
+                "Tempo de preparo nao configurado para o horario atual.",
+            )
+            self._log_final_result(result)
+            return result
 
         cache_key = None
         destination = None
@@ -257,6 +206,7 @@ class DeliveryEstimateService:
                 destination,
                 prep_time_min,
                 prep_time_max,
+                branch,
             )
             cached = self.cache.get(cache_key)
             if cached is not None:
@@ -273,10 +223,90 @@ class DeliveryEstimateService:
                     cached.travel_time_min,
                     str(cached.fallback).lower(),
                 )
+                if cached.distance_km is not None and cached.travel_time_min is not None:
+                    _, raw_delivery_fee = self._calculate_delivery_fee(
+                        branch,
+                        cached.distance_km,
+                    )
+                    self._log_delivery_fee_algorithm(
+                        branch,
+                        cached.distance_km,
+                        cached.travel_time_min,
+                        raw_delivery_fee,
+                        to_decimal(cached.delivery_fee)
+                        if cached.delivery_fee is not None
+                        else None,
+                        cached.prep_time_min,
+                        cached.prep_time_max,
+                        cached.eta_min,
+                        cached.eta_max,
+                        cached.fallback,
+                    )
                 self._log_final_result(cached)
                 return cached
 
             route = self.maps_client.compute_route(origin, destination)
+            delivery_fee, raw_delivery_fee = self._calculate_delivery_fee(
+                branch,
+                route.distance_km,
+            )
+            if delivery_fee is None or raw_delivery_fee is None:
+                result = self._not_serviceable(
+                    "delivery_fee_config_unavailable",
+                    "Configuracao de taxa de entrega nao encontrada para a filial.",
+                    provider=settings.DELIVERY_ESTIMATE_PROVIDER,
+                )
+                result.distance_km = route.distance_km
+                result.travel_time_min = route.travel_time_min
+                result.prep_time_min = prep_time_min
+                result.prep_time_max = prep_time_max
+                result.eta_min = prep_time_min + route.travel_time_min
+                result.eta_max = prep_time_max + route.travel_time_min
+                result.latitude = destination.latitude
+                result.longitude = destination.longitude
+                self._log_delivery_fee_algorithm(
+                    branch,
+                    route.distance_km,
+                    route.travel_time_min,
+                    raw_delivery_fee,
+                    result.delivery_fee,
+                    prep_time_min,
+                    prep_time_max,
+                    result.eta_min,
+                    result.eta_max,
+                    result.fallback,
+                )
+                self._log_final_result(result)
+                return result
+            if self._is_outside_max_distance(branch, route.distance_km):
+                result = self._not_serviceable(
+                    "outside_delivery_area",
+                    "Endereco fora da area de entrega.",
+                    provider=settings.DELIVERY_ESTIMATE_PROVIDER,
+                )
+                result.distance_km = route.distance_km
+                result.travel_time_min = route.travel_time_min
+                result.prep_time_min = prep_time_min
+                result.prep_time_max = prep_time_max
+                result.eta_min = prep_time_min + route.travel_time_min
+                result.eta_max = prep_time_max + route.travel_time_min
+                result.latitude = destination.latitude
+                result.longitude = destination.longitude
+                self._log_delivery_fee_algorithm(
+                    branch,
+                    route.distance_km,
+                    route.travel_time_min,
+                    raw_delivery_fee,
+                    result.delivery_fee,
+                    prep_time_min,
+                    prep_time_max,
+                    result.eta_min,
+                    result.eta_max,
+                    result.fallback,
+                )
+                self.cache.set(cache_key, result)
+                self._log_final_result(result)
+                return result
             travel_time_min = route.travel_time_min
             eta_min = prep_time_min + travel_time_min
             eta_max = prep_time_max + travel_time_min
@@ -290,11 +320,23 @@ class DeliveryEstimateService:
                 prep_time_max=prep_time_max,
                 eta_min=eta_min,
                 eta_max=eta_max,
-                delivery_fee=delivery_fee,
+                delivery_fee=money_to_float(delivery_fee),
                 provider=settings.DELIVERY_ESTIMATE_PROVIDER,
                 fallback=False,
                 latitude=destination.latitude,
                 longitude=destination.longitude,
+            )
+            self._log_delivery_fee_algorithm(
+                branch,
+                route.distance_km,
+                travel_time_min,
+                raw_delivery_fee,
+                delivery_fee,
+                prep_time_min,
+                prep_time_max,
+                eta_min,
+                eta_max,
+                result.fallback,
             )
             logger.info(
                 "[Delivery estimate debug] event=google_maps_result provider=%s "
@@ -323,16 +365,16 @@ class DeliveryEstimateService:
                 self.cache.set(cache_key, result)
         except GoogleMapsUnavailableError:
             result = DeliveryEstimateResult(
-                serviceable=True,
-                reason="provider_unavailable",
-                message="Estimativa baseada na configuracao do restaurante.",
+                serviceable=False,
+                reason="route_unavailable",
+                message="Nao foi possivel calcular a rota para estimar a taxa de entrega.",
                 distance_km=None,
                 travel_time_min=None,
                 prep_time_min=prep_time_min,
                 prep_time_max=prep_time_max,
                 eta_min=prep_time_min,
                 eta_max=prep_time_max,
-                delivery_fee=delivery_fee,
+                delivery_fee=None,
                 provider="configured_fallback",
                 fallback=True,
                 latitude=(
@@ -429,7 +471,7 @@ class DeliveryEstimateService:
             )
         return self.maps_client.geocode(address)
 
-    def _resolve_prep_time(self, branch_id) -> tuple[int, int, str, int]:
+    def _resolve_prep_time(self, branch_id) -> tuple[int | None, int | None, str, int]:
         now = datetime.now(DELIVERY_TIMEZONE)
         current_time = now.timetz().replace(tzinfo=None)
         weekday = now.weekday()
@@ -445,7 +487,34 @@ class DeliveryEstimateService:
         if prep_time_min is not None and prep_time_max is not None:
             return prep_time_min, max(prep_time_min, prep_time_max), "branch_business_hours", weekday
 
-        return 30, 60, "default_30_60", weekday
+        return None, None, "branch_business_hours_missing", weekday
+
+    @staticmethod
+    def _calculate_delivery_fee(branch, distance_km: float) -> tuple[Decimal | None, Decimal | None]:
+        base_fee_config = getattr(branch, "delivery_base_fee", None)
+        fee_per_km_config = getattr(branch, "delivery_fee_per_km", None)
+        if base_fee_config is None or fee_per_km_config is None:
+            return None, None
+
+        base_fee = to_decimal(base_fee_config)
+        fee_per_km = to_decimal(fee_per_km_config)
+        raw_fee = base_fee + (to_decimal(distance_km) * fee_per_km)
+        delivery_fee = raw_fee
+
+        min_fee = getattr(branch, "delivery_min_fee", None)
+        if min_fee is not None:
+            delivery_fee = max(delivery_fee, to_decimal(min_fee))
+
+        max_fee = getattr(branch, "delivery_max_fee", None)
+        if max_fee is not None:
+            delivery_fee = min(delivery_fee, to_decimal(max_fee))
+
+        return quantize_money(delivery_fee), quantize_money(raw_fee)
+
+    @staticmethod
+    def _is_outside_max_distance(branch, distance_km: float) -> bool:
+        max_distance = getattr(branch, "delivery_max_distance_km", None)
+        return max_distance is not None and to_decimal(distance_km) > to_decimal(max_distance)
 
     @classmethod
     def _select_business_hour_for_prep_time(
@@ -556,17 +625,60 @@ class DeliveryEstimateService:
         )
 
     @staticmethod
+    def _log_delivery_fee_algorithm(
+        branch,
+        distance_km: float,
+        travel_time_min: int,
+        raw_fee: Decimal | None,
+        final_delivery_fee: Decimal | None,
+        prep_time_min: int | None,
+        prep_time_max: int | None,
+        eta_min: int | None,
+        eta_max: int | None,
+        fallback: bool,
+    ) -> None:
+        logger.info(
+            "[Delivery estimate debug] event=delivery_fee_algorithm distance_km=%s "
+            "travel_time_min=%s delivery_base_fee=%s delivery_fee_per_km=%s "
+            "delivery_min_fee=%s delivery_max_fee=%s delivery_max_distance_km=%s "
+            "raw_fee=%s final_delivery_fee=%s delivery_fee_source=%s "
+            "prep_time_min=%s prep_time_max=%s eta_min=%s eta_max=%s fallback=%s",
+            distance_km,
+            travel_time_min,
+            getattr(branch, "delivery_base_fee", None),
+            getattr(branch, "delivery_fee_per_km", None),
+            getattr(branch, "delivery_min_fee", None),
+            getattr(branch, "delivery_max_fee", None),
+            getattr(branch, "delivery_max_distance_km", None),
+            raw_fee,
+            final_delivery_fee,
+            "distance_algorithm",
+            prep_time_min,
+            prep_time_max,
+            eta_min,
+            eta_max,
+            str(fallback).lower(),
+        )
+
+    @staticmethod
     def _cache_key(
         restaurant_slug: str,
         branch_id,
         destination: Coordinates,
         prep_time_min: int | None,
         prep_time_max: int | None,
+        branch,
     ) -> str:
         ttl = max(1, settings.DELIVERY_ESTIMATE_CACHE_TTL_SECONDS)
         bucket = int(time() // ttl)
         return (
             f"delivery-estimate:v1:{restaurant_slug}:{branch_id}:"
             f"{destination.latitude:.4f}:{destination.longitude:.4f}:"
-            f"{prep_time_min or 'none'}:{prep_time_max or 'none'}:{bucket}"
+            f"{prep_time_min or 'none'}:{prep_time_max or 'none'}:"
+            f"{getattr(branch, 'delivery_base_fee', None) or 'none'}:"
+            f"{getattr(branch, 'delivery_fee_per_km', None) or 'none'}:"
+            f"{getattr(branch, 'delivery_min_fee', None) or 'none'}:"
+            f"{getattr(branch, 'delivery_max_fee', None) or 'none'}:"
+            f"{getattr(branch, 'delivery_max_distance_km', None) or 'none'}:"
+            f"{bucket}"
         )

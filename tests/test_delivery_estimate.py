@@ -44,18 +44,6 @@ class FakeCache:
         self.values[key] = value
 
 
-class FakeZoneRepository:
-    def __init__(self, zones=None, matching=None) -> None:
-        self.zones = list(zones or [])
-        self.matching = matching
-
-    def list_active_by_branch(self, restaurant_id, branch_id):
-        return self.zones
-
-    def get_active_by_neighborhood(self, **kwargs):
-        return self.matching
-
-
 class DeliveryEstimateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.restaurant = SimpleNamespace(id=uuid.uuid4(), slug="restaurante")
@@ -69,10 +57,14 @@ class DeliveryEstimateTests(unittest.TestCase):
             state="CE",
             zipcode=None,
             is_main=True,
+            delivery_base_fee=Decimal("5.00"),
+            delivery_fee_per_km=Decimal("1.50"),
+            delivery_min_fee=Decimal("8.00"),
+            delivery_max_fee=Decimal("20.00"),
+            delivery_max_distance_km=Decimal("10.00"),
         )
         self.settings = SimpleNamespace(
             accepts_delivery=True,
-            default_delivery_fee=Decimal("8.00"),
             estimated_delivery_time_min=60,
             estimated_delivery_time_max=75,
         )
@@ -91,7 +83,6 @@ class DeliveryEstimateTests(unittest.TestCase):
             list_business_hours_by_weekday=lambda branch_id, weekday: self.business_hours,
         )
         self.service.customer_repository = SimpleNamespace(get_address=lambda *_: None)
-        self.service.delivery_zone_repository = FakeZoneRepository()
         self.service.menu_repository = SimpleNamespace(
             get_settings=lambda restaurant_id: self.settings
         )
@@ -130,7 +121,28 @@ class DeliveryEstimateTests(unittest.TestCase):
         self.assertEqual(result.prep_time_max, 60)
         self.assertEqual(result.eta_min, 58)
         self.assertEqual(result.eta_max, 78)
-        self.assertEqual(result.delivery_fee, 8.0)
+        self.assertEqual(result.delivery_fee, 11.3)
+
+    def test_delivery_fee_respects_min_and_max_limits(self):
+        self.branch.delivery_min_fee = Decimal("15.00")
+        result = self.service.estimate("restaurante", self.request(), None)
+        self.assertTrue(result.serviceable)
+        self.assertEqual(result.delivery_fee, 15.0)
+
+        self.cache = FakeCache()
+        self.service.cache = self.cache
+        self.branch.delivery_min_fee = Decimal("8.00")
+        self.branch.delivery_max_fee = Decimal("10.00")
+        result = self.service.estimate("restaurante", self.request(), None)
+        self.assertTrue(result.serviceable)
+        self.assertEqual(result.delivery_fee, 10.0)
+
+    def test_max_distance_rejects_delivery_area(self):
+        self.branch.delivery_max_distance_km = Decimal("4.00")
+        result = self.service.estimate("restaurante", self.request(), None)
+        self.assertFalse(result.serviceable)
+        self.assertEqual(result.reason, "outside_delivery_area")
+        self.assertEqual(result.distance_km, 4.2)
 
     def test_business_hour_prep_time_is_used_for_current_day(self):
         self.business_hours = [
@@ -173,7 +185,7 @@ class DeliveryEstimateTests(unittest.TestCase):
         self.assertEqual(selected.prep_time_min, 30)
         self.assertEqual(selected.prep_time_max, 45)
 
-    def test_current_business_hour_without_prep_time_falls_back_to_default(self):
+    def test_current_business_hour_without_prep_time_is_not_serviceable(self):
         self.business_hours = [
             SimpleNamespace(
                 opens_at=time(0, 0),
@@ -190,18 +202,35 @@ class DeliveryEstimateTests(unittest.TestCase):
         ]
 
         result = self.service.estimate("restaurante", self.request(), None)
-        self.assertTrue(result.serviceable)
-        self.assertEqual(result.prep_time_min, 30)
-        self.assertEqual(result.prep_time_max, 60)
+        self.assertFalse(result.serviceable)
+        self.assertEqual(result.reason, "prep_time_unavailable")
+        self.assertIsNone(result.prep_time_min)
+        self.assertIsNone(result.prep_time_max)
 
-    def test_default_prep_time_is_used_when_business_hour_prep_time_is_missing(self):
+    def test_missing_business_hour_prep_time_is_not_serviceable(self):
         result = self.service.estimate("restaurante", self.request(), None)
-        self.assertTrue(result.serviceable)
-        self.assertEqual(result.prep_time_min, 30)
-        self.assertEqual(result.prep_time_max, 60)
-        self.assertEqual(result.travel_time_min, 18)
-        self.assertEqual(result.eta_min, 48)
-        self.assertEqual(result.eta_max, 78)
+        self.assertFalse(result.serviceable)
+        self.assertEqual(result.reason, "prep_time_unavailable")
+        self.assertIsNone(result.travel_time_min)
+        self.assertIsNone(result.eta_min)
+        self.assertIsNone(result.eta_max)
+
+    def test_missing_delivery_fee_config_is_not_serviceable(self):
+        self.business_hours = [
+            SimpleNamespace(
+                opens_at=None,
+                closes_at=None,
+                prep_time_min=40,
+                prep_time_max=60,
+            )
+        ]
+        self.branch.delivery_base_fee = None
+
+        result = self.service.estimate("restaurante", self.request(), None)
+        self.assertFalse(result.serviceable)
+        self.assertEqual(result.reason, "delivery_fee_config_unavailable")
+        self.assertEqual(result.distance_km, 4.2)
+        self.assertIsNone(result.delivery_fee)
 
     def test_google_failure_uses_explicit_fallback(self):
         self.business_hours = [
@@ -215,11 +244,13 @@ class DeliveryEstimateTests(unittest.TestCase):
         self.service.maps_client = FakeMapsClient(unavailable=True)
 
         result = self.service.estimate("restaurante", self.request(), None)
-        self.assertTrue(result.serviceable)
+        self.assertFalse(result.serviceable)
         self.assertTrue(result.fallback)
         self.assertEqual(result.provider, "configured_fallback")
+        self.assertEqual(result.reason, "route_unavailable")
         self.assertIsNone(result.distance_km)
         self.assertIsNone(result.travel_time_min)
+        self.assertIsNone(result.delivery_fee)
         self.assertEqual(result.prep_time_min, 40)
         self.assertEqual(result.prep_time_max, 60)
         self.assertEqual(result.eta_min, 40)
@@ -233,16 +264,6 @@ class DeliveryEstimateTests(unittest.TestCase):
                 None,
             )
         self.assertEqual(raised.exception.status_code, 401)
-
-    def test_configured_zones_reject_unknown_neighborhood(self):
-        self.service.delivery_zone_repository = FakeZoneRepository(
-            zones=[SimpleNamespace(id=uuid.uuid4())],
-            matching=None,
-        )
-        result = self.service.estimate("restaurante", self.request(), None)
-        self.assertFalse(result.serviceable)
-        self.assertEqual(result.reason, "outside_delivery_area")
-        self.assertEqual(self.maps.calls, 0)
 
     def test_request_requires_exactly_one_address_source(self):
         with self.assertRaises(ValidationError):

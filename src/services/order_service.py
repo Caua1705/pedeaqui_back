@@ -13,7 +13,6 @@ from src.models.order_model import Order
 from src.models.order_status_history_model import OrderStatusHistory
 from src.repositories.branch_repository import BranchRepository
 from src.repositories.customer_repository import CustomerRepository
-from src.repositories.delivery_zone_repository import DeliveryZoneRepository
 from src.repositories.menu_repository import MenuRepository
 from src.repositories.order_repository import OrderRepository
 from src.repositories.product_repository import ProductRepository
@@ -37,7 +36,6 @@ class OrderService:
         self.branch_repository = BranchRepository(db)
         self.menu_repository = MenuRepository(db)
         self.product_repository = ProductRepository(db)
-        self.delivery_zone_repository = DeliveryZoneRepository(db)
         self.customer_repository = CustomerRepository(db)
         self.order_repository = OrderRepository(db)
 
@@ -76,7 +74,7 @@ class OrderService:
         delivery_fee = (
             quantize_money(to_decimal(delivery_estimate.delivery_fee))
             if delivery_estimate is not None
-            else self._calculate_delivery_fee(restaurant.id, payload, settings, address)
+            else ZERO
         )
         total = quantize_money(subtotal + service_fee + delivery_fee)
 
@@ -306,20 +304,6 @@ class OrderService:
             )
             subtotal += (to_decimal(product.price) + options_total) * item.quantity
         return quantize_money(subtotal)
-
-    def _calculate_delivery_fee(self, restaurant_id: UUID, payload: CreateOrderRequest, settings, address) -> Decimal:
-        if payload.order_type == "pickup":
-            return ZERO
-
-        neighborhood = address.neighborhood if address else ""
-        delivery_zone = self.delivery_zone_repository.get_active_by_neighborhood(
-            restaurant_id=restaurant_id,
-            branch_id=payload.branch_id,
-            neighborhood=neighborhood,
-        )
-        if delivery_zone:
-            return quantize_money(to_decimal(delivery_zone.delivery_fee))
-        return quantize_money(to_decimal(settings.default_delivery_fee if settings else ZERO))
 
     def _calculate_service_fee(self, settings) -> Decimal:
         if not settings or not settings.service_fee_enabled:

@@ -40,6 +40,24 @@ class BranchRepository:
         )
         return list(self.db.scalars(stmt).all())
 
+    def list_business_hours_by_weekday(
+        self,
+        branch_id: uuid.UUID,
+        weekday: int,
+    ) -> list[BranchBusinessHour]:
+        stmt = (
+            select(BranchBusinessHour)
+            .where(
+                BranchBusinessHour.branch_id == branch_id,
+                BranchBusinessHour.weekday == weekday,
+            )
+            .order_by(
+                BranchBusinessHour.sort_order.asc(),
+                BranchBusinessHour.id.asc(),
+            )
+        )
+        return list(self.db.scalars(stmt).all())
+
     def list_enabled_payment_methods(
         self, branch_id: uuid.UUID
     ) -> list[BranchPaymentMethod]:

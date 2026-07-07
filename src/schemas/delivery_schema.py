@@ -81,6 +81,7 @@ class DeliveryEstimateResponse(BaseModel):
     distance_km: float | None = None
     travel_time_min: int | None = None
     prep_time_min: int | None = None
+    prep_time_max: int | None = None
     eta_min: int | None = None
     eta_max: int | None = None
     delivery_fee: float | None = None

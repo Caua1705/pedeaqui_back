@@ -101,6 +101,7 @@ class OrderDetailResponse(BaseResponse):
     delivery_distance_km: float | None = None
     delivery_travel_time_min: int | None = None
     delivery_prep_time_min: int | None = None
+    delivery_prep_time_max: int | None = None
     delivery_eta_min: int | None = None
     delivery_eta_max: int | None = None
     delivery_estimate_provider: str | None = None

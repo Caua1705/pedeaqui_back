@@ -1,5 +1,6 @@
 import unittest
 import uuid
+from datetime import time
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -77,6 +78,7 @@ class DeliveryEstimateTests(unittest.TestCase):
         )
         self.maps = FakeMapsClient()
         self.cache = FakeCache()
+        self.business_hours = []
         self.service = DeliveryEstimateService.__new__(DeliveryEstimateService)
         self.service.restaurant_service = SimpleNamespace(
             get_active_restaurant=lambda slug: self.restaurant
@@ -86,6 +88,7 @@ class DeliveryEstimateTests(unittest.TestCase):
                 self.branch if branch_id == self.branch.id else None
             ),
             list_active_by_restaurant=lambda restaurant_id: [self.branch],
+            list_business_hours_by_weekday=lambda branch_id, weekday: self.business_hours,
         )
         self.service.customer_repository = SimpleNamespace(get_address=lambda *_: None)
         self.service.delivery_zone_repository = FakeZoneRepository()
@@ -109,22 +112,118 @@ class DeliveryEstimateTests(unittest.TestCase):
         )
 
     def test_google_route_builds_real_eta(self):
+        self.business_hours = [
+            SimpleNamespace(
+                opens_at=None,
+                closes_at=None,
+                prep_time_min=40,
+                prep_time_max=60,
+            )
+        ]
+
         result = self.service.estimate("restaurante", self.request(), None)
         self.assertTrue(result.serviceable)
         self.assertEqual(result.provider, "google_routes")
         self.assertEqual(result.distance_km, 4.2)
         self.assertEqual(result.travel_time_min, 18)
-        self.assertEqual(result.eta_min, 78)
-        self.assertEqual(result.eta_max, 93)
+        self.assertEqual(result.prep_time_min, 40)
+        self.assertEqual(result.prep_time_max, 60)
+        self.assertEqual(result.eta_min, 58)
+        self.assertEqual(result.eta_max, 78)
         self.assertEqual(result.delivery_fee, 8.0)
 
+    def test_business_hour_prep_time_is_used_for_current_day(self):
+        self.business_hours = [
+            SimpleNamespace(
+                opens_at=None,
+                closes_at=None,
+                prep_time_min=25,
+                prep_time_max=35,
+            )
+        ]
+
+        result = self.service.estimate("restaurante", self.request(), None)
+        self.assertTrue(result.serviceable)
+        self.assertEqual(result.prep_time_min, 25)
+        self.assertEqual(result.prep_time_max, 35)
+        self.assertEqual(result.travel_time_min, 18)
+        self.assertEqual(result.eta_min, 43)
+        self.assertEqual(result.eta_max, 53)
+
+    def test_current_business_hour_is_preferred_over_first_period(self):
+        business_hours = [
+            SimpleNamespace(
+                opens_at=None,
+                closes_at=None,
+                prep_time_min=25,
+                prep_time_max=35,
+            ),
+            SimpleNamespace(
+                opens_at=time(0, 0),
+                closes_at=time(23, 59),
+                prep_time_min=30,
+                prep_time_max=45,
+            ),
+        ]
+
+        selected = DeliveryEstimateService._select_business_hour_for_prep_time(
+            business_hours,
+            time(12, 0),
+        )
+        self.assertEqual(selected.prep_time_min, 30)
+        self.assertEqual(selected.prep_time_max, 45)
+
+    def test_current_business_hour_without_prep_time_falls_back_to_default(self):
+        self.business_hours = [
+            SimpleNamespace(
+                opens_at=time(0, 0),
+                closes_at=time(23, 59, 59, 999999),
+                prep_time_min=None,
+                prep_time_max=None,
+            ),
+            SimpleNamespace(
+                opens_at=None,
+                closes_at=None,
+                prep_time_min=25,
+                prep_time_max=35,
+            ),
+        ]
+
+        result = self.service.estimate("restaurante", self.request(), None)
+        self.assertTrue(result.serviceable)
+        self.assertEqual(result.prep_time_min, 30)
+        self.assertEqual(result.prep_time_max, 60)
+
+    def test_default_prep_time_is_used_when_business_hour_prep_time_is_missing(self):
+        result = self.service.estimate("restaurante", self.request(), None)
+        self.assertTrue(result.serviceable)
+        self.assertEqual(result.prep_time_min, 30)
+        self.assertEqual(result.prep_time_max, 60)
+        self.assertEqual(result.travel_time_min, 18)
+        self.assertEqual(result.eta_min, 48)
+        self.assertEqual(result.eta_max, 78)
+
     def test_google_failure_uses_explicit_fallback(self):
+        self.business_hours = [
+            SimpleNamespace(
+                opens_at=None,
+                closes_at=None,
+                prep_time_min=40,
+                prep_time_max=60,
+            )
+        ]
         self.service.maps_client = FakeMapsClient(unavailable=True)
+
         result = self.service.estimate("restaurante", self.request(), None)
         self.assertTrue(result.serviceable)
         self.assertTrue(result.fallback)
         self.assertEqual(result.provider, "configured_fallback")
         self.assertIsNone(result.distance_km)
+        self.assertIsNone(result.travel_time_min)
+        self.assertEqual(result.prep_time_min, 40)
+        self.assertEqual(result.prep_time_max, 60)
+        self.assertEqual(result.eta_min, 40)
+        self.assertEqual(result.eta_max, 60)
 
     def test_address_id_requires_authentication(self):
         with self.assertRaises(HTTPException) as raised:

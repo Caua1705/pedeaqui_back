@@ -50,7 +50,7 @@ class DeliveryContractTests(unittest.TestCase):
             )
 
     def test_rejects_customer_id_and_untrusted_calculation_fields(self):
-        for field in ("customer_id", "delivery_fee", "distance_km", "eta_min"):
+        for field in ("customer_id", "delivery_fee", "distance_km", "eta_min", "prep_time_max"):
             with self.assertRaises(ValidationError):
                 DeliveryEstimateRequest.model_validate(
                     {field: "1", "address_id": str(uuid.uuid4())}

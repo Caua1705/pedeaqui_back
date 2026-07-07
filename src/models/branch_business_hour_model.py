@@ -24,6 +24,8 @@ class BranchBusinessHour(Base):
     weekday: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     opens_at: Mapped[time | None] = mapped_column(Time)
     closes_at: Mapped[time | None] = mapped_column(Time)
+    prep_time_min: Mapped[int | None] = mapped_column(Integer)
+    prep_time_max: Mapped[int | None] = mapped_column(Integer)
     is_closed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(

@@ -2,8 +2,10 @@ import json
 import logging
 import threading
 from dataclasses import asdict, dataclass
+from datetime import datetime, time as datetime_time
 from decimal import Decimal
 from time import monotonic, time
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
@@ -26,6 +28,7 @@ from src.utils.money import money_to_float
 
 
 logger = logging.getLogger("uvicorn.error")
+DELIVERY_TIMEZONE = ZoneInfo("America/Fortaleza")
 
 
 @dataclass
@@ -36,6 +39,7 @@ class DeliveryEstimateResult:
     distance_km: float | None
     travel_time_min: int | None
     prep_time_min: int | None
+    prep_time_max: int | None
     eta_min: int | None
     eta_max: int | None
     delivery_fee: float | None
@@ -166,6 +170,8 @@ class DeliveryEstimateService:
                         restaurant_slug,
                         branch.id,
                         Coordinates(latitude=latitude, longitude=longitude),
+                        None,
+                        None,
                     )
                     + ":outside"
                 )
@@ -180,13 +186,7 @@ class DeliveryEstimateService:
             if matching_zone is not None
             else getattr(restaurant_settings, "default_delivery_fee", Decimal("0"))
         )
-        prep_min = int(
-            getattr(restaurant_settings, "estimated_delivery_time_min", None) or 30
-        )
-        prep_max = max(
-            prep_min,
-            int(getattr(restaurant_settings, "estimated_delivery_time_max", None) or prep_min),
-        )
+        prep_time_min, prep_time_max = self._resolve_prep_time(branch.id)
 
         cache_key = None
         destination = None
@@ -197,6 +197,8 @@ class DeliveryEstimateService:
                 restaurant_slug,
                 branch.id,
                 destination,
+                prep_time_min,
+                prep_time_max,
             )
             cached = self.cache.get(cache_key)
             if cached is not None:
@@ -208,15 +210,19 @@ class DeliveryEstimateService:
                 return cached
 
             route = self.maps_client.compute_route(origin, destination)
+            travel_time_min = route.travel_time_min
+            eta_min = prep_time_min + travel_time_min
+            eta_max = prep_time_max + travel_time_min
             result = DeliveryEstimateResult(
                 serviceable=True,
                 reason=None,
                 message=None,
                 distance_km=route.distance_km,
-                travel_time_min=route.travel_time_min,
-                prep_time_min=prep_min,
-                eta_min=prep_min + route.travel_time_min,
-                eta_max=prep_max + route.travel_time_min,
+                travel_time_min=travel_time_min,
+                prep_time_min=prep_time_min,
+                prep_time_max=prep_time_max,
+                eta_min=eta_min,
+                eta_max=eta_max,
                 delivery_fee=delivery_fee,
                 provider=settings.DELIVERY_ESTIMATE_PROVIDER,
                 fallback=False,
@@ -239,9 +245,10 @@ class DeliveryEstimateService:
                 message="Estimativa baseada na configuracao do restaurante.",
                 distance_km=None,
                 travel_time_min=None,
-                prep_time_min=prep_min,
-                eta_min=prep_min,
-                eta_max=prep_max,
+                prep_time_min=prep_time_min,
+                prep_time_max=prep_time_max,
+                eta_min=prep_time_min,
+                eta_max=prep_time_max,
                 delivery_fee=delivery_fee,
                 provider="configured_fallback",
                 fallback=True,
@@ -330,6 +337,65 @@ class DeliveryEstimateService:
             )
         return self.maps_client.geocode(address)
 
+    def _resolve_prep_time(self, branch_id) -> tuple[int, int]:
+        now = datetime.now(DELIVERY_TIMEZONE)
+        current_time = now.timetz().replace(tzinfo=None)
+        business_hours = self.branch_repository.list_business_hours_by_weekday(
+            branch_id,
+            now.weekday(),
+        )
+        business_hour = self._select_business_hour_for_prep_time(
+            business_hours,
+            current_time,
+        )
+        prep_time_min, prep_time_max = self._prep_time_pair_from(business_hour)
+        if prep_time_min is not None and prep_time_max is not None:
+            return prep_time_min, max(prep_time_min, prep_time_max)
+
+        return 30, 60
+
+    @classmethod
+    def _select_business_hour_for_prep_time(
+        cls,
+        business_hours,
+        current_time: datetime_time,
+    ):
+        current_period = next(
+            (
+                item
+                for item in business_hours
+                if cls._time_is_between(
+                    current_time,
+                    getattr(item, "opens_at", None),
+                    getattr(item, "closes_at", None),
+                )
+            ),
+            None,
+        )
+        if current_period is not None:
+            return current_period
+        return next(iter(business_hours), None)
+
+    @staticmethod
+    def _prep_time_pair_from(source) -> tuple[int | None, int | None]:
+        prep_time_min = getattr(source, "prep_time_min", None)
+        prep_time_max = getattr(source, "prep_time_max", None)
+        if prep_time_min is None or prep_time_max is None:
+            return None, None
+        return int(prep_time_min), int(prep_time_max)
+
+    @staticmethod
+    def _time_is_between(
+        current_time: datetime_time,
+        opens_at: datetime_time | None,
+        closes_at: datetime_time | None,
+    ) -> bool:
+        if opens_at is None or closes_at is None:
+            return False
+        if opens_at <= closes_at:
+            return opens_at <= current_time <= closes_at
+        return current_time >= opens_at or current_time <= closes_at
+
     @staticmethod
     def _format_address(location, *, branch: bool) -> str:
         if branch:
@@ -370,6 +436,7 @@ class DeliveryEstimateService:
             distance_km=None,
             travel_time_min=None,
             prep_time_min=None,
+            prep_time_max=None,
             eta_min=None,
             eta_max=None,
             delivery_fee=None,
@@ -380,10 +447,17 @@ class DeliveryEstimateService:
         )
 
     @staticmethod
-    def _cache_key(restaurant_slug: str, branch_id, destination: Coordinates) -> str:
+    def _cache_key(
+        restaurant_slug: str,
+        branch_id,
+        destination: Coordinates,
+        prep_time_min: int | None,
+        prep_time_max: int | None,
+    ) -> str:
         ttl = max(1, settings.DELIVERY_ESTIMATE_CACHE_TTL_SECONDS)
         bucket = int(time() // ttl)
         return (
             f"delivery-estimate:v1:{restaurant_slug}:{branch_id}:"
-            f"{destination.latitude:.4f}:{destination.longitude:.4f}:{bucket}"
+            f"{destination.latitude:.4f}:{destination.longitude:.4f}:"
+            f"{prep_time_min or 'none'}:{prep_time_max or 'none'}:{bucket}"
         )

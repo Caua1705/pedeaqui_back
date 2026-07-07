@@ -41,6 +41,7 @@ class Order(Base):
     delivery_distance_km: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     delivery_travel_time_min: Mapped[int | None] = mapped_column(Integer)
     delivery_prep_time_min: Mapped[int | None] = mapped_column(Integer)
+    delivery_prep_time_max: Mapped[int | None] = mapped_column(Integer)
     delivery_eta_min: Mapped[int | None] = mapped_column(Integer)
     delivery_eta_max: Mapped[int | None] = mapped_column(Integer)
     delivery_estimate_provider: Mapped[str | None] = mapped_column(Text)

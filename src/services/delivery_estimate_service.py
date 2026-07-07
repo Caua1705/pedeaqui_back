@@ -138,15 +138,45 @@ class DeliveryEstimateService:
         payload: DeliveryEstimateRequest,
         current_customer: Customer | None,
     ) -> DeliveryEstimateResult:
+        logger.info(
+            "[Delivery estimate debug] event=start restaurant_slug=%s branch_id=%s "
+            "address_id_present=%s inline_address_present=%s",
+            restaurant_slug,
+            payload.branch_id,
+            str(payload.address_id is not None).lower(),
+            str(payload.address is not None).lower(),
+        )
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
         restaurant_settings = self.menu_repository.get_settings(restaurant.id)
         if restaurant_settings and restaurant_settings.accepts_delivery is False:
-            return self._not_serviceable("delivery_disabled", "Restaurante nao aceita entrega.")
+            result = self._not_serviceable("delivery_disabled", "Restaurante nao aceita entrega.")
+            self._log_final_result(result)
+            return result
 
         branch = self._resolve_branch(restaurant.id, payload.branch_id)
         if getattr(branch, "accepts_delivery", True) is False:
-            return self._not_serviceable("delivery_disabled", "Filial nao aceita entrega.")
+            result = self._not_serviceable("delivery_disabled", "Filial nao aceita entrega.")
+            self._log_final_result(result)
+            return result
+        logger.info(
+            "[Delivery estimate debug] event=restaurant_branch_resolved "
+            "restaurant_id=%s branch_id=%s branch_name=%s branch_latitude=%s branch_longitude=%s",
+            restaurant.id,
+            branch.id,
+            getattr(branch, "name", None) or getattr(branch, "display_name", None),
+            getattr(branch, "latitude", None),
+            getattr(branch, "longitude", None),
+        )
         address = self._resolve_address(payload, current_customer)
+        logger.info(
+            "[Delivery estimate debug] event=address_resolved neighborhood=%s city=%s "
+            "state=%s latitude=%s longitude=%s",
+            getattr(address, "neighborhood", None),
+            getattr(address, "city", None),
+            getattr(address, "state", None),
+            getattr(address, "latitude", None),
+            getattr(address, "longitude", None),
+        )
 
         zones = self.delivery_zone_repository.list_active_by_branch(
             restaurant.id,
@@ -161,6 +191,14 @@ class DeliveryEstimateService:
             result = self._not_serviceable(
                 "outside_delivery_area",
                 "Endereco fora da area de entrega.",
+            )
+            logger.info(
+                "[Delivery estimate debug] event=delivery_zone neighborhood=%s "
+                "zone_found=false delivery_fee=%s serviceable=%s reason=%s",
+                getattr(address, "neighborhood", None),
+                None,
+                str(result.serviceable).lower(),
+                result.reason,
             )
             latitude = self._optional_float(getattr(address, "latitude", None))
             longitude = self._optional_float(getattr(address, "longitude", None))
@@ -177,8 +215,10 @@ class DeliveryEstimateService:
                 )
                 cached = self.cache.get(policy_key)
                 if cached is not None:
+                    self._log_final_result(cached)
                     return cached
                 self.cache.set(policy_key, result)
+            self._log_final_result(result)
             return result
 
         delivery_fee = money_to_float(
@@ -186,7 +226,25 @@ class DeliveryEstimateService:
             if matching_zone is not None
             else getattr(restaurant_settings, "default_delivery_fee", Decimal("0"))
         )
-        prep_time_min, prep_time_max = self._resolve_prep_time(branch.id)
+        logger.info(
+            "[Delivery estimate debug] event=delivery_zone neighborhood=%s "
+            "zone_found=%s delivery_fee=%s serviceable=true reason=%s",
+            getattr(address, "neighborhood", None),
+            str(matching_zone is not None).lower(),
+            delivery_fee,
+            None,
+        )
+        prep_time_min, prep_time_max, prep_time_source, prep_time_weekday = self._resolve_prep_time(
+            branch.id
+        )
+        logger.info(
+            "[Delivery estimate debug] event=prep_time_resolved weekday=%s "
+            "prep_time_min=%s prep_time_max=%s source=%s",
+            prep_time_weekday,
+            prep_time_min,
+            prep_time_max,
+            prep_time_source,
+        )
 
         cache_key = None
         destination = None
@@ -207,6 +265,15 @@ class DeliveryEstimateService:
                     cached.provider,
                     str(cached.serviceable).lower(),
                 )
+                logger.info(
+                    "[Delivery estimate debug] event=google_maps_result provider=%s "
+                    "distance_km=%s travel_time_min=%s fallback=%s",
+                    cached.provider,
+                    cached.distance_km,
+                    cached.travel_time_min,
+                    str(cached.fallback).lower(),
+                )
+                self._log_final_result(cached)
                 return cached
 
             route = self.maps_client.compute_route(origin, destination)
@@ -229,12 +296,28 @@ class DeliveryEstimateService:
                 latitude=destination.latitude,
                 longitude=destination.longitude,
             )
+            logger.info(
+                "[Delivery estimate debug] event=google_maps_result provider=%s "
+                "distance_km=%s travel_time_min=%s fallback=%s",
+                result.provider,
+                result.distance_km,
+                result.travel_time_min,
+                str(result.fallback).lower(),
+            )
             self.cache.set(cache_key, result)
         except GoogleMapsLocationNotFoundError:
             result = self._not_serviceable(
                 "route_not_found",
                 "Nao foi possivel calcular uma rota para este endereco.",
                 provider="google_routes",
+            )
+            logger.info(
+                "[Delivery estimate debug] event=google_maps_result provider=%s "
+                "distance_km=%s travel_time_min=%s fallback=%s",
+                result.provider,
+                result.distance_km,
+                result.travel_time_min,
+                str(result.fallback).lower(),
             )
             if cache_key is not None:
                 self.cache.set(cache_key, result)
@@ -263,6 +346,14 @@ class DeliveryEstimateService:
                     else self._optional_float(getattr(address, "longitude", None))
                 ),
             )
+            logger.info(
+                "[Delivery estimate debug] event=google_maps_result provider=%s "
+                "distance_km=%s travel_time_min=%s fallback=%s",
+                result.provider,
+                result.distance_km,
+                result.travel_time_min,
+                str(result.fallback).lower(),
+            )
 
         logger.info(
             "[Delivery estimate] provider=%s cache_hit=false serviceable=%s fallback=%s",
@@ -270,6 +361,7 @@ class DeliveryEstimateService:
             str(result.serviceable).lower(),
             str(result.fallback).lower(),
         )
+        self._log_final_result(result)
         return result
 
     def _resolve_branch(self, restaurant_id, branch_id):
@@ -337,12 +429,13 @@ class DeliveryEstimateService:
             )
         return self.maps_client.geocode(address)
 
-    def _resolve_prep_time(self, branch_id) -> tuple[int, int]:
+    def _resolve_prep_time(self, branch_id) -> tuple[int, int, str, int]:
         now = datetime.now(DELIVERY_TIMEZONE)
         current_time = now.timetz().replace(tzinfo=None)
+        weekday = now.weekday()
         business_hours = self.branch_repository.list_business_hours_by_weekday(
             branch_id,
-            now.weekday(),
+            weekday,
         )
         business_hour = self._select_business_hour_for_prep_time(
             business_hours,
@@ -350,9 +443,9 @@ class DeliveryEstimateService:
         )
         prep_time_min, prep_time_max = self._prep_time_pair_from(business_hour)
         if prep_time_min is not None and prep_time_max is not None:
-            return prep_time_min, max(prep_time_min, prep_time_max)
+            return prep_time_min, max(prep_time_min, prep_time_max), "branch_business_hours", weekday
 
-        return 30, 60
+        return 30, 60, "default_30_60", weekday
 
     @classmethod
     def _select_business_hour_for_prep_time(
@@ -444,6 +537,22 @@ class DeliveryEstimateService:
             fallback=False,
             latitude=None,
             longitude=None,
+        )
+
+    @staticmethod
+    def _log_final_result(result: DeliveryEstimateResult) -> None:
+        logger.info(
+            "[Delivery estimate debug] event=final_result delivery_fee=%s "
+            "prep_time_min=%s prep_time_max=%s travel_time_min=%s eta_min=%s "
+            "eta_max=%s fallback=%s reason=%s",
+            result.delivery_fee,
+            result.prep_time_min,
+            result.prep_time_max,
+            result.travel_time_min,
+            result.eta_min,
+            result.eta_max,
+            str(result.fallback).lower(),
+            result.reason,
         )
 
     @staticmethod

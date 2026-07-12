@@ -1,7 +1,7 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import bindparam, delete, select, text
+from sqlalchemy import bindparam, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
@@ -124,26 +124,6 @@ class AIRepository:
         )
         row = self.db.execute(stmt).mappings().one_or_none()
         return dict(row) if row else None
-
-    def delete_embeddings(self, restaurant_id: uuid.UUID, product_id: uuid.UUID | None = None) -> None:
-        """Delete embeddings for a restaurant or for a specific product."""
-        stmt = delete(AIProductEmbedding).where(AIProductEmbedding.restaurant_id == restaurant_id)
-        if product_id:
-            stmt = stmt.where(AIProductEmbedding.product_id == product_id)
-
-        self.db.execute(stmt)
-        self.db.commit()
-
-    def get_restaurant_embeddings(self, restaurant_id: uuid.UUID) -> list[dict[str, Any]]:
-        """Return embeddings registered for one restaurant."""
-        stmt = select(
-            AIProductEmbedding.id,
-            AIProductEmbedding.restaurant_id,
-            AIProductEmbedding.product_id,
-            AIProductEmbedding.embedding,
-        ).where(AIProductEmbedding.restaurant_id == restaurant_id)
-        rows = self.db.execute(stmt).mappings()
-        return [dict(row) for row in rows]
 
     @staticmethod
     def _format_vector(embedding: list[float]) -> str:

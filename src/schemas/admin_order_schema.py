@@ -3,8 +3,6 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from src.schemas.order_schema import OrderDetailResponse
-
 
 class AdminOrderListItem(BaseModel):
     id: UUID
@@ -21,7 +19,3 @@ class UpdateOrderStatusRequest(BaseModel):
     status: str
     changed_by: str | None = "admin"
     note: str | None = None
-
-
-class AdminOrderDetailResponse(OrderDetailResponse):
-    pass

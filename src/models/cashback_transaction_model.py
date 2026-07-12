@@ -48,6 +48,7 @@ class CashbackTransaction(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    # Maps the database column named "metadata"; "metadata" is reserved by SQLAlchemy declarative models.
     metadata_: Mapped[dict] = mapped_column(
         "metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )

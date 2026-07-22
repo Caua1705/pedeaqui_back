@@ -93,13 +93,33 @@ class CouponRepository:
         )
         return int(self.db.scalar(stmt) or 0)
 
-    def count_applied_by_customer(self, coupon_id: uuid.UUID, customer_id: uuid.UUID) -> int:
+    def count_applied_redemptions_for_customer(
+        self,
+        coupon_id: uuid.UUID,
+        customer_id: uuid.UUID,
+    ) -> int:
         stmt = select(func.count(CouponRedemption.id)).where(
             CouponRedemption.coupon_id == coupon_id,
             CouponRedemption.customer_id == customer_id,
             CouponRedemption.status == "applied",
         )
         return int(self.db.scalar(stmt) or 0)
+
+    def get_last_applied_redemption_for_customer(
+        self,
+        coupon_id: uuid.UUID,
+        customer_id: uuid.UUID,
+    ) -> datetime | None:
+        stmt = select(func.max(CouponRedemption.applied_at)).where(
+            CouponRedemption.coupon_id == coupon_id,
+            CouponRedemption.customer_id == customer_id,
+            CouponRedemption.status == "applied",
+        )
+        return self.db.scalar(stmt)
+
+    # Compatibility for callers created before the explicit repository name.
+    def count_applied_by_customer(self, coupon_id: uuid.UUID, customer_id: uuid.UUID) -> int:
+        return self.count_applied_redemptions_for_customer(coupon_id, customer_id)
 
     def customer_has_valid_order(self, customer_id: uuid.UUID, restaurant_id: uuid.UUID) -> bool:
         stmt = select(Order.id).where(

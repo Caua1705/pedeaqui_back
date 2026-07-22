@@ -57,6 +57,7 @@ class CouponCampaignFields(BaseModel):
     valid_until: datetime
     total_usage_limit: int | None = Field(default=None, ge=1)
     usage_limit_per_customer: int | None = Field(default=None, ge=1)
+    cooldown_days: int | None = Field(default=None, ge=1)
     first_order_only: bool = False
     is_public: bool = True
     is_active: bool = True
@@ -103,6 +104,7 @@ class CouponUpdate(BaseModel):
     valid_until: datetime | None = None
     total_usage_limit: int | None = Field(default=None, ge=1)
     usage_limit_per_customer: int | None = Field(default=None, ge=1)
+    cooldown_days: int | None = Field(default=None, ge=1)
     first_order_only: bool | None = None
     is_public: bool | None = None
     is_active: bool | None = None
@@ -133,6 +135,7 @@ class CouponAdminResponse(BaseResponse):
     valid_until: datetime
     total_usage_limit: int | None = None
     usage_limit_per_customer: int | None = None
+    cooldown_days: int | None = None
     first_order_only: bool
     is_public: bool
     is_active: bool
@@ -150,11 +153,13 @@ class AvailableCouponResponse(BaseModel):
     max_discount_amount: Decimal | None = None
     min_order_value: Decimal
     valid_until: datetime
+    cooldown_days: int | None = None
     eligible: bool
     requires_login: bool = False
     estimated_discount: Decimal
     missing_amount: Decimal
     ineligibility_reason: str | None = None
+    next_available_at: datetime | None = None
 
 
 class AvailableCouponsResponse(BaseModel):
@@ -184,3 +189,5 @@ class CouponPreviewResponse(BaseModel):
     subtotal: Decimal
     delivery_fee: Decimal
     total_after_coupon: Decimal
+    ineligibility_reason: str | None = None
+    next_available_at: datetime | None = None

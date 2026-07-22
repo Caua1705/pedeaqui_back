@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
@@ -33,6 +33,7 @@ class CouponEvaluation:
     missing_amount: Decimal = ZERO
     reason: str | None = None
     requires_login: bool = False
+    next_available_at: datetime | None = None
 
 
 class CouponService:
@@ -41,6 +42,7 @@ class CouponService:
         self.repository = CouponRepository(db)
         self.restaurant_repository = RestaurantRepository(db)
         self.restaurant_service = RestaurantService(db)
+        self.clock = lambda: datetime.now(timezone.utc)
 
     @staticmethod
     def calculate_discount(coupon: RestaurantCoupon, subtotal: Decimal, delivery_fee: Decimal) -> Decimal:
@@ -72,7 +74,7 @@ class CouponService:
         require_public: bool,
         now: datetime | None = None,
     ) -> CouponEvaluation:
-        current = self._aware(now or datetime.now(timezone.utc))
+        current = self._aware(now or self.clock())
         valid_from = self._aware(coupon.valid_from)
         valid_until = self._aware(coupon.valid_until)
         subtotal = quantize_money(to_decimal(subtotal))
@@ -92,7 +94,11 @@ class CouponService:
             if self.repository.count_applied_total(coupon.id) >= coupon.total_usage_limit:
                 return CouponEvaluation(False, reason="total_limit_reached")
 
-        requires_customer_check = coupon.usage_limit_per_customer is not None or bool(coupon.first_order_only)
+        requires_customer_check = (
+            coupon.usage_limit_per_customer is not None
+            or coupon.cooldown_days is not None
+            or bool(coupon.first_order_only)
+        )
         if customer is None and requires_customer_check:
             missing = quantize_money(max(minimum - subtotal, ZERO))
             return CouponEvaluation(
@@ -103,9 +109,22 @@ class CouponService:
             )
         if customer is not None:
             if coupon.usage_limit_per_customer is not None:
-                usages = self.repository.count_applied_by_customer(coupon.id, customer.id)
+                usages = self.repository.count_applied_redemptions_for_customer(coupon.id, customer.id)
                 if usages >= coupon.usage_limit_per_customer:
                     return CouponEvaluation(False, reason="customer_limit_reached")
+            if coupon.cooldown_days is not None:
+                last_applied_at = self.repository.get_last_applied_redemption_for_customer(
+                    coupon.id,
+                    customer.id,
+                )
+                if last_applied_at is not None:
+                    next_available_at = self._aware(last_applied_at) + timedelta(days=coupon.cooldown_days)
+                    if current < next_available_at:
+                        return CouponEvaluation(
+                            False,
+                            reason="cooldown_active",
+                            next_available_at=next_available_at,
+                        )
             if coupon.first_order_only and self.repository.customer_has_valid_order(customer.id, restaurant_id):
                 return CouponEvaluation(False, reason="first_order_only")
 
@@ -138,7 +157,8 @@ class CouponService:
             fee = ZERO
         responses: list[AvailableCouponResponse] = []
 
-        for coupon in self.repository.list_public_available(restaurant.id):
+        current = self._aware(self.clock())
+        for coupon in self.repository.list_public_available(restaurant.id, now=current):
             evaluation = self.evaluate(
                 coupon,
                 restaurant_id=restaurant.id,
@@ -146,6 +166,7 @@ class CouponService:
                 delivery_fee=fee,
                 customer=customer,
                 require_public=True,
+                now=current,
             )
             if customer is not None and evaluation.reason in {"customer_limit_reached", "first_order_only"}:
                 continue
@@ -166,11 +187,13 @@ class CouponService:
                     ),
                     min_order_value=quantize_money(to_decimal(coupon.min_order_value)),
                     valid_until=coupon.valid_until,
+                    cooldown_days=coupon.cooldown_days,
                     eligible=evaluation.valid,
                     requires_login=evaluation.requires_login,
                     estimated_discount=evaluation.discount,
                     missing_amount=evaluation.missing_amount,
                     ineligibility_reason=evaluation.reason,
+                    next_available_at=evaluation.next_available_at,
                 )
             )
         return AvailableCouponsResponse(coupons=responses)
@@ -210,6 +233,8 @@ class CouponService:
             subtotal=subtotal,
             delivery_fee=delivery_fee,
             total_after_coupon=quantize_money(subtotal + delivery_fee - evaluation.discount),
+            ineligibility_reason=evaluation.reason,
+            next_available_at=evaluation.next_available_at,
         )
 
     def lock_and_validate_for_order(

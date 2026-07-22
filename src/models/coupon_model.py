@@ -48,6 +48,7 @@ class RestaurantCoupon(Base):
     valid_until: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
     total_usage_limit: Mapped[int | None] = mapped_column(Integer)
     usage_limit_per_customer: Mapped[int | None] = mapped_column(Integer)
+    cooldown_days: Mapped[int | None] = mapped_column(Integer)
     first_order_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     sort_order: Mapped[int | None] = mapped_column(Integer, default=0)

@@ -34,6 +34,7 @@ def make_coupon(**overrides):
         "valid_until": NOW + timedelta(days=1),
         "total_usage_limit": None,
         "usage_limit_per_customer": None,
+        "cooldown_days": None,
         "first_order_only": False,
         "is_public": True,
         "is_active": True,
@@ -50,14 +51,24 @@ class FakeCouponRepository:
         self.total = 0
         self.customer_total = 0
         self.has_order = False
+        self.last_applied_at = None
         self.redemptions = []
         self.lock_calls = 0
 
     def count_applied_total(self, coupon_id):
         return self.total
 
-    def count_applied_by_customer(self, coupon_id, customer_id):
+    def count_applied_redemptions_for_customer(self, coupon_id, customer_id):
         return self.customer_total
+
+    def count_applied_by_customer(self, coupon_id, customer_id):
+        return self.count_applied_redemptions_for_customer(coupon_id, customer_id)
+
+    def get_last_applied_redemption_for_customer(self, coupon_id, customer_id):
+        return self.last_applied_at
+
+    def list_public_available(self, restaurant_id, now=None):
+        return [self.coupon] if self.coupon.restaurant_id == restaurant_id else []
 
     def customer_has_valid_order(self, customer_id, restaurant_id):
         return self.has_order
@@ -100,6 +111,7 @@ class CouponServiceTests(unittest.TestCase):
         self.service = CouponService(SimpleNamespace())
         self.repository = FakeCouponRepository(self.coupon)
         self.service.repository = self.repository
+        self.service.clock = lambda: NOW
 
     def evaluate(self, **overrides):
         return self.service.evaluate(
@@ -262,6 +274,157 @@ class CouponServiceTests(unittest.TestCase):
         dumped = payload.model_dump()
         for field in ("subtotal", "coupon_discount_amount", "discount_total", "total"):
             self.assertNotIn(field, dumped)
+
+    def test_customer_without_previous_usage_can_use_cooldown_coupon(self):
+        self.coupon.cooldown_days = 30
+        self.repository.last_applied_at = None
+        self.assertTrue(self.evaluate().valid)
+
+    def test_cooldown_30_days_blocks_before_deadline(self):
+        self.coupon.cooldown_days = 30
+        self.repository.last_applied_at = datetime(2026, 6, 22, 15, tzinfo=timezone.utc)
+        result = self.evaluate(now=datetime(2026, 7, 22, 14, 59, 59, tzinfo=timezone.utc))
+        self.assertFalse(result.valid)
+        self.assertEqual(result.reason, "cooldown_active")
+        self.assertEqual(
+            result.next_available_at,
+            datetime(2026, 7, 22, 15, tzinfo=timezone.utc),
+        )
+
+    def test_cooldown_allows_usage_exactly_at_deadline(self):
+        self.coupon.cooldown_days = 30
+        self.repository.last_applied_at = datetime(2026, 6, 22, 15, tzinfo=timezone.utc)
+        result = self.evaluate(now=datetime(2026, 7, 22, 15, tzinfo=timezone.utc))
+        self.assertTrue(result.valid)
+        self.assertIsNone(result.next_available_at)
+
+    def test_unlimited_lifetime_usage_still_respects_cooldown(self):
+        self.coupon.usage_limit_per_customer = None
+        self.coupon.cooldown_days = 7
+        self.repository.customer_total = 25
+        self.repository.last_applied_at = NOW - timedelta(days=8)
+        self.assertTrue(self.evaluate().valid)
+        self.repository.last_applied_at = NOW - timedelta(days=6)
+        self.assertEqual(self.evaluate().reason, "cooldown_active")
+
+    def test_third_usage_allowed_and_fourth_blocked(self):
+        self.coupon.usage_limit_per_customer = 3
+        self.coupon.cooldown_days = 1
+        self.repository.last_applied_at = NOW - timedelta(days=2)
+        self.repository.customer_total = 2
+        self.assertTrue(self.evaluate().valid)
+        self.repository.customer_total = 3
+        self.assertEqual(self.evaluate().reason, "customer_limit_reached")
+
+    def test_reversed_redemption_is_ignored_for_count_and_cooldown(self):
+        self.coupon.usage_limit_per_customer = 1
+        self.coupon.cooldown_days = 30
+        self.repository.customer_total = 0
+        self.repository.last_applied_at = None
+        self.assertTrue(self.evaluate().valid)
+
+    def test_cancellation_uses_previous_still_applied_redemption(self):
+        self.coupon.cooldown_days = 30
+        # The most recent redemption was reversed; repository returns the prior applied use.
+        self.repository.last_applied_at = NOW - timedelta(days=40)
+        self.assertTrue(self.evaluate().valid)
+        self.repository.last_applied_at = None
+        self.assertTrue(self.evaluate().valid)
+
+    def test_coupons_can_have_independent_cooldowns(self):
+        self.repository.last_applied_at = NOW - timedelta(days=10)
+        self.coupon.cooldown_days = 7
+        self.assertTrue(self.evaluate().valid)
+        another = make_coupon(restaurant_id=self.coupon.restaurant_id, cooldown_days=15)
+        result = self.service.evaluate(
+            another,
+            restaurant_id=another.restaurant_id,
+            subtotal=Decimal("100"),
+            delivery_fee=Decimal("0"),
+            customer=self.customer,
+            require_public=True,
+            now=NOW,
+        )
+        self.assertEqual(result.reason, "cooldown_active")
+
+    def test_preview_exposes_cooldown_without_consuming_coupon(self):
+        self.coupon.cooldown_days = 30
+        self.repository.last_applied_at = NOW - timedelta(days=1)
+        restaurant = SimpleNamespace(id=self.coupon.restaurant_id)
+        self.service.restaurant_service = SimpleNamespace(get_active_restaurant=lambda slug: restaurant)
+        response = self.service.preview(
+            "restaurant",
+            CouponPreviewRequest(
+                coupon_id=self.coupon.id,
+                subtotal=Decimal("100"),
+                delivery_fee=Decimal("0"),
+                order_type="pickup",
+            ),
+            self.customer,
+        )
+        self.assertFalse(response.valid)
+        self.assertEqual(response.ineligibility_reason, "cooldown_active")
+        self.assertEqual(response.next_available_at, NOW + timedelta(days=29))
+        self.assertEqual(self.repository.redemptions, [])
+
+    def test_available_keeps_cooldown_coupon_as_ineligible_for_compatibility(self):
+        self.coupon.cooldown_days = 30
+        self.repository.last_applied_at = NOW - timedelta(days=2)
+        restaurant = SimpleNamespace(id=self.coupon.restaurant_id)
+        self.service.restaurant_service = SimpleNamespace(get_active_restaurant=lambda slug: restaurant)
+        response = self.service.get_available(
+            "restaurant",
+            subtotal=Decimal("100"),
+            delivery_fee=Decimal("0"),
+            order_type="pickup",
+            customer=self.customer,
+        )
+        self.assertEqual(len(response.coupons), 1)
+        item = response.coupons[0]
+        self.assertFalse(item.eligible)
+        self.assertEqual(item.ineligibility_reason, "cooldown_active")
+        self.assertEqual(item.next_available_at, NOW + timedelta(days=28))
+
+    def test_order_final_validation_rechecks_cooldown(self):
+        self.coupon.cooldown_days = 30
+        self.repository.last_applied_at = NOW - timedelta(minutes=1)
+        with self.assertRaises(HTTPException) as raised:
+            self.service.lock_and_validate_for_order(
+                restaurant_id=self.coupon.restaurant_id,
+                coupon_id=self.coupon.id,
+                coupon_code=None,
+                subtotal=Decimal("100"),
+                delivery_fee=Decimal("0"),
+                customer=self.customer,
+            )
+        self.assertEqual(raised.exception.detail, "cooldown_active")
+        self.assertEqual(self.repository.redemptions, [])
+
+    def test_concurrent_cooldown_attempts_allow_only_one(self):
+        self.coupon.cooldown_days = 30
+        transaction_lock = threading.Lock()
+        start = threading.Barrier(2)
+
+        def attempt():
+            start.wait()
+            with transaction_lock:
+                try:
+                    self.service.lock_and_validate_for_order(
+                        restaurant_id=self.coupon.restaurant_id,
+                        coupon_id=self.coupon.id,
+                        coupon_code=None,
+                        subtotal=Decimal("100"),
+                        delivery_fee=Decimal("0"),
+                        customer=self.customer,
+                    )
+                except HTTPException as exc:
+                    return exc.detail
+                self.repository.last_applied_at = NOW
+                return "applied"
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(lambda _: attempt(), range(2)))
+        self.assertCountEqual(results, ["applied", "cooldown_active"])
 
 
 class FakeDb:

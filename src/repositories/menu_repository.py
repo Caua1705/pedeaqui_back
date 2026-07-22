@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -71,6 +72,9 @@ class MenuRepository:
             .where(
                 RestaurantCoupon.restaurant_id == restaurant_id,
                 RestaurantCoupon.is_active.is_(True),
+                RestaurantCoupon.is_public.is_(True),
+                RestaurantCoupon.valid_from <= datetime.now(timezone.utc),
+                RestaurantCoupon.valid_until >= datetime.now(timezone.utc),
                 CouponTemplate.is_active.is_(True),
             )
             .order_by(RestaurantCoupon.sort_order.asc())

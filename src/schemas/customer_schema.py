@@ -186,6 +186,10 @@ class CustomerOrderHistoryItem(BaseModel):
     subtotal: float
     delivery_fee: float
     service_fee: float
+    coupon_code: str | None = None
+    coupon_discount_amount: Decimal = Decimal("0.00")
+    cashback_redeemed_amount: Decimal = Decimal("0.00")
+    discount_total: Decimal = Decimal("0.00")
     total: float
     created_at: datetime | None = None
     items: list[OrderItemResponse]

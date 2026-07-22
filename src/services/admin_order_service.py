@@ -9,6 +9,7 @@ from src.repositories.order_repository import OrderRepository
 from src.schemas.admin_order_schema import AdminOrderListItem, UpdateOrderStatusRequest
 from src.schemas.order_schema import OrderDetailResponse
 from src.services.order_service import OrderService
+from src.services.coupon_service import CouponService
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import money_to_float
 
@@ -18,6 +19,7 @@ class AdminOrderService:
         self.db = db
         self.restaurant_service = RestaurantService(db)
         self.order_repository = OrderRepository(db)
+        self.coupon_service = CouponService(db)
 
     def list_orders(
         self,
@@ -66,6 +68,8 @@ class AdminOrderService:
 
         try:
             self.order_repository.update_status(order, payload.status)
+            if payload.status in {"cancelled", "rejected"}:
+                self.coupon_service.reverse_for_order(order.id)
             self.order_repository.create_status_history(
                 OrderStatusHistory(
                     order_id=order.id,

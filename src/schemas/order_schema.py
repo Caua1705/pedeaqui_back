@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.schemas.common_schema import BaseResponse, StatusHistoryResponse
 
@@ -38,6 +38,8 @@ class OrderItemInput(BaseModel):
 
 
 class CreateOrderRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     branch_id: UUID
     customer: CustomerInput | None = None
     customer_address_id: UUID | None = None
@@ -46,6 +48,16 @@ class CreateOrderRequest(BaseModel):
     address: AddressInput | None = None
     notes: str | None = None
     items: list[OrderItemInput] = Field(min_length=1)
+    coupon_id: UUID | None = None
+    coupon_code: str | None = Field(default=None, min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_single_coupon(self):
+        if self.coupon_id is not None and self.coupon_code is not None:
+            raise ValueError("Informe somente coupon_id ou coupon_code")
+        if self.coupon_code:
+            self.coupon_code = self.coupon_code.strip().upper()
+        return self
 
 
 class CreateOrderResponse(BaseModel):
@@ -55,6 +67,10 @@ class CreateOrderResponse(BaseModel):
     subtotal: float
     delivery_fee: float
     service_fee: float
+    coupon_code: str | None = None
+    coupon_discount_amount: Decimal = Decimal("0.00")
+    cashback_redeemed_amount: Decimal = Decimal("0.00")
+    discount_total: Decimal = Decimal("0.00")
     total: float
     message: str
 
@@ -87,6 +103,10 @@ class OrderDetailResponse(BaseResponse):
     subtotal: float
     delivery_fee: float
     service_fee: float
+    coupon_code: str | None = None
+    coupon_discount_amount: Decimal = Decimal("0.00")
+    cashback_redeemed_amount: Decimal = Decimal("0.00")
+    discount_total: Decimal = Decimal("0.00")
     total: float
     address_street: str | None = None
     address_number: str | None = None

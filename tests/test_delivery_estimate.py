@@ -124,6 +124,9 @@ class DeliveryEstimateTests(unittest.TestCase):
         self.assertEqual(result.delivery_fee, 11.3)
 
     def test_delivery_fee_respects_min_and_max_limits(self):
+        self.business_hours = [
+            SimpleNamespace(opens_at=None, closes_at=None, prep_time_min=40, prep_time_max=60)
+        ]
         self.branch.delivery_min_fee = Decimal("15.00")
         result = self.service.estimate("restaurante", self.request(), None)
         self.assertTrue(result.serviceable)
@@ -138,6 +141,9 @@ class DeliveryEstimateTests(unittest.TestCase):
         self.assertEqual(result.delivery_fee, 10.0)
 
     def test_max_distance_rejects_delivery_area(self):
+        self.business_hours = [
+            SimpleNamespace(opens_at=None, closes_at=None, prep_time_min=40, prep_time_max=60)
+        ]
         self.branch.delivery_max_distance_km = Decimal("4.00")
         result = self.service.estimate("restaurante", self.request(), None)
         self.assertFalse(result.serviceable)

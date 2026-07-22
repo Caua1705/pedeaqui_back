@@ -27,6 +27,11 @@ class Order(Base):
     subtotal: Mapped[Decimal] = mapped_column(Numeric, nullable=False, default=0)
     delivery_fee: Mapped[Decimal] = mapped_column(Numeric, nullable=False, default=0)
     service_fee: Mapped[Decimal] = mapped_column(Numeric, nullable=False, default=0)
+    coupon_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("restaurant_coupons.id"))
+    coupon_code_snapshot: Mapped[str | None] = mapped_column(Text)
+    coupon_discount_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    cashback_redeemed_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    discount_total: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     total: Mapped[Decimal] = mapped_column(Numeric, nullable=False, default=0)
     address_street: Mapped[str | None] = mapped_column(Text)
     address_number: Mapped[str | None] = mapped_column(Text)
@@ -52,3 +57,5 @@ class Order(Base):
 
     items = relationship("OrderItem", back_populates="order")
     status_history = relationship("OrderStatusHistory", back_populates="order")
+    coupon = relationship("RestaurantCoupon")
+    coupon_redemption = relationship("CouponRedemption", back_populates="order", uselist=False)

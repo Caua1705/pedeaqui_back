@@ -7,6 +7,7 @@ from src.models.branch_payment_method_model import BranchPaymentMethod
 from src.models.cashback_transaction_model import CashbackTransaction
 from src.models.category_model import Category
 from src.models.coupon_model import CouponTemplate, RestaurantCoupon
+from src.models.coupon_redemption_model import CouponRedemption
 from src.models.customer_model import Customer, CustomerAddress, EmailVerificationCode, PasswordResetCode
 from src.models.order_item_model import OrderItem
 from src.models.order_item_option_model import OrderItemOption
@@ -28,6 +29,7 @@ __all__ = [
     "CashbackTransaction",
     "Category",
     "CouponTemplate",
+    "CouponRedemption",
     "Customer",
     "CustomerAddress",
     "EmailVerificationCode",

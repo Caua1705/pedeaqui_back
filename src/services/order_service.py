@@ -25,6 +25,7 @@ from src.schemas.order_schema import (
 )
 from src.schemas.common_schema import StatusHistoryResponse
 from src.services.delivery_estimate_service import DeliveryEstimateService
+from src.services.coupon_service import CouponService
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import ZERO, money_to_float, quantize_money, to_decimal
 
@@ -38,6 +39,7 @@ class OrderService:
         self.product_repository = ProductRepository(db)
         self.customer_repository = CustomerRepository(db)
         self.order_repository = OrderRepository(db)
+        self.coupon_service = CouponService(db)
 
     def create_order(
         self,
@@ -76,9 +78,23 @@ class OrderService:
             if delivery_estimate is not None
             else ZERO
         )
-        total = quantize_money(subtotal + service_fee + delivery_fee)
+        coupon = None
+        coupon_discount = ZERO
+        discount_total = ZERO
 
         try:
+            if payload.coupon_id is not None or payload.coupon_code is not None:
+                coupon, coupon_discount = self.coupon_service.lock_and_validate_for_order(
+                    restaurant_id=restaurant.id,
+                    coupon_id=payload.coupon_id,
+                    coupon_code=payload.coupon_code,
+                    subtotal=subtotal,
+                    delivery_fee=delivery_fee,
+                    customer=current_customer,
+                )
+            cashback_redeemed = ZERO
+            discount_total = quantize_money(coupon_discount + cashback_redeemed)
+            total = quantize_money(subtotal + service_fee + delivery_fee - discount_total)
             customer_name = current_customer.name if current_customer else payload.customer.name
             customer_phone = current_customer.phone if current_customer else payload.customer.phone
             order = Order(
@@ -94,6 +110,11 @@ class OrderService:
                 subtotal=subtotal,
                 delivery_fee=delivery_fee,
                 service_fee=service_fee,
+                coupon_id=coupon.id if coupon else None,
+                coupon_code_snapshot=coupon.code if coupon else None,
+                coupon_discount_amount=coupon_discount,
+                cashback_redeemed_amount=cashback_redeemed,
+                discount_total=discount_total,
                 total=total,
                 address_street=address.street if address else None,
                 address_number=address.number if address else None,
@@ -116,6 +137,8 @@ class OrderService:
                 notes=payload.notes,
             )
             self.order_repository.create_order(order)
+            if coupon is not None:
+                self.coupon_service.create_redemption(coupon, current_customer, order.id, coupon_discount)
 
             order_items = [
                 self._build_order_item(
@@ -151,6 +174,10 @@ class OrderService:
             subtotal=money_to_float(order.subtotal),
             delivery_fee=money_to_float(order.delivery_fee),
             service_fee=money_to_float(order.service_fee),
+            coupon_code=order.coupon_code_snapshot,
+            coupon_discount_amount=quantize_money(order.coupon_discount_amount),
+            cashback_redeemed_amount=quantize_money(order.cashback_redeemed_amount),
+            discount_total=quantize_money(order.discount_total),
             total=money_to_float(order.total),
             message="Pedido criado com sucesso",
         )
@@ -371,6 +398,10 @@ class OrderService:
             subtotal=money_to_float(order.subtotal),
             delivery_fee=money_to_float(order.delivery_fee),
             service_fee=money_to_float(order.service_fee),
+            coupon_code=order.coupon_code_snapshot,
+            coupon_discount_amount=quantize_money(order.coupon_discount_amount),
+            cashback_redeemed_amount=quantize_money(order.cashback_redeemed_amount),
+            discount_total=quantize_money(order.discount_total),
             total=money_to_float(order.total),
             address_street=order.address_street,
             address_number=order.address_number,

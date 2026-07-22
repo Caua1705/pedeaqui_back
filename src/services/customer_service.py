@@ -21,7 +21,7 @@ from src.schemas.customer_schema import (
 )
 from src.schemas.customer_schema import CurrentCustomerResponse, CustomerOrderHistoryItem
 from src.schemas.order_schema import OrderItemResponse
-from src.utils.money import money_to_float
+from src.utils.money import money_to_float, quantize_money
 from src.utils.security import PasswordTooLongError, hash_password, verify_password
 
 
@@ -139,6 +139,10 @@ class CustomerService:
                 subtotal=money_to_float(order.subtotal),
                 delivery_fee=money_to_float(order.delivery_fee),
                 service_fee=money_to_float(order.service_fee),
+                coupon_code=order.coupon_code_snapshot,
+                coupon_discount_amount=quantize_money(order.coupon_discount_amount),
+                cashback_redeemed_amount=quantize_money(order.cashback_redeemed_amount),
+                discount_total=quantize_money(order.discount_total),
                 total=money_to_float(order.total),
                 created_at=order.created_at,
                 items=[

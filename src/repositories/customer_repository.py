@@ -66,9 +66,6 @@ class CustomerRepository:
         )
         return self.db.scalar(stmt)
 
-    def count_email_codes(self, email: str) -> int:
-        return len(self.db.scalars(select(EmailVerificationCode).where(EmailVerificationCode.email == email)).all())
-
     def count_email_codes_since(self, email: str, since: datetime) -> int:
         stmt = select(EmailVerificationCode).where(
             EmailVerificationCode.email == email,
@@ -89,10 +86,6 @@ class CustomerRepository:
             .order_by(PasswordResetCode.created_at.desc())
             .limit(1)
         )
-        return self.db.scalar(stmt)
-
-    def get_password_reset_by_id(self, code_id: uuid.UUID) -> PasswordResetCode | None:
-        stmt = select(PasswordResetCode).where(PasswordResetCode.id == code_id)
         return self.db.scalar(stmt)
 
     def get_password_reset_by_token_hash(self, token_hash: str) -> PasswordResetCode | None:
@@ -131,6 +124,7 @@ class CustomerRepository:
             CustomerAddress.customer_id == customer_id,
         )
         return self.db.scalar(stmt)
+
     def create_address(self, **values) -> CustomerAddress:
         address = CustomerAddress(**values)
         self.db.add(address)

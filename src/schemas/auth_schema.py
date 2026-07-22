@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -112,11 +112,3 @@ class VerifyEmailCodeResponse(BaseModel):
     verified: bool
     message: str
 
-
-class CustomerSession(BaseModel):
-    id: UUID
-    name: str
-    email: str
-    phone: str
-    email_verified_at: datetime | None = None
-    is_active: bool

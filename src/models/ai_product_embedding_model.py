@@ -26,7 +26,9 @@ class AIProductEmbedding(Base):
     product_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("products.id"), nullable=False)
     content: Mapped[str | None] = mapped_column(Text)
     content_hash: Mapped[str | None] = mapped_column(Text)
+    # Maps the database column named "metadata"; "metadata" is reserved by SQLAlchemy declarative models.
     embedding_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB)
+    # Stored as a PostgreSQL pgvector/vector value.
     embedding: Mapped[Any] = mapped_column(Vector(), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 

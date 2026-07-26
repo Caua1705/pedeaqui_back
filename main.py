@@ -3,6 +3,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api import chat
+from src.api.middleware.body_size import BodySizeLimitMiddleware
 from src.api.validation_errors import log_contract_validation_error
 from src.api.endpoints import admin_orders, auth, coupons, customers, delivery, health, menu, orders, restaurants
 from src.core.config import settings
@@ -30,6 +31,13 @@ origins = [
     "http://127.0.0.1:5173",
 ]
 
+app.add_middleware(
+    BodySizeLimitMiddleware,
+    max_body_bytes=settings.MAX_REQUEST_BODY_BYTES,
+)
+
+# Adicionado por ultimo para ficar na camada mais externa: assim ate as
+# respostas de erro (413, 429) saem com os cabecalhos de CORS.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,

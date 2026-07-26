@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     DELIVERY_ESTIMATE_PROVIDER: str = "google_routes"
     REDIS_URL: str | None = None
 
+    # Teto do corpo da requisicao. O maior payload legitimo e a criacao de
+    # pedido, que com os limites de order_schema fica bem abaixo disso.
+    MAX_REQUEST_BODY_BYTES: int = 262_144
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

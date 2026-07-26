@@ -63,6 +63,62 @@ docker logs -f pedeaqui-api
 
 The compose file is prepared for Traefik on the external `n8n_default` network and does not expose public ports directly.
 
+## Database Migrations (Alembic)
+
+Schema evolution is owned by Alembic (`alembic/versions/`). The `migrations/`
+folder holds the 13 hand-applied `.sql` files from before Phase 1 and is
+frozen — see `migrations/README.md`.
+
+### Baseline: run once per existing database
+
+The production schema already exists and was never under Alembic. Applying
+the baseline as a migration would fail. Instead, **stamp** it — this records
+the revision in `alembic_version` without executing any DDL:
+
+```bash
+alembic stamp 20260726_0001
+```
+
+Do this once, on every database that already has the schema (production and
+your current dev database). Check it worked:
+
+```bash
+alembic current   # -> 20260726_0001 (head)
+```
+
+### Development
+
+```bash
+alembic upgrade head              # apply pending migrations
+alembic revision -m "add x"       # new empty migration
+alembic revision --autogenerate -m "add x"
+alembic downgrade -1              # roll back one revision
+alembic history --verbose
+```
+
+`--autogenerate` compares the ORM models against the live database. Always
+read the generated file before applying: the production database has objects
+the ORM does not map (sequences, hand-made indexes from the old `.sql`
+files), and autogenerate will propose dropping them. Delete those lines.
+
+### Production
+
+Migrations do **not** run automatically at container start. That is
+deliberate: an automatic `upgrade head` on boot means a bad migration takes
+the API down with it, and with more than one container they race. Run it as
+an explicit step:
+
+```bash
+# 1. Back up first — this is Supabase/Postgres, a failed DDL can be costly
+docker exec pedeaqui-api alembic current      # confirm current revision
+docker compose up -d --build                  # deploy new code
+docker exec pedeaqui-api alembic upgrade head # then migrate
+docker exec pedeaqui-api alembic current      # confirm new revision
+```
+
+Migrations in this project are written to be backward compatible with the
+previous code version, so deploying the image before migrating is safe.
+
 ## Public Endpoints
 
 - `GET /health`

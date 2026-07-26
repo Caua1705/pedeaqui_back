@@ -17,11 +17,21 @@ class Settings(BaseSettings):
     SUPABASE_URL: str
     SUPABASE_STORAGE_BUCKET: str = "restaurant-assets"
 
-    INTERNAL_API_KEY: str
+    # DEPRECIADA na Fase 1. Nenhuma rota HTTP usa mais esta chave: as rotas
+    # /admin passaram a exigir JWT de lojista. Continua opcional aqui apenas
+    # para que um .env antigo nao derrube o boot; pode ser removida do
+    # ambiente depois que a Fase 1 estiver no ar.
+    INTERNAL_API_KEY: str | None = None
     CUSTOMER_AUTH_SECRET: str
     CUSTOMER_JWT_SECRET: str | None = None
     CUSTOMER_ACCESS_TOKEN_MINUTES: int = 10080
     PASSWORD_RESET_TOKEN_MINUTES: int = 15
+
+    # Segredo dos tokens de lojista. Vazio = usa CUSTOMER_AUTH_SECRET.
+    ADMIN_AUTH_SECRET: str | None = None
+    # Jornada de lojista e turno de trabalho, nao sessao de semanas como a do
+    # cliente: o token do painel expira em 12h.
+    ADMIN_ACCESS_TOKEN_MINUTES: int = 720
 
     RESEND_API_KEY: str | None = None
     EMAIL_FROM: str = "Rapidex <no-reply@pederapidex.com>"

@@ -26,7 +26,10 @@ Configure:
 - `DATABASE_URL`: Supabase/PostgreSQL connection string using `postgresql+psycopg`.
 - `SUPABASE_URL`: Supabase project URL.
 - `SUPABASE_STORAGE_BUCKET`: public storage bucket, default `restaurant-assets`.
-- `INTERNAL_API_KEY`: temporary key for admin/internal endpoints.
+- `CUSTOMER_AUTH_SECRET`: signing secret for customer tokens.
+- `ADMIN_AUTH_SECRET`: signing secret for merchant tokens. Falls back to
+  `CUSTOMER_AUTH_SECRET` when empty; a dedicated value is recommended.
+- `INTERNAL_API_KEY`: deprecated in Phase 1, no longer used by any route.
 
 ## Run Locally
 
@@ -129,13 +132,69 @@ previous code version, so deploying the image before migrating is safe.
 - `POST /restaurants/{restaurant_slug}/orders`
 - `GET /restaurants/{restaurant_slug}/orders/{order_number}?phone=85999999999`
 
-## Admin/Internal Endpoints
+## Admin Endpoints
 
-Send `X-API-Key: <INTERNAL_API_KEY>`.
+Admin routes authenticate with a merchant JWT. The shared `X-API-Key` was
+removed in Phase 1: one key for everyone could not say *who* was calling or
+*which restaurant* they belonged to, so no route could scope anything by
+tenant.
 
-- `GET /admin/restaurants/{restaurant_slug}/orders`
-- `GET /admin/orders/{order_id}`
+```bash
+curl -X POST http://localhost:8000/admin/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "junior@exemplo.com", "password": "..."}'
+```
+
+Then send `Authorization: Bearer <access_token>` on every admin route.
+
+- `POST /admin/auth/login` — public
+- `GET  /admin/auth/me`
+- `GET  /admin/restaurants/{restaurant_slug}/orders`
+- `GET  /admin/orders/{order_id}`
 - `PATCH /admin/orders/{order_id}/status`
+- `GET/POST/PATCH /admin/restaurants/{restaurant_id}/coupons`
+
+Every one of these is scoped to the `restaurant_id` in the token. A
+restaurant slug or id in the URL never grants access on its own — it is
+checked against the token and returns 404 when it does not match.
+
+### Creating the first merchant
+
+There is no merchant signup screen, and the first admin cannot be created
+through the API (nobody is authenticated yet to authorize it). Use the
+script:
+
+```bash
+docker exec -it pedeaqui-api python scripts/create_admin_user.py \
+  --restaurant-slug junior-da-picanha \
+  --name "Junior" \
+  --email junior@exemplo.com \
+  --role owner
+```
+
+The password is asked in a hidden prompt — never pass it as an argument, it
+would land in the shell history. Roles come from `ADMIN_USER_ROLES`:
+`owner`, `manager`, `attendant`.
+
+## Idempotency
+
+`POST /restaurants/{slug}/orders` and `PATCH /admin/orders/{id}/status`
+accept an `Idempotency-Key` header. Send a fresh UUID per logical operation
+and reuse it on every retry: resending the same key with the same body
+returns the original response instead of creating a second order.
+
+- same key, same body, already completed → the stored response
+- same key, different body → 422
+- same key, still running → 409
+- no key → accepted without protection (a warning is logged). Set
+  `IDEMPOTENCY_REQUIRED=true` to reject with 400 instead.
+
+Keys expire after `IDEMPOTENCY_TTL_HOURS` (24h). Purge expired rows with a
+cron:
+
+```bash
+docker exec pedeaqui-api python scripts/cleanup_idempotency_keys.py
+```
 
 ## Example Requests
 
@@ -195,6 +254,10 @@ On the VPS, keep Traefik attached to the same Docker network (`n8n_default`) and
 
 ## TODO
 
-- Add real admin authentication with JWT and password verification.
-- Add customer login/authentication if the product requires order history by account.
-- Add Alembic migrations if this backend starts owning schema evolution.
+- Integration tests against a real Postgres (Phase 4): idempotency under
+  concurrency, tenant filtering at the SQL level, TTL cleanup.
+- Versioned schema dump so a database can be built from scratch — today the
+  Alembic baseline assumes the schema already exists.
+- Per-branch scoping for merchants (`admin_users.branch_id` is stored but not
+  yet enforced on routes).
+- Merchant management screen, replacing `scripts/create_admin_user.py`.

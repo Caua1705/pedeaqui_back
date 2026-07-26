@@ -1,9 +1,11 @@
+import hashlib
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from time import perf_counter
 from typing import TypedDict
 
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.ai.schemas.chat_response_schema import ChatResponse
@@ -11,6 +13,7 @@ from src.ai.services.chat_llm_service import ChatLLMService
 from src.ai.services.retrieval_service import RetrievalService
 from src.repositories.ai_feedback_repository import AIFeedbackRepository
 from src.repositories.product_repository import ProductRepository
+from src.repositories.restaurant_repository import RestaurantRepository
 from src.schemas.ai_feedback_schema import AIFeedbackRequest, AIFeedbackResponse
 from src.services.menu_service import MenuService
 
@@ -39,6 +42,7 @@ class ChatService:
         self.db = db
         self.retrieval_service = RetrievalService(db)
         self.product_repository = ProductRepository(db)
+        self.restaurant_repository = RestaurantRepository(db)
 
     def create_feedback(self, request: AIFeedbackRequest) -> AIFeedbackResponse:
         AIFeedbackRepository(self.db).create(request)
@@ -56,12 +60,21 @@ class ChatService:
             "[AI /chat perf] validation_ms=%.2f",
             (perf_counter() - validation_started_at) * 1000,
         )
+        # A mensagem do usuario e dado pessoal e nao vai para o log.
+        # O digest permite correlacionar requisicoes sem expor o conteudo.
         logger.info(
-            "[AI /chat] Nova requisicao | restaurant_id=%s | session_id=%s | mensagem=%r",
+            "[AI /chat] Nova requisicao | restaurant_id=%s | session_id=%s "
+            "| message_chars=%d | message_digest=%s",
             restaurant_id,
             session_id,
-            message,
+            len(message),
+            _message_digest(message),
         )
+
+        # Barra restaurante inexistente/inativo antes de gastar chamada de
+        # embedding e de LLM com um restaurant_id qualquer. Fica fora do try
+        # para o 404 nao virar stack trace no log.
+        self._ensure_active_restaurant(restaurant_id)
 
         try:
             now = _utc_now()
@@ -108,6 +121,13 @@ class ChatService:
             logger.info(
                 "[AI /chat perf] total_ms=%.2f",
                 (perf_counter() - started_at) * 1000,
+            )
+
+    def _ensure_active_restaurant(self, restaurant_id: uuid.UUID) -> None:
+        if self.restaurant_repository.get_active_by_id(restaurant_id) is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Restaurante não encontrado",
             )
 
     @staticmethod
@@ -248,6 +268,10 @@ def _store_session_turn(
     )
     session["messages"] = session["messages"][-_MAX_SESSION_MESSAGES:]
     session["last_interaction"] = now
+
+
+def _message_digest(message: str) -> str:
+    return hashlib.sha256(message.encode("utf-8")).hexdigest()[:12]
 
 
 def _utc_now() -> datetime:

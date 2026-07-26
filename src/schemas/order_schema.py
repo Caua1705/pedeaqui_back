@@ -7,20 +7,25 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from src.schemas.common_schema import BaseResponse, StatusHistoryResponse
 
 
+MAX_ITEMS_PER_ORDER = 100
+MAX_OPTIONS_PER_ITEM = 30
+MAX_QUANTITY_PER_ITEM = 99
+
+
 class CustomerInput(BaseModel):
-    name: str = Field(min_length=1)
-    phone: str = Field(min_length=8)
+    name: str = Field(min_length=1, max_length=120)
+    phone: str = Field(min_length=8, max_length=20)
 
 
 class AddressInput(BaseModel):
-    street: str | None = None
-    number: str | None = None
-    neighborhood: str | None = None
-    complement: str | None = None
-    reference: str | None = None
-    city: str | None = None
-    state: str | None = None
-    zipcode: str | None = None
+    street: str | None = Field(default=None, max_length=200)
+    number: str | None = Field(default=None, max_length=20)
+    neighborhood: str | None = Field(default=None, max_length=120)
+    complement: str | None = Field(default=None, max_length=120)
+    reference: str | None = Field(default=None, max_length=200)
+    city: str | None = Field(default=None, max_length=120)
+    state: str | None = Field(default=None, max_length=40)
+    zipcode: str | None = Field(default=None, max_length=20)
     latitude: Decimal | None = Field(default=None, ge=-90, le=90)
     longitude: Decimal | None = Field(default=None, ge=-180, le=180)
 
@@ -32,9 +37,12 @@ class OrderItemSelectedOptionInput(BaseModel):
 
 class OrderItemInput(BaseModel):
     product_id: UUID
-    quantity: int = Field(default=1, ge=1)
-    observation: str | None = None
-    selected_options: list[OrderItemSelectedOptionInput] = Field(default_factory=list)
+    quantity: int = Field(default=1, ge=1, le=MAX_QUANTITY_PER_ITEM)
+    observation: str | None = Field(default=None, max_length=300)
+    selected_options: list[OrderItemSelectedOptionInput] = Field(
+        default_factory=list,
+        max_length=MAX_OPTIONS_PER_ITEM,
+    )
 
 
 class CreateOrderRequest(BaseModel):
@@ -43,11 +51,11 @@ class CreateOrderRequest(BaseModel):
     branch_id: UUID
     customer: CustomerInput | None = None
     customer_address_id: UUID | None = None
-    order_type: str
-    payment_method: str | None = None
+    order_type: str = Field(max_length=30)
+    payment_method: str | None = Field(default=None, max_length=50)
     address: AddressInput | None = None
-    notes: str | None = None
-    items: list[OrderItemInput] = Field(min_length=1)
+    notes: str | None = Field(default=None, max_length=500)
+    items: list[OrderItemInput] = Field(min_length=1, max_length=MAX_ITEMS_PER_ORDER)
     coupon_id: UUID | None = None
     coupon_code: str | None = Field(default=None, min_length=1, max_length=100)
 

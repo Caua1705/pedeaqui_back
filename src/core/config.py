@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     DEBUG: bool = True
 
+    # Deixe em None para seguir o APP_ENV (desligado em producao).
+    # Defina explicitamente para forcar um dos dois lados.
+    ENABLE_API_DOCS: bool | None = None
+
     DATABASE_URL: str
 
     SUPABASE_URL: str
@@ -36,6 +40,25 @@ class Settings(BaseSettings):
     DELIVERY_ESTIMATE_NEGATIVE_CACHE_TTL_SECONDS: int = 120
     DELIVERY_ESTIMATE_PROVIDER: str = "google_routes"
     REDIS_URL: str | None = None
+
+    # Teto do corpo da requisicao. O maior payload legitimo e a criacao de
+    # pedido, que com os limites de order_schema fica bem abaixo disso.
+    MAX_REQUEST_BODY_BYTES: int = 262_144
+
+    RATE_LIMIT_ENABLED: bool = True
+    # Cabecalho com o IP real do cliente. Atras do Traefik o socket peer e o
+    # proxy; deixe vazio apenas se a API for exposta sem proxy na frente.
+    RATE_LIMIT_CLIENT_IP_HEADER: str = "x-real-ip"
+
+    @property
+    def is_production(self) -> bool:
+        return self.APP_ENV.strip().lower() in {"production", "prod"}
+
+    @property
+    def api_docs_enabled(self) -> bool:
+        if self.ENABLE_API_DOCS is not None:
+            return self.ENABLE_API_DOCS
+        return not self.is_production
 
     model_config = SettingsConfigDict(
         env_file=".env",

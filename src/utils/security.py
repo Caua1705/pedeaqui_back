@@ -92,7 +92,13 @@ def verify_code(code: str, code_hash: str) -> bool:
     return verify_verification_code(code, code_hash)
 
 
-def create_signed_token(subject: str, purpose: str, expires_delta: timedelta, extra: dict[str, Any] | None = None) -> str:
+def create_signed_token(
+    subject: str,
+    purpose: str,
+    expires_delta: timedelta,
+    extra: dict[str, Any] | None = None,
+    secret: str | None = None,
+) -> str:
     now = utcnow()
     payload: dict[str, Any] = {
         "sub": subject,
@@ -103,12 +109,12 @@ def create_signed_token(subject: str, purpose: str, expires_delta: timedelta, ex
     if extra:
         payload.update(extra)
 
-    return jwt.encode(payload, _customer_auth_secret(), algorithm="HS256")
+    return jwt.encode(payload, secret or _customer_auth_secret(), algorithm="HS256")
 
 
-def decode_signed_token(token: str, purpose: str) -> dict[str, Any]:
+def decode_signed_token(token: str, purpose: str, secret: str | None = None) -> dict[str, Any]:
     try:
-        payload = jwt.decode(token, _customer_auth_secret(), algorithms=["HS256"])
+        payload = jwt.decode(token, secret or _customer_auth_secret(), algorithms=["HS256"])
         if payload.get("purpose") != purpose:
             raise TokenInvalidError
         return payload
@@ -125,8 +131,20 @@ def _customer_auth_secret() -> str:
     return secret
 
 
+def admin_auth_secret() -> str:
+    """Segredo dos tokens de lojista.
+
+    Cai no segredo de cliente quando ADMIN_AUTH_SECRET nao esta definido, para
+    que a Fase 1 suba sem exigir variavel nova. Mesmo nesse caso um token de
+    cliente nao vira token de admin: `purpose` e conferido na decodificacao.
+    Definir o segredo separado ainda e o recomendado — ai o comprometimento
+    de um nao alcanca o outro.
+    """
+    return settings.ADMIN_AUTH_SECRET or _customer_auth_secret()
+
+
 def _hmac_hex(value: str, secret: str | None) -> str:
-    key = (secret or settings.CUSTOMER_AUTH_SECRET or settings.INTERNAL_API_KEY).encode("utf-8")
+    key = (secret or settings.CUSTOMER_AUTH_SECRET).encode("utf-8")
     return hmac.new(key, value.encode("utf-8"), hashlib.sha256).hexdigest()
 
 

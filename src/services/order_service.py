@@ -26,8 +26,13 @@ from src.schemas.order_schema import (
 from src.schemas.common_schema import StatusHistoryResponse
 from src.services.delivery_estimate_service import DeliveryEstimateService
 from src.services.coupon_service import CouponService
+from src.services.idempotency_service import IdempotencyService
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import ZERO, money_to_float, quantize_money, to_decimal
+from src.utils.normalization import normalize_digits
+
+
+CREATE_ORDER_ROUTE = "POST /restaurants/{restaurant_slug}/orders"
 
 
 class OrderService:
@@ -40,12 +45,14 @@ class OrderService:
         self.customer_repository = CustomerRepository(db)
         self.order_repository = OrderRepository(db)
         self.coupon_service = CouponService(db)
+        self.idempotency_service = IdempotencyService(db)
 
     def create_order(
         self,
         restaurant_slug: str,
         payload: CreateOrderRequest,
         current_customer: Customer | None = None,
+        idempotency_key: str | None = None,
     ) -> CreateOrderResponse:
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
         self._validate_order_type(payload.order_type)
@@ -56,6 +63,19 @@ class OrderService:
 
         address = self._resolve_order_address(payload, current_customer)
         self._validate_customer_snapshot(payload, current_customer)
+
+        # Reserva antes de qualquer escrita e antes da chamada paga ao Google
+        # Maps: um reenvio devolve a resposta gravada sem gastar rota nem
+        # criar pedido. Fica na mesma transacao do INSERT do pedido, entao um
+        # erro adiante libera a chave junto com o rollback.
+        replayed = self.idempotency_service.begin(
+            scope=self._idempotency_scope(restaurant.id, payload, current_customer),
+            key=idempotency_key,
+            request_fingerprint=IdempotencyService.fingerprint(payload.model_dump(mode="json")),
+        )
+        if replayed is not None:
+            return CreateOrderResponse.model_validate(replayed)
+
         self._validate_delivery_address(payload, address)
         settings = self.menu_repository.get_settings(restaurant.id)
         delivery_estimate = self._estimate_delivery(
@@ -161,25 +181,53 @@ class OrderService:
             self.order_repository.create_status_history(
                 OrderStatusHistory(order_id=order.id, status="pending", changed_by="system", note="Pedido criado")
             )
+            response = CreateOrderResponse(
+                id=order.id,
+                order_number=order.order_number,
+                status=order.status,
+                subtotal=money_to_float(order.subtotal),
+                delivery_fee=money_to_float(order.delivery_fee),
+                service_fee=money_to_float(order.service_fee),
+                coupon_code=order.coupon_code_snapshot,
+                coupon_discount_amount=quantize_money(order.coupon_discount_amount),
+                cashback_redeemed_amount=quantize_money(order.cashback_redeemed_amount),
+                discount_total=quantize_money(order.discount_total),
+                total=money_to_float(order.total),
+                message="Pedido criado com sucesso",
+            )
+            # Gravada antes do commit para que a resposta armazenada e o
+            # pedido entrem no banco atomicamente. Se o commit falhar, nao
+            # sobra chave apontando para um pedido que nao existe.
+            if self.idempotency_service.has_reservation:
+                self.idempotency_service.complete(
+                    response_body=response.model_dump(mode="json"),
+                    order_id=order.id,
+                )
             self.db.commit()
             self.db.refresh(order)
         except Exception:
             self.db.rollback()
             raise
 
-        return CreateOrderResponse(
-            id=order.id,
-            order_number=order.order_number,
-            status=order.status,
-            subtotal=money_to_float(order.subtotal),
-            delivery_fee=money_to_float(order.delivery_fee),
-            service_fee=money_to_float(order.service_fee),
-            coupon_code=order.coupon_code_snapshot,
-            coupon_discount_amount=quantize_money(order.coupon_discount_amount),
-            cashback_redeemed_amount=quantize_money(order.cashback_redeemed_amount),
-            discount_total=quantize_money(order.discount_total),
-            total=money_to_float(order.total),
-            message="Pedido criado com sucesso",
+        return response
+
+    def _idempotency_scope(
+        self,
+        restaurant_id: UUID,
+        payload: CreateOrderRequest,
+        current_customer: Customer | None,
+    ) -> str:
+        # Identidade do solicitante: a conta quando ha login, senao o
+        # telefone do pedido guest. Sem isso a chave de um cliente poderia
+        # devolver o pedido de outro.
+        if current_customer is not None:
+            requester = f"customer:{current_customer.id}"
+        else:
+            requester = f"phone:{normalize_digits(payload.customer.phone)}"
+        return IdempotencyService.build_scope(
+            restaurant_id=restaurant_id,
+            route=CREATE_ORDER_ROUTE,
+            requester=requester,
         )
 
     def get_customer_order(self, restaurant_slug: str, order_number: int, phone: str) -> OrderDetailResponse:

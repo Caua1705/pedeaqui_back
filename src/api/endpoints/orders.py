@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.customer_auth import get_optional_current_customer
@@ -10,10 +10,18 @@ from src.api.rate_limit import (
 )
 from src.models.customer_model import Customer
 from src.schemas.order_schema import CreateOrderRequest, CreateOrderResponse, OrderDetailResponse
+from src.services.idempotency_service import normalize_idempotency_key
 from src.services.order_service import OrderService
 
 
 router = APIRouter(prefix="/restaurants", tags=["orders"])
+
+IDEMPOTENCY_KEY_DESCRIPTION = (
+    "Identificador unico da tentativa de criar ESTE pedido. Reenviar a mesma "
+    "chave com o mesmo corpo devolve a resposta original em vez de criar um "
+    "segundo pedido. Gere um UUID por pedido e reutilize-o em todas as "
+    "retentativas. Vale por 24h."
+)
 
 
 @router.post("/{restaurant_slug}/orders", response_model=CreateOrderResponse)
@@ -23,9 +31,19 @@ def create_order(
     restaurant_slug: str,
     payload: CreateOrderRequest,
     current_customer: Customer | None = Depends(get_optional_current_customer),
+    idempotency_key: str | None = Header(
+        default=None,
+        alias="Idempotency-Key",
+        description=IDEMPOTENCY_KEY_DESCRIPTION,
+    ),
     db: Session = Depends(get_db),
 ) -> CreateOrderResponse:
-    return OrderService(db).create_order(restaurant_slug, payload, current_customer)
+    return OrderService(db).create_order(
+        restaurant_slug,
+        payload,
+        current_customer,
+        idempotency_key=normalize_idempotency_key(idempotency_key),
+    )
 
 
 @router.get("/{restaurant_slug}/orders/{order_number}", response_model=OrderDetailResponse)

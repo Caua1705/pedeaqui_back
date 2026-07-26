@@ -17,11 +17,21 @@ class Settings(BaseSettings):
     SUPABASE_URL: str
     SUPABASE_STORAGE_BUCKET: str = "restaurant-assets"
 
-    INTERNAL_API_KEY: str
+    # DEPRECIADA na Fase 1. Nenhuma rota HTTP usa mais esta chave: as rotas
+    # /admin passaram a exigir JWT de lojista. Continua opcional aqui apenas
+    # para que um .env antigo nao derrube o boot; pode ser removida do
+    # ambiente depois que a Fase 1 estiver no ar.
+    INTERNAL_API_KEY: str | None = None
     CUSTOMER_AUTH_SECRET: str
     CUSTOMER_JWT_SECRET: str | None = None
     CUSTOMER_ACCESS_TOKEN_MINUTES: int = 10080
     PASSWORD_RESET_TOKEN_MINUTES: int = 15
+
+    # Segredo dos tokens de lojista. Vazio = usa CUSTOMER_AUTH_SECRET.
+    ADMIN_AUTH_SECRET: str | None = None
+    # Jornada de lojista e turno de trabalho, nao sessao de semanas como a do
+    # cliente: o token do painel expira em 12h.
+    ADMIN_ACCESS_TOKEN_MINUTES: int = 720
 
     RESEND_API_KEY: str | None = None
     EMAIL_FROM: str = "Rapidex <no-reply@pederapidex.com>"
@@ -44,6 +54,14 @@ class Settings(BaseSettings):
     # Teto do corpo da requisicao. O maior payload legitimo e a criacao de
     # pedido, que com os limites de order_schema fica bem abaixo disso.
     MAX_REQUEST_BODY_BYTES: int = 262_144
+
+    # Janela em que reenviar a mesma Idempotency-Key devolve a resposta
+    # gravada em vez de criar de novo. Passado o TTL a chave e reciclavel.
+    IDEMPOTENCY_TTL_HOURS: int = 24
+    # False: requisicao sem o header passa sem protecao (so warning no log).
+    # Ligue quando nao houver mais cliente antigo em campo — ver
+    # normalize_idempotency_key.
+    IDEMPOTENCY_REQUIRED: bool = False
 
     RATE_LIMIT_ENABLED: bool = True
     # Cabecalho com o IP real do cliente. Atras do Traefik o socket peer e o

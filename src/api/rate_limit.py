@@ -31,6 +31,9 @@ from src.core.config import settings
 
 # Limites por rota publica.
 LOGIN_RATE_LIMIT = "10/minute"
+# Login de lojista: mesma exposicao a forca bruta do login de cliente, e a
+# conta vale mais (le todos os pedidos do restaurante).
+ADMIN_LOGIN_RATE_LIMIT = "10/minute;60/hour"
 FORGOT_PASSWORD_RATE_LIMIT = "5/minute;20/hour"
 PUBLIC_ORDER_LOOKUP_RATE_LIMIT = "30/minute"
 CREATE_ORDER_RATE_LIMIT = "10/minute;60/hour"

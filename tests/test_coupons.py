@@ -543,10 +543,13 @@ class OrderCouponIntegrationTests(unittest.TestCase):
 
     def test_cancelled_order_reverses_redemption_in_same_transaction(self):
         db = FakeDb()
+        restaurant_id = uuid.uuid4()
         order = SimpleNamespace(id=uuid.uuid4(), status="pending")
 
         class Repo:
-            def get_order_detail(self, order_id):
+            # get_order_detail passou a exigir restaurant_id na Fase 1 para
+            # fechar o vazamento cross-tenant; ver AdminOrderService.
+            def get_order_detail(self, order_id, restaurant):
                 return order
 
             def update_status(self, current, new_status):
@@ -564,6 +567,7 @@ class OrderCouponIntegrationTests(unittest.TestCase):
         with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
             result = service.update_order_status(
                 order.id,
+                restaurant_id,
                 SimpleNamespace(status="cancelled", changed_by="admin", note=None),
             )
 

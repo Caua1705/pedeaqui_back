@@ -49,6 +49,20 @@ def collect_configuration_warnings(settings: Settings) -> list[str]:
             "chamadas ao Google Maps."
         )
 
+    if not settings.ADMIN_AUTH_SECRET:
+        warnings.append(
+            "ADMIN_AUTH_SECRET nao definida: os tokens de lojista sao "
+            "assinados com CUSTOMER_AUTH_SECRET. Funciona (o campo `purpose` "
+            "separa os dois tipos de token), mas um segredo proprio evita que "
+            "o comprometimento de um alcance o outro."
+        )
+
+    if settings.INTERNAL_API_KEY:
+        warnings.append(
+            "INTERNAL_API_KEY ainda definida no ambiente: desde a Fase 1 "
+            "nenhuma rota a utiliza. Pode ser removida do .env."
+        )
+
     if not settings.RATE_LIMIT_CLIENT_IP_HEADER.strip():
         warnings.append(
             "RATE_LIMIT_CLIENT_IP_HEADER vazio: atras de um proxy o rate "

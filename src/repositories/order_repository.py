@@ -66,11 +66,15 @@ class OrderRepository:
         stmt = stmt.order_by(Order.created_at.desc()).limit(limit).offset(offset)
         return list(self.db.scalars(stmt).all())
 
-    def get_order_detail(self, order_id: uuid.UUID) -> Order | None:
+    def get_order_detail(self, order_id: uuid.UUID, restaurant_id: uuid.UUID) -> Order | None:
+        # restaurant_id e obrigatorio de proposito. Enquanto o filtro era so
+        # por Order.id, qualquer lojista com um UUID de pedido em maos lia o
+        # pedido de outro restaurante — nome, telefone e endereco do cliente.
+        # Deixa-lo opcional convidaria a repetir o erro na proxima rota.
         stmt = (
             select(Order)
             .options(selectinload(Order.items), selectinload(Order.status_history))
-            .where(Order.id == order_id)
+            .where(Order.id == order_id, Order.restaurant_id == restaurant_id)
         )
         return self.db.scalar(stmt)
 

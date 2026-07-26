@@ -1,8 +1,13 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.customer_auth import get_optional_current_customer
 from src.api.dependencies.database import get_db
+from src.api.rate_limit import (
+    CREATE_ORDER_RATE_LIMIT,
+    PUBLIC_ORDER_LOOKUP_RATE_LIMIT,
+    limiter,
+)
 from src.models.customer_model import Customer
 from src.schemas.order_schema import CreateOrderRequest, CreateOrderResponse, OrderDetailResponse
 from src.services.order_service import OrderService
@@ -12,7 +17,9 @@ router = APIRouter(prefix="/restaurants", tags=["orders"])
 
 
 @router.post("/{restaurant_slug}/orders", response_model=CreateOrderResponse)
+@limiter.limit(CREATE_ORDER_RATE_LIMIT)
 def create_order(
+    request: Request,
     restaurant_slug: str,
     payload: CreateOrderRequest,
     current_customer: Customer | None = Depends(get_optional_current_customer),
@@ -22,7 +29,9 @@ def create_order(
 
 
 @router.get("/{restaurant_slug}/orders/{order_number}", response_model=OrderDetailResponse)
+@limiter.limit(PUBLIC_ORDER_LOOKUP_RATE_LIMIT)
 def get_customer_order(
+    request: Request,
     restaurant_slug: str,
     order_number: int,
     phone: str = Query(..., min_length=8),

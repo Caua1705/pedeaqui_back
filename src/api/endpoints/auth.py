@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.database import get_db
+from src.api.rate_limit import FORGOT_PASSWORD_RATE_LIMIT, LOGIN_RATE_LIMIT, limiter
 from src.schemas.auth_schema import (
     ForgotPasswordRequest,
     LoginRequest,
@@ -38,12 +39,22 @@ def resend_email_code(payload: ResendEmailCodeRequest, db: Session = Depends(get
 
 
 @router.post("/login", response_model=LoginResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)) -> LoginResponse:
+@limiter.limit(LOGIN_RATE_LIMIT)
+def login(
+    request: Request,
+    payload: LoginRequest,
+    db: Session = Depends(get_db),
+) -> LoginResponse:
     return AuthService(db).login(payload)
 
 
 @router.post("/forgot-password", response_model=MessageResponse)
-def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)) -> MessageResponse:
+@limiter.limit(FORGOT_PASSWORD_RATE_LIMIT)
+def forgot_password(
+    request: Request,
+    payload: ForgotPasswordRequest,
+    db: Session = Depends(get_db),
+) -> MessageResponse:
     return AuthService(db).forgot_password(payload)
 
 

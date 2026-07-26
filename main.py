@@ -2,8 +2,11 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
+from slowapi.errors import RateLimitExceeded
+
 from src.api import chat
 from src.api.middleware.body_size import BodySizeLimitMiddleware
+from src.api.rate_limit import limiter, rate_limit_exceeded_handler
 from src.api.validation_errors import log_contract_validation_error
 from src.api.endpoints import admin_orders, auth, coupons, customers, delivery, health, menu, orders, restaurants
 from src.core.config import settings
@@ -23,6 +26,9 @@ app = FastAPI(
 )
 
 app.add_exception_handler(RequestValidationError, log_contract_validation_error)
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 origins = [
     "https://pederapidex.com",

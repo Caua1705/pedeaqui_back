@@ -9,10 +9,17 @@ from src.api.endpoints import admin_orders, auth, coupons, customers, delivery, 
 from src.core.config import settings
 
 
+# Em producao /docs, /redoc e /openapi.json ficam desligados: o schema
+# completo entrega a superficie de ataque inteira a quem so achou o dominio.
+_docs_enabled = settings.api_docs_enabled
+
 app = FastAPI(
     title=settings.APP_NAME,
     description="Backend API for Rapidex white-label restaurant ordering.",
     version="0.1.0",
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 app.add_exception_handler(RequestValidationError, log_contract_validation_error)

@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     DEBUG: bool = True
 
+    # Deixe em None para seguir o APP_ENV (desligado em producao).
+    # Defina explicitamente para forcar um dos dois lados.
+    ENABLE_API_DOCS: bool | None = None
+
     DATABASE_URL: str
 
     SUPABASE_URL: str
@@ -40,6 +44,16 @@ class Settings(BaseSettings):
     # Teto do corpo da requisicao. O maior payload legitimo e a criacao de
     # pedido, que com os limites de order_schema fica bem abaixo disso.
     MAX_REQUEST_BODY_BYTES: int = 262_144
+
+    @property
+    def is_production(self) -> bool:
+        return self.APP_ENV.strip().lower() in {"production", "prod"}
+
+    @property
+    def api_docs_enabled(self) -> bool:
+        if self.ENABLE_API_DOCS is not None:
+            return self.ENABLE_API_DOCS
+        return not self.is_production
 
     model_config = SettingsConfigDict(
         env_file=".env",

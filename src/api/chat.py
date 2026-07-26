@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from src.ai.schemas.chat_response_schema import ChatResponse
 from src.api.dependencies.database import get_db
 from src.schemas.ai_feedback_schema import AIFeedbackRequest, AIFeedbackResponse
+from src.schemas.chat_limits import MAX_CHAT_MESSAGE_LENGTH, MAX_SESSION_ID_LENGTH
 from src.services.chat_service import ChatService
 
 
@@ -15,8 +16,8 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 class ChatRequest(BaseModel):
     restaurant_id: uuid.UUID
-    session_id: str = Field(min_length=1)
-    message: str = Field(min_length=1)
+    session_id: str = Field(min_length=1, max_length=MAX_SESSION_ID_LENGTH)
+    message: str = Field(min_length=1, max_length=MAX_CHAT_MESSAGE_LENGTH)
 
 
 @router.post("/feedback", response_model=AIFeedbackResponse)

@@ -1,0 +1,41 @@
+# Segredos e configuracao local
+.env
+.env.*
+!.env.example
+
+# Controle de versao e metadados
+.git
+.gitignore
+.github
+
+# Artefatos Python
+__pycache__/
+*.pyc
+*.py[cod]
+*$py.class
+.Python
+venv/
+.venv/
+env/
+
+# Testes e caches de ferramentas
+tests/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+requirements-dev.txt
+
+# Build local
+dist/
+build/
+*.egg-info/
+
+# Editores
+.idea/
+.vscode/
+.claude/
+
+# Logs
+*.log

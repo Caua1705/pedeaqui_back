@@ -2,9 +2,10 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.schemas.common_schema import BaseResponse, StatusHistoryResponse
+from src.utils.normalization import normalize_digits
 
 
 MAX_ITEMS_PER_ORDER = 100
@@ -15,6 +16,19 @@ MAX_QUANTITY_PER_ITEM = 99
 class CustomerInput(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     phone: str = Field(min_length=8, max_length=20)
+
+    @field_validator("phone")
+    @classmethod
+    def validate_and_normalize_phone(cls, value: str) -> str:
+        # Guarda so digitos. O telefone do pedido guest e a UNICA chave que o
+        # cliente tem para consultar o proprio pedido depois, e a busca compara
+        # por igualdade exata: se o formato digitado entrasse cru, quem digitou
+        # "(85) 99999-9999" nunca acharia o pedido procurando por
+        # "85999999999". Mesma normalizacao do cadastro (customer_schema).
+        phone = normalize_digits(value)
+        if len(phone) < 8:
+            raise ValueError("invalid phone")
+        return phone
 
 
 class AddressInput(BaseModel):

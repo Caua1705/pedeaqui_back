@@ -116,7 +116,13 @@ class OrderService:
             discount_total = quantize_money(coupon_discount + cashback_redeemed)
             total = quantize_money(subtotal + service_fee + delivery_fee - discount_total)
             customer_name = current_customer.name if current_customer else payload.customer.name
-            customer_phone = current_customer.phone if current_customer else payload.customer.phone
+            # Normaliza de novo na escrita, e nao so no schema: o snapshot e o
+            # que get_customer_order compara, entao ele precisa estar em
+            # digitos venha de onde vier. `current_customer.phone` ja e
+            # normalizado no cadastro, mas contas antigas podem nao ser.
+            customer_phone = normalize_digits(
+                current_customer.phone if current_customer else payload.customer.phone
+            )
             order = Order(
                 restaurant_id=restaurant.id,
                 branch_id=branch.id,
@@ -232,7 +238,14 @@ class OrderService:
 
     def get_customer_order(self, restaurant_slug: str, order_number: int, phone: str) -> OrderDetailResponse:
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
-        order = self.order_repository.get_order_by_number_and_phone(restaurant.id, order_number, phone)
+        # A busca compara com customer_phone_snapshot por igualdade exata, e o
+        # snapshot e gravado so em digitos. Normalizar aqui deixa o cliente
+        # consultar com o telefone formatado do jeito que ele conhece.
+        order = self.order_repository.get_order_by_number_and_phone(
+            restaurant.id,
+            order_number,
+            normalize_digits(phone),
+        )
         if not order:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido não encontrado")
         return self.to_order_detail_response(order)

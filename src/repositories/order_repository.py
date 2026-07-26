@@ -41,6 +41,10 @@ class OrderRepository:
         order_number: int,
         phone: str,
     ) -> Order | None:
+        # `phone` precisa vir ja normalizado (so digitos, via normalize_digits).
+        # A comparacao e por igualdade exata contra customer_phone_snapshot, que
+        # o OrderService grava sempre em digitos; passar o valor cru aqui volta
+        # a produzir "pedido nao encontrado" para telefone formatado.
         stmt = (
             select(Order)
             .options(selectinload(Order.items), selectinload(Order.status_history))

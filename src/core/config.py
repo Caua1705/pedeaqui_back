@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     # pedido, que com os limites de order_schema fica bem abaixo disso.
     MAX_REQUEST_BODY_BYTES: int = 262_144
 
+    # Janela em que reenviar a mesma Idempotency-Key devolve a resposta
+    # gravada em vez de criar de novo. Passado o TTL a chave e reciclavel.
+    IDEMPOTENCY_TTL_HOURS: int = 24
+    # False: requisicao sem o header passa sem protecao (so warning no log).
+    # Ligue quando nao houver mais cliente antigo em campo — ver
+    # normalize_idempotency_key.
+    IDEMPOTENCY_REQUIRED: bool = False
+
     RATE_LIMIT_ENABLED: bool = True
     # Cabecalho com o IP real do cliente. Atras do Traefik o socket peer e o
     # proxy; deixe vazio apenas se a API for exposta sem proxy na frente.

@@ -25,7 +25,8 @@ from src.models.idempotency_key_model import (
     IDEMPOTENCY_COMPLETED,
     IDEMPOTENCY_IN_PROGRESS,
 )
-from src.schemas.order_schema import CreateOrderRequest
+from src.schemas.order_schema import CreateOrderRequest, OrderDetailResponse
+from src.services.admin_order_service import AdminOrderService
 from src.services.idempotency_service import (
     IdempotencyService,
     normalize_idempotency_key,
@@ -370,6 +371,115 @@ class CreateOrderIdempotencyTests(unittest.TestCase):
         service.create_order("junior", payload, None, idempotency_key=None)
 
         self.assertEqual(len(service.order_repository.orders), 1)
+        self.assertEqual(service.idempotency_service.repository.reserve_calls, [])
+
+
+class StatusHistoryRepository:
+    """Guarda o historico de status, que e o que duplicava a cada reenvio."""
+
+    def __init__(self, order):
+        self.order = order
+        self.history = []
+
+    def get_order_detail(self, order_id, restaurant_id):
+        if self.order.id != order_id or self.order.restaurant_id != restaurant_id:
+            return None
+        return self.order
+
+    def update_status(self, order, new_status):
+        order.status = new_status
+
+    def create_status_history(self, history):
+        self.history.append(history)
+
+
+class UpdateStatusIdempotencyTests(unittest.TestCase):
+    def _service(self, db, order, repository=None):
+        service = AdminOrderService(db)
+        service.order_repository = StatusHistoryRepository(order)
+        service.coupon_service = SimpleNamespace(reverse_for_order=lambda order_id: None)
+        service.idempotency_service.repository = repository or FakeIdempotencyRepository()
+        return service
+
+    def _order(self, restaurant_id):
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            restaurant_id=restaurant_id,
+            status="pending",
+            order_number=7,
+        )
+
+    def test_resending_the_same_key_does_not_duplicate_status_history(self):
+        db = FakeDb()
+        restaurant_id = uuid.uuid4()
+        admin_id = uuid.uuid4()
+        order = self._order(restaurant_id)
+        shared_repository = FakeIdempotencyRepository()
+        request = SimpleNamespace(status="accepted", changed_by="lojista", note=None)
+
+        detail = {"id": str(order.id), "status": "accepted"}
+        with patch.object(
+            OrderService, "to_order_detail_response",
+            return_value=SimpleNamespace(model_dump=lambda mode=None: detail),
+        ):
+            first_service = self._service(db, order, shared_repository)
+            first_service.update_order_status(
+                order.id, restaurant_id, request,
+                admin_user_id=admin_id, idempotency_key="patch-key",
+            )
+
+            second_service = self._service(db, order, shared_repository)
+            with patch.object(
+                OrderDetailResponse, "model_validate", side_effect=lambda value: value
+            ):
+                replay = second_service.update_order_status(
+                    order.id, restaurant_id, request,
+                    admin_user_id=admin_id, idempotency_key="patch-key",
+                )
+
+        self.assertEqual(len(first_service.order_repository.history), 1)
+        self.assertEqual(len(second_service.order_repository.history), 0)
+        self.assertEqual(replay, detail)
+
+    def test_same_key_from_another_admin_is_a_separate_operation(self):
+        db = FakeDb()
+        restaurant_id = uuid.uuid4()
+        order = self._order(restaurant_id)
+        shared_repository = FakeIdempotencyRepository()
+        request = SimpleNamespace(status="accepted", changed_by="lojista", note=None)
+
+        with patch.object(
+            OrderService, "to_order_detail_response",
+            return_value=SimpleNamespace(model_dump=lambda mode=None: {}),
+        ):
+            service_a = self._service(db, order, shared_repository)
+            service_a.update_order_status(
+                order.id, restaurant_id, request,
+                admin_user_id=uuid.uuid4(), idempotency_key="mesma-chave",
+            )
+            service_b = self._service(db, order, shared_repository)
+            service_b.update_order_status(
+                order.id, restaurant_id, request,
+                admin_user_id=uuid.uuid4(), idempotency_key="mesma-chave",
+            )
+
+        self.assertEqual(len(service_a.order_repository.history), 1)
+        self.assertEqual(len(service_b.order_repository.history), 1)
+
+    def test_status_change_without_key_still_works(self):
+        db = FakeDb()
+        restaurant_id = uuid.uuid4()
+        order = self._order(restaurant_id)
+
+        with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
+            service = self._service(db, order)
+            result = service.update_order_status(
+                order.id, restaurant_id,
+                SimpleNamespace(status="accepted", changed_by="lojista", note=None),
+            )
+
+        self.assertEqual(result, "detail")
+        self.assertEqual(len(service.order_repository.history), 1)
         self.assertEqual(service.idempotency_service.repository.reserve_calls, [])
 
 

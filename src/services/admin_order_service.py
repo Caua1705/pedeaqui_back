@@ -8,10 +8,14 @@ from src.models.order_status_history_model import OrderStatusHistory
 from src.repositories.order_repository import OrderRepository
 from src.schemas.admin_order_schema import AdminOrderListItem, UpdateOrderStatusRequest
 from src.schemas.order_schema import OrderDetailResponse
+from src.services.idempotency_service import IdempotencyService
 from src.services.order_service import OrderService
 from src.services.coupon_service import CouponService
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import money_to_float
+
+
+UPDATE_STATUS_ROUTE = "PATCH /admin/orders/{order_id}/status"
 
 
 class AdminOrderService:
@@ -20,6 +24,7 @@ class AdminOrderService:
         self.restaurant_service = RestaurantService(db)
         self.order_repository = OrderRepository(db)
         self.coupon_service = CouponService(db)
+        self.idempotency_service = IdempotencyService(db)
 
     def list_orders(
         self,
@@ -72,6 +77,8 @@ class AdminOrderService:
         order_id: UUID,
         restaurant_id: UUID,
         payload: UpdateOrderStatusRequest,
+        admin_user_id: UUID | None = None,
+        idempotency_key: str | None = None,
     ) -> OrderDetailResponse:
         if payload.status not in ORDER_STATUSES:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Status inválido")
@@ -79,6 +86,26 @@ class AdminOrderService:
         order = self.order_repository.get_order_detail(order_id, restaurant_id)
         if not order:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido não encontrado")
+
+        # Sem isto, cada reenvio do painel (clique duplo, retry) empilhava uma
+        # linha nova em order_status_history para o mesmo status, sujando o
+        # historico que o cliente ve.
+        replayed = self.idempotency_service.begin(
+            scope=IdempotencyService.build_scope(
+                restaurant_id=restaurant_id,
+                route=UPDATE_STATUS_ROUTE,
+                requester=f"admin:{admin_user_id}",
+            ),
+            key=idempotency_key,
+            request_fingerprint=IdempotencyService.fingerprint({
+                "order_id": str(order_id),
+                "status": payload.status,
+                "changed_by": payload.changed_by,
+                "note": payload.note,
+            }),
+        )
+        if replayed is not None:
+            return OrderDetailResponse.model_validate(replayed)
 
         try:
             self.order_repository.update_status(order, payload.status)
@@ -92,6 +119,15 @@ class AdminOrderService:
                     note=payload.note,
                 )
             )
+            if self.idempotency_service.has_reservation:
+                # Recarrega antes do commit para gravar a mesma resposta que
+                # o chamador vai receber.
+                self.idempotency_service.complete(
+                    response_body=OrderService.to_order_detail_response(
+                        self.order_repository.get_order_detail(order_id, restaurant_id)
+                    ).model_dump(mode="json"),
+                    order_id=order_id,
+                )
             self.db.commit()
             order = self.order_repository.get_order_detail(order_id, restaurant_id)
         except Exception:

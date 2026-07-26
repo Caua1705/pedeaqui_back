@@ -198,10 +198,11 @@ class OrderService:
             # Gravada antes do commit para que a resposta armazenada e o
             # pedido entrem no banco atomicamente. Se o commit falhar, nao
             # sobra chave apontando para um pedido que nao existe.
-            self.idempotency_service.complete(
-                response_body=response.model_dump(mode="json"),
-                order_id=order.id,
-            )
+            if self.idempotency_service.has_reservation:
+                self.idempotency_service.complete(
+                    response_body=response.model_dump(mode="json"),
+                    order_id=order.id,
+                )
             self.db.commit()
             self.db.refresh(order)
         except Exception:

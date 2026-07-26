@@ -147,6 +147,15 @@ class IdempotencyService:
             detail="Requisicao em andamento. Tente novamente em instantes.",
         )
 
+    @property
+    def has_reservation(self) -> bool:
+        """True quando esta requisicao pegou a reserva.
+
+        Serve para o chamador nao pagar a serializacao da resposta quando
+        nao ha chave para gravar.
+        """
+        return self._reserved_id is not None
+
     def complete(
         self,
         *,

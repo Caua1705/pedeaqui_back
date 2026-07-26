@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -56,11 +57,15 @@ class ChatService:
             "[AI /chat perf] validation_ms=%.2f",
             (perf_counter() - validation_started_at) * 1000,
         )
+        # A mensagem do usuario e dado pessoal e nao vai para o log.
+        # O digest permite correlacionar requisicoes sem expor o conteudo.
         logger.info(
-            "[AI /chat] Nova requisicao | restaurant_id=%s | session_id=%s | mensagem=%r",
+            "[AI /chat] Nova requisicao | restaurant_id=%s | session_id=%s "
+            "| message_chars=%d | message_digest=%s",
             restaurant_id,
             session_id,
-            message,
+            len(message),
+            _message_digest(message),
         )
 
         try:
@@ -248,6 +253,10 @@ def _store_session_turn(
     )
     session["messages"] = session["messages"][-_MAX_SESSION_MESSAGES:]
     session["last_interaction"] = now
+
+
+def _message_digest(message: str) -> str:
+    return hashlib.sha256(message.encode("utf-8")).hexdigest()[:12]
 
 
 def _utc_now() -> datetime:

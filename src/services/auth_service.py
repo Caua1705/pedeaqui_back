@@ -1,5 +1,8 @@
+import logging
+import time
 import uuid
 from datetime import timedelta
+from time import perf_counter
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
@@ -42,11 +45,23 @@ from src.utils.security import (
 )
 
 
+logger = logging.getLogger("uvicorn.error")
+
 MAX_CODE_ATTEMPTS = 5
 MAX_RESENDS = 3
 RESEND_COOLDOWN_SECONDS = 60
 CODE_TTL_MINUTES = 10
 RESEND_WINDOW_MINUTES = 15
+
+FORGOT_PASSWORD_MESSAGE = "Enviamos um código de recuperação para o seu e-mail."
+# Piso de latencia para que o tempo de resposta nao denuncie se o e-mail existe.
+FORGOT_PASSWORD_MIN_SECONDS = 0.6
+
+
+def _pad_latency(started_at: float, minimum_seconds: float) -> None:
+    remaining = minimum_seconds - (perf_counter() - started_at)
+    if remaining > 0:
+        time.sleep(remaining)
 
 
 class AuthService:
@@ -186,22 +201,32 @@ class AuthService:
         )
 
     def forgot_password(self, payload: ForgotPasswordRequest) -> MessageResponse:
-        email = normalize_email(payload.email)
-        customer = self.customer_repository.get_by_email(email)
-        if not customer:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="E-mail não encontrado.")
+        started_at = perf_counter()
+        try:
+            self._issue_password_reset_code(normalize_email(payload.email))
+        except Exception:
+            # A resposta precisa ser indistinguivel entre e-mail existente e
+            # inexistente, entao a falha e apenas registrada e nao propagada.
+            self.db.rollback()
+            logger.exception("[Auth] forgot_password_failed")
+        finally:
+            _pad_latency(started_at, FORGOT_PASSWORD_MIN_SECONDS)
+        return MessageResponse(message=FORGOT_PASSWORD_MESSAGE)
 
+    def _issue_password_reset_code(self, email: str) -> None:
+        # As consultas rodam mesmo sem cliente cadastrado para manter o mesmo
+        # perfil de acesso ao banco nos dois caminhos.
+        customer = self.customer_repository.get_by_email(email)
         latest = self.customer_repository.latest_unused_password_reset_code(email)
         if latest and latest.created_at and (utcnow() - latest.created_at).total_seconds() < RESEND_COOLDOWN_SECONDS:
-            return MessageResponse(message="Enviamos um código de recuperação para o seu e-mail.")
+            return
         recent_count = self.customer_repository.count_password_reset_codes_since(
             email=email,
             since=utcnow() - timedelta(minutes=RESEND_WINDOW_MINUTES),
         )
-        if recent_count < MAX_RESENDS:
+        if customer and recent_count < MAX_RESENDS:
             self._create_password_reset_code(customer)
             self.db.commit()
-        return MessageResponse(message="Enviamos um código de recuperação para o seu e-mail.")
 
     def verify_reset_code(self, payload: VerifyResetCodeRequest) -> VerifyResetCodeResponse:
         code_row = self.customer_repository.latest_unused_password_reset_code(normalize_email(payload.email))

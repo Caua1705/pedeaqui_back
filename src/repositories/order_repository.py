@@ -35,24 +35,35 @@ class OrderRepository:
         self.db.flush()
         return history
 
-    def get_order_by_number_and_phone(
+    def get_order_by_tracking_token(
         self,
         restaurant_id: uuid.UUID,
-        order_number: int,
-        phone: str,
+        tracking_token: str,
     ) -> Order | None:
-        # `phone` precisa vir ja normalizado (so digitos, via normalize_digits).
-        # A comparacao e por igualdade exata contra customer_phone_snapshot, que
-        # o OrderService grava sempre em digitos; passar o valor cru aqui volta
-        # a produzir "pedido nao encontrado" para telefone formatado.
+        # Substituiu a busca por (order_number, telefone), que era
+        # enumeravel: order_number vem de uma sequence global.
         stmt = (
             select(Order)
             .options(selectinload(Order.items), selectinload(Order.status_history))
             .where(
                 Order.restaurant_id == restaurant_id,
-                Order.order_number == order_number,
-                Order.customer_phone_snapshot == phone,
+                Order.tracking_token == tracking_token,
             )
+        )
+        return self.db.scalar(stmt)
+
+    def get_order_detail_for_customer(
+        self,
+        order_id: uuid.UUID,
+        customer_id: uuid.UUID,
+    ) -> Order | None:
+        # customer_id e obrigatorio pelo mesmo motivo que restaurant_id e em
+        # get_order_detail: sem ele a rota entrega o pedido de qualquer um
+        # para quem tiver o UUID.
+        stmt = (
+            select(Order)
+            .options(selectinload(Order.items), selectinload(Order.status_history))
+            .where(Order.id == order_id, Order.customer_id == customer_id)
         )
         return self.db.scalar(stmt)
 

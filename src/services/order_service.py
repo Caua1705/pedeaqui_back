@@ -31,6 +31,7 @@ from src.services.idempotency_service import IdempotencyService
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import ZERO, money_to_float, quantize_money, to_decimal
 from src.utils.normalization import normalize_digits
+from src.utils.security import generate_tracking_token
 
 
 CREATE_ORDER_ROUTE = "POST /restaurants/{restaurant_slug}/orders"
@@ -134,6 +135,7 @@ class OrderService:
             )
             order = Order(
                 restaurant_id=restaurant.id,
+                tracking_token=generate_tracking_token(),
                 branch_id=branch.id,
                 customer_id=current_customer.id if current_customer else None,
                 customer_address_id=payload.customer_address_id if current_customer else None,
@@ -204,6 +206,10 @@ class OrderService:
             response = CreateOrderResponse(
                 id=order.id,
                 order_number=order.order_number,
+                # Unica vez que o token sai da API. Se o cliente perder,
+                # nao ha como reemitir sem estar logado — e o preco de o
+                # segredo ser a propria chave de acesso.
+                tracking_token=order.tracking_token,
                 status=order.status,
                 payment_flow=order.payment_flow,
                 payment_status=order.payment_status,
@@ -252,16 +258,28 @@ class OrderService:
             requester=requester,
         )
 
-    def get_customer_order(self, restaurant_slug: str, order_number: int, phone: str) -> OrderDetailResponse:
+    def get_order_by_tracking_token(self, restaurant_slug: str, tracking_token: str) -> OrderDetailResponse:
+        """Consulta publica de pedido, agora pelo token opaco.
+
+        Substituiu `/orders/{order_number}?phone=...`. Aquela rota casava um
+        numero de sequence GLOBAL com um telefone: quem tinha o telefone de
+        alguem varria os numeros vizinhos ate achar o pedido e lia endereco
+        residencial, itens e historico. O token nao e enumeravel e so quem
+        criou o pedido o recebeu.
+        """
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
-        # A busca compara com customer_phone_snapshot por igualdade exata, e o
-        # snapshot e gravado so em digitos. Normalizar aqui deixa o cliente
-        # consultar com o telefone formatado do jeito que ele conhece.
-        order = self.order_repository.get_order_by_number_and_phone(
-            restaurant.id,
-            order_number,
-            normalize_digits(phone),
-        )
+        order = self.order_repository.get_order_by_tracking_token(restaurant.id, tracking_token)
+        if not order:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido não encontrado")
+        return self.to_order_detail_response(order)
+
+    def get_customer_order(self, customer: Customer, order_id: UUID) -> OrderDetailResponse:
+        """Consulta de pedido do cliente autenticado.
+
+        Sem token nenhum: o vinculo vem de `orders.customer_id`, entao um
+        cliente so alcanca o proprio pedido mesmo tendo o UUID de outro.
+        """
+        order = self.order_repository.get_order_detail_for_customer(order_id, customer.id)
         if not order:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido não encontrado")
         return self.to_order_detail_response(order)

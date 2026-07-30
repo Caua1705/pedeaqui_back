@@ -22,7 +22,7 @@ from src.schemas.customer_schema import (
 from src.schemas.customer_schema import CurrentCustomerResponse, CustomerOrderHistoryItem
 from src.schemas.order_schema import OrderItemResponse
 from src.utils.money import money_to_float, quantize_money
-from src.utils.security import PasswordTooLongError, hash_password, verify_password
+from src.utils.security import PasswordTooLongError, hash_password, utcnow, verify_password
 
 
 class CustomerService:
@@ -119,6 +119,12 @@ class CustomerService:
 
         try:
             customer.password_hash = password_hash
+            # Invalida os tokens ja emitidos. O cliente que trocou a senha
+            # neste aparelho tambem cai e precisa logar de novo — e o preco
+            # de nao manter uma lista de sessoes ativas, e vale a pena: a
+            # troca de senha e a unica ferramenta que o cliente tem para
+            # expulsar quem entrou na conta dele.
+            customer.password_changed_at = utcnow()
             self.db.commit()
         except Exception:
             self.db.rollback()

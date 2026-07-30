@@ -20,8 +20,10 @@ from src.schemas.customer_schema import (
     UpdateCurrentCustomerRequest,
     UpdateCustomerAddressRequest,
 )
+from src.schemas.order_schema import OrderDetailResponse
 from src.services.customer_service import CustomerService
 from src.services.cashback_service import CashbackService
+from src.services.order_service import OrderService
 
 
 router = APIRouter(prefix="/customers", tags=["customers"])
@@ -94,6 +96,21 @@ def list_orders(
     db: Session = Depends(get_db),
 ) -> list[CustomerOrderHistoryItem]:
     return CustomerService(db).list_orders(current_customer)
+
+
+@router.get("/me/orders/{order_id}", response_model=OrderDetailResponse)
+def get_order(
+    order_id: UUID,
+    current_customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+) -> OrderDetailResponse:
+    """Detalhe do pedido para o cliente logado.
+
+    E a contrapartida autenticada de /orders/track/{token}: aqui o vinculo
+    sai de `orders.customer_id`, entao nao ha token nenhum para guardar nem
+    para vazar.
+    """
+    return OrderService(db).get_customer_order(current_customer, order_id)
 
 
 @router.get("/me/addresses", response_model=list[CustomerAddressResponse])

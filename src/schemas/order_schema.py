@@ -85,6 +85,9 @@ class CreateOrderRequest(BaseModel):
 class CreateOrderResponse(BaseModel):
     id: UUID
     order_number: int
+    # Guarde: e o que permite acompanhar o pedido sem login. Devolvido
+    # somente aqui, para quem acabou de criar o pedido.
+    tracking_token: str
     status: str
     # O front usa estes dois para decidir o proximo passo: `payment_flow`
     # "online" com `payment_status` "pending" significa "leve o cliente para

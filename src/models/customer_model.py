@@ -19,6 +19,9 @@ class Customer(Base):
     phone: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     cpf: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    # Marco de revogacao: JWT emitido antes deste instante nao vale mais.
+    # Ver AuthService.get_customer_from_token.
+    password_changed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     birth_date: Mapped[date] = mapped_column(Date, nullable=False)
     email_verified_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     phone_verified_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))

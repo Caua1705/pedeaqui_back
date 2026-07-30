@@ -86,6 +86,11 @@ class CreateOrderResponse(BaseModel):
     id: UUID
     order_number: int
     status: str
+    # O front usa estes dois para decidir o proximo passo: `payment_flow`
+    # "online" com `payment_status` "pending" significa "leve o cliente para
+    # o checkout do gateway".
+    payment_flow: str
+    payment_status: str
     subtotal: float
     delivery_fee: float
     service_fee: float
@@ -122,6 +127,9 @@ class OrderDetailResponse(BaseResponse):
     order_type: str
     status: str
     payment_method: str | None = None
+    payment_flow: str | None = None
+    payment_status: str
+    paid_at: datetime | None = None
     subtotal: float
     delivery_fee: float
     service_fee: float

@@ -2,7 +2,7 @@ import json
 import logging
 import threading
 from dataclasses import asdict, dataclass
-from datetime import datetime, time as datetime_time
+from datetime import datetime
 from decimal import Decimal
 from time import monotonic, time
 from zoneinfo import ZoneInfo
@@ -22,6 +22,7 @@ from src.repositories.branch_repository import BranchRepository
 from src.repositories.customer_repository import CustomerRepository
 from src.repositories.menu_repository import MenuRepository
 from src.schemas.delivery_schema import DeliveryEstimateRequest, DeliveryEstimateResponse
+from src.services.branch_hours_service import BranchHoursService
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import money_to_float, quantize_money, to_decimal
 
@@ -120,6 +121,7 @@ class DeliveryEstimateService:
     ) -> None:
         self.restaurant_service = RestaurantService(db)
         self.branch_repository = BranchRepository(db)
+        self.branch_hours_service = BranchHoursService(db)
         self.customer_repository = CustomerRepository(db)
         self.menu_repository = MenuRepository(db)
         self.maps_client = maps_client or GoogleMapsRoutesClient(
@@ -151,11 +153,13 @@ class DeliveryEstimateService:
             self._log_final_result(result)
             return result
 
+        # Aqui existia `if getattr(branch, "accepts_delivery", True) is False`.
+        # A coluna nunca existiu em `branches`, entao o getattr devolvia o
+        # default True em 100% das chamadas: codigo morto que parecia uma
+        # regra. Quem liga e desliga entrega e restaurant_settings, conferido
+        # logo acima. Se um dia a entrega precisar ser desligada por filial,
+        # e coluna nova em `branches` + migracao, nao um getattr otimista.
         branch = self._resolve_branch(restaurant.id, payload.branch_id)
-        if getattr(branch, "accepts_delivery", True) is False:
-            result = self._not_serviceable("delivery_disabled", "Filial nao aceita entrega.")
-            self._log_final_result(result)
-            return result
         logger.info(
             "[Delivery estimate debug] event=restaurant_branch_resolved "
             "restaurant_id=%s branch_id=%s branch_name=%s branch_latitude=%s branch_longitude=%s",
@@ -188,10 +192,19 @@ class DeliveryEstimateService:
             prep_time_source,
         )
         if prep_time_min is None or prep_time_max is None:
-            result = self._not_serviceable(
-                "prep_time_unavailable",
-                "Tempo de preparo nao configurado para o horario atual.",
-            )
+            # Duas causas diferentes, dois motivos diferentes: "fechado agora"
+            # e operacao normal e o cliente entende; "sem tempo de preparo
+            # cadastrado" e configuracao faltando e alguem precisa arrumar.
+            if prep_time_source == "branch_closed":
+                result = self._not_serviceable(
+                    "branch_closed",
+                    "A loja esta fechada neste horario.",
+                )
+            else:
+                result = self._not_serviceable(
+                    "prep_time_unavailable",
+                    "Tempo de preparo nao configurado para o horario atual.",
+                )
             self._log_final_result(result)
             return result
 
@@ -473,16 +486,15 @@ class DeliveryEstimateService:
 
     def _resolve_prep_time(self, branch_id) -> tuple[int | None, int | None, str, int]:
         now = datetime.now(DELIVERY_TIMEZONE)
-        current_time = now.timetz().replace(tzinfo=None)
         weekday = now.weekday()
-        business_hours = self.branch_repository.list_business_hours_by_weekday(
-            branch_id,
-            weekday,
-        )
-        business_hour = self._select_business_hour_for_prep_time(
-            business_hours,
-            current_time,
-        )
+        # A escolha da faixa mudou de lugar: agora e BranchHoursService quem
+        # decide, e ela devolve None quando o momento atual nao cai em faixa
+        # nenhuma. Antes caia na primeira faixa do dia, o que fazia a filial
+        # "atender" as 3h da manha com o prazo do almoco.
+        business_hour = self.branch_hours_service.find_current_period(branch_id, now)
+        if business_hour is None:
+            return None, None, "branch_closed", weekday
+
         prep_time_min, prep_time_max = self._prep_time_pair_from(business_hour)
         if prep_time_min is not None and prep_time_max is not None:
             return prep_time_min, max(prep_time_min, prep_time_max), "branch_business_hours", weekday
@@ -516,28 +528,6 @@ class DeliveryEstimateService:
         max_distance = getattr(branch, "delivery_max_distance_km", None)
         return max_distance is not None and to_decimal(distance_km) > to_decimal(max_distance)
 
-    @classmethod
-    def _select_business_hour_for_prep_time(
-        cls,
-        business_hours,
-        current_time: datetime_time,
-    ):
-        current_period = next(
-            (
-                item
-                for item in business_hours
-                if cls._time_is_between(
-                    current_time,
-                    getattr(item, "opens_at", None),
-                    getattr(item, "closes_at", None),
-                )
-            ),
-            None,
-        )
-        if current_period is not None:
-            return current_period
-        return next(iter(business_hours), None)
-
     @staticmethod
     def _prep_time_pair_from(source) -> tuple[int | None, int | None]:
         prep_time_min = getattr(source, "prep_time_min", None)
@@ -545,18 +535,6 @@ class DeliveryEstimateService:
         if prep_time_min is None or prep_time_max is None:
             return None, None
         return int(prep_time_min), int(prep_time_max)
-
-    @staticmethod
-    def _time_is_between(
-        current_time: datetime_time,
-        opens_at: datetime_time | None,
-        closes_at: datetime_time | None,
-    ) -> bool:
-        if opens_at is None or closes_at is None:
-            return False
-        if opens_at <= closes_at:
-            return opens_at <= current_time <= closes_at
-        return current_time >= opens_at or current_time <= closes_at
 
     @staticmethod
     def _format_address(location, *, branch: bool) -> str:

@@ -24,6 +24,19 @@ class Order(Base):
     order_type: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
     payment_method: Mapped[str | None] = mapped_column(Text)
+    # Como o dinheiro chega neste pedido: "online" (gateway) ou "delivery"
+    # (na entrega/retirada). Gravado na criacao a partir da configuracao da
+    # filial, nao do que o cliente mandou — ver OrderService._resolve_payment.
+    payment_flow: Mapped[str | None] = mapped_column(Text)
+    # Estados possiveis em src/core/constants.py:PAYMENT_STATUSES.
+    payment_status: Mapped[str] = mapped_column(Text, nullable=False, default="on_delivery")
+    paid_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    # Quem processou o pagamento ("mercadopago", "sandbox"). Fica nulo em
+    # pedido pago na entrega.
+    payment_provider: Mapped[str | None] = mapped_column(Text)
+    # Id do pagamento no gateway. E por ele que o webhook encontra o pedido,
+    # dai o indice unico em (payment_provider, provider_payment_id).
+    provider_payment_id: Mapped[str | None] = mapped_column(Text)
     subtotal: Mapped[Decimal] = mapped_column(Numeric, nullable=False, default=0)
     delivery_fee: Mapped[Decimal] = mapped_column(Numeric, nullable=False, default=0)
     service_fee: Mapped[Decimal] = mapped_column(Numeric, nullable=False, default=0)

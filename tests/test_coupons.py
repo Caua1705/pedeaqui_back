@@ -505,6 +505,7 @@ class OrderCouponIntegrationTests(unittest.TestCase):
         payload = CreateOrderRequest.model_validate({
             "branch_id": str(branch.id),
             "order_type": "pickup",
+            "payment_method": "cash",
             "coupon_code": "save10",
             "items": [{"product_id": str(product_id), "quantity": 4}],
             "subtotal": "1.00",
@@ -515,13 +516,23 @@ class OrderCouponIntegrationTests(unittest.TestCase):
         service = OrderService(db)
         service.restaurant_service = SimpleNamespace(get_active_restaurant=lambda slug: restaurant)
         service.branch_repository = SimpleNamespace(
-            get_active_by_id_and_restaurant=lambda branch_id, restaurant_id: branch
+            get_active_by_id_and_restaurant=lambda branch_id, restaurant_id: branch,
+            list_enabled_payment_methods=lambda branch_id: [
+                SimpleNamespace(method_type="cash", payment_flow="delivery"),
+            ],
+        )
+        service.branch_hours_service = SimpleNamespace(
+            ensure_branch_is_open=lambda branch_id: None
         )
         service.menu_repository = SimpleNamespace(
             get_settings=lambda restaurant_id: SimpleNamespace(
                 min_order_value=Decimal("0"),
                 service_fee_enabled=True,
                 service_fee_amount=Decimal("3.00"),
+                is_open=True,
+                accepts_delivery=True,
+                accepts_pickup=True,
+                platform_commission_percent=Decimal("10.00"),
             )
         )
         service.product_repository = SimpleNamespace(list_active_by_ids=lambda restaurant_id, ids: [product])
@@ -544,7 +555,12 @@ class OrderCouponIntegrationTests(unittest.TestCase):
     def test_cancelled_order_reverses_redemption_in_same_transaction(self):
         db = FakeDb()
         restaurant_id = uuid.uuid4()
-        order = SimpleNamespace(id=uuid.uuid4(), status="pending")
+        order = SimpleNamespace(
+            id=uuid.uuid4(),
+            status="pending",
+            order_type="delivery",
+            payment_status="on_delivery",
+        )
 
         class Repo:
             # get_order_detail passou a exigir restaurant_id na Fase 1 para
@@ -568,7 +584,8 @@ class OrderCouponIntegrationTests(unittest.TestCase):
             result = service.update_order_status(
                 order.id,
                 restaurant_id,
-                SimpleNamespace(status="cancelled", changed_by="admin", note=None),
+                SimpleNamespace(status="cancelled", note=None),
+                admin_user=SimpleNamespace(id=uuid.uuid4(), email="lojista@exemplo.com"),
             )
 
         self.assertEqual(result, "detail")

@@ -1,0 +1,171 @@
+"""PATCH /admin/orders/{id}/status com a maquina de estados ligada.
+
+Cobre o que so aparece quando o service roda inteiro: a ordem entre replay
+de idempotencia e validacao da transicao, o bloqueio por pagamento nao
+confirmado e a autoria do historico saindo do token.
+"""
+
+import unittest
+import uuid
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from fastapi import HTTPException
+
+from src.services.admin_order_service import AdminOrderService
+from src.services.order_service import OrderService
+
+
+ADMIN = SimpleNamespace(id=uuid.uuid4(), email="lojista@exemplo.com")
+
+
+class FakeDb:
+    def __init__(self):
+        self.events = []
+
+    def commit(self):
+        self.events.append("commit")
+
+    def rollback(self):
+        self.events.append("rollback")
+
+
+class FakeOrderRepository:
+    def __init__(self, order):
+        self.order = order
+        self.history = []
+
+    def get_order_detail(self, order_id, restaurant_id):
+        if self.order.id != order_id or self.order.restaurant_id != restaurant_id:
+            return None
+        return self.order
+
+    def update_status(self, order, new_status):
+        order.status = new_status
+
+    def create_status_history(self, history):
+        self.history.append(history)
+
+
+def build_service(order):
+    service = AdminOrderService(FakeDb())
+    service.order_repository = FakeOrderRepository(order)
+    service.coupon_service = SimpleNamespace(reverse_for_order=lambda order_id: None)
+    return service
+
+
+def make_order(restaurant_id, *, status="pending", payment_status="on_delivery", order_type="delivery"):
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        restaurant_id=restaurant_id,
+        status=status,
+        order_type=order_type,
+        payment_status=payment_status,
+        order_number=99,
+    )
+
+
+def request(status, note=None):
+    return SimpleNamespace(status=status, note=note)
+
+
+class TransitionTests(unittest.TestCase):
+    def setUp(self):
+        self.restaurant_id = uuid.uuid4()
+
+    def test_cancelled_order_cannot_be_completed(self):
+        order = make_order(self.restaurant_id, status="cancelled")
+        service = build_service(order)
+
+        with self.assertRaises(HTTPException) as raised:
+            service.update_order_status(
+                order.id, self.restaurant_id, request("completed"), admin_user=ADMIN
+            )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(order.status, "cancelled")
+        self.assertEqual(service.db.events, [])
+
+    def test_unknown_status_is_still_a_400(self):
+        order = make_order(self.restaurant_id)
+        service = build_service(order)
+
+        with self.assertRaises(HTTPException) as raised:
+            service.update_order_status(
+                order.id, self.restaurant_id, request("entregue"), admin_user=ADMIN
+            )
+
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_valid_transition_goes_through(self):
+        order = make_order(self.restaurant_id)
+        service = build_service(order)
+
+        with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
+            service.update_order_status(
+                order.id, self.restaurant_id, request("accepted"), admin_user=ADMIN
+            )
+
+        self.assertEqual(order.status, "accepted")
+        self.assertEqual(service.db.events, ["commit"])
+
+
+class PaymentGateTests(unittest.TestCase):
+    def setUp(self):
+        self.restaurant_id = uuid.uuid4()
+
+    def test_online_order_cannot_be_accepted_before_payment(self):
+        order = make_order(self.restaurant_id, payment_status="pending")
+        service = build_service(order)
+
+        with self.assertRaises(HTTPException) as raised:
+            service.update_order_status(
+                order.id, self.restaurant_id, request("accepted"), admin_user=ADMIN
+            )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(order.status, "pending")
+        self.assertEqual(service.order_repository.history, [])
+
+    def test_online_order_is_accepted_after_payment(self):
+        order = make_order(self.restaurant_id, payment_status="paid")
+        service = build_service(order)
+
+        with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
+            service.update_order_status(
+                order.id, self.restaurant_id, request("accepted"), admin_user=ADMIN
+            )
+
+        self.assertEqual(order.status, "accepted")
+
+    def test_unpaid_online_order_can_always_be_cancelled(self):
+        order = make_order(self.restaurant_id, payment_status="pending")
+        service = build_service(order)
+
+        with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
+            service.update_order_status(
+                order.id, self.restaurant_id, request("cancelled"), admin_user=ADMIN
+            )
+
+        self.assertEqual(order.status, "cancelled")
+
+
+class HistoryAuthorTests(unittest.TestCase):
+    def test_author_comes_from_the_token_and_not_from_the_body(self):
+        restaurant_id = uuid.uuid4()
+        order = make_order(restaurant_id)
+        service = build_service(order)
+
+        with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
+            service.update_order_status(
+                order.id, restaurant_id, request("accepted", note="ok"), admin_user=ADMIN
+            )
+
+        entry = service.order_repository.history[0]
+        self.assertEqual(entry.changed_by, "admin:lojista@exemplo.com")
+        self.assertEqual(entry.status, "accepted")
+        self.assertEqual(entry.note, "ok")
+
+
+if __name__ == "__main__":
+    unittest.main()

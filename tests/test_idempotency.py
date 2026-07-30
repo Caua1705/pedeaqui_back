@@ -293,13 +293,26 @@ def build_order_service(db, restaurant_id):
         get_active_restaurant=lambda slug: SimpleNamespace(id=restaurant_id)
     )
     service.branch_repository = SimpleNamespace(
-        get_active_by_id_and_restaurant=lambda branch_id, restaurant: branch
+        get_active_by_id_and_restaurant=lambda branch_id, restaurant: branch,
+        # A filial aceita dinheiro na entrega: e o que o payload usa.
+        list_enabled_payment_methods=lambda branch: [
+            SimpleNamespace(method_type="cash", payment_flow="delivery"),
+        ],
+    )
+    # Filial aberta agora: a validacao de horario e feita pelo
+    # BranchHoursService, e o pedido nao chega ao banco sem ela.
+    service.branch_hours_service = SimpleNamespace(
+        ensure_branch_is_open=lambda branch: None
     )
     service.menu_repository = SimpleNamespace(
         get_settings=lambda restaurant: SimpleNamespace(
             min_order_value=Decimal("0"),
             service_fee_enabled=False,
             service_fee_amount=Decimal("0"),
+            is_open=True,
+            accepts_delivery=True,
+            accepts_pickup=True,
+            platform_commission_percent=Decimal("10.00"),
         )
     )
     service.product_repository = SimpleNamespace(
@@ -311,6 +324,7 @@ def build_order_service(db, restaurant_id):
     payload = CreateOrderRequest.model_validate({
         "branch_id": str(branch.id),
         "order_type": "pickup",
+        "payment_method": "cash",
         "customer": {"name": "Caua", "phone": "85999999999"},
         "items": [{"product_id": str(product_id), "quantity": 1}],
     })
@@ -374,6 +388,12 @@ class CreateOrderIdempotencyTests(unittest.TestCase):
         self.assertEqual(service.idempotency_service.repository.reserve_calls, [])
 
 
+def _admin(admin_id):
+    """Lojista autenticado. O service so precisa de id (escopo da chave de
+    idempotencia) e e-mail (assinatura no historico)."""
+    return SimpleNamespace(id=admin_id, email=f"lojista-{admin_id}@exemplo.com")
+
+
 class StatusHistoryRepository:
     """Guarda o historico de status, que e o que duplicava a cada reenvio."""
 
@@ -406,6 +426,8 @@ class UpdateStatusIdempotencyTests(unittest.TestCase):
             id=uuid.uuid4(),
             restaurant_id=restaurant_id,
             status="pending",
+            order_type="delivery",
+            payment_status="on_delivery",
             order_number=7,
         )
 
@@ -415,7 +437,7 @@ class UpdateStatusIdempotencyTests(unittest.TestCase):
         admin_id = uuid.uuid4()
         order = self._order(restaurant_id)
         shared_repository = FakeIdempotencyRepository()
-        request = SimpleNamespace(status="accepted", changed_by="lojista", note=None)
+        request = SimpleNamespace(status="accepted", note=None)
 
         detail = {"id": str(order.id), "status": "accepted"}
         with patch.object(
@@ -425,7 +447,7 @@ class UpdateStatusIdempotencyTests(unittest.TestCase):
             first_service = self._service(db, order, shared_repository)
             first_service.update_order_status(
                 order.id, restaurant_id, request,
-                admin_user_id=admin_id, idempotency_key="patch-key",
+                admin_user=_admin(admin_id), idempotency_key="patch-key",
             )
 
             second_service = self._service(db, order, shared_repository)
@@ -434,7 +456,7 @@ class UpdateStatusIdempotencyTests(unittest.TestCase):
             ):
                 replay = second_service.update_order_status(
                     order.id, restaurant_id, request,
-                    admin_user_id=admin_id, idempotency_key="patch-key",
+                    admin_user=_admin(admin_id), idempotency_key="patch-key",
                 )
 
         self.assertEqual(len(first_service.order_repository.history), 1)
@@ -442,11 +464,13 @@ class UpdateStatusIdempotencyTests(unittest.TestCase):
         self.assertEqual(replay, detail)
 
     def test_same_key_from_another_admin_is_a_separate_operation(self):
+        # Dois lojistas do mesmo restaurante reutilizando a MESMA chave em
+        # operacoes diferentes (aceitar e depois preparar). O escopo inclui o
+        # id do admin, entao a chave de um nao devolve a resposta do outro.
         db = FakeDb()
         restaurant_id = uuid.uuid4()
         order = self._order(restaurant_id)
         shared_repository = FakeIdempotencyRepository()
-        request = SimpleNamespace(status="accepted", changed_by="lojista", note=None)
 
         with patch.object(
             OrderService, "to_order_detail_response",
@@ -454,17 +478,18 @@ class UpdateStatusIdempotencyTests(unittest.TestCase):
         ):
             service_a = self._service(db, order, shared_repository)
             service_a.update_order_status(
-                order.id, restaurant_id, request,
-                admin_user_id=uuid.uuid4(), idempotency_key="mesma-chave",
+                order.id, restaurant_id, SimpleNamespace(status="accepted", note=None),
+                admin_user=_admin(uuid.uuid4()), idempotency_key="mesma-chave",
             )
             service_b = self._service(db, order, shared_repository)
             service_b.update_order_status(
-                order.id, restaurant_id, request,
-                admin_user_id=uuid.uuid4(), idempotency_key="mesma-chave",
+                order.id, restaurant_id, SimpleNamespace(status="preparing", note=None),
+                admin_user=_admin(uuid.uuid4()), idempotency_key="mesma-chave",
             )
 
         self.assertEqual(len(service_a.order_repository.history), 1)
         self.assertEqual(len(service_b.order_repository.history), 1)
+        self.assertEqual(order.status, "preparing")
 
     def test_status_change_without_key_still_works(self):
         db = FakeDb()
@@ -475,7 +500,8 @@ class UpdateStatusIdempotencyTests(unittest.TestCase):
             service = self._service(db, order)
             result = service.update_order_status(
                 order.id, restaurant_id,
-                SimpleNamespace(status="accepted", changed_by="lojista", note=None),
+                SimpleNamespace(status="accepted", note=None),
+                admin_user=_admin(uuid.uuid4()),
             )
 
         self.assertEqual(result, "detail")

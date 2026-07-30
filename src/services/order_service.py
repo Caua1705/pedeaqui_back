@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from src.core.constants import ORDER_STATUSES, ORDER_TYPES
+from src.core.constants import ORDER_TYPES, PAYMENT_METHODS
 from src.models.customer_model import Customer
 from src.models.order_item_model import OrderItem
 from src.models.order_item_option_model import OrderItemOption
@@ -24,6 +24,7 @@ from src.schemas.order_schema import (
     OrderItemResponse,
 )
 from src.schemas.common_schema import StatusHistoryResponse
+from src.services.branch_hours_service import BranchHoursService
 from src.services.delivery_estimate_service import DeliveryEstimateService
 from src.services.coupon_service import CouponService
 from src.services.idempotency_service import IdempotencyService
@@ -40,6 +41,7 @@ class OrderService:
         self.db = db
         self.restaurant_service = RestaurantService(db)
         self.branch_repository = BranchRepository(db)
+        self.branch_hours_service = BranchHoursService(db)
         self.menu_repository = MenuRepository(db)
         self.product_repository = ProductRepository(db)
         self.customer_repository = CustomerRepository(db)
@@ -64,6 +66,14 @@ class OrderService:
         address = self._resolve_order_address(payload, current_customer)
         self._validate_customer_snapshot(payload, current_customer)
 
+        # As tres checagens abaixo ficam ANTES da reserva de idempotencia e da
+        # chamada paga ao Google: sao consultas baratas e recusam cedo o
+        # pedido que a loja nao poderia receber de jeito nenhum.
+        settings = self.menu_repository.get_settings(restaurant.id)
+        self._validate_store_accepts_order(payload.order_type, settings)
+        self.branch_hours_service.ensure_branch_is_open(branch.id)
+        payment_flow = self._resolve_payment_flow(branch.id, payload.payment_method)
+
         # Reserva antes de qualquer escrita e antes da chamada paga ao Google
         # Maps: um reenvio devolve a resposta gravada sem gastar rota nem
         # criar pedido. Fica na mesma transacao do INSERT do pedido, entao um
@@ -77,7 +87,6 @@ class OrderService:
             return CreateOrderResponse.model_validate(replayed)
 
         self._validate_delivery_address(payload, address)
-        settings = self.menu_repository.get_settings(restaurant.id)
         delivery_estimate = self._estimate_delivery(
             restaurant_slug,
             payload,
@@ -133,6 +142,11 @@ class OrderService:
                 order_type=payload.order_type,
                 status="pending",
                 payment_method=payload.payment_method,
+                payment_flow=payment_flow,
+                # Pedido online nasce devendo: so vira "paid" quando o
+                # gateway avisar, e so entao pode ser aceito. Pedido pago na
+                # entrega nasce em `on_delivery` e nunca muda.
+                payment_status="pending" if payment_flow == "online" else "on_delivery",
                 subtotal=subtotal,
                 delivery_fee=delivery_fee,
                 service_fee=service_fee,
@@ -191,6 +205,8 @@ class OrderService:
                 id=order.id,
                 order_number=order.order_number,
                 status=order.status,
+                payment_flow=order.payment_flow,
+                payment_status=order.payment_status,
                 subtotal=money_to_float(order.subtotal),
                 delivery_fee=money_to_float(order.delivery_fee),
                 service_fee=money_to_float(order.service_fee),
@@ -253,6 +269,76 @@ class OrderService:
     def _validate_order_type(self, order_type: str) -> None:
         if order_type not in ORDER_TYPES:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de pedido inválido")
+
+    def _validate_store_accepts_order(self, order_type: str, settings) -> None:
+        """is_open, accepts_delivery e accepts_pickup, finalmente lidos.
+
+        Os tres campos existiam em restaurant_settings, apareciam no cardapio
+        e nao bloqueavam nada: quem impedia pedido com a loja fechada era o
+        frontend. Bastava chamar a API direto para furar.
+
+        Sem linha de settings o restaurante segue aceitando pedido — e o
+        comportamento que sempre valeu, e mudar isso agora derrubaria
+        restaurantes que nunca configuraram nada.
+        """
+        if settings is None:
+            return
+        if settings.is_open is False:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A loja esta fechada no momento",
+            )
+        if order_type == "delivery" and settings.accepts_delivery is False:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Esta loja nao esta aceitando entrega",
+            )
+        if order_type == "pickup" and settings.accepts_pickup is False:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Esta loja nao esta aceitando retirada",
+            )
+
+    def _resolve_payment_flow(self, branch_id: UUID, payment_method: str | None) -> str:
+        """Valida a forma de pagamento e diz por onde o dinheiro entra.
+
+        Duas listas precisam concordar: PAYMENT_METHODS (o que a plataforma
+        conhece) e branch_payment_methods (o que ESTA filial habilitou). Antes
+        disso o campo era texto livre de 50 caracteres gravado direto no
+        pedido — dava para fechar pedido com payment_method="banana", e a
+        filial recebia um pedido em uma forma que ela nao aceita.
+
+        Devolve "online" ou "delivery", que e o que decide se o pedido nasce
+        esperando o gateway.
+        """
+        if not payment_method:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Forma de pagamento obrigatoria",
+            )
+        if payment_method not in PAYMENT_METHODS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Forma de pagamento invalida",
+            )
+
+        enabled_methods = self.branch_repository.list_enabled_payment_methods(branch_id)
+        flows = {
+            method.payment_flow
+            for method in enabled_methods
+            if method.method_type == payment_method
+        }
+        if not flows:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Esta filial nao aceita esta forma de pagamento",
+            )
+        # A filial pode oferecer o mesmo metodo nos dois fluxos (pix pelo
+        # gateway e pix na entrega, por exemplo). Sem um campo no pedido para
+        # o cliente escolher, ficamos com o caminho mais restritivo: online
+        # exige pagamento confirmado antes de o pedido ir para a cozinha, e
+        # errar para o lado restritivo nao entrega comida de graca.
+        return "online" if "online" in flows else "delivery"
 
     def _validate_customer_snapshot(self, payload: CreateOrderRequest, current_customer: Customer | None) -> None:
         if current_customer or payload.customer:
@@ -456,6 +542,9 @@ class OrderService:
             order_type=order.order_type,
             status=order.status,
             payment_method=order.payment_method,
+            payment_flow=order.payment_flow,
+            payment_status=order.payment_status,
+            paid_at=order.paid_at,
             subtotal=money_to_float(order.subtotal),
             delivery_fee=money_to_float(order.delivery_fee),
             service_fee=money_to_float(order.service_fee),

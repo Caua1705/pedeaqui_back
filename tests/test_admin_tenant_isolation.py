@@ -66,11 +66,18 @@ class TenantScopedOrderRepository:
         pass
 
 
+# Lojista autenticado usado nas chamadas de escrita: `changed_by` deixou de
+# vir do corpo e passou a sair do token (AdminOrderService._admin_signature).
+ADMIN_USER = SimpleNamespace(id=uuid.uuid4(), email="lojista@exemplo.com")
+
+
 def make_order(restaurant_id):
     return SimpleNamespace(
         id=uuid.uuid4(),
         restaurant_id=restaurant_id,
         status="pending",
+        payment_status="on_delivery",
+        payment_method="cash",
         order_number=1,
         customer_name_snapshot="Cliente",
         customer_phone_snapshot="85999999999",
@@ -138,7 +145,8 @@ class WriteIsolationTests(unittest.TestCase):
             self.service.update_order_status(
                 self.order_of_b.id,
                 self.restaurant_a,
-                SimpleNamespace(status="accepted", changed_by="invasor", note=None),
+                SimpleNamespace(status="accepted", note=None),
+                admin_user=ADMIN_USER,
             )
 
         self.assertEqual(raised.exception.status_code, 404)
@@ -152,7 +160,8 @@ class WriteIsolationTests(unittest.TestCase):
             self.service.update_order_status(
                 self.order_of_b.id,
                 self.restaurant_b,
-                SimpleNamespace(status="accepted", changed_by="lojista", note=None),
+                SimpleNamespace(status="accepted", note=None),
+                admin_user=ADMIN_USER,
             )
 
         self.assertEqual(self.order_of_b.status, "accepted")

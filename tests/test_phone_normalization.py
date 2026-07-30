@@ -167,13 +167,26 @@ def build_order_service(db, restaurant_id, phone=DIGITS):
         get_active_restaurant=lambda slug: SimpleNamespace(id=restaurant_id)
     )
     service.branch_repository = SimpleNamespace(
-        get_active_by_id_and_restaurant=lambda branch_id, restaurant: branch
+        get_active_by_id_and_restaurant=lambda branch_id, restaurant: branch,
+        # A filial aceita dinheiro na entrega: e o que o payload usa.
+        list_enabled_payment_methods=lambda branch: [
+            SimpleNamespace(method_type="cash", payment_flow="delivery"),
+        ],
+    )
+    # Filial aberta agora: a validacao de horario e feita pelo
+    # BranchHoursService, e o pedido nao chega ao banco sem ela.
+    service.branch_hours_service = SimpleNamespace(
+        ensure_branch_is_open=lambda branch: None
     )
     service.menu_repository = SimpleNamespace(
         get_settings=lambda restaurant: SimpleNamespace(
             min_order_value=Decimal("0"),
             service_fee_enabled=False,
             service_fee_amount=Decimal("0"),
+            is_open=True,
+            accepts_delivery=True,
+            accepts_pickup=True,
+            platform_commission_percent=Decimal("10.00"),
         )
     )
     service.product_repository = SimpleNamespace(
@@ -184,6 +197,7 @@ def build_order_service(db, restaurant_id, phone=DIGITS):
     payload = CreateOrderRequest.model_validate({
         "branch_id": str(branch.id),
         "order_type": "pickup",
+        "payment_method": "cash",
         "customer": {"name": "Ana", "phone": phone},
         "items": [{"product_id": str(product_id), "quantity": 1}],
     })

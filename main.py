@@ -10,7 +10,19 @@ from src.api import chat
 from src.api.middleware.body_size import BodySizeLimitMiddleware
 from src.api.rate_limit import limiter, rate_limit_exceeded_handler
 from src.api.validation_errors import log_contract_validation_error
-from src.api.endpoints import admin_auth, admin_orders, auth, coupons, customers, delivery, health, menu, orders, restaurants
+from src.api.endpoints import (
+    admin_auth,
+    admin_orders,
+    auth,
+    coupons,
+    customers,
+    delivery,
+    health,
+    menu,
+    orders,
+    payments,
+    restaurants,
+)
 from src.core.config import settings
 from src.core.startup_checks import validate_settings
 
@@ -78,6 +90,7 @@ app.include_router(auth.router)
 app.include_router(customers.router)
 app.include_router(delivery.router)
 app.include_router(orders.router)
+app.include_router(payments.router)
 app.include_router(coupons.router)
 app.include_router(coupons.admin_router)
 app.include_router(admin_auth.router)

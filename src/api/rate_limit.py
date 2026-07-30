@@ -37,6 +37,10 @@ ADMIN_LOGIN_RATE_LIMIT = "10/minute;60/hour"
 FORGOT_PASSWORD_RATE_LIMIT = "5/minute;20/hour"
 PUBLIC_ORDER_LOOKUP_RATE_LIMIT = "30/minute"
 CREATE_ORDER_RATE_LIMIT = "10/minute;60/hour"
+# Criar cobranca chama o gateway, que cobra por requisicao e tem limite
+# proprio. Um pouco mais folgado que criar pedido porque o cliente pode
+# legitimamente tentar de novo depois de um cartao recusado.
+START_PAYMENT_RATE_LIMIT = "15/minute;60/hour"
 CHAT_RATE_LIMIT = "20/minute;200/hour"
 CHAT_FEEDBACK_RATE_LIMIT = "30/minute"
 

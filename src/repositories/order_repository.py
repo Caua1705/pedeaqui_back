@@ -109,3 +109,46 @@ class OrderRepository:
         self.db.add(order)
         self.db.flush()
         return order
+
+    def get_order_by_provider_payment(
+        self,
+        payment_provider: str,
+        provider_payment_id: str,
+    ) -> Order | None:
+        # Sem filtro por restaurante de proposito: o webhook chega do
+        # gateway, nao de um tenant, e o par (provider, provider_payment_id)
+        # e unico na tabela.
+        stmt = select(Order).where(
+            Order.payment_provider == payment_provider,
+            Order.provider_payment_id == provider_payment_id,
+        )
+        return self.db.scalar(stmt)
+
+    def attach_payment_intent(
+        self,
+        order: Order,
+        *,
+        provider: str,
+        provider_payment_id: str,
+    ) -> Order:
+        order.payment_provider = provider
+        order.provider_payment_id = provider_payment_id
+        # Uma nova tentativa depois de uma recusa volta o pagamento para
+        # "pending"; se ja estava pending, isto e um no-op.
+        order.payment_status = "pending"
+        self.db.add(order)
+        self.db.flush()
+        return order
+
+    def update_payment_status(
+        self,
+        order: Order,
+        payment_status: str,
+        paid_at=None,
+    ) -> Order:
+        order.payment_status = payment_status
+        if paid_at is not None:
+            order.paid_at = paid_at
+        self.db.add(order)
+        self.db.flush()
+        return order

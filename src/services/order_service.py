@@ -5,7 +5,11 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from src.core.constants import ORDER_TYPES, PAYMENT_METHODS
+from src.core.constants import (
+    DEFAULT_PLATFORM_COMMISSION_PERCENT,
+    ORDER_TYPES,
+    PAYMENT_METHODS,
+)
 from src.models.customer_model import Customer
 from src.models.order_item_model import OrderItem
 from src.models.order_item_option_model import OrderItemOption
@@ -125,6 +129,12 @@ class OrderService:
             cashback_redeemed = ZERO
             discount_total = quantize_money(coupon_discount + cashback_redeemed)
             total = quantize_money(subtotal + service_fee + delivery_fee - discount_total)
+            commission_percent, commission_base, commission_amount = self._calculate_commission(
+                subtotal=subtotal,
+                coupon_discount=coupon_discount,
+                cashback_redeemed=cashback_redeemed,
+                settings=settings,
+            )
             customer_name = current_customer.name if current_customer else payload.customer.name
             # Normaliza de novo na escrita, e nao so no schema: o snapshot e o
             # que get_customer_order compara, entao ele precisa estar em
@@ -158,6 +168,9 @@ class OrderService:
                 cashback_redeemed_amount=cashback_redeemed,
                 discount_total=discount_total,
                 total=total,
+                commission_percent=commission_percent,
+                commission_base_amount=commission_base,
+                commission_amount=commission_amount,
                 address_street=address.street if address else None,
                 address_number=address.number if address else None,
                 address_neighborhood=address.neighborhood if address else None,
@@ -496,6 +509,49 @@ class OrderService:
             )
             subtotal += (to_decimal(product.price) + options_total) * item.quantity
         return quantize_money(subtotal)
+
+    def _calculate_commission(
+        self,
+        *,
+        subtotal: Decimal,
+        coupon_discount: Decimal,
+        cashback_redeemed: Decimal,
+        settings,
+    ) -> tuple[Decimal, Decimal, Decimal]:
+        """Comissao da plataforma sobre este pedido.
+
+        Base = subtotal dos produtos - desconto de cupom - cashback usado.
+
+        O que NAO entra na base, e por que:
+        - taxa de entrega: e do entregador/da filial, nao e receita da venda;
+        - taxa de servico: idem, e repasse;
+        - taxa do gateway: custo de quem recebe, nao base de calculo.
+
+        O desconto entra como subtracao porque o restaurante recebeu menos:
+        cobrar comissao sobre um valor que ninguem pagou seria cobrar sobre
+        o proprio desconto.
+
+        Congelado no pedido de proposito. Se fosse calculado no fim do mes,
+        mudar o percentual do restaurante hoje reescreveria a comissao de
+        pedidos de tres semanas atras.
+        """
+        percent = self._commission_percent(settings)
+        base = quantize_money(subtotal - coupon_discount - cashback_redeemed)
+        # Desconto maior que o subtotal e possivel com cupom de frete
+        # gratis somado a cashback. Base negativa viraria comissao negativa,
+        # isto e, a plataforma pagando o restaurante.
+        base = max(base, ZERO)
+        amount = quantize_money(base * percent / Decimal("100"))
+        return percent, base, amount
+
+    @staticmethod
+    def _commission_percent(settings) -> Decimal:
+        # Restaurante sem linha de settings (ou com o campo nulo em banco
+        # antigo) cai no padrao da plataforma. Devolver zero aqui seria
+        # silenciosamente abrir mao da receita.
+        if settings is None or settings.platform_commission_percent is None:
+            return to_decimal(DEFAULT_PLATFORM_COMMISSION_PERCENT)
+        return to_decimal(settings.platform_commission_percent)
 
     def _calculate_service_fee(self, settings) -> Decimal:
         if not settings or not settings.service_fee_enabled:

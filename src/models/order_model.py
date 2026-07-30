@@ -50,6 +50,13 @@ class Order(Base):
     cashback_redeemed_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     discount_total: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     total: Mapped[Decimal] = mapped_column(Numeric, nullable=False, default=0)
+    # Comissao da plataforma, congelada na criacao do pedido. Os tres campos
+    # andam juntos: sem base e percentual, o valor nao e conferivel depois.
+    # Base = subtotal - desconto de cupom - cashback usado. NAO entram taxa
+    # de entrega, taxa de servico nem taxa do gateway.
+    commission_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=0)
+    commission_base_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    commission_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     address_street: Mapped[str | None] = mapped_column(Text)
     address_number: Mapped[str | None] = mapped_column(Text)
     address_neighborhood: Mapped[str | None] = mapped_column(Text)

@@ -28,6 +28,11 @@ class RestaurantSetting(Base):
         default=lambda: ["pix", "credit_card", "debit_card"],
     )
     is_open: Mapped[bool | None] = mapped_column(Boolean, default=True)
+    # Percentual da plataforma sobre este restaurante. Por restaurante e nao
+    # constante global: e valor negociado, e muda de contrato para contrato.
+    platform_commission_percent: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), nullable=False, default=Decimal("10.00")
+    )
     created_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 

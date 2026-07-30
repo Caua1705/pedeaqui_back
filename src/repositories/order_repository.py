@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from src.models.order_item_model import OrderItem
@@ -9,6 +10,12 @@ from src.models.order_model import Order
 from src.models.order_status_history_model import OrderStatusHistory
 from src.models.branch_model import Branch
 from src.models.restaurant_model import Restaurant
+
+
+# Pedido nesses status nao virou venda, entao nao gera comissao. Fica aqui
+# e nao no service porque as duas consultas do relatorio (o extrato e a
+# contagem do que sobrou de fora) precisam concordar exatamente.
+NON_BILLABLE_ORDER_STATUSES = ("cancelled", "rejected")
 
 
 class OrderRepository:
@@ -80,6 +87,59 @@ class OrderRepository:
 
         stmt = stmt.order_by(Order.created_at.desc()).limit(limit).offset(offset)
         return list(self.db.scalars(stmt).all())
+
+    def list_orders_for_commission(
+        self,
+        restaurant_id: uuid.UUID,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> list[Order]:
+        """Pedidos que geram comissao no periodo.
+
+        `end_at` e EXCLUSIVO: o service passa o instante em que o dia
+        seguinte comeca, para nao perder pedido feito 23:59:59.7.
+
+        Cancelado, recusado e estornado ficam de fora — nao houve venda.
+        """
+        stmt = (
+            select(Order)
+            .where(
+                Order.restaurant_id == restaurant_id,
+                Order.created_at >= start_at,
+                Order.created_at < end_at,
+                Order.status.notin_(NON_BILLABLE_ORDER_STATUSES),
+                Order.payment_status != "refunded",
+            )
+            .order_by(Order.created_at.asc())
+        )
+        return list(self.db.scalars(stmt).all())
+
+    def count_excluded_from_commission(
+        self,
+        restaurant_id: uuid.UUID,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> int:
+        """Quantos pedidos do periodo ficaram de fora do relatorio.
+
+        Consulta separada de proposito: sem ela o lojista compara o numero
+        de pedidos do painel com o do extrato, ve a diferenca e nao tem como
+        saber se e regra ou bug.
+        """
+        stmt = (
+            select(func.count())
+            .select_from(Order)
+            .where(
+                Order.restaurant_id == restaurant_id,
+                Order.created_at >= start_at,
+                Order.created_at < end_at,
+                or_(
+                    Order.status.in_(NON_BILLABLE_ORDER_STATUSES),
+                    Order.payment_status == "refunded",
+                ),
+            )
+        )
+        return self.db.scalar(stmt) or 0
 
     def get_order_detail(self, order_id: uuid.UUID, restaurant_id: uuid.UUID) -> Order | None:
         # restaurant_id e obrigatorio de proposito. Enquanto o filtro era so

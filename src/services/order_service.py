@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID
@@ -5,13 +6,18 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from src.core.constants import ORDER_STATUSES, ORDER_TYPES
+from src.core.constants import (
+    DEFAULT_PLATFORM_COMMISSION_PERCENT,
+    ORDER_TYPES,
+    PAYMENT_METHODS,
+)
 from src.models.customer_model import Customer
 from src.models.order_item_model import OrderItem
 from src.models.order_item_option_model import OrderItemOption
 from src.models.order_model import Order
 from src.models.order_status_history_model import OrderStatusHistory
 from src.repositories.branch_repository import BranchRepository
+from src.repositories.delivery_estimate_repository import DeliveryEstimateRepository
 from src.repositories.customer_repository import CustomerRepository
 from src.repositories.menu_repository import MenuRepository
 from src.repositories.order_repository import OrderRepository
@@ -24,13 +30,21 @@ from src.schemas.order_schema import (
     OrderItemResponse,
 )
 from src.schemas.common_schema import StatusHistoryResponse
-from src.services.delivery_estimate_service import DeliveryEstimateService
+from src.services.branch_hours_service import BranchHoursService
+from src.services.delivery_estimate_service import (
+    DeliveryEstimateResult,
+    DeliveryEstimateService,
+    build_address_fingerprint,
+)
 from src.services.coupon_service import CouponService
 from src.services.idempotency_service import IdempotencyService
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import ZERO, money_to_float, quantize_money, to_decimal
 from src.utils.normalization import normalize_digits
+from src.utils.security import generate_tracking_token, utcnow
 
+
+logger = logging.getLogger("uvicorn.error")
 
 CREATE_ORDER_ROUTE = "POST /restaurants/{restaurant_slug}/orders"
 
@@ -40,6 +54,8 @@ class OrderService:
         self.db = db
         self.restaurant_service = RestaurantService(db)
         self.branch_repository = BranchRepository(db)
+        self.branch_hours_service = BranchHoursService(db)
+        self.delivery_estimate_repository = DeliveryEstimateRepository(db)
         self.menu_repository = MenuRepository(db)
         self.product_repository = ProductRepository(db)
         self.customer_repository = CustomerRepository(db)
@@ -64,6 +80,14 @@ class OrderService:
         address = self._resolve_order_address(payload, current_customer)
         self._validate_customer_snapshot(payload, current_customer)
 
+        # As tres checagens abaixo ficam ANTES da reserva de idempotencia e da
+        # chamada paga ao Google: sao consultas baratas e recusam cedo o
+        # pedido que a loja nao poderia receber de jeito nenhum.
+        settings = self.menu_repository.get_settings(restaurant.id)
+        self._validate_store_accepts_order(payload.order_type, settings)
+        self.branch_hours_service.ensure_branch_is_open(branch.id)
+        payment_flow = self._resolve_payment_flow(branch.id, payload.payment_method)
+
         # Reserva antes de qualquer escrita e antes da chamada paga ao Google
         # Maps: um reenvio devolve a resposta gravada sem gastar rota nem
         # criar pedido. Fica na mesma transacao do INSERT do pedido, entao um
@@ -74,15 +98,15 @@ class OrderService:
             request_fingerprint=IdempotencyService.fingerprint(payload.model_dump(mode="json")),
         )
         if replayed is not None:
-            return CreateOrderResponse.model_validate(replayed)
+            return IdempotencyService.parse_stored_response(CreateOrderResponse, replayed)
 
         self._validate_delivery_address(payload, address)
-        settings = self.menu_repository.get_settings(restaurant.id)
         delivery_estimate = self._estimate_delivery(
             restaurant_slug,
             payload,
             address,
             current_customer,
+            restaurant_id=restaurant.id,
         )
         products_by_id = self._get_valid_products(restaurant.id, [item.product_id for item in payload.items])
 
@@ -115,16 +139,24 @@ class OrderService:
             cashback_redeemed = ZERO
             discount_total = quantize_money(coupon_discount + cashback_redeemed)
             total = quantize_money(subtotal + service_fee + delivery_fee - discount_total)
+            commission_percent, commission_base, commission_amount = self._calculate_commission(
+                subtotal=subtotal,
+                coupon_discount=coupon_discount,
+                cashback_redeemed=cashback_redeemed,
+                settings=settings,
+            )
             customer_name = current_customer.name if current_customer else payload.customer.name
-            # Normaliza de novo na escrita, e nao so no schema: o snapshot e o
-            # que get_customer_order compara, entao ele precisa estar em
-            # digitos venha de onde vier. `current_customer.phone` ja e
-            # normalizado no cadastro, mas contas antigas podem nao ser.
+            # Normaliza de novo na escrita, e nao so no schema: o telefone do
+            # snapshot tambem alimenta o escopo da idempotencia, entao ele
+            # precisa estar em digitos venha de onde vier.
+            # `current_customer.phone` ja e normalizado no cadastro, mas
+            # contas antigas podem nao ser.
             customer_phone = normalize_digits(
                 current_customer.phone if current_customer else payload.customer.phone
             )
             order = Order(
                 restaurant_id=restaurant.id,
+                tracking_token=generate_tracking_token(),
                 branch_id=branch.id,
                 customer_id=current_customer.id if current_customer else None,
                 customer_address_id=payload.customer_address_id if current_customer else None,
@@ -133,6 +165,11 @@ class OrderService:
                 order_type=payload.order_type,
                 status="pending",
                 payment_method=payload.payment_method,
+                payment_flow=payment_flow,
+                # Pedido online nasce devendo: so vira "paid" quando o
+                # gateway avisar, e so entao pode ser aceito. Pedido pago na
+                # entrega nasce em `on_delivery` e nunca muda.
+                payment_status="pending" if payment_flow == "online" else "on_delivery",
                 subtotal=subtotal,
                 delivery_fee=delivery_fee,
                 service_fee=service_fee,
@@ -142,6 +179,9 @@ class OrderService:
                 cashback_redeemed_amount=cashback_redeemed,
                 discount_total=discount_total,
                 total=total,
+                commission_percent=commission_percent,
+                commission_base_amount=commission_base,
+                commission_amount=commission_amount,
                 address_street=address.street if address else None,
                 address_number=address.number if address else None,
                 address_neighborhood=address.neighborhood if address else None,
@@ -190,7 +230,13 @@ class OrderService:
             response = CreateOrderResponse(
                 id=order.id,
                 order_number=order.order_number,
+                # Unica vez que o token sai da API. Se o cliente perder,
+                # nao ha como reemitir sem estar logado — e o preco de o
+                # segredo ser a propria chave de acesso.
+                tracking_token=order.tracking_token,
                 status=order.status,
+                payment_flow=order.payment_flow,
+                payment_status=order.payment_status,
                 subtotal=money_to_float(order.subtotal),
                 delivery_fee=money_to_float(order.delivery_fee),
                 service_fee=money_to_float(order.service_fee),
@@ -236,16 +282,28 @@ class OrderService:
             requester=requester,
         )
 
-    def get_customer_order(self, restaurant_slug: str, order_number: int, phone: str) -> OrderDetailResponse:
+    def get_order_by_tracking_token(self, restaurant_slug: str, tracking_token: str) -> OrderDetailResponse:
+        """Consulta publica de pedido, agora pelo token opaco.
+
+        Substituiu `/orders/{order_number}?phone=...`. Aquela rota casava um
+        numero de sequence GLOBAL com um telefone: quem tinha o telefone de
+        alguem varria os numeros vizinhos ate achar o pedido e lia endereco
+        residencial, itens e historico. O token nao e enumeravel e so quem
+        criou o pedido o recebeu.
+        """
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
-        # A busca compara com customer_phone_snapshot por igualdade exata, e o
-        # snapshot e gravado so em digitos. Normalizar aqui deixa o cliente
-        # consultar com o telefone formatado do jeito que ele conhece.
-        order = self.order_repository.get_order_by_number_and_phone(
-            restaurant.id,
-            order_number,
-            normalize_digits(phone),
-        )
+        order = self.order_repository.get_order_by_tracking_token(restaurant.id, tracking_token)
+        if not order:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido não encontrado")
+        return self.to_order_detail_response(order)
+
+    def get_customer_order(self, customer: Customer, order_id: UUID) -> OrderDetailResponse:
+        """Consulta de pedido do cliente autenticado.
+
+        Sem token nenhum: o vinculo vem de `orders.customer_id`, entao um
+        cliente so alcanca o proprio pedido mesmo tendo o UUID de outro.
+        """
+        order = self.order_repository.get_order_detail_for_customer(order_id, customer.id)
         if not order:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido não encontrado")
         return self.to_order_detail_response(order)
@@ -253,6 +311,76 @@ class OrderService:
     def _validate_order_type(self, order_type: str) -> None:
         if order_type not in ORDER_TYPES:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de pedido inválido")
+
+    def _validate_store_accepts_order(self, order_type: str, settings) -> None:
+        """is_open, accepts_delivery e accepts_pickup, finalmente lidos.
+
+        Os tres campos existiam em restaurant_settings, apareciam no cardapio
+        e nao bloqueavam nada: quem impedia pedido com a loja fechada era o
+        frontend. Bastava chamar a API direto para furar.
+
+        Sem linha de settings o restaurante segue aceitando pedido — e o
+        comportamento que sempre valeu, e mudar isso agora derrubaria
+        restaurantes que nunca configuraram nada.
+        """
+        if settings is None:
+            return
+        if settings.is_open is False:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A loja esta fechada no momento",
+            )
+        if order_type == "delivery" and settings.accepts_delivery is False:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Esta loja nao esta aceitando entrega",
+            )
+        if order_type == "pickup" and settings.accepts_pickup is False:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Esta loja nao esta aceitando retirada",
+            )
+
+    def _resolve_payment_flow(self, branch_id: UUID, payment_method: str | None) -> str:
+        """Valida a forma de pagamento e diz por onde o dinheiro entra.
+
+        Duas listas precisam concordar: PAYMENT_METHODS (o que a plataforma
+        conhece) e branch_payment_methods (o que ESTA filial habilitou). Antes
+        disso o campo era texto livre de 50 caracteres gravado direto no
+        pedido — dava para fechar pedido com payment_method="banana", e a
+        filial recebia um pedido em uma forma que ela nao aceita.
+
+        Devolve "online" ou "delivery", que e o que decide se o pedido nasce
+        esperando o gateway.
+        """
+        if not payment_method:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Forma de pagamento obrigatoria",
+            )
+        if payment_method not in PAYMENT_METHODS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Forma de pagamento invalida",
+            )
+
+        enabled_methods = self.branch_repository.list_enabled_payment_methods(branch_id)
+        flows = {
+            method.payment_flow
+            for method in enabled_methods
+            if method.method_type == payment_method
+        }
+        if not flows:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Esta filial nao aceita esta forma de pagamento",
+            )
+        # A filial pode oferecer o mesmo metodo nos dois fluxos (pix pelo
+        # gateway e pix na entrega, por exemplo). Sem um campo no pedido para
+        # o cliente escolher, ficamos com o caminho mais restritivo: online
+        # exige pagamento confirmado antes de o pedido ir para a cozinha, e
+        # errar para o lado restritivo nao entrega comida de graca.
+        return "online" if "online" in flows else "delivery"
 
     def _validate_customer_snapshot(self, payload: CreateOrderRequest, current_customer: Customer | None) -> None:
         if current_customer or payload.customer:
@@ -284,9 +412,36 @@ class OrderService:
         payload: CreateOrderRequest,
         address,
         current_customer: Customer | None,
+        restaurant_id: UUID,
     ):
         if payload.order_type != "delivery":
             return None
+
+        estimate_request = self._build_estimate_request(payload, address)
+        reused = self._reuse_stored_estimate(
+            token=payload.delivery_estimate_token,
+            restaurant_id=restaurant_id,
+            branch_id=payload.branch_id,
+            estimate_request=estimate_request,
+            current_customer=current_customer,
+        )
+        if reused is not None:
+            return reused
+
+        estimate = DeliveryEstimateService(self.db).estimate(
+            restaurant_slug,
+            estimate_request,
+            current_customer,
+        )
+        if not estimate.serviceable:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=estimate.message or estimate.reason or "Endereco fora da area de entrega",
+            )
+        return estimate
+
+    @staticmethod
+    def _build_estimate_request(payload: CreateOrderRequest, address) -> DeliveryEstimateRequest:
         inline_address = None
         if payload.customer_address_id is None:
             inline_address = DeliveryAddressInput(
@@ -299,21 +454,84 @@ class OrderService:
                 latitude=getattr(address, "latitude", None),
                 longitude=getattr(address, "longitude", None),
             )
-        estimate = DeliveryEstimateService(self.db).estimate(
-            restaurant_slug,
-            DeliveryEstimateRequest(
-                branch_id=payload.branch_id,
-                address_id=payload.customer_address_id,
-                address=inline_address,
-            ),
-            current_customer,
+        return DeliveryEstimateRequest(
+            branch_id=payload.branch_id,
+            address_id=payload.customer_address_id,
+            address=inline_address,
         )
-        if not estimate.serviceable:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=estimate.message or estimate.reason or "Endereco fora da area de entrega",
-            )
-        return estimate
+
+    def _reuse_stored_estimate(
+        self,
+        *,
+        token: str | None,
+        restaurant_id: UUID,
+        branch_id: UUID,
+        estimate_request: DeliveryEstimateRequest,
+        current_customer: Customer | None,
+    ):
+        """Aproveita a estimativa que o cliente ja pediu no checkout.
+
+        Sem isto, criar o pedido refazia geocode + rota no Google poucos
+        minutos depois de /delivery/estimate ter feito exatamente as mesmas
+        duas chamadas: custo dobrado por pedido, e a conexao de banco presa
+        durante um I/O externo que pode levar segundos.
+
+        NADA de valor vem do cliente — ele devolve so o token. Taxa,
+        distancia e prazo sao lidos da linha em `delivery_estimates`.
+
+        Qualquer divergencia (outra filial, outro endereco, outro cliente,
+        vencida) simplesmente cai fora e o Google e chamado de novo. E o
+        caminho seguro: no pior caso pagamos a chamada que pagariamos antes.
+        """
+        if not token:
+            return None
+
+        stored = self.delivery_estimate_repository.get_valid_by_token(token, utcnow())
+        if stored is None:
+            self._log_estimate_not_reused("token_invalido_ou_vencido")
+            return None
+        if stored.restaurant_id != restaurant_id or stored.branch_id != branch_id:
+            self._log_estimate_not_reused("restaurante_ou_filial_diferente")
+            return None
+        expected_customer_id = current_customer.id if current_customer else None
+        if stored.customer_id != expected_customer_id:
+            # Estimativa de um cliente logado nao vale para outro nem para
+            # visitante: ela pode ter usado um endereco salvo da conta.
+            self._log_estimate_not_reused("cliente_diferente")
+            return None
+        if stored.address_fingerprint != build_address_fingerprint(estimate_request):
+            # A defesa que importa: estimar o endereco perto e fechar o
+            # pedido para o distante pagando a taxa do primeiro.
+            self._log_estimate_not_reused("endereco_diferente")
+            return None
+
+        logger.info(
+            "[Delivery estimate] reaproveitada estimate_id=%s provider=%s",
+            stored.id,
+            stored.provider,
+        )
+        return DeliveryEstimateResult(
+            serviceable=True,
+            reason=None,
+            message=None,
+            distance_km=float(stored.distance_km) if stored.distance_km is not None else None,
+            travel_time_min=stored.travel_time_min,
+            prep_time_min=stored.prep_time_min,
+            prep_time_max=stored.prep_time_max,
+            eta_min=stored.eta_min,
+            eta_max=stored.eta_max,
+            delivery_fee=money_to_float(stored.delivery_fee),
+            provider=stored.provider,
+            fallback=False,
+            latitude=float(stored.latitude) if stored.latitude is not None else None,
+            longitude=float(stored.longitude) if stored.longitude is not None else None,
+        )
+
+    @staticmethod
+    def _log_estimate_not_reused(reason: str) -> None:
+        # Em info e nao warning: nao e erro, e o custo de uma chamada ao
+        # Google. Vira o primeiro grep quando a conta do Maps subir.
+        logger.info("[Delivery estimate] estimativa nao reaproveitada motivo=%s", reason)
     def _get_valid_products(self, restaurant_id: UUID, product_ids: list[UUID]) -> dict[UUID, object]:
         unique_ids = list(set(product_ids))
         products = self.product_repository.list_active_by_ids(restaurant_id, unique_ids)
@@ -393,6 +611,49 @@ class OrderService:
             subtotal += (to_decimal(product.price) + options_total) * item.quantity
         return quantize_money(subtotal)
 
+    def _calculate_commission(
+        self,
+        *,
+        subtotal: Decimal,
+        coupon_discount: Decimal,
+        cashback_redeemed: Decimal,
+        settings,
+    ) -> tuple[Decimal, Decimal, Decimal]:
+        """Comissao da plataforma sobre este pedido.
+
+        Base = subtotal dos produtos - desconto de cupom - cashback usado.
+
+        O que NAO entra na base, e por que:
+        - taxa de entrega: e do entregador/da filial, nao e receita da venda;
+        - taxa de servico: idem, e repasse;
+        - taxa do gateway: custo de quem recebe, nao base de calculo.
+
+        O desconto entra como subtracao porque o restaurante recebeu menos:
+        cobrar comissao sobre um valor que ninguem pagou seria cobrar sobre
+        o proprio desconto.
+
+        Congelado no pedido de proposito. Se fosse calculado no fim do mes,
+        mudar o percentual do restaurante hoje reescreveria a comissao de
+        pedidos de tres semanas atras.
+        """
+        percent = self._commission_percent(settings)
+        base = quantize_money(subtotal - coupon_discount - cashback_redeemed)
+        # Desconto maior que o subtotal e possivel com cupom de frete
+        # gratis somado a cashback. Base negativa viraria comissao negativa,
+        # isto e, a plataforma pagando o restaurante.
+        base = max(base, ZERO)
+        amount = quantize_money(base * percent / Decimal("100"))
+        return percent, base, amount
+
+    @staticmethod
+    def _commission_percent(settings) -> Decimal:
+        # Restaurante sem linha de settings (ou com o campo nulo em banco
+        # antigo) cai no padrao da plataforma. Devolver zero aqui seria
+        # silenciosamente abrir mao da receita.
+        if settings is None or settings.platform_commission_percent is None:
+            return to_decimal(DEFAULT_PLATFORM_COMMISSION_PERCENT)
+        return to_decimal(settings.platform_commission_percent)
+
     def _calculate_service_fee(self, settings) -> Decimal:
         if not settings or not settings.service_fee_enabled:
             return ZERO
@@ -456,6 +717,9 @@ class OrderService:
             order_type=order.order_type,
             status=order.status,
             payment_method=order.payment_method,
+            payment_flow=order.payment_flow,
+            payment_status=order.payment_status,
+            paid_at=order.paid_at,
             subtotal=money_to_float(order.subtotal),
             delivery_fee=money_to_float(order.delivery_fee),
             service_fee=money_to_float(order.service_fee),

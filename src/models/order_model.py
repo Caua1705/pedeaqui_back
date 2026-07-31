@@ -15,6 +15,10 @@ class Order(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
     order_number: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, server_default=text("nextval('orders_order_number_seq'::regclass)"))
+    # Segredo de acompanhamento. Sorteado na criacao, devolvido UMA vez a
+    # quem fez o pedido e exigido na consulta publica. O order_number nao
+    # serve para isso: e sequence global e previsivel.
+    tracking_token: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     restaurant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("restaurants.id"), nullable=False)
     branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"), nullable=False)
     customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("customers.id"))
@@ -24,6 +28,19 @@ class Order(Base):
     order_type: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
     payment_method: Mapped[str | None] = mapped_column(Text)
+    # Como o dinheiro chega neste pedido: "online" (gateway) ou "delivery"
+    # (na entrega/retirada). Gravado na criacao a partir da configuracao da
+    # filial, nao do que o cliente mandou — ver OrderService._resolve_payment.
+    payment_flow: Mapped[str | None] = mapped_column(Text)
+    # Estados possiveis em src/core/constants.py:PAYMENT_STATUSES.
+    payment_status: Mapped[str] = mapped_column(Text, nullable=False, default="on_delivery")
+    paid_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    # Quem processou o pagamento ("mercadopago", "sandbox"). Fica nulo em
+    # pedido pago na entrega.
+    payment_provider: Mapped[str | None] = mapped_column(Text)
+    # Id do pagamento no gateway. E por ele que o webhook encontra o pedido,
+    # dai o indice unico em (payment_provider, provider_payment_id).
+    provider_payment_id: Mapped[str | None] = mapped_column(Text)
     subtotal: Mapped[Decimal] = mapped_column(Numeric, nullable=False, default=0)
     delivery_fee: Mapped[Decimal] = mapped_column(Numeric, nullable=False, default=0)
     service_fee: Mapped[Decimal] = mapped_column(Numeric, nullable=False, default=0)
@@ -33,6 +50,13 @@ class Order(Base):
     cashback_redeemed_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     discount_total: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     total: Mapped[Decimal] = mapped_column(Numeric, nullable=False, default=0)
+    # Comissao da plataforma, congelada na criacao do pedido. Os tres campos
+    # andam juntos: sem base e percentual, o valor nao e conferivel depois.
+    # Base = subtotal - desconto de cupom - cashback usado. NAO entram taxa
+    # de entrega, taxa de servico nem taxa do gateway.
+    commission_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=0)
+    commission_base_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    commission_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     address_street: Mapped[str | None] = mapped_column(Text)
     address_number: Mapped[str | None] = mapped_column(Text)
     address_neighborhood: Mapped[str | None] = mapped_column(Text)

@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from src.models.order_item_model import OrderItem
@@ -9,6 +10,12 @@ from src.models.order_model import Order
 from src.models.order_status_history_model import OrderStatusHistory
 from src.models.branch_model import Branch
 from src.models.restaurant_model import Restaurant
+
+
+# Pedido nesses status nao virou venda, entao nao gera comissao. Fica aqui
+# e nao no service porque as duas consultas do relatorio (o extrato e a
+# contagem do que sobrou de fora) precisam concordar exatamente.
+NON_BILLABLE_ORDER_STATUSES = ("cancelled", "rejected")
 
 
 class OrderRepository:
@@ -35,24 +42,35 @@ class OrderRepository:
         self.db.flush()
         return history
 
-    def get_order_by_number_and_phone(
+    def get_order_by_tracking_token(
         self,
         restaurant_id: uuid.UUID,
-        order_number: int,
-        phone: str,
+        tracking_token: str,
     ) -> Order | None:
-        # `phone` precisa vir ja normalizado (so digitos, via normalize_digits).
-        # A comparacao e por igualdade exata contra customer_phone_snapshot, que
-        # o OrderService grava sempre em digitos; passar o valor cru aqui volta
-        # a produzir "pedido nao encontrado" para telefone formatado.
+        # Substituiu a busca por (order_number, telefone), que era
+        # enumeravel: order_number vem de uma sequence global.
         stmt = (
             select(Order)
             .options(selectinload(Order.items), selectinload(Order.status_history))
             .where(
                 Order.restaurant_id == restaurant_id,
-                Order.order_number == order_number,
-                Order.customer_phone_snapshot == phone,
+                Order.tracking_token == tracking_token,
             )
+        )
+        return self.db.scalar(stmt)
+
+    def get_order_detail_for_customer(
+        self,
+        order_id: uuid.UUID,
+        customer_id: uuid.UUID,
+    ) -> Order | None:
+        # customer_id e obrigatorio pelo mesmo motivo que restaurant_id e em
+        # get_order_detail: sem ele a rota entrega o pedido de qualquer um
+        # para quem tiver o UUID.
+        stmt = (
+            select(Order)
+            .options(selectinload(Order.items), selectinload(Order.status_history))
+            .where(Order.id == order_id, Order.customer_id == customer_id)
         )
         return self.db.scalar(stmt)
 
@@ -69,6 +87,59 @@ class OrderRepository:
 
         stmt = stmt.order_by(Order.created_at.desc()).limit(limit).offset(offset)
         return list(self.db.scalars(stmt).all())
+
+    def list_orders_for_commission(
+        self,
+        restaurant_id: uuid.UUID,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> list[Order]:
+        """Pedidos que geram comissao no periodo.
+
+        `end_at` e EXCLUSIVO: o service passa o instante em que o dia
+        seguinte comeca, para nao perder pedido feito 23:59:59.7.
+
+        Cancelado, recusado e estornado ficam de fora — nao houve venda.
+        """
+        stmt = (
+            select(Order)
+            .where(
+                Order.restaurant_id == restaurant_id,
+                Order.created_at >= start_at,
+                Order.created_at < end_at,
+                Order.status.notin_(NON_BILLABLE_ORDER_STATUSES),
+                Order.payment_status != "refunded",
+            )
+            .order_by(Order.created_at.asc())
+        )
+        return list(self.db.scalars(stmt).all())
+
+    def count_excluded_from_commission(
+        self,
+        restaurant_id: uuid.UUID,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> int:
+        """Quantos pedidos do periodo ficaram de fora do relatorio.
+
+        Consulta separada de proposito: sem ela o lojista compara o numero
+        de pedidos do painel com o do extrato, ve a diferenca e nao tem como
+        saber se e regra ou bug.
+        """
+        stmt = (
+            select(func.count())
+            .select_from(Order)
+            .where(
+                Order.restaurant_id == restaurant_id,
+                Order.created_at >= start_at,
+                Order.created_at < end_at,
+                or_(
+                    Order.status.in_(NON_BILLABLE_ORDER_STATUSES),
+                    Order.payment_status == "refunded",
+                ),
+            )
+        )
+        return self.db.scalar(stmt) or 0
 
     def get_order_detail(self, order_id: uuid.UUID, restaurant_id: uuid.UUID) -> Order | None:
         # restaurant_id e obrigatorio de proposito. Enquanto o filtro era so
@@ -95,6 +166,49 @@ class OrderRepository:
 
     def update_status(self, order: Order, status: str) -> Order:
         order.status = status
+        self.db.add(order)
+        self.db.flush()
+        return order
+
+    def get_order_by_provider_payment(
+        self,
+        payment_provider: str,
+        provider_payment_id: str,
+    ) -> Order | None:
+        # Sem filtro por restaurante de proposito: o webhook chega do
+        # gateway, nao de um tenant, e o par (provider, provider_payment_id)
+        # e unico na tabela.
+        stmt = select(Order).where(
+            Order.payment_provider == payment_provider,
+            Order.provider_payment_id == provider_payment_id,
+        )
+        return self.db.scalar(stmt)
+
+    def attach_payment_intent(
+        self,
+        order: Order,
+        *,
+        provider: str,
+        provider_payment_id: str,
+    ) -> Order:
+        order.payment_provider = provider
+        order.provider_payment_id = provider_payment_id
+        # Uma nova tentativa depois de uma recusa volta o pagamento para
+        # "pending"; se ja estava pending, isto e um no-op.
+        order.payment_status = "pending"
+        self.db.add(order)
+        self.db.flush()
+        return order
+
+    def update_payment_status(
+        self,
+        order: Order,
+        payment_status: str,
+        paid_at=None,
+    ) -> Order:
+        order.payment_status = payment_status
+        if paid_at is not None:
+            order.paid_at = paid_at
         self.db.add(order)
         self.db.flush()
         return order

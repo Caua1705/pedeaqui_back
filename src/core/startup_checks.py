@@ -29,6 +29,13 @@ def collect_configuration_errors(settings: Settings) -> list[str]:
             "chave ou mude DELIVERY_ESTIMATE_PROVIDER."
         )
 
+    if settings.PAYMENT_PROVIDER == "mercadopago" and not (settings.MERCADOPAGO_ACCESS_TOKEN or "").strip():
+        errors.append(
+            "PAYMENT_PROVIDER=mercadopago sem MERCADOPAGO_ACCESS_TOKEN. Toda "
+            "cobranca online responderia 503. Preencha o token ou volte "
+            "PAYMENT_PROVIDER para sandbox."
+        )
+
     return errors
 
 
@@ -61,6 +68,23 @@ def collect_configuration_warnings(settings: Settings) -> list[str]:
         warnings.append(
             "INTERNAL_API_KEY ainda definida no ambiente: desde a Fase 1 "
             "nenhuma rota a utiliza. Pode ser removida do .env."
+        )
+
+    if not (settings.PAYMENT_WEBHOOK_SECRET or "").strip():
+        # Warning e nao erro: hoje ha restaurante sem nenhuma forma de
+        # pagamento online, e derrubar o boot deles por causa de uma
+        # variavel que nao usam seria pior. Quem tem pagamento online
+        # descobre no primeiro webhook, que responde 503.
+        warnings.append(
+            "PAYMENT_WEBHOOK_SECRET nao definida: o webhook de pagamento "
+            "responde 503 e nenhum pedido online sai de 'aguardando "
+            "pagamento'. Obrigatoria se a filial oferece pagamento online."
+        )
+
+    if settings.is_production and settings.PAYMENT_PROVIDER == "sandbox":
+        warnings.append(
+            "PAYMENT_PROVIDER=sandbox em producao: as cobrancas sao criadas "
+            "localmente e nenhum dinheiro e movimentado de verdade."
         )
 
     if not settings.RATE_LIMIT_CLIENT_IP_HEADER.strip():

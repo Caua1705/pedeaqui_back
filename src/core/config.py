@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     DELIVERY_ESTIMATE_CACHE_TTL_SECONDS: int = 600
     DELIVERY_ESTIMATE_NEGATIVE_CACHE_TTL_SECONDS: int = 120
     DELIVERY_ESTIMATE_PROVIDER: str = "google_routes"
+    # Por quanto tempo a estimativa guardada pode ser reaproveitada na
+    # criacao do pedido, evitando refazer geocode + rota (as duas chamadas
+    # pagas do Google). 15 minutos cobre o tempo de checkout com folga e
+    # nao chega a valer para a proxima faixa de horario da filial, cujo
+    # tempo de preparo e outro.
+    DELIVERY_ESTIMATE_REUSE_TTL_SECONDS: int = 900
     REDIS_URL: str | None = None
 
     # Teto do corpo da requisicao. O maior payload legitimo e a criacao de
@@ -62,6 +68,22 @@ class Settings(BaseSettings):
     # Ligue quando nao houver mais cliente antigo em campo — ver
     # normalize_idempotency_key.
     IDEMPOTENCY_REQUIRED: bool = False
+
+    # Gateway de pagamento.
+    #
+    # "sandbox" e o provider interno: cria a cobranca localmente e aceita
+    # webhook assinado com PAYMENT_WEBHOOK_SECRET, sem chamada externa. E o
+    # que permite exercitar o fluxo inteiro antes de existir credencial.
+    # Quando o Mercado Pago estiver plugado (ver
+    # src/integrations/payment_gateway.py), troque para "mercadopago".
+    PAYMENT_PROVIDER: str = "sandbox"
+    # Segredo do HMAC do webhook do sandbox. Sem ele o webhook e recusado
+    # com 503 — nao existe modo "aceita sem verificar".
+    PAYMENT_WEBHOOK_SECRET: str | None = None
+    # Credenciais do Mercado Pago. Ficam aqui prontas para o dia em que
+    # chegarem; enquanto vazias, o provider "mercadopago" responde 503.
+    MERCADOPAGO_ACCESS_TOKEN: str | None = None
+    MERCADOPAGO_WEBHOOK_SECRET: str | None = None
 
     RATE_LIMIT_ENABLED: bool = True
     # Cabecalho com o IP real do cliente. Atras do Traefik o socket peer e o

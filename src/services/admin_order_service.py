@@ -1,19 +1,27 @@
+import logging
 from uuid import UUID
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.core.constants import ORDER_STATUSES
+from src.models.admin_user_model import AdminUser
 from src.models.order_status_history_model import OrderStatusHistory
 from src.repositories.order_repository import OrderRepository
 from src.schemas.admin_order_schema import AdminOrderListItem, UpdateOrderStatusRequest
 from src.schemas.order_schema import OrderDetailResponse
 from src.services.idempotency_service import IdempotencyService
 from src.services.order_service import OrderService
+from src.services.order_state_machine import (
+    ensure_order_transition_allowed,
+    ensure_payment_allows_order_status,
+)
 from src.services.coupon_service import CouponService
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import money_to_float
 
+
+logger = logging.getLogger("uvicorn.error")
 
 UPDATE_STATUS_ROUTE = "PATCH /admin/orders/{order_id}/status"
 
@@ -57,6 +65,8 @@ class AdminOrderService:
                 customer_phone_snapshot=order.customer_phone_snapshot,
                 order_type=order.order_type,
                 status=order.status,
+                payment_method=order.payment_method,
+                payment_status=order.payment_status,
                 total=money_to_float(order.total),
                 created_at=order.created_at,
             )
@@ -77,7 +87,7 @@ class AdminOrderService:
         order_id: UUID,
         restaurant_id: UUID,
         payload: UpdateOrderStatusRequest,
-        admin_user_id: UUID | None = None,
+        admin_user: AdminUser,
         idempotency_key: str | None = None,
     ) -> OrderDetailResponse:
         if payload.status not in ORDER_STATUSES:
@@ -94,18 +104,25 @@ class AdminOrderService:
             scope=IdempotencyService.build_scope(
                 restaurant_id=restaurant_id,
                 route=UPDATE_STATUS_ROUTE,
-                requester=f"admin:{admin_user_id}",
+                requester=f"admin:{admin_user.id}",
             ),
             key=idempotency_key,
             request_fingerprint=IdempotencyService.fingerprint({
                 "order_id": str(order_id),
                 "status": payload.status,
-                "changed_by": payload.changed_by,
                 "note": payload.note,
             }),
         )
         if replayed is not None:
-            return OrderDetailResponse.model_validate(replayed)
+            return IdempotencyService.parse_stored_response(OrderDetailResponse, replayed)
+
+        # A validacao da transicao vem DEPOIS do replay de proposito. Um
+        # reenvio da mesma chave chega com o pedido ja no status de destino;
+        # validando antes, o retry legitimo morreria com "o pedido ja esta em
+        # accepted" em vez de devolver a resposta gravada.
+        ensure_order_transition_allowed(order.status, payload.status, order.order_type)
+        ensure_payment_allows_order_status(payload.status, order.payment_status)
+        self._log_cancellation_of_paid_order(order, payload.status)
 
         try:
             self.order_repository.update_status(order, payload.status)
@@ -115,7 +132,10 @@ class AdminOrderService:
                 OrderStatusHistory(
                     order_id=order.id,
                     status=payload.status,
-                    changed_by=payload.changed_by,
+                    # Quem mudou sai do token, nunca do corpo: o campo era
+                    # texto livre enviado pelo cliente, entao o historico
+                    # dizia o que o painel quisesse ("sistema", "cliente").
+                    changed_by=self._admin_signature(admin_user),
                     note=payload.note,
                 )
             )
@@ -135,3 +155,28 @@ class AdminOrderService:
             raise
 
         return OrderService.to_order_detail_response(order)
+
+    @staticmethod
+    def _admin_signature(admin_user: AdminUser) -> str:
+        """Identidade gravada em order_status_history.changed_by.
+
+        E-mail e nao id porque quem le esse historico e gente (suporte,
+        lojista), e um UUID nao diz nada sem outra consulta.
+        """
+        return f"admin:{admin_user.email}"
+
+    @staticmethod
+    def _log_cancellation_of_paid_order(order, new_status: str) -> None:
+        """Avisa quando um pedido JA PAGO e cancelado.
+
+        Cancelar nao estorna: o estorno so acontece quando o gateway avisa
+        (PaymentService.handle_webhook) ou quando alguem o faz no painel do
+        proprio gateway. Enquanto o Mercado Pago nao estiver plugado, este
+        log e o unico rastro de que existe dinheiro do cliente parado.
+        """
+        if new_status in {"cancelled", "rejected"} and order.payment_status == "paid":
+            logger.warning(
+                "[Pagamento] pedido pago foi %s sem estorno automatico order_id=%s",
+                new_status,
+                order.id,
+            )

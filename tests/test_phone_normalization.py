@@ -8,6 +8,11 @@ normalizava o mesmo campo, discordava do que tinha sido gravado.
 
 A regra agora e unica: tudo que escreve ou compara telefone passa por
 `normalize_digits`.
+
+Nota da Fase 2: a consulta publica por (order_number, telefone) foi
+REMOVIDA — era enumeravel, ver tests/test_order_tracking.py. O telefone
+continua sendo normalizado na escrita do snapshot e no escopo da
+idempotencia, que sao os pontos que sobraram.
 """
 
 import unittest
@@ -15,7 +20,6 @@ import uuid
 from decimal import Decimal
 from types import SimpleNamespace
 
-from fastapi import HTTPException
 from pydantic import ValidationError
 
 from src.schemas.order_schema import CreateOrderRequest, CustomerInput
@@ -71,34 +75,6 @@ class CreateOrderPhoneTests(unittest.TestCase):
         self.assertIn(f"phone:{DIGITS}", scope)
 
 
-class GetCustomerOrderPhoneTests(unittest.TestCase):
-    def test_lookup_normalizes_before_comparing(self):
-        service, repository = build_lookup_service()
-
-        for queried in (FORMATTED, DIGITS, "85 99999 9999"):
-            with self.subTest(queried=queried):
-                repository.received = None
-                with self.assertRaises(HTTPException):
-                    service.get_customer_order("junior", 123, queried)
-                self.assertEqual(repository.received, DIGITS)
-
-    def test_order_saved_formatted_is_found_when_queried_with_digits(self):
-        """O round-trip que o cliente faz: pede com telefone formatado e
-        consulta depois com o telefone limpo."""
-        db = FakeDb()
-        restaurant_id = uuid.uuid4()
-        service, payload = build_order_service(db, restaurant_id, phone=FORMATTED)
-        service.create_order("junior", payload, None)
-        stored = service.order_repository.orders[0]
-
-        lookup, repository = build_lookup_service(restaurant_id=restaurant_id)
-        repository.orders = {stored.customer_phone_snapshot: stored}
-
-        found = lookup.get_customer_order("junior", 123, DIGITS)
-
-        self.assertEqual(found.customer_phone_snapshot, DIGITS)
-
-
 class FakeDb:
     def __init__(self):
         self.events = []
@@ -138,18 +114,6 @@ class FakeOrderRepository:
         pass
 
 
-class FakeLookupRepository:
-    """Guarda o telefone que chegou, para provar que veio normalizado."""
-
-    def __init__(self):
-        self.received = None
-        self.orders = {}
-
-    def get_order_by_number_and_phone(self, restaurant_id, order_number, phone):
-        self.received = phone
-        return self.orders.get(phone)
-
-
 def build_order_service(db, restaurant_id, phone=DIGITS):
     branch = SimpleNamespace(id=uuid.uuid4())
     product_id = uuid.uuid4()
@@ -167,13 +131,26 @@ def build_order_service(db, restaurant_id, phone=DIGITS):
         get_active_restaurant=lambda slug: SimpleNamespace(id=restaurant_id)
     )
     service.branch_repository = SimpleNamespace(
-        get_active_by_id_and_restaurant=lambda branch_id, restaurant: branch
+        get_active_by_id_and_restaurant=lambda branch_id, restaurant: branch,
+        # A filial aceita dinheiro na entrega: e o que o payload usa.
+        list_enabled_payment_methods=lambda branch: [
+            SimpleNamespace(method_type="cash", payment_flow="delivery"),
+        ],
+    )
+    # Filial aberta agora: a validacao de horario e feita pelo
+    # BranchHoursService, e o pedido nao chega ao banco sem ela.
+    service.branch_hours_service = SimpleNamespace(
+        ensure_branch_is_open=lambda branch: None
     )
     service.menu_repository = SimpleNamespace(
         get_settings=lambda restaurant: SimpleNamespace(
             min_order_value=Decimal("0"),
             service_fee_enabled=False,
             service_fee_amount=Decimal("0"),
+            is_open=True,
+            accepts_delivery=True,
+            accepts_pickup=True,
+            platform_commission_percent=Decimal("10.00"),
         )
     )
     service.product_repository = SimpleNamespace(
@@ -184,22 +161,11 @@ def build_order_service(db, restaurant_id, phone=DIGITS):
     payload = CreateOrderRequest.model_validate({
         "branch_id": str(branch.id),
         "order_type": "pickup",
+        "payment_method": "cash",
         "customer": {"name": "Ana", "phone": phone},
         "items": [{"product_id": str(product_id), "quantity": 1}],
     })
     return service, payload
-
-
-def build_lookup_service(restaurant_id=None):
-    service = OrderService(FakeDb())
-    service.restaurant_service = SimpleNamespace(
-        get_active_restaurant=lambda slug: SimpleNamespace(
-            id=restaurant_id or uuid.uuid4()
-        )
-    )
-    repository = FakeLookupRepository()
-    service.order_repository = repository
-    return service, repository
 
 
 if __name__ == "__main__":

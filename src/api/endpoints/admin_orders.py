@@ -64,6 +64,6 @@ def update_order_status(
         order_id,
         admin_user.restaurant_id,
         payload,
-        admin_user_id=admin_user.id,
+        admin_user=admin_user,
         idempotency_key=normalize_idempotency_key(idempotency_key),
     )

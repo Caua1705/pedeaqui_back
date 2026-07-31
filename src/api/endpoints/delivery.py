@@ -31,9 +31,16 @@ def estimate_delivery(
         str(payload.address is not None).lower(),
         str(payload.branch_id is None).lower(),
     )
-    result = DeliveryEstimateService(db).estimate(
+    # estimate_and_store e nao estimate: aqui a estimativa e GUARDADA, e o
+    # token devolvido junto e o que evita que a criacao do pedido refaca
+    # geocode + rota no Google minutos depois.
+    result, stored = DeliveryEstimateService(db).estimate_and_store(
         restaurant_slug,
         payload,
         current_customer,
     )
-    return result.to_response()
+    response = result.to_response()
+    if stored is not None:
+        response.estimate_token = stored.token
+        response.estimate_expires_at = stored.expires_at
+    return response

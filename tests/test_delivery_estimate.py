@@ -15,7 +15,24 @@ from src.schemas.delivery_schema import (
     DeliveryAddressInput,
     DeliveryEstimateRequest,
 )
+from src.services.branch_hours_service import BranchHoursService
 from src.services.delivery_estimate_service import DeliveryEstimateService
+
+
+def open_period(prep_time_min, prep_time_max, opens_at=time(0, 0), closes_at=time(23, 59)):
+    """Faixa de funcionamento que cobre o dia inteiro.
+
+    Depois da Fase 2 uma faixa sem `opens_at`/`closes_at` nao vale mais como
+    "sempre aberto": ela e ignorada e a filial fica fechada. Os testes que
+    antes usavam None/None passam a declarar o dia inteiro.
+    """
+    return SimpleNamespace(
+        opens_at=opens_at,
+        closes_at=closes_at,
+        prep_time_min=prep_time_min,
+        prep_time_max=prep_time_max,
+        is_closed=False,
+    )
 
 
 class FakeMapsClient:
@@ -82,6 +99,10 @@ class DeliveryEstimateTests(unittest.TestCase):
             list_active_by_restaurant=lambda restaurant_id: [self.branch],
             list_business_hours_by_weekday=lambda branch_id, weekday: self.business_hours,
         )
+        # Servico real de horario apontando para o mesmo repositorio fake: a
+        # escolha da faixa e regra de negocio e nao deve ser mockada.
+        self.service.branch_hours_service = BranchHoursService.__new__(BranchHoursService)
+        self.service.branch_hours_service.branch_repository = self.service.branch_repository
         self.service.customer_repository = SimpleNamespace(get_address=lambda *_: None)
         self.service.menu_repository = SimpleNamespace(
             get_settings=lambda restaurant_id: self.settings
@@ -103,14 +124,7 @@ class DeliveryEstimateTests(unittest.TestCase):
         )
 
     def test_google_route_builds_real_eta(self):
-        self.business_hours = [
-            SimpleNamespace(
-                opens_at=None,
-                closes_at=None,
-                prep_time_min=40,
-                prep_time_max=60,
-            )
-        ]
+        self.business_hours = [open_period(40, 60)]
 
         result = self.service.estimate("restaurante", self.request(), None)
         self.assertTrue(result.serviceable)
@@ -124,9 +138,7 @@ class DeliveryEstimateTests(unittest.TestCase):
         self.assertEqual(result.delivery_fee, 11.3)
 
     def test_delivery_fee_respects_min_and_max_limits(self):
-        self.business_hours = [
-            SimpleNamespace(opens_at=None, closes_at=None, prep_time_min=40, prep_time_max=60)
-        ]
+        self.business_hours = [open_period(40, 60)]
         self.branch.delivery_min_fee = Decimal("15.00")
         result = self.service.estimate("restaurante", self.request(), None)
         self.assertTrue(result.serviceable)
@@ -141,9 +153,7 @@ class DeliveryEstimateTests(unittest.TestCase):
         self.assertEqual(result.delivery_fee, 10.0)
 
     def test_max_distance_rejects_delivery_area(self):
-        self.business_hours = [
-            SimpleNamespace(opens_at=None, closes_at=None, prep_time_min=40, prep_time_max=60)
-        ]
+        self.business_hours = [open_period(40, 60)]
         self.branch.delivery_max_distance_km = Decimal("4.00")
         result = self.service.estimate("restaurante", self.request(), None)
         self.assertFalse(result.serviceable)
@@ -151,14 +161,7 @@ class DeliveryEstimateTests(unittest.TestCase):
         self.assertEqual(result.distance_km, 4.2)
 
     def test_business_hour_prep_time_is_used_for_current_day(self):
-        self.business_hours = [
-            SimpleNamespace(
-                opens_at=None,
-                closes_at=None,
-                prep_time_min=25,
-                prep_time_max=35,
-            )
-        ]
+        self.business_hours = [open_period(25, 35)]
 
         result = self.service.estimate("restaurante", self.request(), None)
         self.assertTrue(result.serviceable)
@@ -168,43 +171,13 @@ class DeliveryEstimateTests(unittest.TestCase):
         self.assertEqual(result.eta_min, 43)
         self.assertEqual(result.eta_max, 53)
 
-    def test_current_business_hour_is_preferred_over_first_period(self):
-        business_hours = [
-            SimpleNamespace(
-                opens_at=None,
-                closes_at=None,
-                prep_time_min=25,
-                prep_time_max=35,
-            ),
-            SimpleNamespace(
-                opens_at=time(0, 0),
-                closes_at=time(23, 59),
-                prep_time_min=30,
-                prep_time_max=45,
-            ),
-        ]
-
-        selected = DeliveryEstimateService._select_business_hour_for_prep_time(
-            business_hours,
-            time(12, 0),
-        )
-        self.assertEqual(selected.prep_time_min, 30)
-        self.assertEqual(selected.prep_time_max, 45)
-
     def test_current_business_hour_without_prep_time_is_not_serviceable(self):
+        # A faixa que contem o agora nao tem tempo de preparo. A outra faixa
+        # do dia NAO e usada como substituta: era esse fallback que fazia o
+        # pedido das 3h sair com o prazo do almoco.
         self.business_hours = [
-            SimpleNamespace(
-                opens_at=time(0, 0),
-                closes_at=time(23, 59, 59, 999999),
-                prep_time_min=None,
-                prep_time_max=None,
-            ),
-            SimpleNamespace(
-                opens_at=None,
-                closes_at=None,
-                prep_time_min=25,
-                prep_time_max=35,
-            ),
+            open_period(None, None, time(0, 0), time(23, 59, 59, 999999)),
+            open_period(25, 35),
         ]
 
         result = self.service.estimate("restaurante", self.request(), None)
@@ -213,23 +186,18 @@ class DeliveryEstimateTests(unittest.TestCase):
         self.assertIsNone(result.prep_time_min)
         self.assertIsNone(result.prep_time_max)
 
-    def test_missing_business_hour_prep_time_is_not_serviceable(self):
+    def test_branch_without_business_hours_today_is_closed(self):
+        # Sem nenhuma faixa cadastrada para hoje a filial esta fechada, e o
+        # motivo agora diz isso em vez de falar de tempo de preparo.
         result = self.service.estimate("restaurante", self.request(), None)
         self.assertFalse(result.serviceable)
-        self.assertEqual(result.reason, "prep_time_unavailable")
+        self.assertEqual(result.reason, "branch_closed")
         self.assertIsNone(result.travel_time_min)
         self.assertIsNone(result.eta_min)
         self.assertIsNone(result.eta_max)
 
     def test_missing_delivery_fee_config_is_not_serviceable(self):
-        self.business_hours = [
-            SimpleNamespace(
-                opens_at=None,
-                closes_at=None,
-                prep_time_min=40,
-                prep_time_max=60,
-            )
-        ]
+        self.business_hours = [open_period(40, 60)]
         self.branch.delivery_base_fee = None
 
         result = self.service.estimate("restaurante", self.request(), None)
@@ -239,14 +207,7 @@ class DeliveryEstimateTests(unittest.TestCase):
         self.assertIsNone(result.delivery_fee)
 
     def test_google_failure_uses_explicit_fallback(self):
-        self.business_hours = [
-            SimpleNamespace(
-                opens_at=None,
-                closes_at=None,
-                prep_time_min=40,
-                prep_time_max=60,
-            )
-        ]
+        self.business_hours = [open_period(40, 60)]
         self.service.maps_client = FakeMapsClient(unavailable=True)
 
         result = self.service.estimate("restaurante", self.request(), None)

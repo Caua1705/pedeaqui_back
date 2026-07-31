@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi import APIRouter, Depends, Header, Request
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.customer_auth import get_optional_current_customer
@@ -46,13 +46,17 @@ def create_order(
     )
 
 
-@router.get("/{restaurant_slug}/orders/{order_number}", response_model=OrderDetailResponse)
+# SUBSTITUI a antiga GET /{slug}/orders/{order_number}?phone=..., removida
+# na Fase 2. `order_number` vem de uma sequence global: com o telefone de
+# alguem, dava para varrer os numeros vizinhos e ler endereco residencial,
+# itens e historico de outras pessoas. O token e sorteado na criacao do
+# pedido e entregue so a quem o criou.
+@router.get("/{restaurant_slug}/orders/track/{tracking_token}", response_model=OrderDetailResponse)
 @limiter.limit(PUBLIC_ORDER_LOOKUP_RATE_LIMIT)
-def get_customer_order(
+def track_order(
     request: Request,
     restaurant_slug: str,
-    order_number: int,
-    phone: str = Query(..., min_length=8),
+    tracking_token: str,
     db: Session = Depends(get_db),
 ) -> OrderDetailResponse:
-    return OrderService(db).get_customer_order(restaurant_slug, order_number, phone)
+    return OrderService(db).get_order_by_tracking_token(restaurant_slug, tracking_token)

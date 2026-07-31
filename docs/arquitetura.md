@@ -40,7 +40,7 @@ src/
 alembic/versions/          migrações versionadas (fonte da verdade do schema hoje)
 migrations/                arquivo histórico congelado dos 13 .sql aplicados a mão. NÃO rode.
 scripts/                   tarefas de operação: criar lojista, limpar chaves, reindexar IA
-tests/                     117 testes, sem banco real (usam fakes)
+tests/                     245 testes, sem banco real (usam fakes)
 ```
 
 ### Regra de quem chama quem
@@ -100,70 +100,84 @@ controller.
 
 ### 3.2 Dentro do `OrderService.create_order`
 
-Entrada: `src/services/order_service.py:50`.
+Entrada: `src/services/order_service.py:66`.
 
 ```
- 57  restaurante ativo pelo slug ................ 404 se não achar
- 58  order_type ∈ {delivery, pickup} ............ 400
- 60  filial ativa E do restaurante .............. 400
- 64  resolve o endereço ......................... 401 / 404
- 65  exige cliente (logado ou no corpo) ......... 401
+ 73  restaurante ativo pelo slug ................ 404 se não achar
+ 74  order_type ∈ {delivery, pickup} ............ 400
+ 76  filial ativa E do restaurante .............. 400
+ 80  resolve o endereço ......................... 401 / 404
+ 81  exige cliente (logado ou no corpo) ......... 401
+ 86  carrega restaurant_settings
+ 87  loja aberta / aceita este tipo de pedido ... 400   ← Fase 2
+ 88  filial dentro do horário de funcionamento .. 400   ← Fase 2
+ 89  forma de pagamento válida e habilitada ..... 400   ← Fase 2
 ─────────────────────────────────────────────────────────────
- 71  ►►► RESERVA A CHAVE DE IDEMPOTÊNCIA ◄◄◄
+ 95  ►►► RESERVA A CHAVE DE IDEMPOTÊNCIA ◄◄◄
 ─────────────────────────────────────────────────────────────
- 79  endereço completo se for delivery .......... 400
- 80  carrega restaurant_settings
- 81  estimativa de entrega (Google Maps) ........ 400 se fora de área
- 87  produtos válidos, ativos, DESTE restaurante  400
- 89  valida opções selecionadas ................. 400
- 93  calcula subtotal
- 94  valor mínimo do pedido ..................... 400
- 95  taxa de serviço
- 96  taxa de entrega
+103  endereço completo se for delivery .......... 400
+104  estimativa de entrega ...................... 400 se fora de área
+       └─ reaproveita delivery_estimate_token quando válido,
+          e só aí chama o Google (Fase 2)
+111  produtos válidos, ativos, DESTE restaurante  400
+113  valida opções selecionadas ................. 400
+117  calcula subtotal
+118  valor mínimo do pedido ..................... 400
+119  taxa de serviço
+120  taxa de entrega
 ─────────────────────────────────────────────────────────────
-105  ►►► INÍCIO DO try/except ◄◄◄
-106  trava e valida o cupom (SELECT FOR UPDATE) . 400 / 401 / 404
-117  total = subtotal + serviço + entrega − descontos
-123  normaliza o telefone do snapshot
-126  INSERT orders
-166  INSERT coupon_redemptions
-169  INSERT order_items
-180  INSERT order_item_options
-187  INSERT order_status_history ("pending")
-207  UPDATE idempotency_keys → completed + resposta
-212  ►►► COMMIT ◄◄◄
-214  except: ROLLBACK e propaga
+129  ►►► INÍCIO DO try/except ◄◄◄
+131  trava e valida o cupom (SELECT FOR UPDATE) . 400 / 401 / 404
+141  total = subtotal + serviço + entrega − descontos
+142  comissão da plataforma (congelada no pedido)      ← Fase 2
+153  normaliza o telefone do snapshot
+157  INSERT orders (com tracking_token, payment_status e comissão)
+     INSERT coupon_redemptions
+     INSERT order_items
+     INSERT order_item_options
+     INSERT order_status_history ("pending")
+     UPDATE idempotency_keys → completed + resposta
+     ►►► COMMIT ◄◄◄
+     except: ROLLBACK e propaga
 ```
+
+As três validações da Fase 2 ficam **antes** da reserva de idempotência: são
+consultas baratas, e recusar cedo evita queimar chave e chamada paga do Google
+num pedido que a loja não poderia receber de jeito nenhum.
 
 Detalhe por etapa:
 
 | # | O que faz | Onde | Erro |
 |---|---|---|---|
-| 1 | Restaurante ativo pelo slug | `order_service.py:57` → `restaurant_service.py:42-49` | 404 |
-| 2 | `order_type` válido | `order_service.py:58` → `:253-255`; lista em `core/constants.py:3` | 400 |
-| 3 | Filial ativa **e** do restaurante | `order_service.py:60` → `branch_repository.py:15-21` | 400 |
-| 4 | Resolve endereço | `order_service.py:64` → `:271-279` | 401/404 |
-| 5 | Cliente identificado | `order_service.py:65` → `:257-260` | 401 |
-| 6 | **Idempotência** | `order_service.py:71-77` | 409/422 |
-| 7 | Endereço completo p/ entrega | `order_service.py:79` → `:262-269` | 400 |
-| 8 | Settings do restaurante | `order_service.py:80` → `menu_repository.py:20-22` | — |
-| 9 | Estimativa de entrega | `order_service.py:81-86` → `:281-316` | 400 |
-| 10 | Produtos válidos | `order_service.py:87` → `:317-323` | 400 |
-| 11 | Opções por item | `order_service.py:89-92` → `:325-378` | 400 |
-| 12 | Subtotal | `order_service.py:93` → `:380-394` | — |
-| 13 | Valor mínimo | `order_service.py:94` → `:401-407` | 400 |
-| 14 | Taxa de serviço | `order_service.py:95` → `:396-399` | — |
-| 15 | Cupom (travado) | `order_service.py:106-114` → `coupon_service.py:240-268` | 400/401/404 |
-| 16 | Gravação | `order_service.py:126-189` | — |
-| 17 | Commit | `order_service.py:212` | — |
+| 1 | Restaurante ativo pelo slug | `order_service.py:73` → `restaurant_service.py:42-49` | 404 |
+| 2 | `order_type` válido | `order_service.py:74` → `:311`; lista em `core/constants.py` | 400 |
+| 3 | Filial ativa **e** do restaurante | `order_service.py:76` → `branch_repository.py:15-21` | 400 |
+| 4 | Resolve endereço | `order_service.py:80` → `:399` | 401/404 |
+| 5 | Cliente identificado | `order_service.py:81` → `:385` | 401 |
+| 6 | Settings do restaurante | `order_service.py:86` → `menu_repository.py:20-22` | — |
+| 7 | **Loja aberta / aceita o tipo** | `order_service.py:87` → `:315` | 400 |
+| 8 | **Filial dentro do horário** | `order_service.py:88` → `branch_hours_service.py:55` | 400 |
+| 9 | **Forma de pagamento** | `order_service.py:89` → `:344` | 400 |
+| 10 | **Idempotência** | `order_service.py:95` | 409/422 |
+| 11 | Endereço completo p/ entrega | `order_service.py:103` → `:390` | 400 |
+| 12 | Estimativa de entrega (reaproveita token) | `order_service.py:104` → `:409`, `:463` | 400 |
+| 13 | Produtos válidos | `order_service.py:111` → `:535` | 400 |
+| 14 | Opções por item | `order_service.py:113` → `:543` | 400 |
+| 15 | Subtotal | `order_service.py:117` → `:598` | — |
+| 16 | Valor mínimo | `order_service.py:118` → `:662` | 400 |
+| 17 | Taxa de serviço | `order_service.py:119` → `:657` | — |
+| 18 | Cupom (travado) | `order_service.py:131` → `coupon_service.py:240-268` | 400/401/404 |
+| 19 | **Comissão da plataforma** | `order_service.py:142` → `:614` | — |
+| 20 | Gravação | `order_service.py:157-228` | — |
+| 21 | Commit | `order_service.py:258` | — |
 
-**Passo 4 (endereço) em detalhe** — `order_service.py:271-279`:
+**Passo 4 (endereço) em detalhe** — `order_service.py:399`:
 - `customer_address_id` sem login → **401**. Um convidado não pode apontar para endereço de conta.
 - Com login + `customer_address_id` → busca em `customer_addresses` filtrando **também** por
   `customer_id` (`customer_repository.py:121-126`). Não é seu, é 404.
 - Sem `customer_address_id` → usa o `address` inline do corpo.
 
-**Passo 10 (produtos)** — `order_service.py:317-323` chama
+**Passo 13 (produtos)** — `order_service.py:535` chama
 `product_repository.py:55-66`, que filtra por `restaurant_id`, `is_active` e `is_available`.
 Se o número de produtos encontrados não bater com o número de ids únicos pedidos, é **400**
 genérico ("Produto inválido ou indisponível"). Não diz qual — de propósito, para não virar
@@ -176,10 +190,11 @@ não repetida (`:346-350`); depois, por grupo: obrigatório foi preenchido (`:35
 
 ### 3.3 Onde entra a idempotência
 
-`src/services/order_service.py:71-77`, e a posição é intencional (comentário em `:67-70`).
+`src/services/order_service.py:95`, e a posição é intencional.
 
 Ela fica **antes de qualquer escrita e antes da chamada paga ao Google Maps**, mas **depois**
-das validações baratas (restaurante, filial, endereço). Assim um reenvio devolve a resposta
+das validações baratas (restaurante, filial, endereço, loja aberta, horário da filial e
+forma de pagamento). Assim um reenvio devolve a resposta
 gravada sem gastar rota do Maps nem criar um segundo pedido, e um payload obviamente inválido
 não queima chave.
 
@@ -190,11 +205,11 @@ A reserva é um `INSERT ... ON CONFLICT DO NOTHING` — `src/repositories/idempo
   - fingerprint diferente → **422** (`:114-124`): mesma chave, corpo diferente, é reciclagem.
   - `in_progress` → **409** (`:126-135`).
   - `completed` com resposta → devolve a resposta gravada (`:137-143`), e o
-    `order_service.py:77` a converte de volta em `CreateOrderResponse`.
+    `order_service.py:101` a converte de volta em `CreateOrderResponse`.
 
 O escopo da chave é `restaurant_id | rota | solicitante` — `idempotency_service.py:48-64`.
 O solicitante é `customer:<id>` quando há login, senão `phone:<dígitos>`
-(`order_service.py:220-237`). Sem o solicitante no escopo, um cliente adivinhando a chave de
+(`order_service.py:266`). Sem o solicitante no escopo, um cliente adivinhando a chave de
 outro receberia o pedido alheio, com nome, telefone e endereço dentro.
 
 O fingerprint é o sha256 do corpo canonicalizado com `sort_keys=True`
@@ -213,12 +228,13 @@ estado "chave reservada, pedido nenhum" preso no banco.
 
 | Valor | Fonte | Onde |
 |---|---|---|
-| Preço unitário | `products.price` do banco + soma de `product_options.additional_price` | `order_service.py:417-418` |
-| Subtotal | Σ (preço + opções) × quantidade | `order_service.py:380-394` |
-| Taxa de entrega | base + km × valor/km, com piso e teto da filial | `delivery_estimate_service.py:493-512` |
-| Taxa de serviço | `restaurant_settings.service_fee_amount`, se habilitada | `order_service.py:396-399` |
+| Preço unitário | `products.price` do banco + soma de `product_options.additional_price` | `order_service.py:671` |
+| Subtotal | Σ (preço + opções) × quantidade | `order_service.py:598` |
+| Taxa de entrega | base + km × valor/km, com piso e teto da filial | `delivery_estimate_service.py:607` |
+| Taxa de serviço | `restaurant_settings.service_fee_amount`, se habilitada | `order_service.py:657` |
 | Desconto do cupom | tipo e valor do cupom no banco | `coupon_service.py:47-64` |
-| Total | `subtotal + serviço + entrega − descontos` | `order_service.py:117` |
+| Total | `subtotal + serviço + entrega − descontos` | `order_service.py:141` |
+| Comissão da plataforma | `(subtotal − cupom − cashback) × percentual do restaurante` | `order_service.py:614` |
 
 Tudo em `Decimal`, arredondado com `ROUND_HALF_UP` para 2 casas em `src/utils/money.py:15-16`.
 Nunca `float` no cálculo — `float` só aparece na serialização da resposta
@@ -226,7 +242,7 @@ Nunca `float` no cálculo — `float` só aparece na serialização da resposta
 
 Os preços também são **congelados em snapshot** dentro do pedido: `product_name_snapshot`,
 `unit_price_snapshot`, `option_name_snapshot`, `additional_price_snapshot`
-(`order_service.py:409-440`). Mudar o preço do produto amanhã não altera pedido de ontem.
+(`order_service.py:671-702`). Mudar o preço do produto amanhã não altera pedido de ontem.
 
 ### 3.5 Onde o cupom é travado
 
@@ -251,36 +267,37 @@ A tabela tem `UNIQUE(order_id)` e `UNIQUE(idempotency_key)`
 
 ### 3.6 O que acontece dentro da transação e o que é gravado
 
-O bloco `try` vai de `order_service.py:105` a `:216`. Dentro dele, tudo em uma transação:
+O bloco `try` vai de `order_service.py:129` a `:262`. Dentro dele, tudo em uma transação:
 
 ```
-orders                 1 linha    order_service.py:126-165
-coupon_redemptions     0 ou 1     order_service.py:166-167
-order_items            N linhas   order_service.py:169-179
-order_item_options     0..N       order_service.py:180-186
-order_status_history   1 linha    order_service.py:187-189  (status "pending", changed_by "system")
-idempotency_keys       1 UPDATE   order_service.py:207-211  (completed + response_body em JSONB)
+orders                 1 linha    order_service.py:157-205
+coupon_redemptions     0 ou 1     order_service.py:207
+order_items            N linhas   order_service.py:209-219
+order_item_options     0..N       order_service.py:220-226
+order_status_history   1 linha    order_service.py:227  (status "pending", changed_by "system")
+idempotency_keys       1 UPDATE   order_service.py:254  (completed + response_body em JSONB)
                        ─────────
-                       COMMIT     order_service.py:212
+                       COMMIT     order_service.py:258
 ```
 
-A resposta é montada em `:190-203` e gravada em `idempotency_keys.response_body`
-**antes** do commit (`:207-211`), com o motivo explicado em `:204-206`: assim a resposta
+A resposta é montada em `:230` e gravada em `idempotency_keys.response_body`
+**antes** do commit (`:254`), com o motivo explicado no comentário logo acima: assim a resposta
 armazenada e o pedido entram no banco atomicamente. Se o commit falhar, não sobra chave
 apontando para pedido inexistente.
 
 O `order_number` é uma sequence do Postgres (`src/models/order_model.py:17`), preenchida no
-`flush()` da linha 165 e já legível na resposta.
+`flush()` do `create_order` e já legível na resposta. O `tracking_token`, ao contrário, é
+sorteado em Python antes do INSERT (`order_service.py:158`).
 
 ### 3.7 Se algo falhar no meio
 
-**Dentro do `try` (linhas 105–213)**: `except Exception: self.db.rollback(); raise`
-(`order_service.py:214-216`). Volta tudo — pedido, itens, opções, histórico, resgate de cupom
+**Dentro do `try` (linhas 129–259)**: `except Exception: self.db.rollback(); raise`
+(`order_service.py:260`). Volta tudo — pedido, itens, opções, histórico, resgate de cupom
 e a reserva da chave de idempotência. O lock `FOR UPDATE` do cupom é liberado pelo rollback.
 O erro sobe: `HTTPException` vira a resposta HTTP correspondente; qualquer outra exceção vira
 500.
 
-**Entre o `begin()` da idempotência (71) e o `try` (105)** — endereço inválido, fora de área,
+**Entre o `begin()` da idempotência (95) e o `try` (129)** — endereço inválido, fora de área,
 produto indisponível, abaixo do mínimo: **não há `rollback()` explícito**, e não precisa. Nada
 foi commitado; a sessão é fechada em `src/db/session.py:21-26` no `finally` do `get_db`, e
 fechar sem commit descarta a transação inteira, incluindo a reserva. O efeito é o mesmo, só
@@ -341,27 +358,35 @@ continuaria valendo até o token expirar. O comentário está em `admin_auth_ser
 
 ### 4.3 Estimativa de entrega
 
-`POST /restaurants/{slug}/delivery/estimate` → `src/api/endpoints/delivery.py:17-39` →
-`src/services/delivery_estimate_service.py:133-407`
+`POST /restaurants/{slug}/delivery/estimate` → `src/api/endpoints/delivery.py` →
+`DeliveryEstimateService.estimate_and_store` (`src/services/delivery_estimate_service.py:187`),
+que chama `estimate` (`:237`) e guarda o resultado.
 
 ```
-restaurante ativo ......................................... :147
-restaurant_settings.accepts_delivery == false → não atende  :149-151
-filial (a informada, ou a is_main) ........................ :154 → :409-431
-branch.accepts_delivery == false → não atende ............. :155-158
-endereço (address_id do cliente, ou inline) ............... :168 → :433-454
-tempo de preparo do dia/faixa da filial ................... :179 → :474-490
-   └─ sem business hours para hoje → NÃO ATENDE ("prep_time_unavailable")  :190-196
-coordenadas: usa lat/lng se vierem, senão geocodifica ..... :201-202 → :456-472
-cache (Redis, ou memória) ................................. :211 → :57-111
+restaurante ativo
+restaurant_settings.accepts_delivery == false → não atende
+filial (a informada, ou a is_main) ......................... :524
+   └─ o `getattr(branch, "accepts_delivery", True)` foi REMOVIDO na Fase 2:
+      a coluna nunca existiu em `branches`, então era código morto que
+      sempre liberava
+endereço (address_id do cliente, ou inline) ................ :548
+faixa de funcionamento que contém o agora .................. :589 → branch_hours_service.py:35
+   └─ nenhuma faixa contém o agora → NÃO ATENDE ("branch_closed")
+   └─ faixa sem tempo de preparo   → NÃO ATENDE ("prep_time_unavailable")
+coordenadas: usa lat/lng se vierem, senão geocodifica (PAGO)
+cache (Redis, ou memória) .................................. :326
    └─ hit → devolve sem chamar o Google
-Google Routes: compute_route .............................. :248
-taxa de entrega = base + km × valor/km, com piso e teto ... :249 → :493-512
-   └─ filial sem base/por-km configurados → não atende ..... :253-280
-distância > delivery_max_distance_km → fora da área ....... :281-309
-eta_min = prep_min + tempo de viagem ...................... :311-312
+Google Routes: compute_route (PAGO) ........................ :363
+taxa de entrega = base + km × valor/km, com piso e teto .... :607
+   └─ filial sem base/por-km configurados → não atende
+distância > delivery_max_distance_km → fora da área ........ :629
+eta_min = prep_min + tempo de viagem
 eta_max = prep_max + tempo de viagem
-grava no cache e devolve .................................. :349
+grava no cache
+─────────────────────────────────────────────────────────────
+GRAVA em delivery_estimates e devolve `estimate_token` ...... :187   ← Fase 2
+   └─ só quando serviceable=true. É esse token que evita a segunda
+      rodada de geocode + rota na criação do pedido (ver 4.7 e 9.17).
 ```
 
 Falhas do Google:
@@ -412,22 +437,128 @@ renomeado não aparece no chat até reindexar.
 
 ---
 
+### 4.5 Pagamento do pedido (Fase 2)
+
+Um pedido nasce com dois estados: `status` (o ciclo operacional) e
+`payment_status` (o dinheiro). Os estados de pagamento estão documentados em
+`src/core/constants.py` — `on_delivery`, `pending`, `paid`, `failed`,
+`refunded`.
+
+Qual dos dois caminhos o pedido segue é decidido na criação, por
+`OrderService._resolve_payment_flow` (`src/services/order_service.py:344`), a
+partir do `payment_flow` da forma de pagamento **habilitada na filial**:
+
+```
+pagamento na entrega (payment_flow="delivery")
+    pedido nasce status=pending, payment_status=on_delivery
+    o lojista já pode aceitar
+
+pagamento online (payment_flow="online")
+    pedido nasce status=pending, payment_status=pending
+    POST /restaurants/{slug}/orders/{tracking_token}/payment  → cria a cobrança
+    gateway confirma → POST /payments/webhooks/{provider}     → payment_status=paid
+    só então o lojista consegue aceitar
+```
+
+A regra central está em `order_state_machine.ensure_payment_allows_order_status`
+(`src/services/order_state_machine.py:110`): nenhum pedido entra em
+`accepted`/`preparing`/`ready`/`out_for_delivery`/`completed` com pagamento
+online não confirmado. Sem isso bastava clicar em "aceitar" para o pedido ir
+para a cozinha com o pix em aberto.
+
+**Pagar não aceita o pedido automaticamente.** O webhook grava
+`payment_status=paid` e registra no histórico; aceitar continua sendo decisão do
+lojista — pagar não pode obrigar o restaurante a produzir.
+
+O webhook (`src/services/payment_service.py:141`) faz, nesta ordem: confere a
+assinatura (401 se inválida), traduz o corpo, acha o pedido por
+`(payment_provider, provider_payment_id)`, reserva a chave de idempotência
+usando o **id do evento** e só então aplica a transição. Corpo malformado,
+pagamento desconhecido e transição impossível respondem **2xx** com warning no
+log — 5xx colocaria o gateway em retentativa por horas sem consertar nada.
+
+#### Onde o Mercado Pago vai ser plugado
+
+`src/integrations/payment_gateway.py`, **três funções**, cada uma com o passo a
+passo escrito em comentário:
+
+| Função | Linha | O que escrever |
+|---|---|---|
+| `create_payment` | `:83` | `POST /v1/payments` com `X-Idempotency-Key: {order_id}` |
+| `verify_webhook_signature` | `:129` | manifest `id:...;request-id:...;ts:...;` + HMAC do header `x-signature` |
+| `parse_webhook_event` | `:173` | `GET /v1/payments/{id}` e traduzir `approved`/`rejected`/`refunded` |
+
+Nada fora desse arquivo muda. Depois dos três, é só `PAYMENT_PROVIDER=mercadopago`
+no `.env`.
+
+Enquanto isso, o provider `sandbox` é uma implementação **de verdade** (sem
+chamada externa): cria a cobrança localmente e valida o webhook por HMAC-SHA256
+do corpo cru com `PAYMENT_WEBHOOK_SECRET`. É o que permite exercitar o fluxo
+inteiro sem credencial.
+
+### 4.6 Comissão da plataforma (Fase 2)
+
+Gravada **no pedido, na criação** (`order_service.py:614`), não apurada no
+fechamento do mês:
+
+```
+base    = subtotal − desconto de cupom − cashback usado     (nunca negativa)
+percent = restaurant_settings.platform_commission_percent   (por restaurante)
+valor   = base × percent / 100                              (2 casas, HALF_UP)
+```
+
+Ficam **fora** da base: taxa de entrega, taxa de serviço e taxa do gateway — as
+duas primeiras são repasse, a terceira é custo de quem recebe.
+
+São três colunas em `orders` (`commission_percent`, `commission_base_amount`,
+`commission_amount`) porque o valor sozinho não é conferível: com base e
+percentual gravados, o lojista refaz a conta de cada linha do extrato.
+
+Congelar é o ponto: se fosse calculado no fim do mês, mudar o percentual do
+restaurante hoje reescreveria a comissão de pedidos de três semanas atrás.
+
+`GET /admin/reports/commission?start_date&end_date`
+(`src/services/admin_report_service.py:33`) só **soma** o que está gravado.
+Cancelados, recusados e estornados não entram, e quantos ficaram de fora vem em
+`excluded_orders_count` — sem esse número, a diferença para o painel parece bug.
+As datas são lidas em America/Fortaleza e o fim é exclusivo no dia seguinte,
+para não perder pedido das 23:59.
+
+### 4.7 Consulta de pedido pelo cliente (Fase 2)
+
+A rota `GET /orders/{order_number}?phone=...` **foi removida**. Ela casava um
+`order_number` vindo de sequence **global** com o telefone: com um telefone em
+mãos, dava para varrer os números vizinhos e ler endereço residencial, itens e
+histórico de outras pessoas.
+
+Duas rotas no lugar:
+
+| Quem | Rota | Como autoriza |
+|---|---|---|
+| Convidado | `GET /restaurants/{slug}/orders/track/{tracking_token}` | token opaco sorteado na criação, devolvido **uma vez** a quem criou |
+| Cliente logado | `GET /customers/me/orders/{order_id}` | `orders.customer_id`, sem token nenhum |
+
+O token é `secrets.token_urlsafe(32)` (`src/utils/security.py`), gravado em
+`orders.tracking_token` com UNIQUE. Pedidos anteriores à migração receberam
+token sorteado no banco: como ninguém os tem em mãos, eles deixaram de ser
+consultáveis pela rota pública — que era o objetivo.
+
 ## 5. Onde ficam as regras de negócio
 
 | Regra | Arquivo:linha |
 |---|---|
-| **Taxa de entrega** = base + (km × valor/km), com piso e teto | `src/services/delivery_estimate_service.py:493-512` |
-| Filial sem `delivery_base_fee`/`delivery_fee_per_km` → não atende | `src/services/delivery_estimate_service.py:496-497`, `:253-280` |
-| **Raio máximo de entrega** | `src/services/delivery_estimate_service.py:515-517` |
-| **Tempo de preparo** (por filial, dia da semana e faixa de horário) | `src/services/delivery_estimate_service.py:474-490` |
-| Escolha da faixa de horário (a atual, ou a primeira do dia) | `src/services/delivery_estimate_service.py:520-539` |
-| ETA = preparo + tempo de viagem | `src/services/delivery_estimate_service.py:310-312` |
-| Fuso horário do preparo (America/Fortaleza) | `src/services/delivery_estimate_service.py:30`, `:475` |
+| **Taxa de entrega** = base + (km × valor/km), com piso e teto | `src/services/delivery_estimate_service.py:607` |
+| Filial sem `delivery_base_fee`/`delivery_fee_per_km` → não atende | `src/services/delivery_estimate_service.py:607` |
+| **Raio máximo de entrega** | `src/services/delivery_estimate_service.py:629` |
+| **Tempo de preparo** (por filial, dia da semana e faixa de horário) | `src/services/delivery_estimate_service.py:589` |
+| Escolha da faixa de horário (a que contém o agora, ou fechado) | `src/services/branch_hours_service.py:35` |
+| ETA = preparo + tempo de viagem | `src/services/delivery_estimate_service.py:425` |
+| Fuso horário da operação (America/Fortaleza) | `src/core/constants.py` |
 | TTL do cache de estimativa (600s / 120s negativo) | `src/core/config.py:49-50` |
-| **Valor mínimo do pedido** (compara com o **subtotal**) | `src/services/order_service.py:401-407` |
-| **Taxa de serviço** (liga/desliga + valor, por restaurante) | `src/services/order_service.py:396-399` |
-| Subtotal = Σ (preço do produto + opções) × quantidade | `src/services/order_service.py:380-394` |
-| Total = subtotal + serviço + entrega − descontos | `src/services/order_service.py:117` |
+| **Valor mínimo do pedido** (compara com o **subtotal**) | `src/services/order_service.py:662` |
+| **Taxa de serviço** (liga/desliga + valor, por restaurante) | `src/services/order_service.py:657` |
+| Subtotal = Σ (preço do produto + opções) × quantidade | `src/services/order_service.py:598` |
+| Total = subtotal + serviço + entrega − descontos | `src/services/order_service.py:141` |
 | Arredondamento de dinheiro (2 casas, HALF_UP) | `src/utils/money.py:15-16` |
 | **Elegibilidade de cupom** (ordem completa das checagens) | `src/services/coupon_service.py:66-140` |
 | Cálculo do desconto (fixo / percentual / frete grátis) | `src/services/coupon_service.py:47-64` |
@@ -436,11 +567,24 @@ renomeado não aparece no chat até reindexar.
 | Trava do cupom (`SELECT FOR UPDATE`) | `src/repositories/coupon_repository.py:47-58` |
 | Cooldown em dias entre usos | `src/services/coupon_service.py:115-127` |
 | "Só no primeiro pedido" | `src/services/coupon_service.py:128-129`, `coupon_repository.py:124-130` |
-| Estorno do cupom ao cancelar/rejeitar | `src/services/admin_order_service.py:112-113` → `coupon_service.py:282-285` |
-| Opções obrigatórias, mínimo e máximo por grupo | `src/services/order_service.py:353-372` |
-| Endereço obrigatório para entrega | `src/services/order_service.py:262-269` |
-| Telefone gravado e comparado só em dígitos | `src/schemas/order_schema.py:20-31`, `order_service.py:123`, `:232`, `:244-248` |
-| Tipos de pedido, status e papéis de lojista válidos | `src/core/constants.py:1-16` |
+| Estorno do cupom ao cancelar/rejeitar | `src/services/admin_order_service.py:139` → `coupon_service.py:282-285` |
+| Opções obrigatórias, mínimo e máximo por grupo | `src/services/order_service.py:543` |
+| Endereço obrigatório para entrega | `src/services/order_service.py:390` |
+| Telefone gravado e comparado só em dígitos | `src/schemas/order_schema.py:20-31`, `order_service.py:153`, `:266` |
+| Tipos de pedido, status, formas e estados de pagamento | `src/core/constants.py` |
+| **Transições válidas de status** (grafo, terminais) | `src/services/order_state_machine.py:30` |
+| **Pedido online só entra na cozinha depois de pago** | `src/services/order_state_machine.py:110` |
+| Transições válidas de `payment_status` | `src/services/order_state_machine.py:52` |
+| Loja aberta / aceita entrega / aceita retirada | `src/services/order_service.py:315` |
+| Horário de funcionamento da filial (inclui virada de noite) | `src/services/branch_hours_service.py:35` |
+| Forma de pagamento válida e habilitada na filial | `src/services/order_service.py:344` |
+| **Comissão da plataforma** (base, percentual, valor) | `src/services/order_service.py:614` |
+| Percentual de comissão por restaurante | `restaurant_settings.platform_commission_percent` |
+| Recorte e exclusões do relatório de comissão | `src/services/admin_report_service.py:33` |
+| Reaproveitamento da estimativa de entrega | `src/services/order_service.py:463` |
+| Identidade do endereço estimado (fingerprint) | `src/services/delivery_estimate_service.py:38` |
+| Assinatura e tradução do webhook do gateway | `src/integrations/payment_gateway.py` |
+| Revogação de JWT na troca de senha | `src/services/auth_service.py` |
 | Limites do pedido (100 itens, 30 opções, qtd 99) | `src/schemas/order_schema.py:11-13` |
 | TTL da idempotência (24h) | `src/core/config.py:60` |
 | Idempotência obrigatória ou não | `src/core/config.py:64`, `src/services/idempotency_service.py:193-200` |
@@ -489,6 +633,10 @@ restaurant_settings  branches  │       categories    restaurant_       admin_u
        ├── coupon_redemptions
        └── orders (customer_id, opcional)
 
+
+   delivery_estimates  ◄──── estimativa já calculada, reaproveitada na criação do
+                             pedido por token (TTL curto). Aponta para restaurante,
+                             filial e, quando há login, cliente.
 
    coupon_templates  ◄──── GLOBAL (catálogo de arte/tipo). restaurant_coupons aponta pra ele.
    ai_product_embeddings / ai_feedback  ◄──── por restaurante
@@ -590,9 +738,13 @@ Não há refresh token: expirou, loga de novo.
 | Verificado em | `src/api/dependencies/customer_auth.py:14-35` |
 
 **Obrigatório** (`get_current_customer`, `customer_auth.py:14-21`): todas as rotas
-`/customers/me/*` (perfil, endereços, histórico, cashback) e
-`POST /restaurants/{slug}/coupons/preview`. Sem token → 401; conta inativa → 403
-(`auth_service.py:288-299`).
+`/customers/me/*` (perfil, endereços, histórico, detalhe de pedido, cashback) e
+`POST /restaurants/{slug}/coupons/preview`. Sem token → 401; conta inativa → 403.
+
+Desde a Fase 2 o token também é conferido contra `customers.password_changed_at`:
+JWT emitido antes da última troca de senha é recusado, mesmo dentro da validade.
+É o que permite ao cliente expulsar quem entrou na conta dele — antes, um token
+roubado sobrevivia à troca de senha por até 7 dias.
 
 **Opcional** (`get_optional_current_customer`, `customer_auth.py:23-35`): criação de pedido,
 estimativa de entrega e listagem de cupons disponíveis. Token ruim aqui **não** dá erro —
@@ -620,6 +772,7 @@ decodificação (`src/utils/security.py:118-119`) e o `/admin` exige `purpose="a
 - `GET /admin/restaurants/{slug}/orders` — lista de pedidos
 - `GET /admin/orders/{id}` — detalhe do pedido
 - `PATCH /admin/orders/{id}/status` — mudar status
+- `GET /admin/reports/commission` — comissão do período com extrato
 - `GET|POST|PATCH /admin/restaurants/{id}/coupons` — campanhas de cupom
 
 A verificação, em ordem (`admin_auth_service.py:103-138`): assinatura e expiração (`:105-115`),
@@ -737,7 +890,7 @@ Local, com o venv ativo: `py scripts/create_admin_user.py --restaurant-slug ... 
 ### 8.5 Rodar os testes
 
 ```powershell
-py -m pytest tests -q          # 117 testes, ~7s
+py -m pytest tests -q          # 245 testes, ~6s
 py -m pytest tests -v          # com nome de cada teste
 py -m pytest tests/test_idempotency.py -v
 ```
@@ -788,7 +941,8 @@ docker exec pedeaqui-api python scripts/cleanup_idempotency_keys.py
 docker exec pedeaqui-api python scripts/reindex_ai.py
 ```
 
-O primeiro apaga chaves vencidas — seguro, passado o TTL a chave já não protege nada
+O primeiro apaga chaves de idempotência **e estimativas de entrega** vencidas —
+seguro, passado o TTL nenhuma das duas protege ou vale mais nada
 (`scripts/cleanup_idempotency_keys.py:1-6`). Bota no cron. O segundo regenera os embeddings
 dos produtos; rode depois de mexer no cardápio, senão o chat continua recomendando o cardápio
 velho.
@@ -858,7 +1012,7 @@ A regra hoje é uma só — **tudo que escreve ou compara telefone passa por `no
 | Entrada do pedido (contrato HTTP) | `src/schemas/order_schema.py:20-31` |
 | Escrita do snapshot | `src/services/order_service.py:119-125` |
 | Escopo da idempotência | `src/services/order_service.py:232` |
-| Consulta pública do pedido | `src/services/order_service.py:241-248` |
+| ~~Consulta pública do pedido~~ | removida na Fase 2 — ver 4.7 |
 
 A normalização na escrita (`order_service.py:123`) é **redundante com o schema de propósito**:
 o snapshot também pode vir de `current_customer.phone`, que o schema do pedido não toca. Não
@@ -879,37 +1033,72 @@ lado dela — nunca em um dos quatro pontos isolados.
 
 Testes que travam isso: `tests/test_phone_normalization.py`.
 
-### 9.2 `is_open` e `accepts_pickup` não bloqueiam nada
+### 9.2 `is_open` e `accepts_pickup` (corrigido na Fase 2)
 
-`restaurant_settings.is_open` e `accepts_pickup` existem (`restaurant_setting_model.py:24-30`)
-e são devolvidos no cardápio (`menu_service.py:64-66`), mas **`create_order` nunca os
-consulta**. Um `grep` confirma: fora do `menu_service`, ninguém lê esses campos.
+**Era um bug, foi corrigido.** `restaurant_settings.is_open`, `accepts_delivery`
+e `accepts_pickup` existiam, apareciam no cardápio e **não bloqueavam nada**:
+quem impedia pedido com a loja fechada era o frontend, então bastava chamar a
+API direto para furar.
 
-Efeito: restaurante "fechado" continua aceitando pedido pela API. Quem bloqueia hoje é o
-frontend. Só `accepts_delivery` é aplicado, e apenas dentro da estimativa de entrega
-(`delivery_estimate_service.py:149-158`) — então "não aceita entrega" funciona, "está fechado"
-e "não aceita retirada" não.
+Agora os três são lidos em `OrderService._validate_store_accepts_order`
+(`src/services/order_service.py:315`), chamado antes da reserva de
+idempotência. `accepts_delivery` e `accepts_pickup` são conferidos **por tipo
+de pedido** — desligar retirada não pode derrubar a entrega junto.
 
-### 9.3 `payment_method` não é validado
+Restaurante **sem linha** em `restaurant_settings` continua aceitando pedido: é
+o comportamento que sempre valeu, e mudá-lo agora derrubaria quem nunca
+configurou nada.
 
-`PAYMENT_METHODS` está definido em `src/core/constants.py:16` e **não é usado em lugar nenhum**.
-`CreateOrderRequest.payment_method` é uma string livre de até 50 caracteres
-(`order_schema.py:69`) e vai direto para `orders.payment_method`. Qualquer texto entra.
+### 9.3 `payment_method` (corrigido na Fase 2)
 
-### 9.4 Sem `branch_business_hours` para hoje, nenhuma entrega passa
+**Era um bug, foi corrigido.** O campo era string livre de 50 caracteres que ia
+direto para `orders.payment_method`; `PAYMENT_METHODS` estava definido e não era
+usado em lugar nenhum. Dava para fechar pedido com `payment_method="banana"`, e
+a filial recebia pedido numa forma que não aceita.
 
-`_resolve_prep_time` (`delivery_estimate_service.py:474-490`) devolve `None, None` quando não
-há faixa cadastrada para o dia da semana atual, e isso vira `prep_time_unavailable` /
-não atende (`:190-196`), que no fluxo de pedido é **400**.
+Agora `OrderService._resolve_payment_flow` (`src/services/order_service.py:344`)
+confere **duas listas**: `PAYMENT_METHODS` (o que a plataforma conhece,
+`src/core/constants.py`) e `branch_payment_methods` habilitados **daquela
+filial**. Sem forma de pagamento, ou com uma que a filial não oferece, é 400.
 
-Sintoma clássico: "de repente parou de aceitar entrega e ninguém mexeu em nada" — mexeram sim,
-apagaram ou nunca cadastraram o horário daquele dia da semana. Confira
-`branch_business_hours` para `weekday` de hoje (0 = segunda, `datetime.weekday()`), com
-`prep_time_min` e `prep_time_max` preenchidos.
+A constante foi ampliada para espelhar o CHECK de
+`branch_payment_methods.method_type` (`cash`, `voucher`, `meal_voucher`,
+`other` entraram). **Os dois lados têm que mudar juntos**: método que exista só
+no banco faz a filial oferecer algo que o pedido recusa.
 
-Detalhe relacionado: se a hora atual não cair em nenhuma faixa do dia, o código **não** falha —
-usa a primeira faixa cadastrada (`:537-539`). Fora do horário, o prazo mostrado é o da primeira
-faixa, não um erro.
+Efeito colateral desta função: ela também devolve o `payment_flow`
+(`online` ou `delivery`), que é o que decide se o pedido nasce devendo. Quando a
+filial oferece o mesmo método nos dois fluxos (pix pelo gateway **e** pix na
+entrega), vale `online` — o caminho restritivo, que exige pagamento antes da
+cozinha.
+
+### 9.4 Horário da filial (corrigido na Fase 2)
+
+**Eram dois bugs, foram corrigidos.**
+
+O primeiro: quando a hora atual não caía em nenhuma faixa do dia,
+`_select_business_hour_for_prep_time` usava a **primeira faixa cadastrada**. Às
+3h da manhã o pedido passava com o tempo de preparo do almoço — e passava com a
+loja fechada.
+
+O segundo: `is_closed` era ignorado. Uma linha marcada como fechada mas com
+horários preenchidos (o jeito comum de registrar "domingo fechado") abria a
+filial.
+
+A regra agora está em `src/services/branch_hours_service.py`: ou existe faixa
+que contém o agora, ou está fechado. Não existe faixa "mais parecida". Faixa que
+vira a noite (18:00–02:00) pertence ao dia em que **começa**, então
+`find_current_period` (`:35`) consulta hoje **e ontem** — sem isso, a lanchonete
+noturna recusaria pedido à 1h da manhã.
+
+`ensure_branch_is_open` (`:55`) é chamado na criação do pedido para **os dois
+tipos**. Pedido de retirada não passa pela estimativa de entrega, então antes
+disso nunca chegava perto de uma checagem de horário.
+
+Sintoma que continua valendo: sem faixa cadastrada para o dia da semana atual, a
+filial está fechada e nenhum pedido entra. Confira `branch_business_hours` para
+o `weekday` de hoje (0 = segunda), com `prep_time_min` e `prep_time_max`
+preenchidos.
 
 ### 9.5 Google Maps fora do ar = zero pedidos de entrega
 
@@ -937,13 +1126,13 @@ taxa existir. O que reduz o desperdício é o cache de estimativa
 
 ### 9.7 A reserva de idempotência é liberada por rollback implícito
 
-Entre `begin()` (`order_service.py:71`) e o `try` (`:105`) há seis validações que podem
+Entre `begin()` (`order_service.py:95`) e o `try` (`:129`) há validações que podem
 levantar `HTTPException`, e **não** há `rollback()` nesse trecho. Está correto — a sessão é
 fechada sem commit em `src/db/session.py:24-26` e o Postgres descarta a transação — mas é
 implícito.
 
 O que isso significa para você: **se algum dia alguém colocar um `db.commit()` entre as linhas
-71 e 105**, a reserva passa a ser persistida sem o pedido, e a chave fica queimada por 24h
+95 e 129**, a reserva passa a ser persistida sem o pedido, e a chave fica queimada por 24h
 retornando 409 para um pedido que nunca existiu. Não commite nesse trecho.
 
 ### 9.8 Sem `Idempotency-Key`, o pedido passa sem proteção
@@ -981,16 +1170,32 @@ lojista enxerga os pedidos de todas as filiais do restaurante. Está registrado 
 modelo (`admin_user_model.py:16-19`). Se você criar um usuário achando que ele fica preso a
 uma filial, não fica.
 
-### 9.11 Não há máquina de estados de pedido
+### 9.11 Máquina de estados de pedido (corrigido na Fase 2)
 
-`update_order_status` (`admin_order_service.py:75-137`) valida que o status **existe** em
-`ORDER_STATUSES` (`:83-84`) e nada mais. `completed → pending` é aceito, `cancelled →
-out_for_delivery` também. O único efeito colateral condicionado ao destino é o estorno do
-cupom, em `cancelled` e `rejected` (`:112-113`).
+**Era um bug, foi corrigido.** `update_order_status` validava apenas que o
+status **existia** em `ORDER_STATUSES`. `completed → pending` era aceito, e
+`cancelled → completed` também — o pedido cancelado (cujo cupom já tinha sido
+estornado) era faturado, e o cliente levava o desconto duas vezes.
 
-Como o estorno só olha o destino e `reverse_redemption` é idempotente
-(`coupon_repository.py:157-164`), cancelar e "descancelar" **não** devolve o cupom ao cliente —
-o resgate fica `reversed` para sempre.
+O grafo agora é explícito em `src/services/order_state_machine.py:30`, e
+`completed`, `cancelled` e `rejected` são **terminais**. `rejected` entrou na
+lista junto com os dois obrigatórios pelo mesmo motivo: "desrecusar" traz de
+volta o problema do cupom estornado.
+
+Duas armadilhas de ordem que valem conhecer:
+
+- A validação da transição roda **depois** do replay de idempotência
+  (`admin_order_service.py:123`). Validando antes, um retry legítimo da mesma
+  chave morreria com "o pedido já está em accepted" em vez de devolver a
+  resposta gravada.
+- `ensure_payment_allows_order_status` bloqueia a entrada na cozinha enquanto o
+  pagamento online não confirma, mas **nunca** bloqueia `cancelled`/`rejected`:
+  são justamente a saída para o pagamento que não chegou.
+
+Continua valendo o aviso sobre o estorno de cupom: ele acontece em `cancelled` e
+`rejected` e `reverse_redemption` é idempotente, então o resgate fica `reversed`
+para sempre. Como agora não se sai de estado terminal, o cenário
+"cancelar e descancelar" deixou de existir.
 
 ### 9.12 Resgate de cashback está pela metade
 
@@ -1021,3 +1226,59 @@ no ORM. Está avisado em `alembic/env.py:6-11` e no `README.md:102-105`.
 
 E, em banco que já tem o schema, a baseline é `alembic stamp 20260726_0001`, nunca
 `upgrade` — aplicar a baseline como migração falha.
+
+### 9.15 Pagamento: o que a Fase 2 deixou de fora, de propósito
+
+Três buracos conhecidos, todos com o lugar de resolver já escolhido:
+
+1. **O Mercado Pago não está implementado.** As três funções de
+   `src/integrations/payment_gateway.py` levantam
+   `PaymentProviderNotConfiguredError` e a API responde **503**. Falhar alto é
+   proposital — um retorno plausível deixaria pedidos pendentes para sempre.
+   Com `PAYMENT_PROVIDER=sandbox` (padrão) o fluxo roda inteiro sem gateway.
+2. **Cancelar um pedido pago NÃO estorna.** O estorno só acontece quando o
+   gateway avisa (webhook com `refunded`) ou quando alguém o faz no painel do
+   próprio gateway. Cancelamento de pedido `paid` sai no log como
+   `[Pagamento] pedido pago foi cancelled sem estorno automatico`
+   (`admin_order_service.py:169`) — é o único rastro de dinheiro de cliente
+   parado. Bota esse grep no radar.
+3. **Pagamento recusado não cancela o pedido.** Ele fica `status=pending` com
+   `payment_status=failed`, e a máquina de estados impede que seja aceito. Fica
+   visível para o lojista cancelar, e o cliente pode gerar uma nova cobrança
+   para o mesmo pedido (`failed → pending`).
+
+Ainda: um pedido **estornado** não consegue avançar de status, porque `refunded`
+não está em `PAYMENT_STATUSES_THAT_RELEASE_ORDER`. É intencional — pedido cujo
+dinheiro voltou não deve continuar na cozinha.
+
+### 9.16 O `tracking_token` só sai da API uma vez
+
+`CreateOrderResponse.tracking_token` é a única resposta que carrega o token. Não
+existe rota para reemitir: o segredo **é** a chave de acesso, e uma rota de
+"me manda meu token de novo" precisaria autenticar por... telefone e número de
+pedido, que é exatamente o buraco que a Fase 2 fechou.
+
+Consequências práticas:
+
+- O front **tem** que guardar o token (localStorage) ao criar o pedido de
+  convidado. Perdeu, o convidado não acompanha mais aquele pedido.
+- Cliente logado não depende disso: `GET /customers/me/orders/{order_id}`
+  deriva o acesso de `customer_id`.
+- O token fica gravado também em `idempotency_keys.response_body`, porque a
+  resposta inteira é armazenada lá. Não é vazamento novo (a tabela já guardava
+  a resposta do pedido), mas conta na hora de decidir quem lê aquela tabela.
+
+### 9.17 Estimativa reaproveitada: quando ela NÃO é usada
+
+`delivery_estimate_token` é uma otimização de custo, nunca uma fonte de valor.
+`OrderService._reuse_stored_estimate` (`order_service.py:463`) descarta a
+estimativa guardada — e chama o Google de novo — quando a linha venceu, é de
+outro restaurante, de outra filial, de outro cliente ou de outro endereço.
+
+O `grep` para quando a conta do Maps subir:
+`[Delivery estimate] estimativa nao reaproveitada motivo=`.
+
+Um motivo legítimo e frequente: o cliente pediu a estimativa e demorou mais de
+`DELIVERY_ESTIMATE_REUSE_TTL_SECONDS` (15 min) para fechar o pedido. Aumentar
+esse TTL reduz custo e aumenta a chance de cobrar uma taxa calculada com o
+trânsito de meia hora atrás.

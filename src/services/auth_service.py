@@ -1,7 +1,7 @@
 import logging
 import time
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from time import perf_counter
 
 from fastapi import HTTPException, status
@@ -62,6 +62,37 @@ def _pad_latency(started_at: float, minimum_seconds: float) -> None:
     remaining = minimum_seconds - (perf_counter() - started_at)
     if remaining > 0:
         time.sleep(remaining)
+
+
+def _token_was_issued_before_password_change(payload: dict, customer: Customer) -> bool:
+    """Revogacao de JWT na troca de senha.
+
+    Nao ha lista de tokens revogados nem refresh token: comparamos o `iat`
+    do token com `customers.password_changed_at`. Trocou a senha, todo token
+    emitido antes daquele instante morre — inclusive o do ladrao, que era o
+    ponto. Antes disso o token roubado sobrevivia ate 7 dias a troca de
+    senha da vitima (CUSTOMER_ACCESS_TOKEN_MINUTES).
+
+    Sem `password_changed_at` (contas que nunca trocaram a senha depois
+    desta versao) nada e revogado, que e o comportamento de sempre.
+
+    O `iat` do JWT tem resolucao de segundos. Um token emitido no MESMO
+    segundo da troca e tratado como anterior e cai — errar para o lado de
+    derrubar uma sessao legitima e barato (basta logar de novo); o outro
+    lado deixa a conta invadida aberta.
+    """
+    if customer.password_changed_at is None:
+        return False
+    issued_at_epoch = payload.get("iat")
+    if issued_at_epoch is None:
+        # Token sem `iat` nao da para datar. Tratamos como antigo: quem
+        # emite hoje sempre inclui o campo (utils/security.create_signed_token).
+        return True
+    issued_at = datetime.fromtimestamp(issued_at_epoch, timezone.utc)
+    password_changed_at = customer.password_changed_at
+    if password_changed_at.tzinfo is None:
+        password_changed_at = password_changed_at.replace(tzinfo=timezone.utc)
+    return issued_at < password_changed_at
 
 
 class AuthService:
@@ -269,6 +300,10 @@ class AuthService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token invalido ou expirado")
 
         customer.password_hash = password_hash
+        # Derruba as sessoes antigas: quem esta com um token emitido antes
+        # daqui perde o acesso. Em "esqueci minha senha" isso e o esperado —
+        # a troca costuma ser justamente reacao a suspeita de invasao.
+        customer.password_changed_at = utcnow()
         code_row.used_at = utcnow()
         self.customer_repository.invalidate_unused_password_reset_codes(customer.id)
         self.db.add(customer)
@@ -281,9 +316,14 @@ class AuthService:
         if payload.get("type") != "customer":
             return None
         try:
-            return self.customer_repository.get_by_id(uuid.UUID(payload["sub"]))
+            customer = self.customer_repository.get_by_id(uuid.UUID(payload["sub"]))
         except (ValueError, KeyError):
             return None
+        if customer is None:
+            return None
+        if _token_was_issued_before_password_change(payload, customer):
+            return None
+        return customer
 
     def get_customer_from_token_or_error(self, token: str) -> Customer:
         try:

@@ -76,6 +76,16 @@ def generate_reset_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def generate_tracking_token() -> str:
+    """Segredo de acompanhamento do pedido.
+
+    `secrets` e nao `random`: e um valor que autoriza leitura de dados
+    pessoais, entao precisa ser imprevisivel de verdade. 32 bytes viram 43
+    caracteres URL-safe — cabe em link de WhatsApp e nao da para adivinhar.
+    """
+    return secrets.token_urlsafe(32)
+
+
 def hash_reset_token(token: str) -> str:
     return _hmac_hex(token, settings.PASSWORD_RESET_SECRET)
 

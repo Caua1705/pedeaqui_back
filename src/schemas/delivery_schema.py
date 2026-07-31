@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -75,6 +76,14 @@ class DeliveryEstimateRequest(BaseModel):
 
 
 class DeliveryEstimateResponse(BaseModel):
+    # Devolva este token em `delivery_estimate_token` ao criar o pedido: ele
+    # reaproveita ESTA estimativa em vez de refazer geocode e rota no
+    # Google. Vem nulo quando a entrega nao e atendida (nao ha o que
+    # reaproveitar) e vence em DELIVERY_ESTIMATE_REUSE_TTL_SECONDS.
+    #
+    # O token nao carrega valor nenhum: a taxa continua saindo do banco.
+    estimate_token: str | None = None
+    estimate_expires_at: datetime | None = None
     serviceable: bool
     reason: str | None = None
     message: str | None = None

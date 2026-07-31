@@ -113,6 +113,10 @@ class PaymentService:
 
         try:
             order = self.order_repository.get_order_by_tracking_token(restaurant_id, tracking_token)
+            if order is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Pedido não encontrado"
+                )
             # Reconferido depois do I/O: um webhook pode ter chegado
             # enquanto esperavamos o gateway responder.
             if order.payment_status not in PAYABLE_STATUSES:

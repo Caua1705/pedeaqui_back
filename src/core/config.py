@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     DELIVERY_ESTIMATE_CACHE_TTL_SECONDS: int = 600
     DELIVERY_ESTIMATE_NEGATIVE_CACHE_TTL_SECONDS: int = 120
     DELIVERY_ESTIMATE_PROVIDER: str = "google_routes"
+    # Por quanto tempo a estimativa guardada pode ser reaproveitada na
+    # criacao do pedido, evitando refazer geocode + rota (as duas chamadas
+    # pagas do Google). 15 minutos cobre o tempo de checkout com folga e
+    # nao chega a valer para a proxima faixa de horario da filial, cujo
+    # tempo de preparo e outro.
+    DELIVERY_ESTIMATE_REUSE_TTL_SECONDS: int = 900
     REDIS_URL: str | None = None
 
     # Teto do corpo da requisicao. O maior payload legitimo e a criacao de

@@ -1,8 +1,9 @@
+import hashlib
 import json
 import logging
 import threading
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from time import monotonic, time
 from zoneinfo import ZoneInfo
@@ -18,17 +19,66 @@ from src.integrations.google_maps_routes_client import (
     GoogleMapsUnavailableError,
 )
 from src.models.customer_model import Customer
+from src.models.delivery_estimate_model import DeliveryEstimate
 from src.repositories.branch_repository import BranchRepository
 from src.repositories.customer_repository import CustomerRepository
+from src.repositories.delivery_estimate_repository import DeliveryEstimateRepository
 from src.repositories.menu_repository import MenuRepository
 from src.schemas.delivery_schema import DeliveryEstimateRequest, DeliveryEstimateResponse
 from src.services.branch_hours_service import BranchHoursService
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import money_to_float, quantize_money, to_decimal
+from src.utils.security import generate_tracking_token, utcnow
 
 
 logger = logging.getLogger("uvicorn.error")
 DELIVERY_TIMEZONE = ZoneInfo("America/Fortaleza")
+
+
+def build_address_fingerprint(payload: DeliveryEstimateRequest) -> str:
+    """Identidade do endereco estimado.
+
+    Serve para amarrar uma estimativa guardada ao endereco que ela mediu:
+    sem isso, o cliente pediria a estimativa para o endereco a 500m e
+    fecharia o pedido para o de 15km pagando a taxa do primeiro.
+
+    Endereco de conta e identificado pelo id (o conteudo dele pode ser
+    editado, e ai a estimativa antiga deixa de valer — o id continua o
+    mesmo, mas a checagem de expiracao limita a janela a 15 minutos).
+    Endereco avulso e identificado pelo conteudo que afeta a rota;
+    complemento e ponto de referencia ficam de fora porque nao mudam
+    distancia nenhuma.
+    """
+    if payload.address_id is not None:
+        return f"address_id:{payload.address_id}"
+
+    address = payload.address
+    parts = (
+        _normalized(address.street),
+        _normalized(address.number),
+        _normalized(address.neighborhood),
+        _normalized(address.city),
+        _normalized(address.state),
+        _digits(address.zipcode),
+        _coordinate(address.latitude),
+        _coordinate(address.longitude),
+    )
+    canonical = "|".join(parts)
+    return "address:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _normalized(value: str | None) -> str:
+    return (value or "").strip().casefold()
+
+
+def _digits(value: str | None) -> str:
+    return "".join(character for character in (value or "") if character.isdigit())
+
+
+def _coordinate(value) -> str:
+    # Arredondado para 5 casas (~1 metro): ruido do GPS do celular nao pode
+    # invalidar a estimativa que o proprio cliente acabou de pedir.
+    return "" if value is None else f"{float(value):.5f}"
 
 
 @dataclass
@@ -119,11 +169,13 @@ class DeliveryEstimateService:
         maps_client: GoogleMapsRoutesClient | None = None,
         cache: DeliveryEstimateCache | None = None,
     ) -> None:
+        self.db = db
         self.restaurant_service = RestaurantService(db)
         self.branch_repository = BranchRepository(db)
         self.branch_hours_service = BranchHoursService(db)
         self.customer_repository = CustomerRepository(db)
         self.menu_repository = MenuRepository(db)
+        self.delivery_estimate_repository = DeliveryEstimateRepository(db)
         self.maps_client = maps_client or GoogleMapsRoutesClient(
             api_key=settings.GOOGLE_MAPS_ROUTES_API_KEY,
             base_url=settings.GOOGLE_MAPS_ROUTES_BASE_URL,
@@ -131,6 +183,56 @@ class DeliveryEstimateService:
             routing_preference=settings.GOOGLE_MAPS_ROUTING_PREFERENCE,
         )
         self.cache = cache or DeliveryEstimateCache()
+
+    def estimate_and_store(
+        self,
+        restaurant_slug: str,
+        payload: DeliveryEstimateRequest,
+        current_customer: Customer | None,
+    ) -> tuple[DeliveryEstimateResult, DeliveryEstimate | None]:
+        """Calcula a estimativa e guarda o resultado para reaproveitamento.
+
+        Separado de `estimate` porque ESTE metodo escreve e commita. O
+        `estimate` cru continua sem efeito colateral, que e o que permite
+        chama-lo de dentro da transacao do pedido.
+
+        O que e guardado alimenta a criacao do pedido minutos depois, sem
+        refazer geocode e rota (as duas chamadas pagas do Google).
+        """
+        result = self.estimate(restaurant_slug, payload, current_customer)
+        if not result.serviceable:
+            # Nao ha o que reaproveitar: "fora da area" e "loja fechada"
+            # precisam ser reavaliados no momento do pedido.
+            return result, None
+
+        restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
+        branch = self._resolve_branch(restaurant.id, payload.branch_id)
+        now = utcnow()
+        stored = DeliveryEstimate(
+            token=generate_tracking_token(),
+            restaurant_id=restaurant.id,
+            branch_id=branch.id,
+            customer_id=current_customer.id if current_customer else None,
+            address_fingerprint=build_address_fingerprint(payload),
+            distance_km=to_decimal(result.distance_km) if result.distance_km is not None else None,
+            travel_time_min=result.travel_time_min,
+            prep_time_min=result.prep_time_min,
+            prep_time_max=result.prep_time_max,
+            eta_min=result.eta_min,
+            eta_max=result.eta_max,
+            delivery_fee=quantize_money(to_decimal(result.delivery_fee)),
+            latitude=to_decimal(result.latitude) if result.latitude is not None else None,
+            longitude=to_decimal(result.longitude) if result.longitude is not None else None,
+            provider=result.provider,
+            expires_at=now + timedelta(seconds=settings.DELIVERY_ESTIMATE_REUSE_TTL_SECONDS),
+        )
+        try:
+            self.delivery_estimate_repository.create(stored)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        return result, stored
 
     def estimate(
         self,

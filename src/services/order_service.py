@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID
@@ -16,6 +17,7 @@ from src.models.order_item_option_model import OrderItemOption
 from src.models.order_model import Order
 from src.models.order_status_history_model import OrderStatusHistory
 from src.repositories.branch_repository import BranchRepository
+from src.repositories.delivery_estimate_repository import DeliveryEstimateRepository
 from src.repositories.customer_repository import CustomerRepository
 from src.repositories.menu_repository import MenuRepository
 from src.repositories.order_repository import OrderRepository
@@ -29,14 +31,20 @@ from src.schemas.order_schema import (
 )
 from src.schemas.common_schema import StatusHistoryResponse
 from src.services.branch_hours_service import BranchHoursService
-from src.services.delivery_estimate_service import DeliveryEstimateService
+from src.services.delivery_estimate_service import (
+    DeliveryEstimateResult,
+    DeliveryEstimateService,
+    build_address_fingerprint,
+)
 from src.services.coupon_service import CouponService
 from src.services.idempotency_service import IdempotencyService
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import ZERO, money_to_float, quantize_money, to_decimal
 from src.utils.normalization import normalize_digits
-from src.utils.security import generate_tracking_token
+from src.utils.security import generate_tracking_token, utcnow
 
+
+logger = logging.getLogger("uvicorn.error")
 
 CREATE_ORDER_ROUTE = "POST /restaurants/{restaurant_slug}/orders"
 
@@ -47,6 +55,7 @@ class OrderService:
         self.restaurant_service = RestaurantService(db)
         self.branch_repository = BranchRepository(db)
         self.branch_hours_service = BranchHoursService(db)
+        self.delivery_estimate_repository = DeliveryEstimateRepository(db)
         self.menu_repository = MenuRepository(db)
         self.product_repository = ProductRepository(db)
         self.customer_repository = CustomerRepository(db)
@@ -97,6 +106,7 @@ class OrderService:
             payload,
             address,
             current_customer,
+            restaurant_id=restaurant.id,
         )
         products_by_id = self._get_valid_products(restaurant.id, [item.product_id for item in payload.items])
 
@@ -136,10 +146,11 @@ class OrderService:
                 settings=settings,
             )
             customer_name = current_customer.name if current_customer else payload.customer.name
-            # Normaliza de novo na escrita, e nao so no schema: o snapshot e o
-            # que get_customer_order compara, entao ele precisa estar em
-            # digitos venha de onde vier. `current_customer.phone` ja e
-            # normalizado no cadastro, mas contas antigas podem nao ser.
+            # Normaliza de novo na escrita, e nao so no schema: o telefone do
+            # snapshot tambem alimenta o escopo da idempotencia, entao ele
+            # precisa estar em digitos venha de onde vier.
+            # `current_customer.phone` ja e normalizado no cadastro, mas
+            # contas antigas podem nao ser.
             customer_phone = normalize_digits(
                 current_customer.phone if current_customer else payload.customer.phone
             )
@@ -401,9 +412,36 @@ class OrderService:
         payload: CreateOrderRequest,
         address,
         current_customer: Customer | None,
+        restaurant_id: UUID,
     ):
         if payload.order_type != "delivery":
             return None
+
+        estimate_request = self._build_estimate_request(payload, address)
+        reused = self._reuse_stored_estimate(
+            token=payload.delivery_estimate_token,
+            restaurant_id=restaurant_id,
+            branch_id=payload.branch_id,
+            estimate_request=estimate_request,
+            current_customer=current_customer,
+        )
+        if reused is not None:
+            return reused
+
+        estimate = DeliveryEstimateService(self.db).estimate(
+            restaurant_slug,
+            estimate_request,
+            current_customer,
+        )
+        if not estimate.serviceable:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=estimate.message or estimate.reason or "Endereco fora da area de entrega",
+            )
+        return estimate
+
+    @staticmethod
+    def _build_estimate_request(payload: CreateOrderRequest, address) -> DeliveryEstimateRequest:
         inline_address = None
         if payload.customer_address_id is None:
             inline_address = DeliveryAddressInput(
@@ -416,21 +454,84 @@ class OrderService:
                 latitude=getattr(address, "latitude", None),
                 longitude=getattr(address, "longitude", None),
             )
-        estimate = DeliveryEstimateService(self.db).estimate(
-            restaurant_slug,
-            DeliveryEstimateRequest(
-                branch_id=payload.branch_id,
-                address_id=payload.customer_address_id,
-                address=inline_address,
-            ),
-            current_customer,
+        return DeliveryEstimateRequest(
+            branch_id=payload.branch_id,
+            address_id=payload.customer_address_id,
+            address=inline_address,
         )
-        if not estimate.serviceable:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=estimate.message or estimate.reason or "Endereco fora da area de entrega",
-            )
-        return estimate
+
+    def _reuse_stored_estimate(
+        self,
+        *,
+        token: str | None,
+        restaurant_id: UUID,
+        branch_id: UUID,
+        estimate_request: DeliveryEstimateRequest,
+        current_customer: Customer | None,
+    ):
+        """Aproveita a estimativa que o cliente ja pediu no checkout.
+
+        Sem isto, criar o pedido refazia geocode + rota no Google poucos
+        minutos depois de /delivery/estimate ter feito exatamente as mesmas
+        duas chamadas: custo dobrado por pedido, e a conexao de banco presa
+        durante um I/O externo que pode levar segundos.
+
+        NADA de valor vem do cliente — ele devolve so o token. Taxa,
+        distancia e prazo sao lidos da linha em `delivery_estimates`.
+
+        Qualquer divergencia (outra filial, outro endereco, outro cliente,
+        vencida) simplesmente cai fora e o Google e chamado de novo. E o
+        caminho seguro: no pior caso pagamos a chamada que pagariamos antes.
+        """
+        if not token:
+            return None
+
+        stored = self.delivery_estimate_repository.get_valid_by_token(token, utcnow())
+        if stored is None:
+            self._log_estimate_not_reused("token_invalido_ou_vencido")
+            return None
+        if stored.restaurant_id != restaurant_id or stored.branch_id != branch_id:
+            self._log_estimate_not_reused("restaurante_ou_filial_diferente")
+            return None
+        expected_customer_id = current_customer.id if current_customer else None
+        if stored.customer_id != expected_customer_id:
+            # Estimativa de um cliente logado nao vale para outro nem para
+            # visitante: ela pode ter usado um endereco salvo da conta.
+            self._log_estimate_not_reused("cliente_diferente")
+            return None
+        if stored.address_fingerprint != build_address_fingerprint(estimate_request):
+            # A defesa que importa: estimar o endereco perto e fechar o
+            # pedido para o distante pagando a taxa do primeiro.
+            self._log_estimate_not_reused("endereco_diferente")
+            return None
+
+        logger.info(
+            "[Delivery estimate] reaproveitada estimate_id=%s provider=%s",
+            stored.id,
+            stored.provider,
+        )
+        return DeliveryEstimateResult(
+            serviceable=True,
+            reason=None,
+            message=None,
+            distance_km=float(stored.distance_km) if stored.distance_km is not None else None,
+            travel_time_min=stored.travel_time_min,
+            prep_time_min=stored.prep_time_min,
+            prep_time_max=stored.prep_time_max,
+            eta_min=stored.eta_min,
+            eta_max=stored.eta_max,
+            delivery_fee=money_to_float(stored.delivery_fee),
+            provider=stored.provider,
+            fallback=False,
+            latitude=float(stored.latitude) if stored.latitude is not None else None,
+            longitude=float(stored.longitude) if stored.longitude is not None else None,
+        )
+
+    @staticmethod
+    def _log_estimate_not_reused(reason: str) -> None:
+        # Em info e nao warning: nao e erro, e o custo de uma chamada ao
+        # Google. Vira o primeiro grep quando a conta do Maps subir.
+        logger.info("[Delivery estimate] estimativa nao reaproveitada motivo=%s", reason)
     def _get_valid_products(self, restaurant_id: UUID, product_ids: list[UUID]) -> dict[UUID, object]:
         unique_ids = list(set(product_ids))
         products = self.product_repository.list_active_by_ids(restaurant_id, unique_ids)

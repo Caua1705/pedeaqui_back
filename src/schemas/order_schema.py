@@ -68,6 +68,12 @@ class CreateOrderRequest(BaseModel):
     order_type: str = Field(max_length=30)
     payment_method: str | None = Field(default=None, max_length=50)
     address: AddressInput | None = None
+    # Token devolvido por POST /delivery/estimate. Com ele, o pedido
+    # reaproveita a estimativa ja calculada em vez de refazer geocode e
+    # rota no Google. NAO traz valor nenhum dentro: taxa, distancia e prazo
+    # continuam saindo do banco. Token ausente, vencido ou de outro
+    # endereco so faz o servidor recalcular.
+    delivery_estimate_token: str | None = Field(default=None, max_length=100)
     notes: str | None = Field(default=None, max_length=500)
     items: list[OrderItemInput] = Field(min_length=1, max_length=MAX_ITEMS_PER_ORDER)
     coupon_id: UUID | None = None

@@ -23,6 +23,7 @@ from datetime import timedelta
 from typing import Any
 
 from fastapi import HTTPException, status
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
 from src.core.config import settings
@@ -146,6 +147,35 @@ class IdempotencyService:
             status_code=status.HTTP_409_CONFLICT,
             detail="Requisicao em andamento. Tente novamente em instantes.",
         )
+
+    @staticmethod
+    def parse_stored_response(model: type[BaseModel], response_body: dict[str, Any]):
+        """Converte a resposta gravada de volta no schema de hoje.
+
+        Uma resposta gravada ANTES de um deploy que acrescentou campo
+        obrigatorio nao valida mais. Aconteceu na Fase 2: `tracking_token`,
+        `payment_flow` e `payment_status` entraram em CreateOrderResponse, e
+        chaves criadas antes do deploy ficam ate 24h no banco sem esses
+        campos.
+
+        Nesse caso respondemos 409 pedindo chave nova. As outras duas saidas
+        seriam piores: 500 nao diz o que fazer, e seguir em frente criaria um
+        SEGUNDO pedido — exatamente o que a chave existe para impedir.
+        """
+        try:
+            return model.model_validate(response_body)
+        except ValidationError:
+            logger.warning(
+                "[Idempotency] resposta gravada incompativel com o schema atual model=%s",
+                model.__name__,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "A resposta original desta requisicao foi gravada por uma "
+                    "versao anterior da API. Gere uma nova Idempotency-Key."
+                ),
+            ) from None
 
     @property
     def has_reservation(self) -> bool:

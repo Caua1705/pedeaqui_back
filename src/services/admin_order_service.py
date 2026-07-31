@@ -114,7 +114,7 @@ class AdminOrderService:
             }),
         )
         if replayed is not None:
-            return OrderDetailResponse.model_validate(replayed)
+            return IdempotencyService.parse_stored_response(OrderDetailResponse, replayed)
 
         # A validacao da transicao vem DEPOIS do replay de proposito. Um
         # reenvio da mesma chave chega com o pedido ja no status de destino;
@@ -170,8 +170,8 @@ class AdminOrderService:
         """Avisa quando um pedido JA PAGO e cancelado.
 
         Cancelar nao estorna: o estorno so acontece quando o gateway avisa
-        (PaymentService.apply_webhook_event) ou quando alguem o faz no painel
-        do proprio gateway. Enquanto o Mercado Pago nao estiver plugado, este
+        (PaymentService.handle_webhook) ou quando alguem o faz no painel do
+        proprio gateway. Enquanto o Mercado Pago nao estiver plugado, este
         log e o unico rastro de que existe dinheiro do cliente parado.
         """
         if new_status in {"cancelled", "rejected"} and order.payment_status == "paid":

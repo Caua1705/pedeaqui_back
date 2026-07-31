@@ -98,7 +98,7 @@ class OrderService:
             request_fingerprint=IdempotencyService.fingerprint(payload.model_dump(mode="json")),
         )
         if replayed is not None:
-            return CreateOrderResponse.model_validate(replayed)
+            return IdempotencyService.parse_stored_response(CreateOrderResponse, replayed)
 
         self._validate_delivery_address(payload, address)
         delivery_estimate = self._estimate_delivery(

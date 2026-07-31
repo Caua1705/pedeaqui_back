@@ -25,7 +25,11 @@ from src.models.idempotency_key_model import (
     IDEMPOTENCY_COMPLETED,
     IDEMPOTENCY_IN_PROGRESS,
 )
-from src.schemas.order_schema import CreateOrderRequest, OrderDetailResponse
+from src.schemas.order_schema import (
+    CreateOrderRequest,
+    CreateOrderResponse,
+    OrderDetailResponse,
+)
 from src.services.admin_order_service import AdminOrderService
 from src.services.idempotency_service import (
     IdempotencyService,
@@ -216,6 +220,48 @@ class BeginTests(unittest.TestCase):
         _, body, stored_order_id = service.repository.completed[0]
         self.assertEqual(body, {"order_number": 7})
         self.assertEqual(stored_order_id, order_id)
+
+
+class StoredResponseCompatibilityTests(unittest.TestCase):
+    """Resposta gravada por uma versao anterior da API.
+
+    A Fase 2 acrescentou campos obrigatorios em CreateOrderResponse
+    (tracking_token, payment_flow, payment_status). Uma chave criada antes
+    do deploy fica ate 24h no banco com a resposta antiga; reenvia-la nao
+    pode virar 500 nem, muito pior, criar um segundo pedido.
+    """
+
+    def _valid_body(self):
+        return {
+            "id": str(uuid.uuid4()),
+            "order_number": 10,
+            "tracking_token": "token",
+            "status": "pending",
+            "payment_flow": "delivery",
+            "payment_status": "on_delivery",
+            "subtotal": 50.0,
+            "delivery_fee": 0.0,
+            "service_fee": 0.0,
+            "total": 50.0,
+            "message": "Pedido criado com sucesso",
+        }
+
+    def test_current_body_is_parsed(self):
+        parsed = IdempotencyService.parse_stored_response(
+            CreateOrderResponse, self._valid_body()
+        )
+        self.assertEqual(parsed.order_number, 10)
+
+    def test_body_from_an_older_version_answers_409(self):
+        old_body = self._valid_body()
+        del old_body["tracking_token"]
+        del old_body["payment_flow"]
+        del old_body["payment_status"]
+
+        with self.assertRaises(HTTPException) as raised:
+            IdempotencyService.parse_stored_response(CreateOrderResponse, old_body)
+
+        self.assertEqual(raised.exception.status_code, 409)
 
 
 class HeaderPolicyTests(unittest.TestCase):

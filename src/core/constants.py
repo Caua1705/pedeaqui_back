@@ -30,10 +30,6 @@ PAYMENT_METHODS = (
     "other",
 )
 
-# Como o dinheiro chega: pelo gateway (online) ou na mao do entregador /
-# balcao (delivery). Espelha branch_payment_methods.payment_flow.
-PAYMENT_FLOWS = ("online", "delivery")
-
 # Estados de pagamento de um pedido (orders.payment_status).
 #
 # on_delivery  O pedido nao passa por gateway: o cliente paga na entrega ou

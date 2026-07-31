@@ -65,10 +65,6 @@ PAYMENT_STATUS_TRANSITIONS: dict[str, tuple[str, ...]] = {
     "refunded": (),
 }
 
-TERMINAL_PAYMENT_STATUSES = tuple(
-    status for status, destinations in PAYMENT_STATUS_TRANSITIONS.items() if not destinations
-)
-
 # Prefixo usado ao registrar mudanca de PAGAMENTO em order_status_history.
 # A tabela guarda as duas maquinas, e sem o prefixo "paid" (pagamento) se
 # confundiria com um status operacional.

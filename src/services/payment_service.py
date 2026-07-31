@@ -90,6 +90,10 @@ class PaymentService:
                 detail=f"Pagamento em '{order.payment_status}': nao ha o que cobrar.",
             )
 
+        # Valores copiados ANTES do commit: depois dele o objeto do
+        # SQLAlchemy esta expirado e cada atributo lido dispara um SELECT
+        # novo — exatamente o que estamos tentando evitar aqui.
+        restaurant_id = restaurant.id
         order_id = order.id
         amount = order.total
         payment_method = order.payment_method
@@ -108,7 +112,7 @@ class PaymentService:
         )
 
         try:
-            order = self.order_repository.get_order_by_tracking_token(restaurant.id, tracking_token)
+            order = self.order_repository.get_order_by_tracking_token(restaurant_id, tracking_token)
             # Reconferido depois do I/O: um webhook pode ter chegado
             # enquanto esperavamos o gateway responder.
             if order.payment_status not in PAYABLE_STATUSES:

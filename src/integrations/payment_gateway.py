@@ -37,7 +37,6 @@ from src.core.constants import PAYMENT_STATUSES
 
 SANDBOX_PROVIDER = "sandbox"
 MERCADOPAGO_PROVIDER = "mercadopago"
-SUPPORTED_PROVIDERS = (SANDBOX_PROVIDER, MERCADOPAGO_PROVIDER)
 
 # Header em que o sandbox espera a assinatura do corpo. O Mercado Pago usa
 # `x-signature` com outro formato; ver verify_webhook_signature.

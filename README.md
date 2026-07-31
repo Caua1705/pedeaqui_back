@@ -130,7 +130,16 @@ previous code version, so deploying the image before migrating is safe.
 - `GET /restaurants/{restaurant_slug}/categories/{category_slug}/products`
 - `GET /restaurants/{restaurant_slug}/products/{product_slug}`
 - `POST /restaurants/{restaurant_slug}/orders`
-- `GET /restaurants/{restaurant_slug}/orders/{order_number}?phone=85999999999`
+- `GET /restaurants/{restaurant_slug}/orders/track/{tracking_token}`
+- `POST /restaurants/{restaurant_slug}/orders/{tracking_token}/payment`
+- `POST /payments/webhooks/{provider}` — chamada pelo gateway, nao pelo app
+
+The lookup by `order_number` + phone was **removed in Phase 2**. Order
+numbers come from a global sequence, so with one phone number an attacker
+could walk the neighbouring numbers and read other people's home address,
+items and history. The tracking token is random, returned once, to whoever
+created the order. A logged-in customer does not need it:
+`GET /customers/me/orders/{order_id}` derives access from `customer_id`.
 
 ## Admin Endpoints
 
@@ -152,6 +161,7 @@ Then send `Authorization: Bearer <access_token>` on every admin route.
 - `GET  /admin/restaurants/{restaurant_slug}/orders`
 - `GET  /admin/orders/{order_id}`
 - `PATCH /admin/orders/{order_id}/status`
+- `GET  /admin/reports/commission?start_date=2026-07-01&end_date=2026-07-31`
 - `GET/POST/PATCH /admin/restaurants/{restaurant_id}/coupons`
 
 Every one of these is scoped to the `restaurant_id` in the token. A
@@ -234,6 +244,7 @@ curl -X POST http://localhost:8000/restaurants/junior-da-picanha/orders \
     "customer": {"name": "Caua", "phone": "85999999999"},
     "order_type": "delivery",
     "payment_method": "pix",
+    "delivery_estimate_token": "<token devolvido por POST /delivery/estimate>",
     "address": {
       "street": "Rua Exemplo",
       "number": "123",

@@ -18,6 +18,7 @@ from src.models.product_model import Product
 from src.models.product_option_model import ProductOption, ProductOptionGroup
 from src.models.restaurant_banner_model import RestaurantBanner
 from src.models.restaurant_model import Restaurant
+from src.models.restaurant_payment_credential_model import RestaurantPaymentCredential
 from src.models.restaurant_setting_model import RestaurantSetting
 
 __all__ = [
@@ -46,5 +47,6 @@ __all__ = [
     "Restaurant",
     "RestaurantCoupon",
     "RestaurantBanner",
+    "RestaurantPaymentCredential",
     "RestaurantSetting",
 ]

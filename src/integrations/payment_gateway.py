@@ -87,16 +87,38 @@ def create_payment(
     amount: Decimal,
     payment_method: str,
     description: str,
+    access_token: str | None = None,
+    application_fee: Decimal | None = None,
 ) -> PaymentIntent:
-    """Cria a cobranca no gateway."""
+    """Cria a cobranca no gateway.
+
+    `access_token` e a credencial DO RESTAURANTE (resolvida pelo
+    PaymentCredentialService a partir do restaurant_id do pedido, nunca de
+    uma variavel global) — a cobranca precisa ser criada em nome da conta
+    dele. Nao existe token de fallback: gateway que precisa de credencial e
+    nao recebeu uma vira PaymentProviderNotConfiguredError.
+
+    `application_fee` e o corte da plataforma no split de pagamento do
+    Mercado Pago. Fica opcional e hoje ninguem preenche — nao ha contrato de
+    marketplace assinado ainda. Quando existir, quem chama passa o valor e a
+    implementacao do Mercado Pago (abaixo) inclui no corpo da requisicao.
+    """
     if provider == SANDBOX_PROVIDER:
         return _create_sandbox_payment(order_id)
 
     if provider == MERCADOPAGO_PROVIDER:
+        if not access_token:
+            raise PaymentProviderNotConfiguredError(
+                "Restaurante sem credencial do Mercado Pago cadastrada para "
+                "o ambiente atual: ver scripts/register_restaurant_payment_credential.py"
+            )
+
         # >>> PLUGUE AQUI (1/3) <<<
         #
         # POST https://api.mercadopago.com/v1/payments
-        #   Authorization: Bearer {settings.MERCADOPAGO_ACCESS_TOKEN}
+        #   Authorization: Bearer {access_token}
+        #       ^ credencial do restaurante, nao uma constante do .env: e a
+        #         conta dele que recebe o dinheiro.
         #   X-Idempotency-Key: {order_id}
         #       ^ o Mercado Pago tem idempotencia propria. Usar o order_id
         #         garante que um retry nosso nao gere duas cobrancas.
@@ -104,7 +126,10 @@ def create_payment(
         #          payment_method_id derivado de `payment_method`
         #          ("pix", "credit_card"...), description, payer,
         #          notification_url apontando para
-        #          POST /payments/webhooks/mercadopago
+        #          POST /payments/webhooks/mercadopago,
+        #          application_fee=float(application_fee) SE application_fee
+        #              nao for None — omitir o campo quando for, e nao mandar
+        #              zero (zero e uma resposta, ausencia e outra).
         #
         # Da resposta, montar:
         #   PaymentIntent(
@@ -179,11 +204,20 @@ def parse_webhook_event(*, provider: str, raw_body: bytes) -> PaymentWebhookEven
         # >>> PLUGUE AQUI (3/3) <<<
         #
         # ATENCAO: o webhook do Mercado Pago NAO traz o status do pagamento.
-        # Ele avisa "o pagamento X mudou". O status confiavel exige uma
-        # consulta:
+        # Ele avisa "o pagamento X mudou" (o `data.id` do envelope e o
+        # provider_payment_id). O status confiavel exige uma consulta:
         #
         #   GET https://api.mercadopago.com/v1/payments/{data.id}
-        #     Authorization: Bearer {settings.MERCADOPAGO_ACCESS_TOKEN}
+        #     Authorization: Bearer {access_token da conta DO RESTAURANTE}
+        #
+        # Nao ha credencial global para essa chamada: o `access_token` e o
+        # do restaurante dono do pagamento, e o webhook so chega com o
+        # data.id. A ordem tem que ser: (1) achar o pedido pelo
+        # provider_payment_id via OrderRepository.get_order_by_provider_payment,
+        # (2) resolver a credencial ativa desse order.restaurant_id com
+        # PaymentCredentialService, (3) so entao fazer o GET acima. Por isso
+        # esta funcao vai precisar deixar de ser pura — o PaymentService e
+        # quem tem acesso ao banco para os passos 1 e 2.
         #
         # Nunca confie em status vindo dentro do corpo do webhook: o corpo
         # e so um aviso, e quem manda e a API.

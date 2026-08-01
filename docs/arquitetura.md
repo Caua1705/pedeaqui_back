@@ -470,7 +470,7 @@ para a cozinha com o pix em aberto.
 `payment_status=paid` e registra no histórico; aceitar continua sendo decisão do
 lojista — pagar não pode obrigar o restaurante a produzir.
 
-O webhook (`src/services/payment_service.py:141`) faz, nesta ordem: confere a
+O webhook (`src/services/payment_service.py:165`) faz, nesta ordem: confere a
 assinatura (401 se inválida), traduz o corpo, acha o pedido por
 `(payment_provider, provider_payment_id)`, reserva a chave de idempotência
 usando o **id do evento** e só então aplica a transição. Corpo malformado,
@@ -485,8 +485,8 @@ passo escrito em comentário:
 | Função | Linha | O que escrever |
 |---|---|---|
 | `create_payment` | `:83` | `POST /v1/payments` com `X-Idempotency-Key: {order_id}` |
-| `verify_webhook_signature` | `:129` | manifest `id:...;request-id:...;ts:...;` + HMAC do header `x-signature` |
-| `parse_webhook_event` | `:173` | `GET /v1/payments/{id}` e traduzir `approved`/`rejected`/`refunded` |
+| `verify_webhook_signature` | `:154` | manifest `id:...;request-id:...;ts:...;` + HMAC do header `x-signature` |
+| `parse_webhook_event` | `:198` | `GET /v1/payments/{id}` e traduzir `approved`/`rejected`/`refunded` |
 
 Nada fora desse arquivo muda. Depois dos três, é só `PAYMENT_PROVIDER=mercadopago`
 no `.env`.
@@ -495,6 +495,60 @@ Enquanto isso, o provider `sandbox` é uma implementação **de verdade** (sem
 chamada externa): cria a cobrança localmente e valida o webhook por HMAC-SHA256
 do corpo cru com `PAYMENT_WEBHOOK_SECRET`. É o que permite exercitar o fluxo
 inteiro sem credencial.
+
+#### 4.5.1 Credencial de pagamento por restaurante (BLOCO G)
+
+Não existe uma credencial global do Mercado Pago. Cada restaurante tem a
+própria conta lá, e a cobrança do pedido dele tem que sair em nome dessa
+conta — daí `restaurant_payment_credentials`
+(`alembic/versions/20260801_0008_credenciais_pagamento_por_restaurante.py`),
+uma linha por `(restaurant_id, environment)`:
+
+```
+public_key             texto puro    — o próprio Mercado Pago manda expor no frontend
+access_token_encrypted cifrado       — credencial da CONTA DO RESTAURANTE, nunca em log
+environment             'test' | 'production'
+```
+
+`access_token` é cifrado com Fernet (`src/utils/crypto.py`), chave em
+`PAYMENT_CREDENTIALS_ENCRYPTION_KEY` (só no `.env`, nunca no banco — cifrar a
+coluna não protege nada se a chave mora ao lado dela). `startup_checks.py`
+derruba o boot se `PAYMENT_PROVIDER=mercadopago` e a chave estiver vazia.
+
+Teste e produção **coexistem** no banco. Qual das duas vale para todo mundo é
+a variável global `MERCADOPAGO_ENVIRONMENT` (`test` por padrão) — trocar para
+produção é mudar essa variável no `.env`, sem tocar em código nem apagar a
+credencial de teste.
+
+`PaymentCredentialService.get_active_credential` (`src/services/payment_credential_service.py`)
+busca a linha do `(restaurant_id, MERCADOPAGO_ENVIRONMENT)` e devolve o token
+já decifrado. `PaymentService.start_online_payment` chama isso **antes** de
+falar com o gateway e passa o resultado para `create_payment(..., access_token=...)`
+— não existe caminho em que a cobrança saia sem a credencial do restaurante
+do pedido. Sem credencial cadastrada para o ambiente ativo, `create_payment`
+responde `PaymentProviderNotConfiguredError` → **503**, o mesmo
+comportamento de antes quando a credencial global estava vazia.
+
+`create_payment` também aceita `application_fee` (o corte da plataforma no
+split de pagamento do Mercado Pago), **opcional e hoje sempre `None`**: não
+há contrato de marketplace assinado com nenhum restaurante ainda. O campo
+existe para não exigir mexer na assinatura da função no dia em que existir.
+
+Sem tela de cadastro, quem registra a credencial é
+`scripts/register_restaurant_payment_credential.py` — mesma forma de
+`scripts/create_admin_user.py` (o segredo é pedido em prompt oculto, nunca
+argumento de linha de comando):
+
+```
+python scripts/register_restaurant_payment_credential.py \
+    --restaurant-slug junior-da-picanha \
+    --environment test \
+    --public-key TEST-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
+
+Rodar de novo para o mesmo `(restaurant, environment)` substitui a credencial
+(`ON CONFLICT DO UPDATE` em `RestaurantPaymentCredentialRepository.upsert`) —
+é como se troca um token vazado.
 
 ### 4.6 Comissão da plataforma (Fase 2)
 

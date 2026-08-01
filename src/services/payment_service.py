@@ -29,14 +29,18 @@ from sqlalchemy.orm import Session
 from src.core.config import settings
 from src.integrations.payment_gateway import (
     MERCADOPAGO_PROVIDER,
+    PaymentGatewayError,
+    PaymentNotFoundError,
     PaymentProviderNotConfiguredError,
     PaymentProviderUnknownError,
     PaymentWebhookPayloadError,
     create_payment,
+    extract_provider_payment_id,
     parse_webhook_event,
     verify_webhook_signature,
 )
 from src.models.order_status_history_model import OrderStatusHistory
+from src.repositories.customer_repository import CustomerRepository
 from src.repositories.order_repository import OrderRepository
 from src.schemas.payment_schema import StartPaymentResponse
 from src.services.idempotency_service import IdempotencyService
@@ -64,6 +68,7 @@ class PaymentService:
         self.restaurant_service = RestaurantService(db)
         self.idempotency_service = IdempotencyService(db)
         self.payment_credential_service = PaymentCredentialService(db)
+        self.customer_repository = CustomerRepository(db)
 
     def start_online_payment(
         self,
@@ -109,10 +114,14 @@ class PaymentService:
         # ainda nao cadastrou a credencial do ambiente ativo — nesse
         # segundo caso, create_payment e quem recusa com 503.
         access_token = None
+        payer_email = None
         if settings.PAYMENT_PROVIDER == MERCADOPAGO_PROVIDER:
             credential = self.payment_credential_service.get_active_credential(restaurant_id)
             if credential is not None:
                 access_token = credential.access_token
+            # So resolve e-mail quando de fato vai chamar o Mercado Pago: o
+            # sandbox nao usa, e e uma consulta a mais no banco por nada.
+            payer_email = self._resolve_payer_email(order)
 
         # Fecha a transacao de leitura ANTES de falar com o gateway. Sem
         # isso a conexao de banco fica presa durante um I/O externo que pode
@@ -126,6 +135,7 @@ class PaymentService:
             payment_method=payment_method,
             description=f"Pedido #{order_number}",
             access_token=access_token,
+            payer_email=payer_email,
             # application_fee (corte da plataforma no split) fica de fora:
             # e um campo opcional que so passa a ser preenchido quando
             # existir contrato de marketplace com o restaurante.
@@ -162,6 +172,23 @@ class PaymentService:
             qr_code=intent.qr_code,
         )
 
+    def _resolve_payer_email(self, order) -> str:
+        """E-mail exigido pelo Mercado Pago para criar cobranca pix.
+
+        O pedido nao guarda e-mail nenhum (so nome e telefone — ver
+        Order.customer_name_snapshot/customer_phone_snapshot). Quem fez
+        login tem e-mail em customers; quem pediu como convidado nao tem
+        nenhum cadastrado em lugar algum. Para o convidado, usamos um
+        e-mail sintetico nosso, derivado do numero do pedido: o Mercado
+        Pago so usa esse campo para validar o payer da cobranca pix, nao
+        para mandar comunicacao nenhuma a ele.
+        """
+        if order.customer_id is not None:
+            customer = self.customer_repository.get_by_id(order.customer_id)
+            if customer is not None and customer.email:
+                return customer.email
+        return f"pedido-{order.order_number}@pederapidex.com"
+
     def handle_webhook(
         self,
         provider: str,
@@ -171,28 +198,65 @@ class PaymentService:
         self._verify_signature(provider, raw_body, headers)
 
         try:
-            event = parse_webhook_event(provider=provider, raw_body=raw_body)
+            provider_payment_id = extract_provider_payment_id(provider=provider, raw_body=raw_body)
         except PaymentWebhookPayloadError as exc:
             # 200 de proposito: reenviar nao conserta um corpo que nao
             # entendemos, e 5xx colocaria o gateway em retentativa por horas.
             logger.warning("[Pagamento] webhook ignorado provider=%s motivo=%s", provider, exc)
             return {"status": "ignored", "reason": "payload"}
-        except PaymentProviderNotConfiguredError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
-            ) from exc
 
         order = self.order_repository.get_order_by_provider_payment(
             provider,
-            event.provider_payment_id,
+            provider_payment_id,
         )
         if order is None:
             logger.warning(
                 "[Pagamento] webhook sem pedido correspondente provider=%s payment_id=%s",
                 provider,
-                event.provider_payment_id,
+                provider_payment_id,
             )
             return {"status": "ignored", "reason": "unknown_payment"}
+
+        # So a partir daqui sabemos de qual restaurante e o pagamento, e so
+        # entao da para saber qual credencial usar na consulta de status do
+        # Mercado Pago (ele nao manda o status no corpo do webhook).
+        access_token = None
+        if provider == MERCADOPAGO_PROVIDER:
+            credential = self.payment_credential_service.get_active_credential(order.restaurant_id)
+            if credential is not None:
+                access_token = credential.access_token
+
+        try:
+            event = parse_webhook_event(provider=provider, raw_body=raw_body, access_token=access_token)
+        except PaymentWebhookPayloadError as exc:
+            logger.warning("[Pagamento] webhook ignorado provider=%s motivo=%s", provider, exc)
+            return {"status": "ignored", "reason": "payload"}
+        except PaymentNotFoundError as exc:
+            # Nao retentavel: um 404 do gateway para o mesmo id nao vira
+            # outra coisa se o Mercado Pago reenviar a notificacao de novo.
+            logger.warning(
+                "[Pagamento] pagamento nao encontrado no gateway provider=%s payment_id=%s motivo=%s",
+                provider,
+                provider_payment_id,
+                exc,
+            )
+            return {"status": "ignored", "reason": "payment_not_found"}
+        except PaymentProviderNotConfiguredError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            ) from exc
+        except PaymentGatewayError as exc:
+            # Timeout, 5xx ou credencial recusada na consulta de status:
+            # 503 para o gateway reenviar depois, sem perder o evento.
+            logger.warning(
+                "[Pagamento] falha ao consultar status no gateway provider=%s payment_id=%s motivo=%s",
+                provider,
+                provider_payment_id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            ) from exc
 
         if order.payment_status == event.payment_status:
             # Reenvio depois de ja aplicado, ou duas notificacoes do mesmo
@@ -302,6 +366,7 @@ class PaymentService:
         payment_method: str | None,
         description: str,
         access_token: str | None,
+        payer_email: str | None = None,
         application_fee=None,
     ):
         try:
@@ -312,11 +377,14 @@ class PaymentService:
                 payment_method=payment_method or "other",
                 description=description,
                 access_token=access_token,
+                payer_email=payer_email,
                 application_fee=application_fee,
             )
-        except (PaymentProviderNotConfiguredError, PaymentProviderUnknownError) as exc:
+        except (PaymentProviderNotConfiguredError, PaymentProviderUnknownError, PaymentGatewayError) as exc:
             # 503 e nao 500: e configuracao/indisponibilidade do gateway, e o
             # cliente pode tentar de novo depois. O pedido continua de pe.
+            # PaymentGatewayError cobre timeout, credencial recusada e
+            # qualquer status de erro que o Mercado Pago tenha devolvido.
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
             ) from exc

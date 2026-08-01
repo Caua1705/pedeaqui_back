@@ -73,17 +73,23 @@ class Settings(BaseSettings):
     #
     # "sandbox" e o provider interno: cria a cobranca localmente e aceita
     # webhook assinado com PAYMENT_WEBHOOK_SECRET, sem chamada externa. E o
-    # que permite exercitar o fluxo inteiro antes de existir credencial.
-    # Quando o Mercado Pago estiver plugado (ver
-    # src/integrations/payment_gateway.py), troque para "mercadopago".
+    # que permite exercitar o fluxo inteiro sem depender do Mercado Pago
+    # responder. "mercadopago" chama a API de verdade (ver
+    # src/integrations/payment_gateway.py) usando a credencial cadastrada
+    # do restaurante do pedido.
     PAYMENT_PROVIDER: str = "sandbox"
     # Segredo do HMAC do webhook do sandbox. Sem ele o webhook e recusado
     # com 503 — nao existe modo "aceita sem verificar".
     PAYMENT_WEBHOOK_SECRET: str | None = None
-    # Segredo da assinatura do webhook do Mercado Pago. Este continua
-    # global (nao por restaurante): e o segredo configurado nas notificacoes
-    # da NOSSA aplicacao no painel do Mercado Pago, nao uma credencial da
-    # conta do restaurante.
+    # Segredo da assinatura do webhook do Mercado Pago. GLOBAL por enquanto,
+    # nao por restaurante — funciona para o piloto (um restaurante, uma
+    # conta). Cada restaurante tem sua PROPRIA conta no Mercado Pago (nao e
+    # um app de marketplace com OAuth compartilhado) e configura o segredo
+    # de notificacao dela mesma no proprio painel; com o segundo
+    # restaurante, este segredo precisa passar a ser cadastrado por
+    # restaurante, do mesmo jeito que o access_token em
+    # restaurant_payment_credentials — nao fizemos isso ainda porque nao foi
+    # pedido.
     MERCADOPAGO_WEBHOOK_SECRET: str | None = None
 
     # Qual conjunto de credencial usar: a de teste (para desenvolver sem

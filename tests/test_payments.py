@@ -1,12 +1,13 @@
 """Pagamento: criacao da cobranca e webhook do gateway.
 
-O Mercado Pago ainda nao esta plugado. O que estes testes exercitam e toda
-a estrutura em volta dele — assinatura, idempotencia, maquina de estados e
-o efeito no pedido — usando o provider "sandbox", que e uma implementacao
-de verdade sem chamada externa.
-
-Quando o Mercado Pago entrar, estes testes continuam valendo: o que muda e
-so o conteudo das tres funcoes de src/integrations/payment_gateway.py.
+A estrutura em volta do gateway — assinatura, idempotencia, maquina de
+estados, resolucao de credencial e o efeito no pedido — e exercitada aqui
+usando o provider "sandbox", uma implementacao de verdade sem chamada
+externa. As chamadas HTTP de verdade ao Mercado Pago (create_payment,
+verify_webhook_signature e parse_webhook_event para provider="mercadopago")
+tem testes proprios em tests/test_mercadopago_gateway.py, com o gateway
+mocado — aqui o que importa e que o PaymentService resolve e passa a
+credencial CERTA, nao o formato da chamada HTTP em si.
 """
 
 import json
@@ -123,12 +124,25 @@ def make_order(**overrides):
         "provider_payment_id": None,
         "paid_at": None,
         "status": "pending",
+        # None = pedido de convidado, o caso mais comum nos testes. Ver
+        # PaymentService._resolve_payer_email.
+        "customer_id": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
 
 
-def build_service(order, idempotency_repository=None, credential=None):
+class FakeCustomerRepository:
+    def __init__(self, customer=None):
+        self.customer = customer
+
+    def get_by_id(self, customer_id):
+        if self.customer is not None and self.customer.id == customer_id:
+            return self.customer
+        return None
+
+
+def build_service(order, idempotency_repository=None, credential=None, customer=None):
     service = PaymentService(FakeDb())
     service.order_repository = FakeOrderRepository(order)
     service.restaurant_service = SimpleNamespace(
@@ -140,6 +154,7 @@ def build_service(order, idempotency_repository=None, credential=None):
     service.payment_credential_service = SimpleNamespace(
         get_active_credential=lambda restaurant_id: credential
     )
+    service.customer_repository = FakeCustomerRepository(customer)
     return service
 
 
@@ -172,10 +187,12 @@ class GatewayContractTests(unittest.TestCase):
         # Chamar duas vezes para o mesmo pedido nao pode gerar duas cobrancas.
         self.assertEqual(first.provider_payment_id, second.provider_payment_id)
 
-    def test_mercadopago_is_a_documented_hole_and_not_a_silent_success(self):
-        # O ponto de extensao precisa FALHAR alto enquanto nao existir. Se
-        # devolvesse algo plausivel, um pedido ficaria eternamente pendente
-        # sem ninguem perceber.
+    def test_mercadopago_without_credential_fails_loudly_not_silently(self):
+        # Sem access_token (restaurante sem credencial cadastrada para o
+        # ambiente ativo) tem que FALHAR alto. Se devolvesse algo plausivel,
+        # um pedido ficaria eternamente pendente sem ninguem perceber. A
+        # chamada HTTP de verdade ao Mercado Pago e testada em
+        # tests/test_mercadopago_gateway.py.
         with self.assertRaises(PaymentProviderNotConfiguredError):
             create_payment(
                 provider="mercadopago", order_id=uuid.uuid4(), amount=Decimal("10.00"),
@@ -326,6 +343,54 @@ class StartPaymentTests(unittest.TestCase):
         # de pagamento assinado com nenhum restaurante ainda.
         self.assertIsNone(kwargs["application_fee"])
 
+    def test_payer_email_uses_the_logged_in_customer_email(self):
+        customer_id = uuid.uuid4()
+        order = make_order(customer_id=customer_id)
+        customer = SimpleNamespace(id=customer_id, email="cliente@exemplo.com")
+        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        service = build_service(order, credential=credential, customer=customer)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment"
+        ) as mocked_create_payment:
+            mocked_create_payment.return_value = PaymentIntent(
+                provider="mercadopago", provider_payment_id="mp-1"
+            )
+            service.start_online_payment("junior", "token-do-pedido")
+
+        _, kwargs = mocked_create_payment.call_args
+        self.assertEqual(kwargs["payer_email"], "cliente@exemplo.com")
+
+    def test_payer_email_falls_back_to_a_synthetic_address_for_guests(self):
+        # customer_id=None (padrao de make_order): pedido de convidado, sem
+        # e-mail cadastrado em lugar nenhum.
+        order = make_order(order_number=4321)
+        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        service = build_service(order, credential=credential)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment"
+        ) as mocked_create_payment:
+            mocked_create_payment.return_value = PaymentIntent(
+                provider="mercadopago", provider_payment_id="mp-1"
+            )
+            service.start_online_payment("junior", "token-do-pedido")
+
+        _, kwargs = mocked_create_payment.call_args
+        self.assertEqual(kwargs["payer_email"], "pedido-4321@pederapidex.com")
+
+    def test_payer_email_is_not_resolved_for_the_sandbox_provider(self):
+        # O sandbox nao usa e-mail nenhum: nao ha por que gastar uma consulta
+        # ao customer_repository so para descartar o resultado.
+        order = make_order()
+        service = build_service(order)
+        service.customer_repository = SimpleNamespace(
+            get_by_id=lambda customer_id: self.fail("nao deveria consultar customer_repository")
+        )
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "sandbox"):
+            service.start_online_payment("junior", "token-do-pedido")
+
 
 class WebhookTests(unittest.TestCase):
     def setUp(self):
@@ -452,6 +517,57 @@ class WebhookTests(unittest.TestCase):
             requester="gateway:sandbox",
         )
         self.assertNotEqual(scope_a, scope_b)
+
+
+class MercadopagoWebhookWiringTests(unittest.TestCase):
+    """O Mercado Pago nao manda o status no webhook, so o data.id — dai o
+    PaymentService precisar achar o PEDIDO (e por ele, o restaurante) antes
+    de saber qual credencial usar na consulta de status. Aqui a assinatura e
+    parse_webhook_event sao mocados: o que se prova e a ORDEM das chamadas e
+    QUAL credencial chega em parse_webhook_event, nao o formato da chamada
+    HTTP em si (isso e tests/test_mercadopago_gateway.py).
+    """
+
+    def test_credential_of_the_order_restaurant_is_passed_to_parse_webhook_event(self):
+        order = make_order(payment_provider="mercadopago", provider_payment_id="mp-1")
+        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        service = build_service(order, credential=credential)
+
+        with patch(
+            "src.services.payment_service.verify_webhook_signature", return_value=True
+        ), patch(
+            "src.services.payment_service.extract_provider_payment_id", return_value="mp-1"
+        ), patch(
+            "src.services.payment_service.parse_webhook_event"
+        ) as mocked_parse:
+            mocked_parse.return_value = SimpleNamespace(
+                event_id="evt-1",
+                provider_payment_id="mp-1",
+                payment_status="paid",
+                raw_status="approved",
+            )
+            result = service.handle_webhook("mercadopago", b"{}", {})
+
+        self.assertEqual(result["status"], "processed")
+        _, kwargs = mocked_parse.call_args
+        self.assertEqual(kwargs["access_token"], "token-do-junior-da-picanha")
+
+    def test_without_a_registered_credential_the_webhook_answers_503(self):
+        # credential=None (padrao de build_service): restaurante sem
+        # credencial cadastrada. parse_webhook_event AQUI E O DE VERDADE
+        # (nao mocado) — e ele quem recusa por falta de access_token.
+        order = make_order(payment_provider="mercadopago", provider_payment_id="mp-1")
+        service = build_service(order)
+
+        with patch(
+            "src.services.payment_service.verify_webhook_signature", return_value=True
+        ), patch(
+            "src.services.payment_service.extract_provider_payment_id", return_value="mp-1"
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                service.handle_webhook("mercadopago", b"{}", {})
+
+        self.assertEqual(raised.exception.status_code, 503)
 
 
 if __name__ == "__main__":

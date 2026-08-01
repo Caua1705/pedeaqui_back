@@ -29,11 +29,25 @@ def collect_configuration_errors(settings: Settings) -> list[str]:
             "chave ou mude DELIVERY_ESTIMATE_PROVIDER."
         )
 
-    if settings.PAYMENT_PROVIDER == "mercadopago" and not (settings.MERCADOPAGO_ACCESS_TOKEN or "").strip():
+    if settings.PAYMENT_PROVIDER == "mercadopago" and not (settings.PAYMENT_CREDENTIALS_ENCRYPTION_KEY or "").strip():
+        # A credencial em si e por restaurante e vive no banco (ver
+        # restaurant_payment_credentials); o que da para checar no boot,
+        # sem consultar o banco, e se existe chave para decifra-la. Sem
+        # isso TODA cobranca online responde 503, restaurante nenhum
+        # cadastrado ou nao.
         errors.append(
-            "PAYMENT_PROVIDER=mercadopago sem MERCADOPAGO_ACCESS_TOKEN. Toda "
-            "cobranca online responderia 503. Preencha o token ou volte "
-            "PAYMENT_PROVIDER para sandbox."
+            "PAYMENT_PROVIDER=mercadopago sem PAYMENT_CREDENTIALS_ENCRYPTION_KEY. "
+            "Nenhuma credencial de restaurante pode ser decifrada e toda "
+            "cobranca online responderia 503. Gere uma chave com "
+            "`python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"` "
+            "ou volte PAYMENT_PROVIDER para sandbox."
+        )
+
+    if settings.MERCADOPAGO_ENVIRONMENT not in ("test", "production"):
+        errors.append(
+            f"MERCADOPAGO_ENVIRONMENT='{settings.MERCADOPAGO_ENVIRONMENT}' invalido: "
+            "so 'test' ou 'production' selecionam qual credencial cadastrada "
+            "em restaurant_payment_credentials e usada."
         )
 
     return errors

@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from src.core.config import settings
 from src.integrations.payment_gateway import (
+    MERCADOPAGO_PROVIDER,
     PaymentProviderNotConfiguredError,
     PaymentProviderUnknownError,
     PaymentWebhookPayloadError,
@@ -43,6 +44,7 @@ from src.services.order_state_machine import (
     ensure_payment_transition_allowed,
     payment_history_status,
 )
+from src.services.payment_credential_service import PaymentCredentialService
 from src.services.restaurant_service import RestaurantService
 from src.utils.security import utcnow
 
@@ -61,6 +63,7 @@ class PaymentService:
         self.order_repository = OrderRepository(db)
         self.restaurant_service = RestaurantService(db)
         self.idempotency_service = IdempotencyService(db)
+        self.payment_credential_service = PaymentCredentialService(db)
 
     def start_online_payment(
         self,
@@ -98,6 +101,19 @@ class PaymentService:
         amount = order.total
         payment_method = order.payment_method
         order_number = order.order_number
+
+        # A cobranca e sempre em nome do restaurante do pedido: busca a
+        # credencial dele ANTES de falar com o gateway, nunca uma constante
+        # global. `access_token` fica None quando o provider e "sandbox"
+        # (que nao precisa de credencial nenhuma) ou quando o restaurante
+        # ainda nao cadastrou a credencial do ambiente ativo — nesse
+        # segundo caso, create_payment e quem recusa com 503.
+        access_token = None
+        if settings.PAYMENT_PROVIDER == MERCADOPAGO_PROVIDER:
+            credential = self.payment_credential_service.get_active_credential(restaurant_id)
+            if credential is not None:
+                access_token = credential.access_token
+
         # Fecha a transacao de leitura ANTES de falar com o gateway. Sem
         # isso a conexao de banco fica presa durante um I/O externo que pode
         # levar segundos — com o pool cheio, a API inteira trava esperando
@@ -109,6 +125,10 @@ class PaymentService:
             amount=amount,
             payment_method=payment_method,
             description=f"Pedido #{order_number}",
+            access_token=access_token,
+            # application_fee (corte da plataforma no split) fica de fora:
+            # e um campo opcional que so passa a ser preenchido quando
+            # existir contrato de marketplace com o restaurante.
         )
 
         try:
@@ -281,6 +301,8 @@ class PaymentService:
         amount,
         payment_method: str | None,
         description: str,
+        access_token: str | None,
+        application_fee=None,
     ):
         try:
             return create_payment(
@@ -289,6 +311,8 @@ class PaymentService:
                 amount=amount,
                 payment_method=payment_method or "other",
                 description=description,
+                access_token=access_token,
+                application_fee=application_fee,
             )
         except (PaymentProviderNotConfiguredError, PaymentProviderUnknownError) as exc:
             # 503 e nao 500: e configuracao/indisponibilidade do gateway, e o

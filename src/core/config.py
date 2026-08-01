@@ -80,10 +80,25 @@ class Settings(BaseSettings):
     # Segredo do HMAC do webhook do sandbox. Sem ele o webhook e recusado
     # com 503 — nao existe modo "aceita sem verificar".
     PAYMENT_WEBHOOK_SECRET: str | None = None
-    # Credenciais do Mercado Pago. Ficam aqui prontas para o dia em que
-    # chegarem; enquanto vazias, o provider "mercadopago" responde 503.
-    MERCADOPAGO_ACCESS_TOKEN: str | None = None
+    # Segredo da assinatura do webhook do Mercado Pago. Este continua
+    # global (nao por restaurante): e o segredo configurado nas notificacoes
+    # da NOSSA aplicacao no painel do Mercado Pago, nao uma credencial da
+    # conta do restaurante.
     MERCADOPAGO_WEBHOOK_SECRET: str | None = None
+
+    # Qual conjunto de credencial usar: a de teste (para desenvolver sem
+    # mover dinheiro de verdade) ou a de producao. Global e nao por
+    # restaurante — todo mundo migra junto no dia do go-live. Trocar aqui
+    # nao muda nenhuma linha de codigo, so exige que a credencial de
+    # "production" ja esteja cadastrada (ver
+    # scripts/register_restaurant_payment_credential.py).
+    MERCADOPAGO_ENVIRONMENT: str = "test"
+    # Chave Fernet usada para cifrar/decifrar o access_token de cada
+    # restaurante em restaurant_payment_credentials. E o unico lugar em que
+    # essa chave existe fora do processo que a gerou — perde-la torna toda
+    # credencial cadastrada ilegivel, entao troque-a com um plano de
+    # recadastro em maos, nunca de surpresa.
+    PAYMENT_CREDENTIALS_ENCRYPTION_KEY: str | None = None
 
     RATE_LIMIT_ENABLED: bool = True
     # Cabecalho com o IP real do cliente. Atras do Traefik o socket peer e o

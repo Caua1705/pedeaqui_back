@@ -20,6 +20,7 @@ from fastapi import HTTPException
 
 from src.core.config import settings
 from src.integrations.payment_gateway import (
+    PaymentIntent,
     PaymentProviderNotConfiguredError,
     PaymentProviderUnknownError,
     PaymentWebhookPayloadError,
@@ -127,13 +128,18 @@ def make_order(**overrides):
     return SimpleNamespace(**values)
 
 
-def build_service(order, idempotency_repository=None):
+def build_service(order, idempotency_repository=None, credential=None):
     service = PaymentService(FakeDb())
     service.order_repository = FakeOrderRepository(order)
     service.restaurant_service = SimpleNamespace(
         get_active_restaurant=lambda slug: SimpleNamespace(id=order.restaurant_id)
     )
     service.idempotency_service.repository = idempotency_repository or FakeIdempotencyRepository()
+    # None por padrao: restaurante sem credencial cadastrada, o mesmo estado
+    # de qualquer restaurante novo antes de rodar o script de cadastro.
+    service.payment_credential_service = SimpleNamespace(
+        get_active_credential=lambda restaurant_id: credential
+    )
     return service
 
 
@@ -289,6 +295,8 @@ class StartPaymentTests(unittest.TestCase):
 
     def test_gateway_without_credentials_answers_503(self):
         order = make_order()
+        # credential=None (padrao de build_service): restaurante sem
+        # credencial cadastrada para o ambiente ativo.
         service = build_service(order)
 
         with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"):
@@ -296,6 +304,27 @@ class StartPaymentTests(unittest.TestCase):
                 service.start_online_payment("junior", "token-do-pedido")
 
         self.assertEqual(raised.exception.status_code, 503)
+
+    def test_charge_is_created_with_the_restaurant_own_credential(self):
+        # BLOCO G: a cobranca tem que sair em nome da conta do restaurante
+        # do pedido, nunca de uma credencial global.
+        order = make_order()
+        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        service = build_service(order, credential=credential)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment"
+        ) as mocked_create_payment:
+            mocked_create_payment.return_value = PaymentIntent(
+                provider="mercadopago", provider_payment_id="mp-1"
+            )
+            service.start_online_payment("junior", "token-do-pedido")
+
+        _, kwargs = mocked_create_payment.call_args
+        self.assertEqual(kwargs["access_token"], "token-do-junior-da-picanha")
+        # application_fee opcional e hoje vazio: nao ha contrato de split
+        # de pagamento assinado com nenhum restaurante ainda.
+        self.assertIsNone(kwargs["application_fee"])
 
 
 class WebhookTests(unittest.TestCase):

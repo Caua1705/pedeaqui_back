@@ -16,3 +16,4 @@ redis
 psycopg2-binary
 slowapi
 alembic
+cryptography

@@ -24,6 +24,14 @@ class RestaurantPaymentCredential(Base):
     (nao e segredo nosso, e dele): fica cifrado em repouso e nunca deve ir
     para log. `public_key` nao e sigilosa — o proprio Mercado Pago manda
     expor no frontend — e por isso fica em texto puro.
+
+    `webhook_secret` (a "Assinatura secreta" do painel) e da MESMA conta,
+    entao mora na mesma linha (restaurante, ambiente) e cifrada do mesmo
+    jeito. Nullable: ela so existe depois de cadastrar a Notification URL
+    no painel, um passo que pode acontecer depois do access_token — sem
+    ela, o webhook deste restaurante responde 503 (ver
+    PaymentService._verify_signature), o mesmo comportamento de uma
+    credencial ausente.
     """
 
     __tablename__ = "restaurant_payment_credentials"
@@ -50,6 +58,9 @@ class RestaurantPaymentCredential(Base):
     # settings.PAYMENT_CREDENTIALS_ENCRYPTION_KEY. Nunca decodificar isto em
     # um log ou em uma resposta de API.
     access_token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    # Cifrado do mesmo jeito que access_token_encrypted. None = restaurante
+    # ainda nao cadastrou a "Assinatura secreta" do painel do Mercado Pago.
+    webhook_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )

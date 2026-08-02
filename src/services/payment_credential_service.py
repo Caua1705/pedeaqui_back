@@ -28,6 +28,11 @@ class ActivePaymentCredential:
     # vida longa, nem loga-lo. Passa direto para o header Authorization da
     # chamada ao gateway.
     access_token: str
+    # None quando o restaurante ainda nao cadastrou a "Assinatura secreta"
+    # do painel do Mercado Pago (registro criado antes desse campo existir,
+    # ou webhook ainda nao configurado la). Mesma regra do access_token:
+    # decifrado na hora, nunca logado.
+    webhook_secret: str | None
 
 
 class PaymentCredentialService:
@@ -48,4 +53,9 @@ class PaymentCredentialService:
             environment=environment,
             public_key=record.public_key,
             access_token=decrypt_secret(record.access_token_encrypted),
+            webhook_secret=(
+                decrypt_secret(record.webhook_secret_encrypted)
+                if record.webhook_secret_encrypted
+                else None
+            ),
         )

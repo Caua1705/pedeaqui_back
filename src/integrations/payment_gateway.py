@@ -334,9 +334,12 @@ def _verify_mercadopago_signature(
     secret: str | None,
 ) -> bool:
     if not secret:
+        # `secret` vem de RestaurantPaymentCredential.webhook_secret_encrypted
+        # (por restaurante), resolvido por quem chama — nao existe mais uma
+        # MERCADOPAGO_WEBHOOK_SECRET global para citar aqui.
         raise PaymentProviderNotConfiguredError(
-            "MERCADOPAGO_WEBHOOK_SECRET nao configurada: o webhook do "
-            "Mercado Pago nao pode ser verificado."
+            "Segredo do webhook do Mercado Pago nao cadastrado para este "
+            "restaurante: o webhook nao pode ser verificado."
         )
 
     signature_header = _header(headers, MERCADOPAGO_SIGNATURE_HEADER)

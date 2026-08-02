@@ -30,15 +30,16 @@ def collect_configuration_errors(settings: Settings) -> list[str]:
         )
 
     if settings.PAYMENT_PROVIDER == "mercadopago" and not (settings.PAYMENT_CREDENTIALS_ENCRYPTION_KEY or "").strip():
-        # A credencial em si e por restaurante e vive no banco (ver
-        # restaurant_payment_credentials); o que da para checar no boot,
-        # sem consultar o banco, e se existe chave para decifra-la. Sem
-        # isso TODA cobranca online responde 503, restaurante nenhum
-        # cadastrado ou nao.
+        # A credencial em si (access_token e webhook_secret) e por
+        # restaurante e vive no banco (ver restaurant_payment_credentials);
+        # o que da para checar no boot, sem consultar o banco, e se existe
+        # chave para decifra-la. Sem isso TODA cobranca online responde 503
+        # e TODO webhook responde 503, restaurante cadastrado ou nao.
         errors.append(
             "PAYMENT_PROVIDER=mercadopago sem PAYMENT_CREDENTIALS_ENCRYPTION_KEY. "
-            "Nenhuma credencial de restaurante pode ser decifrada e toda "
-            "cobranca online responderia 503. Gere uma chave com "
+            "Nenhuma credencial de restaurante (access_token ou segredo de "
+            "webhook) pode ser decifrada, e toda cobranca online e todo "
+            "webhook responderiam 503. Gere uma chave com "
             "`python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"` "
             "ou volte PAYMENT_PROVIDER para sandbox."
         )
@@ -95,13 +96,13 @@ def collect_configuration_warnings(settings: Settings) -> list[str]:
             "pagamento'. Obrigatoria se a filial oferece pagamento online."
         )
 
-    if settings.PAYMENT_PROVIDER == "mercadopago" and not (settings.MERCADOPAGO_WEBHOOK_SECRET or "").strip():
-        warnings.append(
-            "MERCADOPAGO_WEBHOOK_SECRET nao definida: o webhook do Mercado "
-            "Pago responde 503 e nenhum pedido online sai de 'aguardando "
-            "pagamento'. Pegue a 'Assinatura secreta' no painel do "
-            "restaurante, em Webhooks, depois de cadastrar a Notification URL."
-        )
+    # Nao ha warning de boot equivalente para o segredo de webhook do
+    # Mercado Pago: ele e por restaurante e vive no banco (ver
+    # restaurant_payment_credentials.webhook_secret_encrypted), entao nao
+    # da para saber no boot se "algum" restaurante esta sem cadastrar —
+    # mesma razao pela qual nao ha warning de boot para access_token
+    # ausente. Quem nao tiver cadastrado descobre no primeiro webhook, que
+    # responde 503.
 
     if settings.is_production and settings.PAYMENT_PROVIDER == "sandbox":
         warnings.append(

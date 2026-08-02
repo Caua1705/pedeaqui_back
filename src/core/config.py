@@ -81,16 +81,14 @@ class Settings(BaseSettings):
     # Segredo do HMAC do webhook do sandbox. Sem ele o webhook e recusado
     # com 503 — nao existe modo "aceita sem verificar".
     PAYMENT_WEBHOOK_SECRET: str | None = None
-    # Segredo da assinatura do webhook do Mercado Pago. GLOBAL por enquanto,
-    # nao por restaurante — funciona para o piloto (um restaurante, uma
-    # conta). Cada restaurante tem sua PROPRIA conta no Mercado Pago (nao e
-    # um app de marketplace com OAuth compartilhado) e configura o segredo
-    # de notificacao dela mesma no proprio painel; com o segundo
-    # restaurante, este segredo precisa passar a ser cadastrado por
-    # restaurante, do mesmo jeito que o access_token em
-    # restaurant_payment_credentials — nao fizemos isso ainda porque nao foi
-    # pedido.
-    MERCADOPAGO_WEBHOOK_SECRET: str | None = None
+    # Nao existe MERCADOPAGO_WEBHOOK_SECRET global: cada restaurante tem
+    # sua PROPRIA conta no Mercado Pago (nao e um app de marketplace com
+    # OAuth compartilhado) e configura a assinatura de notificacao dela
+    # mesma no proprio painel. O segredo mora em
+    # restaurant_payment_credentials.webhook_secret_encrypted, por
+    # restaurante e por ambiente, do mesmo jeito que o access_token — ver
+    # PaymentCredentialService.get_active_credential e
+    # scripts/register_restaurant_payment_credential.py.
 
     # Qual conjunto de credencial usar: a de teste (para desenvolver sem
     # mover dinheiro de verdade) ou a de producao. Global e nao por

@@ -48,7 +48,7 @@ from src.services.order_state_machine import (
     ensure_payment_transition_allowed,
     payment_history_status,
 )
-from src.services.payment_credential_service import PaymentCredentialService
+from src.services.payment_credential_service import ActivePaymentCredential, PaymentCredentialService
 from src.services.restaurant_service import RestaurantService
 from src.utils.security import utcnow
 
@@ -195,10 +195,45 @@ class PaymentService:
         raw_body: bytes,
         headers: dict[str, str],
     ) -> dict[str, Any]:
-        self._verify_signature(provider, raw_body, headers)
+        """Confere a assinatura e aplica a mudanca de estado do pagamento.
 
+        A assinatura do Mercado Pago e por RESTAURANTE (ver
+        RestaurantPaymentCredential.webhook_secret_encrypted) — nao existe
+        mais uma unica MERCADOPAGO_WEBHOOK_SECRET global para verificar
+        "antes de tudo", porque antes de saber qual segredo usar precisamos
+        saber de qual restaurante e o pagamento, e isso so vem do PROPRIO
+        corpo do webhook (data.id). Ordem adotada:
+
+          1. extract_provider_payment_id  so le o id do gateway no corpo,
+             NENHUMA chamada externa nem ao banco. Corpo malformado ou
+             provider desconhecido nunca chega a etapa 2.
+          2. OrderRepository.get_order_by_provider_payment  SELECT indexado
+             e local pelo (provider, provider_payment_id) lido no passo 1.
+             So devolve o restaurante_id; nao muda nada nem custa uma
+             chamada paga. Id que nao bate com pedido nenhum nosso para
+             tudo aqui (ignored/unknown_payment), sem verificar assinatura
+             nenhuma — nao ha o que proteger quando nao ha pedido para
+             mudar de estado.
+          3. resolve a credencial do restaurante achado no passo 2 e,
+             SO ENTAO, verifica a assinatura com o webhook_secret DELE.
+          4. so com assinatura valida e que este metodo segue para
+             parse_webhook_event, que para o Mercado Pago faz o GET
+             /v1/payments/{id} — a chamada de verdade, paga, ao gateway.
+
+        O que a ordem antiga protegia (nao gastar uma consulta FORJADA na
+        API do Mercado Pago) continua protegido: o unico passo que fala com
+        o Mercado Pago de verdade (passo 4) continua atras da assinatura
+        verificada. Os passos 1 e 2, que agora rodam antes, sao leitura
+        local e barata (parse de JSON e SELECT por indice unico) — a unica
+        coisa que um corpo forjado com um data.id chutado consegue provocar
+        e um SELECT que nao acha nada. Nao ha efeito colateral, e nenhum
+        dado sensivel novo e exposto: ja existia "ignored/unknown_payment"
+        como resposta publica para esse caso antes desta mudanca.
+        """
         try:
             provider_payment_id = extract_provider_payment_id(provider=provider, raw_body=raw_body)
+        except PaymentProviderUnknownError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
         except PaymentWebhookPayloadError as exc:
             # 200 de proposito: reenviar nao conserta um corpo que nao
             # entendemos, e 5xx colocaria o gateway em retentativa por horas.
@@ -217,14 +252,18 @@ class PaymentService:
             )
             return {"status": "ignored", "reason": "unknown_payment"}
 
-        # So a partir daqui sabemos de qual restaurante e o pagamento, e so
-        # entao da para saber qual credencial usar na consulta de status do
-        # Mercado Pago (ele nao manda o status no corpo do webhook).
-        access_token = None
+        # So a partir daqui sabemos de qual restaurante e o pagamento. Busca
+        # a credencial dele UMA VEZ SO: da o segredo para conferir a
+        # assinatura (a seguir) e, se ela bater, o access_token para o GET
+        # de status mais abaixo — nao ha necessidade de duas consultas ao
+        # banco para a mesma linha.
+        credential = None
         if provider == MERCADOPAGO_PROVIDER:
             credential = self.payment_credential_service.get_active_credential(order.restaurant_id)
-            if credential is not None:
-                access_token = credential.access_token
+
+        self._verify_signature(provider, credential, raw_body, headers)
+
+        access_token = credential.access_token if credential is not None else None
 
         try:
             event = parse_webhook_event(provider=provider, raw_body=raw_body, access_token=access_token)
@@ -333,18 +372,33 @@ class PaymentService:
         # ensure_payment_allows_order_status passa a deixar.
         return response
 
-    def _verify_signature(self, provider: str, raw_body: bytes, headers: dict[str, str]) -> None:
+    def _verify_signature(
+        self,
+        provider: str,
+        credential: ActivePaymentCredential | None,
+        raw_body: bytes,
+        headers: dict[str, str],
+    ) -> None:
+        # `provider` ja e conhecido aqui (extract_provider_payment_id, chamado
+        # antes deste metodo em handle_webhook, teria levantado
+        # PaymentProviderUnknownError para um provider desconhecido) — nao ha
+        # PaymentProviderUnknownError a tratar neste ponto.
+        if provider == MERCADOPAGO_PROVIDER:
+            # Segredo do RESTAURANTE do pedido (RestaurantPaymentCredential),
+            # nunca uma variavel global. None quando o restaurante nao tem
+            # credencial cadastrada para o ambiente ativo, ou tem credencial
+            # mas ainda nao cadastrou a Assinatura secreta do webhook.
+            secret = credential.webhook_secret if credential is not None else None
+        else:
+            secret = settings.PAYMENT_WEBHOOK_SECRET
+
         try:
             valid = verify_webhook_signature(
                 provider=provider,
                 raw_body=raw_body,
                 headers=headers,
-                secret=self._webhook_secret(provider),
+                secret=secret,
             )
-        except PaymentProviderUnknownError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
-            ) from exc
         except PaymentProviderNotConfiguredError as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
@@ -388,9 +442,3 @@ class PaymentService:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
             ) from exc
-
-    @staticmethod
-    def _webhook_secret(provider: str) -> str | None:
-        if provider == "mercadopago":
-            return settings.MERCADOPAGO_WEBHOOK_SECRET
-        return settings.PAYMENT_WEBHOOK_SECRET

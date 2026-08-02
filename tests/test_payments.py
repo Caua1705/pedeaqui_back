@@ -10,7 +10,10 @@ mocado — aqui o que importa e que o PaymentService resolve e passa a
 credencial CERTA, nao o formato da chamada HTTP em si.
 """
 
+import hashlib
+import hmac
 import json
+import time
 import unittest
 import uuid
 from decimal import Decimal
@@ -167,6 +170,23 @@ def webhook_body(payment_id, status, event_id="evt-1"):
 
 def signed_headers(raw_body, secret=WEBHOOK_SECRET):
     return {"X-Webhook-Signature": sign_sandbox_payload(raw_body, secret)}
+
+
+def mercadopago_webhook_body(data_id, event_id="evt-1"):
+    return json.dumps(
+        {"id": event_id, "data": {"id": data_id}}, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def mercadopago_signed_headers(data_id, secret, request_id="req-1", ts=None):
+    # Mesmo manifest de src.integrations.payment_gateway._verify_mercadopago_signature,
+    # calculado a mao aqui (ver tests/test_mercadopago_gateway.py para a
+    # cobertura do formato em si) — o que estes testes provam e QUAL
+    # segredo o PaymentService usa, nao o formato da assinatura.
+    ts = ts or str(int(time.time()))
+    manifest = f"id:{str(data_id).lower()};request-id:{request_id};ts:{ts};"
+    v1 = hmac.new(secret.encode("utf-8"), manifest.encode("utf-8"), hashlib.sha256).hexdigest()
+    return {"x-signature": f"ts={ts},v1={v1}", "x-request-id": request_id}
 
 
 class GatewayContractTests(unittest.TestCase):
@@ -530,7 +550,10 @@ class MercadopagoWebhookWiringTests(unittest.TestCase):
 
     def test_credential_of_the_order_restaurant_is_passed_to_parse_webhook_event(self):
         order = make_order(payment_provider="mercadopago", provider_payment_id="mp-1")
-        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        credential = SimpleNamespace(
+            access_token="token-do-junior-da-picanha",
+            webhook_secret="segredo-do-webhook-do-junior",
+        )
         service = build_service(order, credential=credential)
 
         with patch(
@@ -568,6 +591,97 @@ class MercadopagoWebhookWiringTests(unittest.TestCase):
                 service.handle_webhook("mercadopago", b"{}", {})
 
         self.assertEqual(raised.exception.status_code, 503)
+
+
+class MercadopagoWebhookSignatureOrderingTests(unittest.TestCase):
+    """A assinatura do Mercado Pago passou a ser por restaurante — precisa
+    achar o pedido (e por ele, o restaurante e o segredo dele) antes de dar
+    para conferir a assinatura. Estes testes travam essa ordem: a assinatura
+    e conferida com o segredo DO RESTAURANTE DO PEDIDO (nao um global, nao o
+    de outro restaurante), e nada que fale de verdade com o Mercado Pago
+    (parse_webhook_event) acontece sem uma assinatura valida. verify_webhook_signature
+    e parse_webhook_event AQUI SAO OS DE VERDADE (nao mocados) exceto onde
+    dito — o formato da assinatura em si e coberto em
+    tests/test_mercadopago_gateway.py.
+    """
+
+    def test_signature_is_checked_with_the_order_restaurant_own_secret(self):
+        order = make_order(payment_provider="mercadopago", provider_payment_id="mp-1")
+        credential = SimpleNamespace(
+            access_token="token-do-junior-da-picanha",
+            webhook_secret="segredo-do-junior",
+        )
+        service = build_service(order, credential=credential)
+        raw_body = mercadopago_webhook_body("mp-1")
+        headers = mercadopago_signed_headers("mp-1", "segredo-do-junior")
+
+        with patch("src.services.payment_service.parse_webhook_event") as mocked_parse:
+            mocked_parse.return_value = SimpleNamespace(
+                event_id="evt-1",
+                provider_payment_id="mp-1",
+                payment_status="paid",
+                raw_status="approved",
+            )
+            result = service.handle_webhook("mercadopago", raw_body, headers)
+
+        self.assertEqual(result["status"], "processed")
+
+    def test_another_restaurants_secret_does_not_validate_this_one(self):
+        order = make_order(payment_provider="mercadopago", provider_payment_id="mp-1")
+        credential = SimpleNamespace(
+            access_token="token-do-junior-da-picanha",
+            webhook_secret="segredo-do-junior",
+        )
+        service = build_service(order, credential=credential)
+        raw_body = mercadopago_webhook_body("mp-1")
+        # Assinado com o segredo de OUTRO restaurante: bater com o webhook
+        # secret GLOBAL antigo teria passado, com o de cada um nao.
+        headers = mercadopago_signed_headers("mp-1", "segredo-de-outro-restaurante")
+
+        with self.assertRaises(HTTPException) as raised:
+            service.handle_webhook("mercadopago", raw_body, headers)
+
+        self.assertEqual(raised.exception.status_code, 401)
+
+    def test_credential_without_webhook_secret_yet_answers_503(self):
+        # Credencial cadastrada so com access_token (o caso do Junior antes
+        # deste campo existir) — sem segredo nao ha como verificar, e a
+        # resposta e a mesma de qualquer credencial ausente.
+        order = make_order(payment_provider="mercadopago", provider_payment_id="mp-1")
+        credential = SimpleNamespace(access_token="token-do-junior-da-picanha", webhook_secret=None)
+        service = build_service(order, credential=credential)
+        raw_body = mercadopago_webhook_body("mp-1")
+        headers = mercadopago_signed_headers("mp-1", "qualquer-coisa")
+
+        with self.assertRaises(HTTPException) as raised:
+            service.handle_webhook("mercadopago", raw_body, headers)
+
+        self.assertEqual(raised.exception.status_code, 503)
+
+    def test_unknown_payment_never_reaches_signature_verification(self):
+        # Sem pedido correspondente nao ha restaurante, e sem restaurante
+        # nao ha segredo nenhum para conferir — a resposta e ignored ANTES
+        # de qualquer tentativa de verificar assinatura, gastando so um
+        # SELECT local que nao achou nada.
+        order = make_order(payment_provider="mercadopago", provider_payment_id="mp-1")
+        service = build_service(order)
+        raw_body = mercadopago_webhook_body("mp-outro")
+        headers = mercadopago_signed_headers("mp-outro", "nao-importa")
+
+        with patch("src.services.payment_service.verify_webhook_signature") as mocked_verify:
+            result = service.handle_webhook("mercadopago", raw_body, headers)
+
+        mocked_verify.assert_not_called()
+        self.assertEqual(result["reason"], "unknown_payment")
+
+    def test_unknown_provider_is_a_404_before_touching_the_database(self):
+        order = make_order(payment_provider="mercadopago", provider_payment_id="mp-1")
+        service = build_service(order)
+
+        with self.assertRaises(HTTPException) as raised:
+            service.handle_webhook("picpay", b"{}", {})
+
+        self.assertEqual(raised.exception.status_code, 404)
 
 
 if __name__ == "__main__":

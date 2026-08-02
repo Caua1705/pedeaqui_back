@@ -477,24 +477,112 @@ usando o **id do evento** e só então aplica a transição. Corpo malformado,
 pagamento desconhecido e transição impossível respondem **2xx** com warning no
 log — 5xx colocaria o gateway em retentativa por horas sem consertar nada.
 
-#### Onde o Mercado Pago vai ser plugado
+#### Os dois providers
 
-`src/integrations/payment_gateway.py`, **três funções**, cada uma com o passo a
-passo escrito em comentário:
+`src/integrations/payment_gateway.py` implementa **dois** providers atrás das
+mesmas três funções (`create_payment`, `verify_webhook_signature`,
+`parse_webhook_event`) — nada fora desse arquivo sabe qual dos dois está ativo:
 
-| Função | Linha | O que escrever |
+- `sandbox`: implementação **de verdade** (sem chamada externa) — cria a
+  cobrança localmente e valida o webhook por HMAC-SHA256 do corpo cru com
+  `PAYMENT_WEBHOOK_SECRET`. Permite exercitar o fluxo inteiro sem depender do
+  Mercado Pago responder.
+- `mercadopago`: chama a API de Pagamentos (v1) de verdade, Checkout
+  Transparente, **hoje só pix** (cartão exige token gerado no frontend com o
+  SDK deles — outra integração, fica para depois). Detalhes na 4.5.2.
+
+Troca de um para o outro é só `PAYMENT_PROVIDER` no `.env`.
+
+#### 4.5.2 Integração real com o Mercado Pago (pix)
+
+**Criar a cobrança** (`create_payment`, provider `mercadopago`) —
+`POST /v1/payments` com:
+
+```
+Authorization: Bearer {access_token}      credencial do restaurante do pedido
+                                           (PaymentCredentialService, nunca global)
+X-Idempotency-Key: {order_id}             retry nosso não gera duas cobranças lá
+transaction_amount, description
+payment_method_id: "pix"
+payer.email                               ver payer_email abaixo
+application_fee                           SO no corpo se != None (split, ver 4.5.1)
+```
+
+`payer.email` é exigido pela API deles e o pedido **não guarda e-mail
+nenhum** (só nome e telefone — `Order.customer_name_snapshot`/
+`customer_phone_snapshot`). `PaymentService._resolve_payer_email` resolve
+assim: cliente logado → `customers.email`; convidado → um e-mail sintético
+próprio (`pedido-{order_number}@pederapidex.com`) — o Mercado Pago só usa
+esse campo para validar o payer da cobrança pix, não manda nada para ele.
+
+Da resposta, `PaymentIntent.qr_code` vem de
+`point_of_interaction.transaction_data.qr_code` (o "copia e cola") e
+`checkout_url` de `.ticket_url` (página hospedada pelo Mercado Pago com o QR
+em imagem — não implementamos `qr_code_base64` para renderizar o QR inline;
+hoje o front redireciona para `ticket_url`).
+
+**Receber o webhook** (`verify_webhook_signature` + `parse_webhook_event`,
+provider `mercadopago`) — a parte não óbvia é que **o corpo do webhook não
+traz o status**, só avisa "o pagamento X mudou" (`data.id`). O status
+confiável exige `GET /v1/payments/{data.id}`, autenticado com a credencial
+do restaurante DONO do pagamento — e o webhook não diz de qual restaurante é.
+Por isso `PaymentService.handle_webhook` faz, nesta ordem:
+
+```
+1. verify_webhook_signature   assinatura ANTES de tudo (401 se invalida)
+2. extract_provider_payment_id   so le data.id, nenhuma chamada externa
+3. OrderRepository.get_order_by_provider_payment   acha o pedido (e o restaurante)
+4. PaymentCredentialService.get_active_credential(order.restaurant_id)
+5. parse_webhook_event(access_token=...)   SO AGORA faz o GET com o token certo
+```
+
+Sem isso, dar um GET com uma credencial errada (ou nenhuma) seria o caminho
+óbvio, e simplesmente não funciona: cada restaurante tem sua própria conta,
+não uma conta de marketplace compartilhada.
+
+Assinatura (`x-signature: ts=...,v1=...` + `x-request-id`): manifest
+`f"id:{data_id};request-id:{x_request_id};ts:{ts};"` (id em minúsculas),
+`hmac_sha256` com `MERCADOPAGO_WEBHOOK_SECRET`, comparado com
+`hmac.compare_digest`. `ts` mais velho que 5 minutos é recusado — sem isso
+uma notificação capturada hoje serviria para replay amanhã. Corpo
+malformado durante a verificação vira `False` (401), nunca uma exceção.
+
+Tradução de status: `approved→paid`, `rejected`/`cancelled→failed`,
+`refunded`/`charged_back→refunded`. `pending`/`in_process`/`authorized` (e
+qualquer status novo que o Mercado Pago venha a inventar) não aplicam
+mudança nenhuma — o pagamento ainda não tem veredito, e é o próprio gateway
+quem manda um novo webhook quando isso mudar.
+
+**Erros do gateway são todos explícitos**, nunca uma resposta plausível
+silenciosa:
+
+| Situação | Exceção | Como o PaymentService reage |
 |---|---|---|
-| `create_payment` | `:83` | `POST /v1/payments` com `X-Idempotency-Key: {order_id}` |
-| `verify_webhook_signature` | `:154` | manifest `id:...;request-id:...;ts:...;` + HMAC do header `x-signature` |
-| `parse_webhook_event` | `:198` | `GET /v1/payments/{id}` e traduzir `approved`/`rejected`/`refunded` |
+| timeout / falha de rede / 5xx | `PaymentGatewayUnavailableError` | 503 (create_payment) / 503 + gateway reenvia (webhook) |
+| 401/403 (token inválido/revogado) | `PaymentGatewayCredentialError` | 503 |
+| 404 (payment_id não existe lá) | `PaymentNotFoundError` | 503 (create_payment) / `ignored, reason=payment_not_found` (webhook — não retentável) |
+| 400/422 (requisição nossa recusada) | `PaymentGatewayError` | 503 |
+| corpo da resposta não é JSON | `PaymentGatewayUnavailableError` | 503 |
 
-Nada fora desse arquivo muda. Depois dos três, é só `PAYMENT_PROVIDER=mercadopago`
-no `.env`.
+Nenhuma mensagem de erro inclui o access_token nem o corpo da resposta do
+gateway — só método, path, status e latência vão para o log
+(`[Pagamento][mercadopago] method=... path=... status=... latency_ms=...`).
 
-Enquanto isso, o provider `sandbox` é uma implementação **de verdade** (sem
-chamada externa): cria a cobrança localmente e valida o webhook por HMAC-SHA256
-do corpo cru com `PAYMENT_WEBHOOK_SECRET`. É o que permite exercitar o fluxo
-inteiro sem credencial.
+**MERCADOPAGO_WEBHOOK_SECRET continua global** (não por restaurante) — vale
+para o piloto, um restaurante. Cada restaurante tem sua própria conta e
+configura essa assinatura no próprio painel; com o segundo restaurante, este
+segredo precisa virar por restaurante, do mesmo jeito que o `access_token`
+em `restaurant_payment_credentials` — não fizemos isso agora porque não foi
+pedido, fica registrado aqui.
+
+Testes: `tests/test_mercadopago_gateway.py` cobre as três funções com o
+gateway mocado (`httpx.Client` substituído) — formato da requisição,
+tradução da resposta, todos os erros da tabela acima, e a assinatura
+(HMAC calculado a mão no teste, corpo adulterado, timestamp velho).
+`tests/test_payments.py` cobre a resolução de `payer_email` e a ordem
+pedido→credencial→GET no webhook. Nenhum teste chama o Mercado Pago de
+verdade — isso só se confirma testando de ponta a ponta com a credencial de
+teste (ver relatório da integração para o passo a passo).
 
 #### 4.5.1 Credencial de pagamento por restaurante (BLOCO G)
 

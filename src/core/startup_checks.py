@@ -84,15 +84,23 @@ def collect_configuration_warnings(settings: Settings) -> list[str]:
             "nenhuma rota a utiliza. Pode ser removida do .env."
         )
 
-    if not (settings.PAYMENT_WEBHOOK_SECRET or "").strip():
+    if settings.PAYMENT_PROVIDER == "sandbox" and not (settings.PAYMENT_WEBHOOK_SECRET or "").strip():
         # Warning e nao erro: hoje ha restaurante sem nenhuma forma de
         # pagamento online, e derrubar o boot deles por causa de uma
         # variavel que nao usam seria pior. Quem tem pagamento online
         # descobre no primeiro webhook, que responde 503.
         warnings.append(
-            "PAYMENT_WEBHOOK_SECRET nao definida: o webhook de pagamento "
+            "PAYMENT_WEBHOOK_SECRET nao definida: o webhook do sandbox "
             "responde 503 e nenhum pedido online sai de 'aguardando "
             "pagamento'. Obrigatoria se a filial oferece pagamento online."
+        )
+
+    if settings.PAYMENT_PROVIDER == "mercadopago" and not (settings.MERCADOPAGO_WEBHOOK_SECRET or "").strip():
+        warnings.append(
+            "MERCADOPAGO_WEBHOOK_SECRET nao definida: o webhook do Mercado "
+            "Pago responde 503 e nenhum pedido online sai de 'aguardando "
+            "pagamento'. Pegue a 'Assinatura secreta' no painel do "
+            "restaurante, em Webhooks, depois de cadastrar a Notification URL."
         )
 
     if settings.is_production and settings.PAYMENT_PROVIDER == "sandbox":

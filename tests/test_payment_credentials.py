@@ -81,6 +81,7 @@ def make_record(**overrides):
     values = {
         "public_key": "PUBLIC-KEY-DO-JUNIOR",
         "access_token_encrypted": None,
+        "webhook_secret_encrypted": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -116,6 +117,29 @@ class PaymentCredentialServiceTests(unittest.TestCase):
         # A troca de teste para producao e so essa variavel: confere que a
         # busca no repositorio de fato usa MERCADOPAGO_ENVIRONMENT.
         self.assertEqual(repository.requested, (restaurant_id, "test"))
+
+    def test_resolves_and_decrypts_the_webhook_secret_when_registered(self):
+        record = make_record(
+            access_token_encrypted=encrypt_secret("TEST-token-do-junior"),
+            webhook_secret_encrypted=encrypt_secret("segredo-do-webhook-do-junior"),
+        )
+        service = PaymentCredentialService.__new__(PaymentCredentialService)
+        service.repository = FakeCredentialRepository(record=record)
+
+        credential = service.get_active_credential(uuid.uuid4())
+
+        self.assertEqual(credential.webhook_secret, "segredo-do-webhook-do-junior")
+
+    def test_webhook_secret_is_none_when_not_yet_registered(self):
+        # Credencial cadastrada antes deste campo existir, ou restaurante
+        # que ainda nao configurou a Notification URL no painel.
+        record = make_record(access_token_encrypted=encrypt_secret("TEST-token-do-junior"))
+        service = PaymentCredentialService.__new__(PaymentCredentialService)
+        service.repository = FakeCredentialRepository(record=record)
+
+        credential = service.get_active_credential(uuid.uuid4())
+
+        self.assertIsNone(credential.webhook_secret)
 
     def test_switching_the_environment_changes_which_credential_is_requested(self):
         repository = FakeCredentialRepository(record=None)

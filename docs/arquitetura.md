@@ -522,30 +522,50 @@ em imagem — não implementamos `qr_code_base64` para renderizar o QR inline;
 hoje o front redireciona para `ticket_url`).
 
 **Receber o webhook** (`verify_webhook_signature` + `parse_webhook_event`,
-provider `mercadopago`) — a parte não óbvia é que **o corpo do webhook não
-traz o status**, só avisa "o pagamento X mudou" (`data.id`). O status
-confiável exige `GET /v1/payments/{data.id}`, autenticado com a credencial
-do restaurante DONO do pagamento — e o webhook não diz de qual restaurante é.
-Por isso `PaymentService.handle_webhook` faz, nesta ordem:
+provider `mercadopago`) — duas coisas não óbvias, as duas resolvidas pela
+mesma ordem de operações em `PaymentService.handle_webhook`:
+
+- **o corpo do webhook não traz o status**, só avisa "o pagamento X mudou"
+  (`data.id`). O status confiável exige `GET /v1/payments/{data.id}`,
+  autenticado com a credencial do restaurante DONO do pagamento — e o
+  webhook não diz de qual restaurante é.
+- **a assinatura também é por restaurante** (`webhook_secret` em
+  `restaurant_payment_credentials`, ver 4.5.1) — não existe mais uma
+  `MERCADOPAGO_WEBHOOK_SECRET` global para verificar contra qualquer
+  notificação. Só dá para saber qual segredo usar depois de saber de qual
+  restaurante é o pagamento — o mesmo dado que falta para o `GET` acima.
 
 ```
-1. verify_webhook_signature   assinatura ANTES de tudo (401 se invalida)
-2. extract_provider_payment_id   so le data.id, nenhuma chamada externa
-3. OrderRepository.get_order_by_provider_payment   acha o pedido (e o restaurante)
-4. PaymentCredentialService.get_active_credential(order.restaurant_id)
-5. parse_webhook_event(access_token=...)   SO AGORA faz o GET com o token certo
+1. extract_provider_payment_id                       so le data.id, nenhuma chamada externa nem ao banco
+2. OrderRepository.get_order_by_provider_payment      SELECT indexado e local; acha o pedido (e o restaurante)
+                                                       sem pedido correspondente -> ignored/unknown_payment, PARA AQUI
+3. PaymentCredentialService.get_active_credential(order.restaurant_id)
+4. verify_webhook_signature(secret=credential.webhook_secret)   SO AGORA confere a assinatura (401 se invalida)
+5. parse_webhook_event(access_token=credential.access_token)    SO com assinatura valida faz o GET com o token certo
 ```
 
-Sem isso, dar um GET com uma credencial errada (ou nenhuma) seria o caminho
-óbvio, e simplesmente não funciona: cada restaurante tem sua própria conta,
-não uma conta de marketplace compartilhada.
+**Por que essa ordem não abre brecha.** A ordem antiga (assinatura antes de
+tudo) existia para não gastar uma consulta FORJADA na API do Mercado Pago —
+o passo 5, a única chamada de rede de verdade e paga. Essa garantia
+continua: o passo 5 só roda depois da assinatura verificada, exatamente
+como antes. O que mudou foi só re-ordenar os passos 1 e 2 para ANTES da
+assinatura, e os dois são leitura local e barata (parse de JSON e um
+`SELECT` por índice único, sem chamada externa nem efeito colateral) — o
+pior que um corpo forjado com um `data.id` chutado consegue provocar é um
+`SELECT` que não acha nada, e a resposta nesse caso (`ignored`,
+`reason=unknown_payment`) já era pública antes desta mudança. Um provider
+desconhecido (nem `sandbox` nem `mercadopago`) já é rejeitado no passo 1
+(`PaymentProviderUnknownError` → 404), antes de qualquer leitura.
 
 Assinatura (`x-signature: ts=...,v1=...` + `x-request-id`): manifest
 `f"id:{data_id};request-id:{x_request_id};ts:{ts};"` (id em minúsculas),
-`hmac_sha256` com `MERCADOPAGO_WEBHOOK_SECRET`, comparado com
-`hmac.compare_digest`. `ts` mais velho que 5 minutos é recusado — sem isso
-uma notificação capturada hoje serviria para replay amanhã. Corpo
-malformado durante a verificação vira `False` (401), nunca uma exceção.
+`hmac_sha256` com o `webhook_secret` do RESTAURANTE (nunca uma constante
+global), comparado com `hmac.compare_digest`. `ts` mais velho que 5
+minutos é recusado — sem isso uma notificação capturada hoje serviria para
+replay amanhã. Corpo malformado durante a verificação vira `False` (401),
+nunca uma exceção. Restaurante sem `webhook_secret` cadastrado (ou sem
+credencial nenhuma) responde 503, o mesmo comportamento de uma credencial
+ausente em qualquer outro ponto do fluxo.
 
 Tradução de status: `approved→paid`, `rejected`/`cancelled→failed`,
 `refunded`/`charged_back→refunded`. `pending`/`in_process`/`authorized` (e
@@ -568,40 +588,46 @@ Nenhuma mensagem de erro inclui o access_token nem o corpo da resposta do
 gateway — só método, path, status e latência vão para o log
 (`[Pagamento][mercadopago] method=... path=... status=... latency_ms=...`).
 
-**MERCADOPAGO_WEBHOOK_SECRET continua global** (não por restaurante) — vale
-para o piloto, um restaurante. Cada restaurante tem sua própria conta e
-configura essa assinatura no próprio painel; com o segundo restaurante, este
-segredo precisa virar por restaurante, do mesmo jeito que o `access_token`
-em `restaurant_payment_credentials` — não fizemos isso agora porque não foi
-pedido, fica registrado aqui.
-
 Testes: `tests/test_mercadopago_gateway.py` cobre as três funções com o
 gateway mocado (`httpx.Client` substituído) — formato da requisição,
-tradução da resposta, todos os erros da tabela acima, e a assinatura
-(HMAC calculado a mão no teste, corpo adulterado, timestamp velho).
-`tests/test_payments.py` cobre a resolução de `payer_email` e a ordem
-pedido→credencial→GET no webhook. Nenhum teste chama o Mercado Pago de
-verdade — isso só se confirma testando de ponta a ponta com a credencial de
-teste (ver relatório da integração para o passo a passo).
+tradução da resposta, todos os erros da tabela acima, e o formato da
+assinatura (HMAC calculado a mão no teste, corpo adulterado, timestamp
+velho). `tests/test_payments.py` cobre a resolução de `payer_email`, a
+ordem pedido→credencial→GET no webhook, e a ordem
+extração→pedido→credencial→assinatura descrita acima — inclusive que o
+segredo usado é sempre o do restaurante DO PEDIDO (o segredo de um
+restaurante não valida o webhook de outro) e que um pagamento sem pedido
+correspondente nunca chega a chamar `verify_webhook_signature`. Nenhum
+teste chama o Mercado Pago de verdade — isso só se confirma testando de
+ponta a ponta com a credencial de teste (ver relatório da integração para
+o passo a passo).
 
 #### 4.5.1 Credencial de pagamento por restaurante (BLOCO G)
 
 Não existe uma credencial global do Mercado Pago. Cada restaurante tem a
 própria conta lá, e a cobrança do pedido dele tem que sair em nome dessa
 conta — daí `restaurant_payment_credentials`
-(`alembic/versions/20260801_0008_credenciais_pagamento_por_restaurante.py`),
-uma linha por `(restaurant_id, environment)`:
+(`alembic/versions/20260801_0008_credenciais_pagamento_por_restaurante.py`,
+`webhook_secret_encrypted` acrescentada em
+`20260801_0009_segredo_webhook_por_restaurante.py`), uma linha por
+`(restaurant_id, environment)`:
 
 ```
-public_key             texto puro    — o próprio Mercado Pago manda expor no frontend
-access_token_encrypted cifrado       — credencial da CONTA DO RESTAURANTE, nunca em log
-environment             'test' | 'production'
+public_key               texto puro    — o próprio Mercado Pago manda expor no frontend
+access_token_encrypted   cifrado       — credencial da CONTA DO RESTAURANTE, nunca em log
+webhook_secret_encrypted cifrado, NULLABLE — "Assinatura secreta" do painel, idem
+environment               'test' | 'production'
 ```
 
-`access_token` é cifrado com Fernet (`src/utils/crypto.py`), chave em
-`PAYMENT_CREDENTIALS_ENCRYPTION_KEY` (só no `.env`, nunca no banco — cifrar a
-coluna não protege nada se a chave mora ao lado dela). `startup_checks.py`
-derruba o boot se `PAYMENT_PROVIDER=mercadopago` e a chave estiver vazia.
+`access_token` e `webhook_secret` são cifrados com Fernet
+(`src/utils/crypto.py`), chave em `PAYMENT_CREDENTIALS_ENCRYPTION_KEY` (só no
+`.env`, nunca no banco — cifrar a coluna não protege nada se a chave mora ao
+lado dela). `startup_checks.py` derruba o boot se `PAYMENT_PROVIDER=mercadopago`
+e a chave estiver vazia. `webhook_secret_encrypted` é `NULL` até o
+restaurante cadastrar a Notification URL no painel do Mercado Pago e receber
+a Assinatura secreta — um passo que pode acontecer depois do `access_token`;
+enquanto estiver `NULL`, o webhook deste restaurante responde 503 (ver
+4.5.2), do mesmo jeito que uma credencial ausente.
 
 Teste e produção **coexistem** no banco. Qual das duas vale para todo mundo é
 a variável global `MERCADOPAGO_ENVIRONMENT` (`test` por padrão) — trocar para
@@ -609,13 +635,16 @@ produção é mudar essa variável no `.env`, sem tocar em código nem apagar a
 credencial de teste.
 
 `PaymentCredentialService.get_active_credential` (`src/services/payment_credential_service.py`)
-busca a linha do `(restaurant_id, MERCADOPAGO_ENVIRONMENT)` e devolve o token
-já decifrado. `PaymentService.start_online_payment` chama isso **antes** de
-falar com o gateway e passa o resultado para `create_payment(..., access_token=...)`
-— não existe caminho em que a cobrança saia sem a credencial do restaurante
-do pedido. Sem credencial cadastrada para o ambiente ativo, `create_payment`
-responde `PaymentProviderNotConfiguredError` → **503**, o mesmo
-comportamento de antes quando a credencial global estava vazia.
+busca a linha do `(restaurant_id, MERCADOPAGO_ENVIRONMENT)` e devolve
+`access_token` e `webhook_secret` já decifrados (`webhook_secret` vem `None`
+quando a coluna está `NULL`). `PaymentService.start_online_payment` chama
+isso **antes** de falar com o gateway e passa o `access_token` para
+`create_payment(..., access_token=...)` — não existe caminho em que a
+cobrança saia sem a credencial do restaurante do pedido. Sem credencial
+cadastrada para o ambiente ativo, `create_payment` responde
+`PaymentProviderNotConfiguredError` → **503**, o mesmo comportamento de
+antes quando a credencial global estava vazia. `PaymentService.handle_webhook`
+usa o `webhook_secret` da mesma forma — ver a ordem em 4.5.2.
 
 `create_payment` também aceita `application_fee` (o corte da plataforma no
 split de pagamento do Mercado Pago), **opcional e hoje sempre `None`**: não
@@ -624,8 +653,8 @@ existe para não exigir mexer na assinatura da função no dia em que existir.
 
 Sem tela de cadastro, quem registra a credencial é
 `scripts/register_restaurant_payment_credential.py` — mesma forma de
-`scripts/create_admin_user.py` (o segredo é pedido em prompt oculto, nunca
-argumento de linha de comando):
+`scripts/create_admin_user.py` (os segredos são pedidos em prompt oculto,
+nunca argumento de linha de comando):
 
 ```
 python scripts/register_restaurant_payment_credential.py \
@@ -634,9 +663,29 @@ python scripts/register_restaurant_payment_credential.py \
     --public-key TEST-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 ```
 
-Rodar de novo para o mesmo `(restaurant, environment)` substitui a credencial
-(`ON CONFLICT DO UPDATE` em `RestaurantPaymentCredentialRepository.upsert`) —
-é como se troca um token vazado.
+Pede `access_token` (obrigatório) e, em seguida, `webhook_secret`
+(opcional — Enter em branco pula e **não mexe** no que já estava cadastrado,
+se houver). Rodar de novo para o mesmo `(restaurant, environment)`
+substitui a credencial (`ON CONFLICT DO UPDATE` em
+`RestaurantPaymentCredentialRepository.upsert`) — é como se troca um token
+vazado; `webhook_secret_encrypted` só entra nesse `UPDATE` quando um valor
+novo é informado, para rodar de novo (rotacionar `access_token`, por
+exemplo) não apagar um segredo de webhook já cadastrado.
+
+Para atualizar **só** o segredo do webhook de uma credencial que já existe
+— o caso de uma credencial cadastrada antes deste campo existir —, sem
+re-informar `access_token` nem `public_key`:
+
+```
+python scripts/register_restaurant_payment_credential.py \
+    --restaurant-slug junior-da-picanha \
+    --environment test \
+    --webhook-secret-only
+```
+
+Isso chama `RestaurantPaymentCredentialRepository.update_webhook_secret`, um
+`UPDATE` parcial que recusa (mensagem clara, sem criar linha) se a
+credencial ainda não existir.
 
 ### 4.6 Comissão da plataforma (Fase 2)
 

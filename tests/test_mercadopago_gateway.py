@@ -266,6 +266,189 @@ class CreatePaymentTests(unittest.TestCase):
                 self.assertNotIn(ACCESS_TOKEN, str(exc))
 
 
+class ErrorLoggingTests(unittest.TestCase):
+    """Um erro do Mercado Pago tem que ser DIAGNOSTICAVEL pelo nosso log.
+
+    Antes daqui a linha de log tinha metodo, path, status e latencia — e
+    "status=500" sozinho nao distingue instabilidade deles de `payer.email`
+    recusado de chave de idempotencia em conflito. O codigo e a causa que
+    eles mandam no corpo sao o que separa os tres.
+    """
+
+    def _call_and_capture_log(self, response):
+        fake_client = FakeHttpxClient(response=response)
+        with patch(HTTPX_CLIENT_PATH, return_value=fake_client):
+            with self.assertLogs("uvicorn.error", level="WARNING") as captured:
+                with self.assertRaises(PaymentGatewayError):
+                    create_payment(**create_payment_body())
+        return "\n".join(captured.output)
+
+    def test_500_logs_the_code_the_message_and_the_cause(self):
+        logged = self._call_and_capture_log(
+            FakeResponse(
+                500,
+                {
+                    "message": "internal server error",
+                    "error": "internal_error",
+                    "status": 500,
+                    "cause": [{"code": 2062, "description": "invalid idempotency key"}],
+                },
+            )
+        )
+
+        self.assertIn("status=500", logged)
+        self.assertIn("error=internal_error", logged)
+        self.assertIn("code=2062", logged)
+        self.assertIn("internal server error", logged)
+        self.assertIn("invalid idempotency key", logged)
+
+    def test_400_logs_the_cause_too(self):
+        logged = self._call_and_capture_log(
+            FakeResponse(
+                400,
+                {
+                    "message": "bad request",
+                    "error": "bad_request",
+                    "cause": [{"code": 4051, "description": "payer.email must be valid"}],
+                },
+            )
+        )
+
+        self.assertIn("code=4051", logged)
+        self.assertIn("payer.email must be valid", logged)
+
+    def test_payer_email_is_masked_in_the_log(self):
+        # Eles ecoam o valor recusado na mensagem. O e-mail do pagador e o
+        # UNICO dado dele que mandamos — nao pode voltar para o log.
+        logged = self._call_and_capture_log(
+            FakeResponse(
+                400,
+                {
+                    "message": "cliente@exemplo.com is not a valid email",
+                    "error": "bad_request",
+                    "cause": [{"code": 4051, "description": "payer.email cliente@exemplo.com invalid"}],
+                },
+            )
+        )
+
+        self.assertNotIn("cliente@exemplo.com", logged)
+        self.assertIn("[email]", logged)
+        # O que interessa depurar continua legivel.
+        self.assertIn("code=4051", logged)
+        self.assertIn("is not a valid email", logged)
+
+    def test_payment_id_and_error_code_survive_the_masking(self):
+        # Mascarar tudo que parece identificador levaria junto o id do
+        # pagamento e o codigo do erro — que sao exatamente o que se le.
+        logged = self._call_and_capture_log(
+            FakeResponse(
+                400,
+                {
+                    "message": "payment 123456789012 already exists",
+                    "error": "bad_request",
+                    "cause": [{"code": 2062, "description": "duplicated payment 123456789012"}],
+                },
+            )
+        )
+
+        self.assertIn("123456789012", logged)
+        self.assertIn("code=2062", logged)
+
+    def test_access_token_is_never_logged(self):
+        logged = self._call_and_capture_log(
+            FakeResponse(500, {"message": "internal error", "error": "internal_error"})
+        )
+
+        self.assertNotIn(ACCESS_TOKEN, logged)
+
+    def test_very_long_description_is_truncated(self):
+        logged = self._call_and_capture_log(
+            FakeResponse(500, {"message": "x" * 5000, "error": "internal_error"})
+        )
+
+        self.assertNotIn("x" * 400, logged)
+        self.assertIn("x" * 100, logged)
+
+    def test_error_body_without_cause_still_logs_what_there_is(self):
+        logged = self._call_and_capture_log(
+            FakeResponse(500, {"message": "internal error", "error": "internal_error"})
+        )
+
+        self.assertIn("error=internal_error", logged)
+        # Sem `cause`, o codigo especifico nao existe e o slug generico serve.
+        self.assertIn("code=internal_error", logged)
+        self.assertIn("cause=-", logged)
+
+    def test_error_body_that_is_not_json_does_not_break_the_call(self):
+        # Corpo de erro e justamente o que menos segue contrato. Nao poder
+        # ler o motivo nao pode virar uma excecao diferente da devida.
+        fake_client = FakeHttpxClient(response=FakeResponse(500, json_error=True))
+
+        with patch(HTTPX_CLIENT_PATH, return_value=fake_client):
+            with self.assertRaises(PaymentGatewayUnavailableError):
+                create_payment(**create_payment_body())
+
+    def test_error_body_that_is_a_list_does_not_break_the_call(self):
+        fake_client = FakeHttpxClient(response=FakeResponse(400, ["erro"]))
+
+        with patch(HTTPX_CLIENT_PATH, return_value=fake_client):
+            with self.assertRaises(PaymentGatewayError):
+                create_payment(**create_payment_body())
+
+    def test_cause_as_a_single_object_is_read_the_same_way(self):
+        logged = self._call_and_capture_log(
+            FakeResponse(400, {"error": "bad_request", "cause": {"code": 3034, "description": "nope"}})
+        )
+
+        self.assertIn("code=3034", logged)
+
+    def test_provider_error_code_is_carried_on_the_exception(self):
+        # E o que o PaymentService mostra ao cliente como referencia: um
+        # codigo do catalogo deles, nunca a mensagem crua.
+        fake_client = FakeHttpxClient(
+            response=FakeResponse(
+                400,
+                {"error": "bad_request", "cause": [{"code": 4051, "description": "payer.email invalid"}]},
+            )
+        )
+
+        with patch(HTTPX_CLIENT_PATH, return_value=fake_client):
+            try:
+                create_payment(**create_payment_body())
+                self.fail("esperava PaymentGatewayError")
+            except PaymentGatewayError as exc:
+                self.assertEqual(exc.provider_error_code, "4051")
+
+    def test_provider_error_code_falls_back_to_the_generic_slug(self):
+        fake_client = FakeHttpxClient(response=FakeResponse(500, {"error": "internal_error"}))
+
+        with patch(HTTPX_CLIENT_PATH, return_value=fake_client):
+            try:
+                create_payment(**create_payment_body())
+                self.fail("esperava PaymentGatewayUnavailableError")
+            except PaymentGatewayUnavailableError as exc:
+                self.assertEqual(exc.provider_error_code, "internal_error")
+
+    def test_raised_message_never_carries_the_gateway_text(self):
+        # A mensagem da excecao chega ao cliente. O texto deles pode ecoar o
+        # e-mail do pagador; so o codigo pode atravessar.
+        fake_client = FakeHttpxClient(
+            response=FakeResponse(
+                500,
+                {"message": "cliente@exemplo.com recusado", "error": "internal_error"},
+            )
+        )
+
+        with patch(HTTPX_CLIENT_PATH, return_value=fake_client):
+            try:
+                create_payment(**create_payment_body())
+                self.fail("esperava PaymentGatewayUnavailableError")
+            except PaymentGatewayUnavailableError as exc:
+                self.assertNotIn("cliente@exemplo.com", str(exc))
+                self.assertNotIn("recusado", str(exc))
+                self.assertIn("internal_error", str(exc))
+
+
 class ExtractProviderPaymentIdTests(unittest.TestCase):
     def test_reads_data_id_from_the_mercadopago_envelope(self):
         raw_body = json.dumps({"id": 999, "data": {"id": "123456789"}}).encode()

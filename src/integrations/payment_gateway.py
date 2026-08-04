@@ -40,6 +40,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -70,6 +71,18 @@ MERCADOPAGO_SUPPORTED_PAYMENT_METHODS = ("pix",)
 # por terceiros horas depois nao pode passar so porque o HMAC bate.
 MERCADOPAGO_SIGNATURE_MAX_AGE_SECONDS = 300
 
+# Teto do texto de erro que vai para o log. O Mercado Pago as vezes devolve
+# uma descricao longa; o que importa esta no comeco dela, e uma linha de log
+# de tamanho imprevisivel atrapalha quem for ler o arquivo depois.
+MERCADOPAGO_ERROR_TEXT_MAX_CHARS = 300
+
+# O UNICO dado do pagador que mandamos para eles e o e-mail (ver o corpo
+# montado em create_payment), e a mensagem de erro deles ecoa de volta o
+# valor recusado ("fulano@x.com is invalid"). Mascarar na saida do log: o
+# codigo e a descricao do erro sao o que se depura, o e-mail de quem pagou
+# nao.
+_EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+
 # approved/rejected/etc. -> vocabulario da casa (PAYMENT_STATUSES). Status
 # que nao aparece aqui (pending, in_process, authorized, e qualquer coisa
 # nova que o Mercado Pago inventar) nao produz mudanca — ver parse_webhook_event.
@@ -98,7 +111,18 @@ class PaymentWebhookPayloadError(Exception):
 
 class PaymentGatewayError(Exception):
     """O gateway respondeu, mas recusou ou nao foi possivel entender a
-    resposta. Erro DELES (ou da chamada), nao um bug de configuracao nossa."""
+    resposta. Erro DELES (ou da chamada), nao um bug de configuracao nossa.
+
+    `provider_error_code` e o identificador que o gateway devolveu no corpo
+    do erro quando devolveu algum ("bad_request", "2062", ...). E o codigo do
+    catalogo DELES, nunca a mensagem crua: a mensagem pode ecoar o e-mail de
+    quem pagou e por isso fica so no log, enquanto o codigo pode ser
+    mostrado ao cliente e citado num chamado de suporte.
+    """
+
+    def __init__(self, message: str, *, provider_error_code: str | None = None):
+        super().__init__(message)
+        self.provider_error_code = provider_error_code
 
 
 class PaymentGatewayUnavailableError(PaymentGatewayError):
@@ -123,6 +147,28 @@ class PaymentIntent:
     # Para onde mandar o cliente. Pix costuma vir com qr_code em vez de url.
     checkout_url: str | None = None
     qr_code: str | None = None
+
+
+@dataclass(frozen=True)
+class MercadopagoError:
+    """O que o Mercado Pago conta sobre um erro no CORPO da resposta.
+
+    O status HTTP sozinho nao diagnostica nada: um 500 deles pode ser
+    instabilidade do lado deles, o `payer.email` recusado ou a chave de
+    idempotencia repetida com um corpo diferente — e as tres coisas so se
+    distinguem pelo `error`/`message`/`cause` que vem no corpo.
+    """
+
+    # Slug generico: "bad_request", "internal_error", ...
+    error: str | None
+    # Texto livre deles, ja com o e-mail do pagador mascarado e truncado.
+    message: str | None
+    # `cause` deles, achatado em "code=X description=Y; code=..." — e o campo
+    # mais especifico que eles tem sobre o motivo da recusa.
+    causes: str | None
+    # O identificador mais especifico disponivel (primeiro `cause.code`, ou o
+    # `error` quando nao ha causa nenhuma). E o que vai para o cliente.
+    code: str | None
 
 
 @dataclass(frozen=True)
@@ -468,11 +514,17 @@ def _call_mercadopago(
 ) -> dict:
     """POST/GET autenticado na API do Mercado Pago.
 
-    Nunca loga o access_token nem o corpo da resposta: o primeiro e
-    credencial da conta do restaurante, o segundo pode trazer dado de quem
-    pagou. O que fica no log e so o suficiente para depurar uma falha
-    (metodo, path, status, latencia) — para o resto, o Mercado Pago tem o
-    proprio painel de "Atividade" com o detalhe de cada chamada.
+    Nunca loga o access_token nem o corpo de uma resposta de SUCESSO: o
+    primeiro e credencial da conta do restaurante, o segundo traz o dado de
+    quem pagou. Chamada que deu certo rende uma linha so (metodo, path,
+    status, latencia).
+
+    Chamada que deu ERRADO rende uma segunda linha com o `error`, o
+    `message` e o `cause` que eles mandaram — sem isso o log tem o status
+    HTTP e mais nada, e "status=500" nao distingue instabilidade deles de
+    `payer.email` recusado de chave de idempotencia repetida. O e-mail do
+    pagador sai mascarado desse texto (ver _redact_payer_data); o
+    access_token nunca esteve nele.
     """
     headers = {"Authorization": f"Bearer {access_token}"}
     if extra_headers:
@@ -506,23 +558,26 @@ def _call_mercadopago(
             (time.perf_counter() - started_at) * 1000,
         )
 
-    if status_code in (401, 403):
-        raise PaymentGatewayCredentialError(
-            f"Mercado Pago recusou a credencial do restaurante (status {status_code})"
-        )
-    if status_code == 404:
-        raise PaymentNotFoundError(f"Mercado Pago: recurso nao encontrado ({method} {path})")
-    if status_code >= 500:
-        raise PaymentGatewayUnavailableError(
-            f"Mercado Pago com erro interno (status {status_code})"
-        )
     if status_code >= 400:
-        # 400/422 etc.: a requisicao que MONTAMOS foi recusada (dado
-        # invalido). Nao inclui o corpo na mensagem — pode ecoar de volta
-        # o e-mail do pagador que mandamos.
-        raise PaymentGatewayError(
-            f"Mercado Pago recusou a requisicao (status {status_code})"
+        error = _read_mercadopago_error(response)
+        # A linha que faltava. O painel de "Atividade" deles tem o detalhe de
+        # cada chamada, mas depender dele significa nao conseguir depurar uma
+        # falha sem sair do nosso log — e sem o codigo da causa nao ha nem o
+        # que informar num chamado de suporte.
+        logger.warning(
+            "[Pagamento][mercadopago] erro method=%s path=%s status=%s "
+            "error=%s code=%s message=%s cause=%s",
+            method,
+            path,
+            status_code,
+            error.error or "-",
+            error.code or "-",
+            error.message or "-",
+            error.causes or "-",
         )
+        # A mensagem da excecao leva o CODIGO, nunca o texto deles: ele chega
+        # ao cliente e pode ecoar o e-mail do pagador que mandamos.
+        raise _mercadopago_error_for_status(status_code, method, path, error)
 
     try:
         return response.json()
@@ -530,6 +585,109 @@ def _call_mercadopago(
         raise PaymentGatewayUnavailableError(
             "Mercado Pago respondeu um corpo que nao e JSON"
         ) from exc
+
+
+def _mercadopago_error_for_status(
+    status_code: int,
+    method: str,
+    path: str,
+    error: MercadopagoError,
+) -> PaymentGatewayError:
+    """Traduz o status de erro deles na excecao que descreve o que fazer."""
+    if status_code in (401, 403):
+        return PaymentGatewayCredentialError(
+            f"Mercado Pago recusou a credencial do restaurante (status {status_code})",
+            provider_error_code=error.code,
+        )
+    if status_code == 404:
+        return PaymentNotFoundError(
+            f"Mercado Pago: recurso nao encontrado ({method} {path})",
+            provider_error_code=error.code,
+        )
+    if status_code >= 500:
+        return PaymentGatewayUnavailableError(
+            f"Mercado Pago com erro interno (status {status_code}, code={error.code or '-'})",
+            provider_error_code=error.code,
+        )
+    # 400/422 etc.: a requisicao que MONTAMOS foi recusada (dado invalido,
+    # chave de idempotencia em conflito).
+    return PaymentGatewayError(
+        f"Mercado Pago recusou a requisicao (status {status_code}, code={error.code or '-'})",
+        provider_error_code=error.code,
+    )
+
+
+def _read_mercadopago_error(response) -> MercadopagoError:
+    """Le `error`, `message` e `cause` do corpo de erro deles.
+
+    Defensiva de proposito: corpo de erro e justamente o que menos segue
+    contrato. Qualquer coisa que nao de para ler vira None e a chamada segue
+    — deixar de levantar a excecao certa porque o corpo do erro veio
+    estranho seria trocar um problema por outro pior.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return MercadopagoError(error=None, message=None, causes=None, code=None)
+    if not isinstance(body, dict):
+        return MercadopagoError(error=None, message=None, causes=None, code=None)
+
+    first_cause_code, causes = _format_mercadopago_causes(body.get("cause"))
+    error = body.get("error")
+    message = body.get("message")
+    return MercadopagoError(
+        error=str(error) if error is not None else None,
+        message=_redact_payer_data(str(message)) if message is not None else None,
+        causes=causes,
+        # `cause[].code` e especifico ("2062"); `error` e o balde generico
+        # ("bad_request"). Prefere-se o especifico quando existe.
+        code=first_cause_code or (str(error) if error is not None else None),
+    )
+
+
+def _format_mercadopago_causes(cause) -> tuple[str | None, str | None]:
+    """Achata `cause` em (codigo da primeira, texto de todas).
+
+    Eles mandam `cause` ora como lista de objetos, ora como um objeto so,
+    ora com a descricao em texto puro — os tres formatos aparecem na
+    documentacao e nas respostas reais.
+    """
+    if isinstance(cause, dict):
+        cause = [cause]
+    if not isinstance(cause, list):
+        return None, None
+
+    first_code = None
+    parts = []
+    for item in cause:
+        if isinstance(item, dict):
+            code = item.get("code")
+            description = item.get("description")
+        else:
+            code, description = None, item
+        if first_code is None and code is not None:
+            first_code = str(code)
+        parts.append(
+            f"code={code if code is not None else '-'} "
+            f"description={_redact_payer_data(str(description))}"
+        )
+    return first_code, "; ".join(parts) or None
+
+
+def _redact_payer_data(text: str) -> str:
+    """Tira do texto o que identifica o pagador, antes de ele ir para o log.
+
+    O unico dado do pagador que este arquivo manda para o Mercado Pago e o
+    `payer.email` (ver o corpo montado em create_payment) — e e justamente
+    ele que volta ecoado na mensagem quando e recusado. Mascarar so o
+    e-mail, e nao tudo que pareca um identificador, e proposital: mascarar
+    numeros levaria junto o id do pagamento e o codigo do erro, que sao
+    exatamente o que se precisa ler no log.
+    """
+    redacted = _EMAIL_PATTERN.sub("[email]", text)
+    if len(redacted) > MERCADOPAGO_ERROR_TEXT_MAX_CHARS:
+        return redacted[:MERCADOPAGO_ERROR_TEXT_MAX_CHARS] + "..."
+    return redacted
 
 
 def _load_json_object(raw_body: bytes) -> dict:

@@ -24,6 +24,9 @@ from fastapi import HTTPException
 
 from src.core.config import settings
 from src.integrations.payment_gateway import (
+    PaymentGatewayCredentialError,
+    PaymentGatewayError,
+    PaymentGatewayUnavailableError,
     PaymentIntent,
     PaymentProviderNotConfiguredError,
     PaymentProviderUnknownError,
@@ -399,6 +402,52 @@ class StartPaymentTests(unittest.TestCase):
         _, kwargs = mocked_create_payment.call_args
         self.assertEqual(kwargs["payer_email"], "pedido-4321@pederapidex.com")
 
+    def test_retry_of_a_pending_charge_asks_for_the_same_one(self):
+        # Cliente clicou de novo em "pagar" com o pix ainda em aberto. Nao
+        # ha cobranca a substituir: a chave de idempotencia tem que se
+        # repetir para o gateway devolver o MESMO pix, em vez de abrir um
+        # segundo QR code para o mesmo pedido.
+        order = make_order(payment_status="pending", provider_payment_id="mp-1")
+        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        service = build_service(order, credential=credential)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment"
+        ) as mocked_create_payment:
+            mocked_create_payment.return_value = PaymentIntent(
+                provider="mercadopago", provider_payment_id="mp-1"
+            )
+            service.start_online_payment("junior", "token-do-pedido")
+
+        _, kwargs = mocked_create_payment.call_args
+        self.assertIsNone(kwargs["previous_payment_id"])
+
+    def test_retry_after_a_refused_charge_asks_for_a_new_one(self):
+        # Cobranca recusada nao se retenta, se SUBSTITUI. Sem informar qual
+        # cobranca esta sendo trocada, a chave se repetiria e o gateway
+        # devolveria a propria cobranca RECUSADA — o pedido ficaria sem
+        # nenhuma forma de ser pago.
+        order = make_order(
+            payment_status="failed",
+            payment_provider="mercadopago",
+            provider_payment_id="mp-recusada",
+        )
+        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        service = build_service(order, credential=credential)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment"
+        ) as mocked_create_payment:
+            mocked_create_payment.return_value = PaymentIntent(
+                provider="mercadopago", provider_payment_id="mp-2"
+            )
+            service.start_online_payment("junior", "token-do-pedido")
+
+        _, kwargs = mocked_create_payment.call_args
+        self.assertEqual(kwargs["previous_payment_id"], "mp-recusada")
+        self.assertEqual(order.provider_payment_id, "mp-2")
+        self.assertEqual(order.payment_status, "pending")
+
     def test_payer_email_is_not_resolved_for_the_sandbox_provider(self):
         # O sandbox nao usa e-mail nenhum: nao ha por que gastar uma consulta
         # ao customer_repository so para descartar o resultado.
@@ -410,6 +459,108 @@ class StartPaymentTests(unittest.TestCase):
 
         with patch.object(settings, "PAYMENT_PROVIDER", "sandbox"):
             service.start_online_payment("junior", "token-do-pedido")
+
+
+class StartPaymentErrorTests(unittest.TestCase):
+    """O que o CLIENTE recebe quando a cobranca nao sai.
+
+    Antes daqui todo erro do gateway virava 503 com uma mensagem interna, e
+    o frontend mostrava "erro interno" para tudo. Sao situacoes diferentes
+    para quem esta esperando o pix: o gateway fora do ar por um minuto pede
+    "tentar de novo"; restaurante sem credencial cadastrada, nao.
+    """
+
+    def _failing_service(self, exception):
+        order = make_order()
+        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        service = build_service(order, credential=credential)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment", side_effect=exception
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                service.start_online_payment("junior", "token-do-pedido")
+        return raised.exception
+
+    def test_unstable_gateway_asks_the_client_to_try_again(self):
+        exc = self._failing_service(
+            PaymentGatewayUnavailableError("Mercado Pago com erro interno (status 500)")
+        )
+
+        self.assertEqual(exc.status_code, 503)
+        self.assertEqual(exc.detail["code"], "gateway_unavailable")
+        self.assertTrue(exc.detail["retryable"])
+        self.assertIn("Tente de novo", exc.detail["message"])
+
+    def test_refused_charge_does_not_ask_the_client_to_try_again(self):
+        # 400/422: eles entenderam e recusaram. Voltar depois com a mesma
+        # cobranca da no mesmo — mandar o cliente insistir e enganacao.
+        exc = self._failing_service(
+            PaymentGatewayError(
+                "Mercado Pago recusou a requisicao (status 400, code=4051)",
+                provider_error_code="4051",
+            )
+        )
+
+        self.assertEqual(exc.status_code, 502)
+        self.assertEqual(exc.detail["code"], "payment_rejected")
+        self.assertFalse(exc.detail["retryable"])
+        # A referencia do provedor atravessa para poder ser citada num
+        # chamado de suporte.
+        self.assertEqual(exc.detail["provider_error_code"], "4051")
+
+    def test_rejected_credential_is_definitive_for_the_client(self):
+        # Token invalido ou revogado: quem resolve e o lojista, no painel
+        # dele. O cliente insistindo nao troca credencial nenhuma.
+        exc = self._failing_service(
+            PaymentGatewayCredentialError("Mercado Pago recusou a credencial (status 401)")
+        )
+
+        self.assertEqual(exc.status_code, 503)
+        self.assertEqual(exc.detail["code"], "payment_unavailable")
+        self.assertFalse(exc.detail["retryable"])
+
+    def test_restaurant_without_credential_is_definitive_too(self):
+        # credential=None: restaurante que ainda nao rodou o script de
+        # cadastro. Nunca chegamos a falar com o gateway.
+        order = make_order()
+        service = build_service(order)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"):
+            with self.assertRaises(HTTPException) as raised:
+                service.start_online_payment("junior", "token-do-pedido")
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(raised.exception.detail["code"], "payment_unavailable")
+        self.assertFalse(raised.exception.detail["retryable"])
+
+    def test_the_gateway_own_message_never_reaches_the_client(self):
+        # O texto cru do gateway pode ecoar o e-mail de quem pagou (eles
+        # devolvem o valor recusado na mensagem). Ele fica no log.
+        exc = self._failing_service(
+            PaymentGatewayError("cliente@exemplo.com recusado pelo Mercado Pago")
+        )
+
+        self.assertNotIn("cliente@exemplo.com", str(exc.detail))
+        self.assertNotIn("Mercado Pago", exc.detail["message"])
+
+    def test_the_reason_is_logged_even_though_it_is_not_answered(self):
+        # Tirar o motivo tecnico da resposta so vale se ele nao se perder.
+        order = make_order()
+        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        service = build_service(order, credential=credential)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment",
+            side_effect=PaymentGatewayUnavailableError("status 500, code=internal_error"),
+        ):
+            with self.assertLogs("uvicorn.error", level="WARNING") as captured:
+                with self.assertRaises(HTTPException):
+                    service.start_online_payment("junior", "token-do-pedido")
+
+        logged = "\n".join(captured.output)
+        self.assertIn("code=gateway_unavailable", logged)
+        self.assertIn("internal_error", logged)
 
 
 class WebhookTests(unittest.TestCase):

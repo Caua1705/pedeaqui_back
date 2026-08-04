@@ -501,12 +501,47 @@ Troca de um para o outro é só `PAYMENT_PROVIDER` no `.env`.
 ```
 Authorization: Bearer {access_token}      credencial do restaurante do pedido
                                            (PaymentCredentialService, nunca global)
-X-Idempotency-Key: {order_id}             retry nosso não gera duas cobranças lá
+X-Idempotency-Key: {order_id}:{hash}      uma chave por TENTATIVA, ver abaixo
 transaction_amount, description
 payment_method_id: "pix"
 payer.email                               ver payer_email abaixo
 application_fee                           SO no corpo se != None (split, ver 4.5.1)
 ```
+
+**A chave de idempotência é por tentativa, não por pedido.** O Mercado Pago
+devolve a **mesma** cobrança quando a mesma chave chega de novo — é o que
+protege um retry (timeout na ida, cliente clicando duas vezes em "pagar") de
+virar duas cobranças pix abertas para o mesmo pedido. A chave era
+`str(order_id)`, constante para sempre, e isso tratava como "a mesma
+cobrança" duas coisas que não são:
+
+- **retry depois de uma cobrança recusada.** A chave antiga devolve a
+  própria cobrança recusada, e o pedido nunca mais teria como ser pago.
+- **tentativa com o corpo diferente** — o total do pedido mudou, ou o
+  cliente fez login entre uma tentativa e outra e o `payer.email` deixou de
+  ser o sintético de convidado. Mesma chave com corpo diferente é
+  **conflito** de idempotência, não retry, e conflito eles respondem com
+  erro.
+
+A chave passou a ser `{order_id}:{sha256(corpo + cobrança substituída)[:16]}`
+(`payment_gateway._mercadopago_idempotency_key`). O `order_id` fica no começo
+para a tentativa continuar achável no painel de "Atividade" deles a partir
+do pedido. Quem informa a cobrança substituída é
+`PaymentService.start_online_payment`, e só quando o pagamento está
+`failed`:
+
+```
+payment_status = "pending"   previous_payment_id = None       chave se REPETE
+                                                                (2º clique devolve o mesmo pix)
+payment_status = "failed"    previous_payment_id = o recusado  chave MUDA
+                                                                (cobrança nova, a recusada não volta)
+```
+
+A garantia original continua: retry por timeout na ida não gravou nada no
+pedido, o corpo é o mesmo, a chave se repete e eles devolvem a cobrança que
+já tinham criado. O que a mudança **não** faz é cancelar a cobrança antiga
+lá quando o corpo muda (total editado, cliente logou) — nasce uma cobrança
+nova e o QR antigo fica em aberto do lado deles até expirar.
 
 `payer.email` é exigido pela API deles e o pedido **não guarda e-mail
 nenhum** (só nome e telefone — `Order.customer_name_snapshot`/
@@ -578,21 +613,76 @@ silenciosa:
 
 | Situação | Exceção | Como o PaymentService reage |
 |---|---|---|
-| timeout / falha de rede / 5xx | `PaymentGatewayUnavailableError` | 503 (create_payment) / 503 + gateway reenvia (webhook) |
-| 401/403 (token inválido/revogado) | `PaymentGatewayCredentialError` | 503 |
-| 404 (payment_id não existe lá) | `PaymentNotFoundError` | 503 (create_payment) / `ignored, reason=payment_not_found` (webhook — não retentável) |
-| 400/422 (requisição nossa recusada) | `PaymentGatewayError` | 503 |
-| corpo da resposta não é JSON | `PaymentGatewayUnavailableError` | 503 |
+| timeout / falha de rede / 5xx | `PaymentGatewayUnavailableError` | 503 `gateway_unavailable` (create_payment) / 503 + gateway reenvia (webhook) |
+| 401/403 (token inválido/revogado) | `PaymentGatewayCredentialError` | 503 `payment_unavailable` |
+| 404 (payment_id não existe lá) | `PaymentNotFoundError` | 502 `payment_rejected` (create_payment) / `ignored, reason=payment_not_found` (webhook — não retentável) |
+| 400/422 (requisição nossa recusada) | `PaymentGatewayError` | 502 `payment_rejected` |
+| corpo da resposta não é JSON | `PaymentGatewayUnavailableError` | 503 `gateway_unavailable` |
 
-Nenhuma mensagem de erro inclui o access_token nem o corpo da resposta do
-gateway — só método, path, status e latência vão para o log
-(`[Pagamento][mercadopago] method=... path=... status=... latency_ms=...`).
+#### O que o cliente recebe quando a cobrança não sai
+
+Os códigos da coluna da direita são o `detail` da rota de criar cobrança, no
+formato de `PaymentErrorDetail` (`src/schemas/payment_schema.py`) — um
+**objeto**, não a string dos outros erros da API. Antes tudo saía como 503
+com a mensagem interna (`"Mercado Pago com erro interno (status 500)"`) e o
+frontend mostrava "erro interno" para qualquer coisa, sem ter como
+distinguir "espere um minuto" de "não adianta insistir":
+
+```json
+{"detail": {"code": "gateway_unavailable",
+            "message": "Não foi possível gerar o pagamento agora. Tente de novo em alguns instantes.",
+            "retryable": true,
+            "provider_error_code": null}}
+```
+
+| `code` | HTTP | `retryable` | Quando |
+|---|---|---|---|
+| `gateway_unavailable` | 503 | `true` | instabilidade passageira deles — a mesma chamada tem chance de funcionar daqui a pouco |
+| `payment_unavailable` | 503 | `false` | pagamento online indisponível para **este restaurante**: sem credencial cadastrada, credencial recusada, método não suportado. Quem resolve é o lojista |
+| `payment_rejected` | 502 | `false` | eles entenderam e **recusaram** a cobrança (dado inválido, conflito de idempotência) |
+
+502 no recusado é proposital: 503 diz "volte depois", e voltar depois com a
+mesma cobrança dá no mesmo. `provider_error_code` é o código do catálogo
+deles (`"bad_request"`, `"2062"`) para citar num chamado de suporte — nunca
+a mensagem crua, que pode ecoar o e-mail de quem pagou.
+
+#### O log de uma chamada que deu errado
+
+Chamada que deu certo rende uma linha só, sem o corpo da resposta (que traz
+o dado de quem pagou):
+
+```
+[Pagamento][mercadopago] method=POST path=/v1/payments status=200 latency_ms=915.18
+```
+
+Chamada com status >= 400 rende **uma segunda linha** com o que eles
+contam no corpo. Sem ela o log tinha o status HTTP e mais nada, e
+`status=500` sozinho não distingue instabilidade deles de `payer.email`
+recusado de chave de idempotência em conflito:
+
+```
+[Pagamento][mercadopago] erro method=POST path=/v1/payments status=500 \
+    error=internal_error code=2062 message=... cause=code=2062 description=...
+```
+
+`code` é o primeiro `cause[].code` deles, ou o `error` genérico quando não
+vem causa nenhuma. O access_token nunca esteve nessas linhas; o e-mail do
+pagador sai mascarado como `[email]` (é o único dado dele que mandamos, e
+volta ecoado na mensagem quando é recusado). Números **não** são mascarados
+de propósito — levariam junto o id do pagamento e o código do erro, que são
+exatamente o que se lê. A mensagem crua deles também não entra na exceção,
+só o código: a exceção chega ao cliente.
 
 Testes: `tests/test_mercadopago_gateway.py` cobre as três funções com o
 gateway mocado (`httpx.Client` substituído) — formato da requisição,
-tradução da resposta, todos os erros da tabela acima, e o formato da
-assinatura (HMAC calculado a mão no teste, corpo adulterado, timestamp
-velho). `tests/test_payments.py` cobre a resolução de `payer_email`, a
+tradução da resposta, todos os erros da tabela acima, o que a linha de erro
+leva para o log (`ErrorLoggingTests`: código, causa, e-mail mascarado, id do
+pagamento **não** mascarado), quando a chave de idempotência se repete e
+quando muda (`IdempotencyKeyTests`), e o formato da assinatura (HMAC
+calculado a mão no teste, corpo adulterado, timestamp velho).
+`tests/test_payments.py` cobre a resolução de `payer_email`, qual cobrança
+o service informa como substituída em cada `payment_status`, o `retryable`
+de cada erro que chega ao cliente (`StartPaymentErrorTests`), a
 ordem pedido→credencial→GET no webhook, e a ordem
 extração→pedido→credencial→assinatura descrita acima — inclusive que o
 segredo usado é sempre o do restaurante DO PEDIDO (o segredo de um
@@ -1117,6 +1207,8 @@ Prefixos e o que investigam:
 | `[AdminAuth]` | quem logou no painel e de qual restaurante | `admin_auth_service.py:73-78` |
 | `[AI /chat]`, `[AI /chat perf]`, `[AI /chat cache]` | chat: tempo por etapa e cache | `chat_service.py:59-124` |
 | `[Contract validation]` | 422 em `/delivery/estimate` e import de endereço | `validation_errors.py:31-47` |
+| `[Pagamento][mercadopago]` | latência/status de cada chamada e, no erro, o código e a causa que eles devolveram | `payment_gateway.py:_call_mercadopago` (ver 4.5.2) |
+| `[Pagamento]` | cobrança que não saiu, webhook aplicado ou ignorado | `payment_service.py` |
 | `[Body limit]` | requisição rejeitada com 413 | `body_size.py:76-80` |
 | `[Rate limit]` (429) | resposta em `rate_limit.py:64-75` | — |
 

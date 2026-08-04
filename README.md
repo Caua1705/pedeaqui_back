@@ -134,6 +134,12 @@ previous code version, so deploying the image before migrating is safe.
 - `POST /restaurants/{restaurant_slug}/orders/{tracking_token}/payment`
 - `POST /payments/webhooks/{provider}` — chamada pelo gateway, nao pelo app
 
+A rota de pagamento e a unica com `detail` em formato de OBJETO quando
+falha (`{code, message, retryable, provider_error_code}`, 502 ou 503): sem
+o `retryable` o frontend nao tem como escolher entre oferecer "tentar de
+novo" e mandar o cliente falar com o restaurante. Ver `docs/arquitetura.md`
+4.5.2.
+
 The lookup by `order_number` + phone was **removed in Phase 2**. Order
 numbers come from a global sequence, so with one phone number an attacker
 could walk the neighbouring numbers and read other people's home address,

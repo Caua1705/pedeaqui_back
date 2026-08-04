@@ -11,16 +11,28 @@ from sqlalchemy.orm import Session
 
 from src.api.dependencies.database import get_db
 from src.api.rate_limit import START_PAYMENT_RATE_LIMIT, limiter
-from src.schemas.payment_schema import PaymentWebhookResponse, StartPaymentResponse
+from src.schemas.payment_schema import (
+    PaymentErrorDetail,
+    PaymentWebhookResponse,
+    StartPaymentResponse,
+)
 from src.services.payment_service import PaymentService
 
 
 router = APIRouter(tags=["payments"])
 
+# O erro desta rota tem corpo proprio: o frontend precisa distinguir "tente
+# de novo" de "nao adianta insistir" — ver PaymentErrorDetail.
+_PAYMENT_ERROR_RESPONSES = {
+    502: {"model": PaymentErrorDetail, "description": "Cobranca recusada pelo provedor"},
+    503: {"model": PaymentErrorDetail, "description": "Pagamento indisponivel no momento"},
+}
+
 
 @router.post(
     "/restaurants/{restaurant_slug}/orders/{tracking_token}/payment",
     response_model=StartPaymentResponse,
+    responses=_PAYMENT_ERROR_RESPONSES,
 )
 @limiter.limit(START_PAYMENT_RATE_LIMIT)
 def start_payment(
@@ -35,6 +47,11 @@ def start_payment(
     publica usa: quem tem o token e quem fez o pedido. Fica fora de
     create_order de proposito — a chamada ao gateway nao pode acontecer com
     a transacao do pedido aberta.
+
+    Falha ao criar a cobranca responde 502 ou 503 com `detail` no formato
+    de `PaymentErrorDetail` — um objeto, nao a string de sempre: sem o
+    `retryable` nao ha como o frontend escolher entre oferecer "tentar de
+    novo" e mandar o cliente falar com o restaurante.
     """
     return PaymentService(db).start_online_payment(restaurant_slug, tracking_token)
 

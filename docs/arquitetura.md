@@ -646,6 +646,22 @@ mesma cobrança dá no mesmo. `provider_error_code` é o código do catálogo
 deles (`"bad_request"`, `"2062"`) para citar num chamado de suporte — nunca
 a mensagem crua, que pode ecoar o e-mail de quem pagou.
 
+Os três códigos vivem em `PaymentErrorCode`
+(`src/schemas/payment_schema.py`), um `str, Enum` — e não três constantes
+soltas — porque a **lista** precisa sair no `/openapi.json`: com só o
+`retryable`, o frontend cai no mesmo texto genérico para
+`payment_unavailable` e `payment_rejected`, que pedem coisas diferentes do
+cliente. `PaymentService` importa daqui; duas listas sairiam de sincronia
+na primeira adição.
+
+O `model` declarado nas respostas 502/503 é `PaymentErrorResponse`, o
+envelope `{"detail": {...}}`, e **não** `PaymentErrorDetail`: o
+`HTTPException` do FastAPI embrulha tudo em `detail`, e anunciar o detail na
+raiz faria o frontend escrever o parser contra um formato que a rota nunca
+devolve. `tests/test_new_route_contracts.py:PaymentErrorContractTests` trava
+isso no documento gerado, não no código — formato que existe no service mas
+não no `/openapi.json` é formato que ninguém consegue consumir.
+
 #### O log de uma chamada que deu errado
 
 Chamada que deu certo rende uma linha só, sem o corpo da resposta (que traz

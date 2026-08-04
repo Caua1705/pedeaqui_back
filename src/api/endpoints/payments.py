@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from src.api.dependencies.database import get_db
 from src.api.rate_limit import START_PAYMENT_RATE_LIMIT, limiter
 from src.schemas.payment_schema import (
-    PaymentErrorDetail,
+    PaymentErrorResponse,
     PaymentWebhookResponse,
     StartPaymentResponse,
 )
@@ -23,9 +23,14 @@ router = APIRouter(tags=["payments"])
 
 # O erro desta rota tem corpo proprio: o frontend precisa distinguir "tente
 # de novo" de "nao adianta insistir" — ver PaymentErrorDetail.
+#
+# O model e PaymentErrorResponse (com o envelope `detail`) e nao
+# PaymentErrorDetail: HTTPException entrega {"detail": {...}}, e anunciar o
+# detail na raiz faria o frontend escrever o parser contra um formato que a
+# rota nunca devolve.
 _PAYMENT_ERROR_RESPONSES = {
-    502: {"model": PaymentErrorDetail, "description": "Cobranca recusada pelo provedor"},
-    503: {"model": PaymentErrorDetail, "description": "Pagamento indisponivel no momento"},
+    502: {"model": PaymentErrorResponse, "description": "Cobranca recusada pelo provedor"},
+    503: {"model": PaymentErrorResponse, "description": "Pagamento indisponivel no momento"},
 }
 
 

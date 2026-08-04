@@ -44,7 +44,11 @@ from src.integrations.payment_gateway import (
 from src.models.order_status_history_model import OrderStatusHistory
 from src.repositories.customer_repository import CustomerRepository
 from src.repositories.order_repository import OrderRepository
-from src.schemas.payment_schema import PaymentErrorDetail, StartPaymentResponse
+from src.schemas.payment_schema import (
+    PaymentErrorCode,
+    PaymentErrorDetail,
+    StartPaymentResponse,
+)
 from src.services.idempotency_service import IdempotencyService
 from src.services.order_state_machine import (
     ensure_payment_transition_allowed,
@@ -62,21 +66,10 @@ WEBHOOK_ROUTE = "POST /payments/webhooks/{provider}"
 # Estados de pagamento em que faz sentido criar (ou recriar) uma cobranca.
 PAYABLE_STATUSES = ("pending", "failed")
 
-# Os tres desfechos possiveis de uma cobranca que nao pode ser criada. O que
-# separa um do outro e o que o CLIENTE tem a fazer a seguir — nao a natureza
-# tecnica da falha. Ver PaymentErrorDetail.
+# Os desfechos possiveis moram em PaymentErrorCode (payment_schema): a lista
+# tem que sair no /openapi.json para o frontend escrever um texto por caso,
+# e duas listas separadas sairiam de sincronia na primeira adicao.
 #
-# Instabilidade passageira: a mesma chamada tem chance de funcionar daqui a
-# pouco. E o unico caso retentavel.
-PAYMENT_ERROR_GATEWAY_UNAVAILABLE = "gateway_unavailable"
-# Pagamento online indisponivel para ESTE restaurante: sem credencial
-# cadastrada, credencial recusada, metodo nao suportado. Insistir nao muda
-# nada — quem resolve e o lojista.
-PAYMENT_ERROR_PAYMENT_UNAVAILABLE = "payment_unavailable"
-# O gateway entendeu e RECUSOU a cobranca (dado invalido, conflito de
-# idempotencia). Tambem nao adianta insistir com a mesma cobranca.
-PAYMENT_ERROR_PAYMENT_REJECTED = "payment_rejected"
-
 # Mensagens prontas para o cliente ler. "Erro interno" nao diz a ninguem se
 # vale esperar um minuto ou se e melhor ligar para o restaurante.
 _GATEWAY_UNAVAILABLE_MESSAGE = (
@@ -492,7 +485,7 @@ class PaymentService:
             # tentar de novo daqui a pouco tem chance de funcionar.
             raise self._payment_error(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                code=PAYMENT_ERROR_GATEWAY_UNAVAILABLE,
+                code=PaymentErrorCode.GATEWAY_UNAVAILABLE,
                 message=_GATEWAY_UNAVAILABLE_MESSAGE,
                 retryable=True,
                 cause=exc,
@@ -502,7 +495,7 @@ class PaymentService:
             # a credencial — quem resolve e o lojista, no painel dele.
             raise self._payment_error(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                code=PAYMENT_ERROR_PAYMENT_UNAVAILABLE,
+                code=PaymentErrorCode.PAYMENT_UNAVAILABLE,
                 message=_PAYMENT_UNAVAILABLE_MESSAGE,
                 retryable=False,
                 cause=exc,
@@ -513,7 +506,7 @@ class PaymentService:
             # cobranca da no mesmo.
             raise self._payment_error(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                code=PAYMENT_ERROR_PAYMENT_REJECTED,
+                code=PaymentErrorCode.PAYMENT_REJECTED,
                 message=_PAYMENT_REJECTED_MESSAGE,
                 retryable=False,
                 cause=exc,
@@ -526,7 +519,7 @@ class PaymentService:
             # ao cliente que tente de novo.
             raise self._payment_error(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                code=PAYMENT_ERROR_PAYMENT_UNAVAILABLE,
+                code=PaymentErrorCode.PAYMENT_UNAVAILABLE,
                 message=_PAYMENT_UNAVAILABLE_MESSAGE,
                 retryable=False,
                 cause=exc,
@@ -536,7 +529,7 @@ class PaymentService:
         self,
         *,
         status_code: int,
-        code: str,
+        code: PaymentErrorCode,
         message: str,
         retryable: bool,
         cause: Exception,
@@ -552,7 +545,7 @@ class PaymentService:
         """
         logger.warning(
             "[Pagamento] cobranca nao criada code=%s retryable=%s provider_code=%s motivo=%s",
-            code,
+            code.value,
             retryable,
             provider_error_code or "-",
             cause,
@@ -563,4 +556,6 @@ class PaymentService:
             retryable=retryable,
             provider_error_code=provider_error_code,
         )
-        return HTTPException(status_code=status_code, detail=detail.model_dump())
+        # mode="json" para o `code` sair como a string do enum: o dict vai
+        # direto para o corpo da resposta e para as asserts dos testes.
+        return HTTPException(status_code=status_code, detail=detail.model_dump(mode="json"))

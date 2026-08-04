@@ -1,4 +1,27 @@
-from pydantic import BaseModel
+from enum import Enum
+
+from pydantic import BaseModel, Field
+
+
+class PaymentErrorCode(str, Enum):
+    """Os desfechos possiveis de uma cobranca que nao pode ser criada.
+
+    Enum e nao `str` solto para o valor sair no /openapi.json: o frontend
+    precisa da LISTA para escrever um texto proprio por caso, e nao so o
+    `retryable` para decidir entre "tentar de novo" e "nao adianta". A lista
+    tambem e a fonte unica dos codigos — PaymentService importa daqui.
+    """
+
+    # Instabilidade passageira do gateway (timeout, rede, 5xx deles). O
+    # unico caso em que repetir a MESMA chamada tem chance de funcionar.
+    GATEWAY_UNAVAILABLE = "gateway_unavailable"
+    # Pagamento online indisponivel para ESTE restaurante: sem credencial
+    # cadastrada, credencial recusada, metodo nao suportado. Insistir nao
+    # muda nada — quem resolve e o lojista.
+    PAYMENT_UNAVAILABLE = "payment_unavailable"
+    # O gateway entendeu e RECUSOU a cobranca (dado invalido, conflito de
+    # idempotencia). Tambem nao adianta insistir com a mesma cobranca.
+    PAYMENT_REJECTED = "payment_rejected"
 
 
 class StartPaymentResponse(BaseModel):
@@ -32,18 +55,48 @@ class PaymentErrorDetail(BaseModel):
     restaurante, ou pagar na entrega).
     """
 
-    # Identificador estavel para o frontend ligar a um texto proprio, sem
-    # depender de comparar `message`. Ver PAYMENT_ERROR_* em payment_service.
-    code: str
-    # Pronta para ser mostrada ao cliente: curta, em portugues, e dizendo o
-    # que fazer a seguir.
-    message: str
-    retryable: bool
-    # Referencia do provedor quando ele deu alguma ("bad_request", "2062"),
-    # para citar num chamado de suporte. E um codigo do catalogo deles,
-    # nunca a mensagem crua — essa pode ecoar o e-mail de quem pagou e fica
-    # so no log.
-    provider_error_code: str | None = None
+    code: PaymentErrorCode = Field(
+        description=(
+            "Identificador estavel do desfecho, para o frontend ligar a um "
+            "texto proprio sem comparar `message`."
+        ),
+    )
+    message: str = Field(
+        description=(
+            "Pronta para ser mostrada ao cliente: curta, em portugues, e "
+            "dizendo o que fazer a seguir."
+        ),
+        examples=["Não foi possível gerar o pagamento agora. Tente de novo em alguns instantes."],
+    )
+    retryable: bool = Field(
+        description=(
+            "true = repetir a MESMA chamada daqui a pouco tem chance de "
+            "funcionar. false = insistir nao muda nada."
+        ),
+    )
+    provider_error_code: str | None = Field(
+        default=None,
+        description=(
+            "Referencia do provedor quando ele deu alguma, para citar num "
+            "chamado de suporte. E um codigo do catalogo deles "
+            "('bad_request', '2062'), nunca a mensagem crua — essa pode "
+            "ecoar o e-mail de quem pagou e fica so no log."
+        ),
+        examples=["2062"],
+    )
+
+
+class PaymentErrorResponse(BaseModel):
+    """O CORPO INTEIRO do erro, com o envelope `detail` do FastAPI.
+
+    Existe so para o /openapi.json publicar a forma certa. Declarar
+    PaymentErrorDetail direto como `model` da resposta anunciava
+    `{code, message, ...}` na raiz, mas HTTPException entrega
+    `{"detail": {code, message, ...}}` — o frontend escreveria o parser
+    contra um formato que a rota nunca devolve.
+    """
+
+    detail: PaymentErrorDetail
 
 
 class PaymentWebhookResponse(BaseModel):

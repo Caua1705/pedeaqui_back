@@ -1,3 +1,4 @@
+import json
 import unittest
 import uuid
 
@@ -6,6 +7,69 @@ from pydantic import ValidationError
 from main import app
 from src.schemas.customer_schema import ImportCustomerAddressesRequest
 from src.schemas.delivery_schema import DeliveryEstimateRequest
+from src.schemas.payment_schema import PaymentErrorCode
+
+
+PAYMENT_ROUTE = "/restaurants/{restaurant_slug}/orders/{tracking_token}/payment"
+
+
+class PaymentErrorContractTests(unittest.TestCase):
+    """O erro da cobranca tem que estar PUBLICADO, nao so implementado.
+
+    O frontend escreve o parser a partir do /openapi.json. Um formato que
+    existe no codigo mas nao no documento e um formato que ninguem consegue
+    consumir sem ler o backend.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.schema = app.openapi()
+        cls.operation = cls.schema["paths"][PAYMENT_ROUTE]["post"]
+
+    def test_the_error_statuses_are_declared(self):
+        self.assertIn("502", self.operation["responses"])
+        self.assertIn("503", self.operation["responses"])
+
+    def test_the_declared_body_carries_the_detail_envelope(self):
+        # HTTPException entrega {"detail": {...}}. Anunciar o detail na raiz
+        # faria o frontend escrever o parser contra um formato que a rota
+        # nunca devolve.
+        for status_code in ("502", "503"):
+            ref = self.operation["responses"][status_code]["content"]["application/json"]["schema"]["$ref"]
+            self.assertEqual(ref, "#/components/schemas/PaymentErrorResponse")
+
+        envelope = self.schema["components"]["schemas"]["PaymentErrorResponse"]
+        self.assertEqual(
+            envelope["properties"]["detail"]["$ref"],
+            "#/components/schemas/PaymentErrorDetail",
+        )
+
+    def test_the_detail_publishes_every_field_the_frontend_reads(self):
+        detail = self.schema["components"]["schemas"]["PaymentErrorDetail"]
+
+        for field in ("code", "message", "retryable", "provider_error_code"):
+            self.assertIn(field, detail["properties"])
+        # provider_error_code e o unico opcional: nem todo erro tem
+        # referencia do provedor.
+        self.assertEqual(sorted(detail["required"]), ["code", "message", "retryable"])
+
+    def test_the_possible_codes_are_published_as_an_enum(self):
+        # Sem a lista, o frontend so consegue tratar `retryable` e cai no
+        # texto generico para os dois casos definitivos, que pedem coisas
+        # diferentes do cliente.
+        published = self.schema["components"]["schemas"]["PaymentErrorCode"]["enum"]
+
+        self.assertEqual(sorted(published), sorted(code.value for code in PaymentErrorCode))
+        self.assertIn("gateway_unavailable", published)
+        self.assertIn("payment_unavailable", published)
+        self.assertIn("payment_rejected", published)
+
+    def test_the_enum_is_reachable_from_the_route(self):
+        # Um enum solto em components que nenhuma rota referencia nao chega
+        # a gerador de cliente nenhum.
+        detail = self.schema["components"]["schemas"]["PaymentErrorDetail"]
+
+        self.assertIn("PaymentErrorCode", json.dumps(detail["properties"]["code"]))
 
 
 class DeliveryContractTests(unittest.TestCase):

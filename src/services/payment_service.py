@@ -29,7 +29,9 @@ from sqlalchemy.orm import Session
 from src.core.config import settings
 from src.integrations.payment_gateway import (
     MERCADOPAGO_PROVIDER,
+    PaymentGatewayCredentialError,
     PaymentGatewayError,
+    PaymentGatewayUnavailableError,
     PaymentNotFoundError,
     PaymentProviderNotConfiguredError,
     PaymentProviderUnknownError,
@@ -42,7 +44,7 @@ from src.integrations.payment_gateway import (
 from src.models.order_status_history_model import OrderStatusHistory
 from src.repositories.customer_repository import CustomerRepository
 from src.repositories.order_repository import OrderRepository
-from src.schemas.payment_schema import StartPaymentResponse
+from src.schemas.payment_schema import PaymentErrorDetail, StartPaymentResponse
 from src.services.idempotency_service import IdempotencyService
 from src.services.order_state_machine import (
     ensure_payment_transition_allowed,
@@ -59,6 +61,35 @@ WEBHOOK_ROUTE = "POST /payments/webhooks/{provider}"
 
 # Estados de pagamento em que faz sentido criar (ou recriar) uma cobranca.
 PAYABLE_STATUSES = ("pending", "failed")
+
+# Os tres desfechos possiveis de uma cobranca que nao pode ser criada. O que
+# separa um do outro e o que o CLIENTE tem a fazer a seguir — nao a natureza
+# tecnica da falha. Ver PaymentErrorDetail.
+#
+# Instabilidade passageira: a mesma chamada tem chance de funcionar daqui a
+# pouco. E o unico caso retentavel.
+PAYMENT_ERROR_GATEWAY_UNAVAILABLE = "gateway_unavailable"
+# Pagamento online indisponivel para ESTE restaurante: sem credencial
+# cadastrada, credencial recusada, metodo nao suportado. Insistir nao muda
+# nada — quem resolve e o lojista.
+PAYMENT_ERROR_PAYMENT_UNAVAILABLE = "payment_unavailable"
+# O gateway entendeu e RECUSOU a cobranca (dado invalido, conflito de
+# idempotencia). Tambem nao adianta insistir com a mesma cobranca.
+PAYMENT_ERROR_PAYMENT_REJECTED = "payment_rejected"
+
+# Mensagens prontas para o cliente ler. "Erro interno" nao diz a ninguem se
+# vale esperar um minuto ou se e melhor ligar para o restaurante.
+_GATEWAY_UNAVAILABLE_MESSAGE = (
+    "Não foi possível gerar o pagamento agora. Tente de novo em alguns instantes."
+)
+_PAYMENT_UNAVAILABLE_MESSAGE = (
+    "O pagamento online deste restaurante está indisponível no momento. "
+    "Fale com o restaurante para combinar o pagamento."
+)
+_PAYMENT_REJECTED_MESSAGE = (
+    "O provedor de pagamento recusou esta cobrança. "
+    "Fale com o restaurante para concluir o pedido."
+)
 
 
 class PaymentService:
@@ -80,6 +111,9 @@ class PaymentService:
         Autorizacao pelo token de acompanhamento: quem tem o token e quem
         criou o pedido. Nao ha login obrigatorio aqui porque pedido de
         convidado tambem paga.
+
+        Falha ao criar a cobranca sai como PaymentErrorDetail, separando o
+        que vale tentar de novo do que nao vale — ver _create_payment_at_gateway.
         """
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
         order = self.order_repository.get_order_by_tracking_token(restaurant.id, tracking_token)
@@ -451,11 +485,82 @@ class PaymentService:
                 previous_payment_id=previous_payment_id,
                 application_fee=application_fee,
             )
-        except (PaymentProviderNotConfiguredError, PaymentProviderUnknownError, PaymentGatewayError) as exc:
-            # 503 e nao 500: e configuracao/indisponibilidade do gateway, e o
-            # cliente pode tentar de novo depois. O pedido continua de pe.
-            # PaymentGatewayError cobre timeout, credencial recusada e
-            # qualquer status de erro que o Mercado Pago tenha devolvido.
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        # A ordem dos except importa: as duas primeiras sao subclasses de
+        # PaymentGatewayError e sao os casos que se distinguem dele.
+        except PaymentGatewayUnavailableError as exc:
+            # Timeout, falha de rede ou 5xx deles: o UNICO caso em que
+            # tentar de novo daqui a pouco tem chance de funcionar.
+            raise self._payment_error(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                code=PAYMENT_ERROR_GATEWAY_UNAVAILABLE,
+                message=_GATEWAY_UNAVAILABLE_MESSAGE,
+                retryable=True,
+                cause=exc,
             ) from exc
+        except PaymentGatewayCredentialError as exc:
+            # Token invalido, revogado ou de outra conta. Insistir nao troca
+            # a credencial — quem resolve e o lojista, no painel dele.
+            raise self._payment_error(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                code=PAYMENT_ERROR_PAYMENT_UNAVAILABLE,
+                message=_PAYMENT_UNAVAILABLE_MESSAGE,
+                retryable=False,
+                cause=exc,
+            ) from exc
+        except PaymentGatewayError as exc:
+            # 400/422: o gateway entendeu e RECUSOU a cobranca. 502 e nao
+            # 503 — 503 diz "volte depois", e aqui voltar depois com a mesma
+            # cobranca da no mesmo.
+            raise self._payment_error(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                code=PAYMENT_ERROR_PAYMENT_REJECTED,
+                message=_PAYMENT_REJECTED_MESSAGE,
+                retryable=False,
+                cause=exc,
+                provider_error_code=exc.provider_error_code,
+            ) from exc
+        except (PaymentProviderNotConfiguredError, PaymentProviderUnknownError) as exc:
+            # Restaurante sem credencial para o ambiente ativo, metodo nao
+            # suportado, provider mal configurado. Nunca chegamos a falar com
+            # o gateway; 503 continua (o pedido segue de pe), mas sem pedir
+            # ao cliente que tente de novo.
+            raise self._payment_error(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                code=PAYMENT_ERROR_PAYMENT_UNAVAILABLE,
+                message=_PAYMENT_UNAVAILABLE_MESSAGE,
+                retryable=False,
+                cause=exc,
+            ) from exc
+
+    def _payment_error(
+        self,
+        *,
+        status_code: int,
+        code: str,
+        message: str,
+        retryable: bool,
+        cause: Exception,
+        provider_error_code: str | None = None,
+    ) -> HTTPException:
+        """Monta o erro que o cliente recebe e manda o motivo para o log.
+
+        O motivo tecnico fica NO LOG e nao na resposta: "Mercado Pago com
+        erro interno (status 500)" nao ajuda quem so quer pagar o lanche, e
+        a mensagem crua do gateway ainda pode ecoar o e-mail de quem pagou.
+        O que atravessa para o cliente e o codigo, a mensagem escrita para
+        ele e o `retryable`.
+        """
+        logger.warning(
+            "[Pagamento] cobranca nao criada code=%s retryable=%s provider_code=%s motivo=%s",
+            code,
+            retryable,
+            provider_error_code or "-",
+            cause,
+        )
+        detail = PaymentErrorDetail(
+            code=code,
+            message=message,
+            retryable=retryable,
+            provider_error_code=provider_error_code,
+        )
+        return HTTPException(status_code=status_code, detail=detail.model_dump())

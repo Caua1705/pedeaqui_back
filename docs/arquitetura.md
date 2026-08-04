@@ -1528,13 +1528,15 @@ E, em banco que já tem o schema, a baseline é `alembic stamp 20260726_0001`, n
 
 ### 9.15 Pagamento: o que a Fase 2 deixou de fora, de propósito
 
-Três buracos conhecidos, todos com o lugar de resolver já escolhido:
+Quatro buracos conhecidos, todos com o lugar de resolver já escolhido:
 
-1. **O Mercado Pago não está implementado.** As três funções de
-   `src/integrations/payment_gateway.py` levantam
-   `PaymentProviderNotConfiguredError` e a API responde **503**. Falhar alto é
-   proposital — um retorno plausível deixaria pedidos pendentes para sempre.
-   Com `PAYMENT_PROVIDER=sandbox` (padrão) o fluxo roda inteiro sem gateway.
+1. **Só pix passa pelo Mercado Pago.** A integração está implementada (ver
+   4.5.2), mas `MERCADOPAGO_SUPPORTED_PAYMENT_METHODS = ("pix",)`: cartão
+   exige token gerado no frontend com o SDK deles e fluxo de parcelas, outra
+   integração. Método não suportado responde **503**
+   (`payment_unavailable`) — falhar alto é proposital, um retorno plausível
+   deixaria pedidos pendentes para sempre. Com `PAYMENT_PROVIDER=sandbox`
+   (padrão) o fluxo roda inteiro sem gateway.
 2. **Cancelar um pedido pago NÃO estorna.** O estorno só acontece quando o
    gateway avisa (webhook com `refunded`) ou quando alguém o faz no painel do
    próprio gateway. Cancelamento de pedido `paid` sai no log como
@@ -1545,10 +1547,69 @@ Três buracos conhecidos, todos com o lugar de resolver já escolhido:
    `payment_status=failed`, e a máquina de estados impede que seja aceito. Fica
    visível para o lojista cancelar, e o cliente pode gerar uma nova cobrança
    para o mesmo pedido (`failed → pending`).
+4. **Não existe rota para trocar a forma de pagamento de um pedido já
+   criado** — ver a análise abaixo. Decidido não implementar por ora.
 
 Ainda: um pedido **estornado** não consegue avançar de status, porque `refunded`
 não está em `PAYMENT_STATUSES_THAT_RELEASE_ORDER`. É intencional — pedido cujo
 dinheiro voltou não deve continuar na cozinha.
+
+#### Trocar a forma de pagamento: por que não foi feito (PENDÊNCIA)
+
+Levantado pelo frontend em 2026-08-04, ao consumir a rota de pagamento.
+`payment_flow` é derivado na criação por `_resolve_payment_flow` e nunca
+muda; `on_delivery` não tem nenhuma aresta de ENTRADA em
+`PAYMENT_STATUS_TRANSITIONS`. Um pedido online é online para sempre.
+
+**Por que não é urgente.** O buraco é menor do que parece:
+
+- retentar o pix já funciona — `PAYABLE_STATUSES` inclui `failed` e a
+  aresta `failed → pending` existe. E passou a funcionar **de verdade**
+  depois que a chave de idempotência virou por tentativa (4.5.2): antes, o
+  retry de uma cobrança recusada devolvia a própria cobrança recusada;
+- trocar pix por outro método **online** é inócuo enquanto só pix estiver
+  implementado (item 1 acima);
+- sobra **online → pagar na entrega**, que é raro e tem contorno pelo
+  lojista.
+
+**O que decide o desenho, quando for feito.** `on_delivery` está em
+`PAYMENT_STATUSES_THAT_RELEASE_ORDER`. Uma rota que deixe o CLIENTE fazer
+`pending → on_delivery` por conta própria permite a quem tem o
+`tracking_token` transformar "paga antes" em "paga depois" e empurrar o
+pedido para a cozinha sem pagar — exatamente o que
+`ensure_payment_allows_order_status` existe para impedir. O que torna a
+troca segura não é regra nova: é aceitar só método que a filial habilitou
+com `payment_flow='delivery'` em `branch_payment_methods`. Restaurante que
+quer dinheiro adiantado não tem essa linha, e a troca fica impossível para
+ele — a configuração do lojista **é** a autorização.
+
+Esboço: `PATCH /restaurants/{slug}/orders/{tracking_token}/payment-method`,
+autorizado pelo tracking token, só com `status == "pending"` (lojista ainda
+não agiu) e `payment_status in ("pending", "failed")`, reusando
+`_resolve_payment_flow` sem alterar. Fluxo `delivery` resultante grava
+`payment_status="on_delivery"` — precisa das arestas `pending → on_delivery`
+e `failed → on_delivery`. Sem migração: as três colunas já existem.
+
+**A corrida, que é o motivo de isto não ser um endpoint trivial.** O cliente
+paga o pix e troca para dinheiro quase ao mesmo tempo. A troca limpa
+`provider_payment_id` (senão fica webhook órfão apontando para o pedido
+pelo índice único) e o webhook atrasado chega num pedido já `on_delivery`,
+que é **terminal**: `ensure_payment_transition_allowed` recusa, o
+`handle_webhook` devolve `ignored/invalid_transition` e segue a vida. Ou
+seja — **dinheiro real entrou e ninguém registrou**, com um warning no log
+como único rastro. Mitigação: antes de sair do fluxo online com um
+`provider_payment_id` vivo, `GET /v1/payments/{id}` e recusar a troca se
+estiver `approved`. Uma chamada a mais num caminho raro, contra perder
+pagamento de cliente.
+
+Descartados: **corpo no `POST .../payment`** (mistura "criar cobrança" com
+"mudar os termos do pedido", e esconde mudança de estado atrás de um nome
+que diz outra coisa); **cancelar e refazer o pedido** (é o que acontece
+hoje — perde cupom já resgatado, cashback, comissão congelada e estimativa
+de entrega, e o cupom pode ter batido o limite de uso no meio do caminho).
+Troca pelo lojista via rota admin é **complementar**, não substituta: zero
+superfície de fraude, mas exige telefonema — e é a única saída para pedido
+já aceito, onde a rota do cliente não alcança.
 
 ### 9.16 O `tracking_token` só sai da API uma vez
 

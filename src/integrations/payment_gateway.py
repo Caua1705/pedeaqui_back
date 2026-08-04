@@ -195,6 +195,7 @@ def create_payment(
     access_token: str | None = None,
     application_fee: Decimal | None = None,
     payer_email: str | None = None,
+    previous_payment_id: str | None = None,
 ) -> PaymentIntent:
     """Cria a cobranca no gateway.
 
@@ -212,6 +213,11 @@ def create_payment(
     `payer_email` e exigido pela API deles para pix. Quem resolve o valor
     (e-mail do cliente logado, ou um sintetico para convidado) e
     PaymentService, nao esta funcao — aqui so se recusa a prosseguir sem ele.
+
+    `previous_payment_id` e a cobranca que esta tentativa vem SUBSTITUIR —
+    preenchido so quando a anterior foi recusada. E o que faz a chave de
+    idempotencia mudar e uma cobranca nova nascer; ver
+    _mercadopago_idempotency_key.
     """
     if provider == SANDBOX_PROVIDER:
         return _create_sandbox_payment(order_id)
@@ -247,10 +253,11 @@ def create_payment(
             path="/v1/payments",
             access_token=access_token,
             json_body=body,
-            # O Mercado Pago tem idempotencia propria por esse header: um
-            # retry nosso (timeout na ida, por exemplo) reusa o order_id e
-            # nao gera uma segunda cobranca la.
-            extra_headers={"X-Idempotency-Key": str(order_id)},
+            extra_headers={
+                "X-Idempotency-Key": _mercadopago_idempotency_key(
+                    order_id, body, previous_payment_id
+                )
+            },
         )
 
         transaction_data = (payload.get("point_of_interaction") or {}).get("transaction_data") or {}
@@ -585,6 +592,46 @@ def _call_mercadopago(
         raise PaymentGatewayUnavailableError(
             "Mercado Pago respondeu um corpo que nao e JSON"
         ) from exc
+
+
+def _mercadopago_idempotency_key(
+    order_id: uuid.UUID,
+    body: dict,
+    previous_payment_id: str | None,
+) -> str:
+    """Chave de idempotencia desta TENTATIVA de cobranca.
+
+    O Mercado Pago devolve a MESMA cobranca quando a mesma chave chega de
+    novo. Isso e exatamente o que se quer num retry — um timeout na ida, ou
+    o cliente clicando duas vezes em "pagar", nao pode virar duas cobrancas
+    pix abertas para o mesmo pedido. So que a chave era `str(order_id)`,
+    constante para sempre, e isso tratava como "a mesma cobranca" duas
+    coisas que nao sao:
+
+      - RETRY DE UMA COBRANCA RECUSADA. Reenviar a chave da tentativa
+        recusada devolve a propria cobranca recusada, e o pedido nunca mais
+        teria como ser pago. Dai `previous_payment_id`: quem chama informa
+        qual cobranca esta sendo substituida, e a chave muda.
+      - TENTATIVA COM O CORPO DIFERENTE. Entre uma tentativa e outra o total
+        do pedido pode ter mudado, ou o cliente fez login e o `payer.email`
+        deixou de ser o sintetico de convidado. Mesma chave com corpo
+        diferente e CONFLITO de idempotencia, nao retry — e conflito e uma
+        das coisas que o Mercado Pago responde com erro. Dai o corpo inteiro
+        entrar no calculo: corpo diferente, chave diferente, cobranca nova.
+
+    O que continua igual: com o pagamento ainda `pending` e o mesmo corpo, a
+    chave se repete e a cobranca volta a mesma — a garantia original.
+
+    O `order_id` fica no comeco da chave de proposito: e o que permite achar
+    a tentativa no painel de "Atividade" deles a partir do pedido.
+    """
+    material = json.dumps(
+        {"body": body, "previous_payment_id": previous_payment_id},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+    return f"{order_id}:{digest}"
 
 
 def _mercadopago_error_for_status(

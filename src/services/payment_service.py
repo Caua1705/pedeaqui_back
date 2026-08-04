@@ -107,6 +107,20 @@ class PaymentService:
         payment_method = order.payment_method
         order_number = order.order_number
 
+        # Uma cobranca RECUSADA nao se "retenta": ela se SUBSTITUI. Reenviar
+        # a chave de idempotencia da tentativa recusada faria o gateway
+        # devolver a propria cobranca recusada de volta, e o pedido nunca
+        # mais teria como ser pago. Informar qual cobranca esta sendo
+        # substituida e o que faz a proxima nascer com chave nova — ver
+        # payment_gateway._mercadopago_idempotency_key.
+        #
+        # Com o pagamento ainda "pending" e o CONTRARIO: fica None de
+        # proposito, para a chave se repetir e um segundo clique em "pagar"
+        # devolver o mesmo pix em vez de abrir um segundo.
+        previous_payment_id = (
+            order.provider_payment_id if order.payment_status == "failed" else None
+        )
+
         # A cobranca e sempre em nome do restaurante do pedido: busca a
         # credencial dele ANTES de falar com o gateway, nunca uma constante
         # global. `access_token` fica None quando o provider e "sandbox"
@@ -136,6 +150,7 @@ class PaymentService:
             description=f"Pedido #{order_number}",
             access_token=access_token,
             payer_email=payer_email,
+            previous_payment_id=previous_payment_id,
             # application_fee (corte da plataforma no split) fica de fora:
             # e um campo opcional que so passa a ser preenchido quando
             # existir contrato de marketplace com o restaurante.
@@ -421,6 +436,7 @@ class PaymentService:
         description: str,
         access_token: str | None,
         payer_email: str | None = None,
+        previous_payment_id: str | None = None,
         application_fee=None,
     ):
         try:
@@ -432,6 +448,7 @@ class PaymentService:
                 description=description,
                 access_token=access_token,
                 payer_email=payer_email,
+                previous_payment_id=previous_payment_id,
                 application_fee=application_fee,
             )
         except (PaymentProviderNotConfiguredError, PaymentProviderUnknownError, PaymentGatewayError) as exc:

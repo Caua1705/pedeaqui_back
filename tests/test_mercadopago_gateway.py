@@ -104,6 +104,7 @@ def create_payment_body(
     payer_email="cliente@exemplo.com",
     payment_method="pix",
     application_fee=None,
+    previous_payment_id=None,
 ):
     return dict(
         provider="mercadopago",
@@ -114,6 +115,7 @@ def create_payment_body(
         access_token=access_token,
         payer_email=payer_email,
         application_fee=application_fee,
+        previous_payment_id=previous_payment_id,
     )
 
 
@@ -151,7 +153,10 @@ class CreatePaymentTests(unittest.TestCase):
         self.assertEqual(sent["method"], "POST")
         self.assertEqual(sent["url"], "https://api.mercadopago.com/v1/payments")
         self.assertEqual(sent["headers"]["Authorization"], f"Bearer {ACCESS_TOKEN}")
-        self.assertEqual(sent["headers"]["X-Idempotency-Key"], str(order_id))
+        # A chave comeca pelo order_id para a tentativa ser achavel no painel
+        # deles a partir do pedido; o sufixo e o que separa uma tentativa da
+        # outra (ver IdempotencyKeyTests).
+        self.assertTrue(sent["headers"]["X-Idempotency-Key"].startswith(f"{order_id}:"))
         self.assertEqual(sent["json"]["payment_method_id"], "pix")
         self.assertEqual(sent["json"]["payer"], {"email": "cliente@exemplo.com"})
         self.assertEqual(sent["json"]["transaction_amount"], 93.00)
@@ -264,6 +269,96 @@ class CreatePaymentTests(unittest.TestCase):
                 self.fail("esperava PaymentGatewayCredentialError")
             except PaymentGatewayCredentialError as exc:
                 self.assertNotIn(ACCESS_TOKEN, str(exc))
+
+
+class IdempotencyKeyTests(unittest.TestCase):
+    """Quando duas chamadas sao "a mesma cobranca" e quando nao sao.
+
+    O header X-Idempotency-Key faz o Mercado Pago devolver a MESMA cobranca
+    para a mesma chave. Isso protege um retry (timeout na ida, clique duplo)
+    de virar duas cobrancas pix abertas — mas so vale como protecao se a
+    chave se repetir EXATAMENTE nos casos em que a cobranca e a mesma.
+    """
+
+    def _key_for(self, **kwargs):
+        fake_client = FakeHttpxClient(response=FakeResponse(201, {"id": 1}))
+        with patch(HTTPX_CLIENT_PATH, return_value=fake_client):
+            create_payment(**create_payment_body(**kwargs))
+        return fake_client.requests[0]["headers"]["X-Idempotency-Key"]
+
+    def test_same_charge_asked_twice_repeats_the_key(self):
+        # O caso que a idempotencia existe para cobrir: retry do MESMO
+        # pedido com o MESMO corpo devolve a mesma cobranca, nao uma segunda.
+        order_id = uuid.uuid4()
+
+        first = self._key_for(order_id=order_id)
+        second = self._key_for(order_id=order_id)
+
+        self.assertEqual(first, second)
+
+    def test_key_is_scoped_to_the_order(self):
+        first = self._key_for(order_id=uuid.uuid4())
+        second = self._key_for(order_id=uuid.uuid4())
+
+        self.assertNotEqual(first, second)
+
+    def test_key_starts_with_the_order_id(self):
+        # Para achar a tentativa no painel de "Atividade" deles a partir do
+        # pedido, sem ter que recalcular hash nenhum.
+        order_id = uuid.uuid4()
+
+        self.assertTrue(self._key_for(order_id=order_id).startswith(f"{order_id}:"))
+
+    def test_a_new_attempt_after_a_refused_charge_gets_a_new_key(self):
+        # Cobranca recusada nao se retenta, se SUBSTITUI: reenviar a chave
+        # da tentativa recusada devolveria a propria cobranca recusada de
+        # volta, e o pedido nunca mais teria como ser pago.
+        order_id = uuid.uuid4()
+
+        first = self._key_for(order_id=order_id)
+        second = self._key_for(order_id=order_id, previous_payment_id="mp-1")
+
+        self.assertNotEqual(first, second)
+
+    def test_each_refused_attempt_gets_its_own_key(self):
+        order_id = uuid.uuid4()
+
+        second = self._key_for(order_id=order_id, previous_payment_id="mp-1")
+        third = self._key_for(order_id=order_id, previous_payment_id="mp-2")
+
+        self.assertNotEqual(second, third)
+
+    def test_a_changed_amount_gets_a_new_key(self):
+        # Mesma chave com corpo diferente e CONFLITO de idempotencia, nao
+        # retry — e conflito e uma das coisas que eles respondem com erro.
+        order_id = uuid.uuid4()
+        fake_client = FakeHttpxClient(response=FakeResponse(201, {"id": 1}))
+
+        with patch(HTTPX_CLIENT_PATH, return_value=fake_client):
+            create_payment(**create_payment_body(order_id=order_id))
+            body = create_payment_body(order_id=order_id)
+            body["amount"] = Decimal("120.00")
+            create_payment(**body)
+
+        first, second = (r["headers"]["X-Idempotency-Key"] for r in fake_client.requests)
+        self.assertNotEqual(first, second)
+
+    def test_a_changed_payer_email_gets_a_new_key(self):
+        # O caso concreto: o cliente fez login entre uma tentativa e outra e
+        # o payer.email deixou de ser o sintetico de convidado.
+        order_id = uuid.uuid4()
+
+        guest = self._key_for(order_id=order_id, payer_email="pedido-4321@pederapidex.com")
+        logged_in = self._key_for(order_id=order_id, payer_email="cliente@exemplo.com")
+
+        self.assertNotEqual(guest, logged_in)
+
+    def test_the_key_never_carries_the_payer_email_in_the_clear(self):
+        # O header vai para o gateway, mas tambem aparece em log de proxy e
+        # em painel de observabilidade pelo caminho.
+        key = self._key_for(payer_email="cliente@exemplo.com")
+
+        self.assertNotIn("cliente@exemplo.com", key)
 
 
 class ErrorLoggingTests(unittest.TestCase):

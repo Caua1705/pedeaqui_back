@@ -399,6 +399,52 @@ class StartPaymentTests(unittest.TestCase):
         _, kwargs = mocked_create_payment.call_args
         self.assertEqual(kwargs["payer_email"], "pedido-4321@pederapidex.com")
 
+    def test_retry_of_a_pending_charge_asks_for_the_same_one(self):
+        # Cliente clicou de novo em "pagar" com o pix ainda em aberto. Nao
+        # ha cobranca a substituir: a chave de idempotencia tem que se
+        # repetir para o gateway devolver o MESMO pix, em vez de abrir um
+        # segundo QR code para o mesmo pedido.
+        order = make_order(payment_status="pending", provider_payment_id="mp-1")
+        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        service = build_service(order, credential=credential)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment"
+        ) as mocked_create_payment:
+            mocked_create_payment.return_value = PaymentIntent(
+                provider="mercadopago", provider_payment_id="mp-1"
+            )
+            service.start_online_payment("junior", "token-do-pedido")
+
+        _, kwargs = mocked_create_payment.call_args
+        self.assertIsNone(kwargs["previous_payment_id"])
+
+    def test_retry_after_a_refused_charge_asks_for_a_new_one(self):
+        # Cobranca recusada nao se retenta, se SUBSTITUI. Sem informar qual
+        # cobranca esta sendo trocada, a chave se repetiria e o gateway
+        # devolveria a propria cobranca RECUSADA — o pedido ficaria sem
+        # nenhuma forma de ser pago.
+        order = make_order(
+            payment_status="failed",
+            payment_provider="mercadopago",
+            provider_payment_id="mp-recusada",
+        )
+        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        service = build_service(order, credential=credential)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment"
+        ) as mocked_create_payment:
+            mocked_create_payment.return_value = PaymentIntent(
+                provider="mercadopago", provider_payment_id="mp-2"
+            )
+            service.start_online_payment("junior", "token-do-pedido")
+
+        _, kwargs = mocked_create_payment.call_args
+        self.assertEqual(kwargs["previous_payment_id"], "mp-recusada")
+        self.assertEqual(order.provider_payment_id, "mp-2")
+        self.assertEqual(order.payment_status, "pending")
+
     def test_payer_email_is_not_resolved_for_the_sandbox_provider(self):
         # O sandbox nao usa e-mail nenhum: nao ha por que gastar uma consulta
         # ao customer_repository so para descartar o resultado.

@@ -15,6 +15,7 @@ from src.api.endpoints import (
     admin_menu,
     admin_orders,
     admin_reports,
+    admin_settings,
     auth,
     coupons,
     customers,
@@ -99,5 +100,6 @@ app.include_router(coupons.admin_router)
 app.include_router(admin_auth.router)
 app.include_router(admin_orders.router)
 app.include_router(admin_menu.router)
+app.include_router(admin_settings.router)
 app.include_router(admin_reports.router)
 app.include_router(chat.router)

@@ -1,9 +1,9 @@
-"""Isolamento entre restaurantes nas rotas /admin.
+"""Isolamento entre restaurantes e entre filiais nas rotas /admin.
 
 O que da para provar sem banco: que o restaurant_id do token chega ao
-repositorio em toda leitura e escrita, que o service recusa quando o
-restaurante da URL nao e o do token, e que a resposta e 404 (nao 403) para
-nao confirmar a existencia de recurso alheio.
+repositorio em toda leitura e escrita, que a filial do lojista restringe o
+que ele ve, e que a resposta e 404 (nao 403) para nao confirmar a
+existencia de recurso alheio.
 
 O que fica para os testes de integracao da Fase 4: que o WHERE
 restaurant_id de fato filtra no Postgres. Aqui o repositorio e um fake — ele
@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from src.api.dependencies.admin_auth import ensure_restaurant_scope
+from src.api.dependencies.admin_scope import AdminScope, build_admin_scope
 from src.services.admin_order_service import AdminOrderService
 from src.services.order_service import OrderService
 
@@ -39,6 +39,7 @@ class TenantScopedOrderRepository:
 
     Guarda os pedidos por (order_id, restaurant_id) e so devolve quando os
     dois batem — e o comportamento do WHERE id = :id AND restaurant_id = :r.
+    O mesmo vale para branch_id na listagem.
     """
 
     def __init__(self, orders):
@@ -52,12 +53,33 @@ class TenantScopedOrderRepository:
             return None
         return order
 
-    def list_orders_by_restaurant(self, restaurant_id, status=None, limit=50, offset=0):
-        self.calls.append(("list", restaurant_id))
+    def _matching(self, restaurant_id, branch_id):
         return [
             order for order in self.orders.values()
             if order.restaurant_id == restaurant_id
+            and (branch_id is None or order.branch_id == branch_id)
         ]
+
+    def list_orders_by_restaurant(
+        self, restaurant_id, branch_id=None, status=None,
+        start_at=None, end_at=None, search=None, limit=50, offset=0,
+    ):
+        self.calls.append(("list", restaurant_id, branch_id))
+        return self._matching(restaurant_id, branch_id)
+
+    def count_orders_by_restaurant(
+        self, restaurant_id, branch_id=None, status=None,
+        start_at=None, end_at=None, search=None,
+    ):
+        return len(self._matching(restaurant_id, branch_id))
+
+    def count_orders_grouped_by_status(
+        self, restaurant_id, branch_id=None, start_at=None, end_at=None, search=None,
+    ):
+        grouped = {}
+        for order in self._matching(restaurant_id, branch_id):
+            grouped[order.status] = grouped.get(order.status, 0) + 1
+        return grouped
 
     def update_status(self, order, new_status):
         order.status = new_status
@@ -71,10 +93,19 @@ class TenantScopedOrderRepository:
 ADMIN_USER = SimpleNamespace(id=uuid.uuid4(), email="lojista@exemplo.com")
 
 
-def make_order(restaurant_id):
+def owner_scope(restaurant_id):
+    return AdminScope(admin_user=ADMIN_USER, restaurant_id=restaurant_id, branch_id=None)
+
+
+def branch_scope(restaurant_id, branch_id):
+    return AdminScope(admin_user=ADMIN_USER, restaurant_id=restaurant_id, branch_id=branch_id)
+
+
+def make_order(restaurant_id, branch_id=None):
     return SimpleNamespace(
         id=uuid.uuid4(),
         restaurant_id=restaurant_id,
+        branch_id=branch_id or uuid.uuid4(),
         status="pending",
         payment_status="on_delivery",
         payment_method="cash",
@@ -100,15 +131,15 @@ class ReadIsolationTests(unittest.TestCase):
 
     def test_admin_cannot_read_order_of_another_restaurant(self):
         with self.assertRaises(HTTPException) as raised:
-            self.service.get_order_detail(self.order_of_b.id, self.restaurant_a)
+            self.service.get_order_detail(self.order_of_b.id, owner_scope(self.restaurant_a))
 
         self.assertEqual(raised.exception.status_code, 404)
 
     def test_error_does_not_reveal_that_the_order_exists(self):
         with self.assertRaises(HTTPException) as unknown:
-            self.service.get_order_detail(uuid.uuid4(), self.restaurant_a)
+            self.service.get_order_detail(uuid.uuid4(), owner_scope(self.restaurant_a))
         with self.assertRaises(HTTPException) as foreign:
-            self.service.get_order_detail(self.order_of_b.id, self.restaurant_a)
+            self.service.get_order_detail(self.order_of_b.id, owner_scope(self.restaurant_a))
 
         # Pedido inexistente e pedido de outro restaurante tem que ser
         # indistinguiveis, senao a rota vira um oraculo de UUIDs validos.
@@ -117,13 +148,13 @@ class ReadIsolationTests(unittest.TestCase):
 
     def test_owner_restaurant_reads_its_own_order(self):
         with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
-            result = self.service.get_order_detail(self.order_of_b.id, self.restaurant_b)
+            result = self.service.get_order_detail(self.order_of_b.id, owner_scope(self.restaurant_b))
 
         self.assertEqual(result, "detail")
 
     def test_restaurant_id_is_always_forwarded_to_the_repository(self):
         with self.assertRaises(HTTPException):
-            self.service.get_order_detail(self.order_of_b.id, self.restaurant_a)
+            self.service.get_order_detail(self.order_of_b.id, owner_scope(self.restaurant_a))
 
         self.assertEqual(self.repository.calls, [(self.order_of_b.id, self.restaurant_a)])
 
@@ -144,7 +175,7 @@ class WriteIsolationTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as raised:
             self.service.update_order_status(
                 self.order_of_b.id,
-                self.restaurant_a,
+                owner_scope(self.restaurant_a),
                 SimpleNamespace(status="accepted", note=None),
                 admin_user=ADMIN_USER,
             )
@@ -159,7 +190,7 @@ class WriteIsolationTests(unittest.TestCase):
         with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
             self.service.update_order_status(
                 self.order_of_b.id,
-                self.restaurant_b,
+                owner_scope(self.restaurant_b),
                 SimpleNamespace(status="accepted", note=None),
                 admin_user=ADMIN_USER,
             )
@@ -168,55 +199,122 @@ class WriteIsolationTests(unittest.TestCase):
         self.assertEqual(self.db.events, ["commit"])
 
 
-class ListIsolationTests(unittest.TestCase):
-    def test_listing_with_a_slug_of_another_restaurant_is_refused(self):
-        db = FakeDb()
-        restaurant_a = uuid.uuid4()
-        restaurant_b = uuid.uuid4()
+class BranchIsolationTests(unittest.TestCase):
+    """Escopo por filial: BLOCO A da Fase 3.
 
-        service = AdminOrderService(db)
-        service.order_repository = TenantScopedOrderRepository({})
-        # O slug da URL resolve para o restaurante B; o token e do A.
-        service.restaurant_service = SimpleNamespace(
-            get_active_restaurant=lambda slug: SimpleNamespace(id=restaurant_b)
-        )
+    Ate aqui `admin_users.branch_id` era gravado e ignorado (armadilha 9.10
+    da arquitetura): quem fosse cadastrado como atendente de uma filial via
+    os pedidos de todas.
+    """
 
+    def setUp(self):
+        self.db = FakeDb()
+        self.restaurant_id = uuid.uuid4()
+        self.branch_a = uuid.uuid4()
+        self.branch_b = uuid.uuid4()
+        self.order_a = make_order(self.restaurant_id, self.branch_a)
+        self.order_b = make_order(self.restaurant_id, self.branch_b)
+        self.repository = TenantScopedOrderRepository({
+            self.order_a.id: self.order_a,
+            self.order_b.id: self.order_b,
+        })
+
+        self.service = AdminOrderService(self.db)
+        self.service.order_repository = self.repository
+        self.service.coupon_service = SimpleNamespace(reverse_for_order=lambda order_id: None)
+
+    def test_attendant_only_lists_orders_of_its_own_branch(self):
+        result = self.service.list_orders(branch_scope(self.restaurant_id, self.branch_a))
+
+        self.assertEqual(result.total, 1)
+        self.assertEqual([item.id for item in result.items], [self.order_a.id])
+
+    def test_owner_lists_orders_of_every_branch(self):
+        result = self.service.list_orders(owner_scope(self.restaurant_id))
+
+        self.assertEqual(result.total, 2)
+
+    def test_attendant_cannot_read_order_of_another_branch(self):
         with self.assertRaises(HTTPException) as raised:
-            service.list_orders(restaurant_slug="restaurante-b", restaurant_id=restaurant_a)
+            self.service.get_order_detail(
+                self.order_b.id, branch_scope(self.restaurant_id, self.branch_a)
+            )
 
         self.assertEqual(raised.exception.status_code, 404)
 
-    def test_listing_its_own_slug_works(self):
-        db = FakeDb()
-        restaurant_a = uuid.uuid4()
-        order = make_order(restaurant_a)
-
-        service = AdminOrderService(db)
-        service.order_repository = TenantScopedOrderRepository({order.id: order})
-        service.restaurant_service = SimpleNamespace(
-            get_active_restaurant=lambda slug: SimpleNamespace(id=restaurant_a)
-        )
-
-        result = service.list_orders(restaurant_slug="restaurante-a", restaurant_id=restaurant_a)
-
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0].id, order.id)
-
-
-class CouponScopeTests(unittest.TestCase):
-    def test_scope_check_refuses_another_restaurant(self):
-        admin_user = SimpleNamespace(restaurant_id=uuid.uuid4())
-
+    def test_attendant_cannot_change_status_of_another_branch(self):
         with self.assertRaises(HTTPException) as raised:
-            ensure_restaurant_scope(admin_user, uuid.uuid4())
+            self.service.update_order_status(
+                self.order_b.id,
+                branch_scope(self.restaurant_id, self.branch_a),
+                SimpleNamespace(status="accepted", note=None),
+                admin_user=ADMIN_USER,
+            )
+
+        self.assertEqual(raised.exception.status_code, 404)
+        self.assertEqual(self.order_b.status, "pending")
+        self.assertEqual(self.db.events, [])
+
+    def test_branch_filter_from_the_querystring_cannot_widen_the_scope(self):
+        # O painel manda ?branch_id=... como filtro de tela. Um atendente
+        # preso a filial A pedindo a filial B nao pode receber a lista de B.
+        with self.assertRaises(HTTPException) as raised:
+            self.service.list_orders(
+                branch_scope(self.restaurant_id, self.branch_a), branch_id=self.branch_b
+            )
 
         self.assertEqual(raised.exception.status_code, 404)
 
-    def test_scope_check_accepts_its_own_restaurant(self):
+    def test_status_counts_respect_the_branch(self):
+        counts = self.service.count_orders_by_status(
+            branch_scope(self.restaurant_id, self.branch_a)
+        )
+
+        self.assertEqual(counts.total, 1)
+        pending = next(item for item in counts.counts if item.status == "pending")
+        self.assertEqual(pending.count, 1)
+
+
+class ScopeRuleTests(unittest.TestCase):
+    """A regra de qual filial cada papel enxerga, isolada da rota."""
+
+    def test_owner_ignores_its_branch_and_sees_the_whole_restaurant(self):
         restaurant_id = uuid.uuid4()
-        admin_user = SimpleNamespace(restaurant_id=restaurant_id)
+        admin_user = SimpleNamespace(
+            role="owner", restaurant_id=restaurant_id, branch_id=uuid.uuid4()
+        )
 
-        self.assertIsNone(ensure_restaurant_scope(admin_user, restaurant_id))
+        scope = build_admin_scope(admin_user)
+
+        self.assertIsNone(scope.branch_id)
+        self.assertTrue(scope.sees_all_branches)
+
+    def test_manager_with_branch_is_restricted_to_it(self):
+        branch_id = uuid.uuid4()
+        admin_user = SimpleNamespace(
+            role="manager", restaurant_id=uuid.uuid4(), branch_id=branch_id
+        )
+
+        scope = build_admin_scope(admin_user)
+
+        self.assertEqual(scope.branch_id, branch_id)
+        self.assertFalse(scope.sees_all_branches)
+
+    def test_attendant_without_branch_sees_every_branch(self):
+        admin_user = SimpleNamespace(
+            role="attendant", restaurant_id=uuid.uuid4(), branch_id=None
+        )
+
+        scope = build_admin_scope(admin_user)
+
+        self.assertIsNone(scope.branch_id)
+
+    def test_resolve_branch_filter_keeps_the_requested_branch_when_allowed(self):
+        branch_id = uuid.uuid4()
+        scope = branch_scope(uuid.uuid4(), branch_id)
+
+        self.assertEqual(scope.resolve_branch_filter(branch_id), branch_id)
+        self.assertEqual(scope.resolve_branch_filter(None), branch_id)
 
 
 if __name__ == "__main__":

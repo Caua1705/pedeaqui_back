@@ -212,11 +212,14 @@ class AdminRouteContractTests(unittest.TestCase):
 
         paths = app.openapi()["paths"]
         protected = [
+            ("/admin/orders", "get"),
+            ("/admin/orders/status-counts", "get"),
             ("/admin/orders/{order_id}", "get"),
             ("/admin/orders/{order_id}/status", "patch"),
-            ("/admin/restaurants/{restaurant_slug}/orders", "get"),
-            ("/admin/restaurants/{restaurant_id}/coupons", "get"),
-            ("/admin/restaurants/{restaurant_id}/coupons", "post"),
+            ("/admin/orders/stream-ticket", "post"),
+            ("/admin/coupons", "get"),
+            ("/admin/coupons", "post"),
+            ("/admin/coupons/{coupon_id}", "patch"),
         ]
 
         for path, method in protected:
@@ -228,6 +231,26 @@ class AdminRouteContractTests(unittest.TestCase):
                 }
                 self.assertNotIn("x-api-key", parameter_names)
                 self.assertNotIn("X-API-Key", parameter_names)
+
+    def test_no_admin_route_takes_the_restaurant_from_the_url(self):
+        """A Fase 3 tirou o restaurante do path das rotas /admin.
+
+        O `restaurant_id`/`restaurant_slug` na URL era confrontado com o
+        token e nao autorizava nada, mas mantinha na API a forma de um
+        parametro que a rota nao pode obedecer. Este teste existe para que a
+        proxima rota /admin nao volte a aceita-lo por habito.
+
+        A excecao e o stream: ele nao recebe restaurante nenhum, so um
+        ticket assinado de onde o restaurante e derivado.
+        """
+        from main import app
+
+        admin_paths = [path for path in app.openapi()["paths"] if path.startswith("/admin")]
+
+        for path in admin_paths:
+            with self.subTest(path=path):
+                self.assertNotIn("{restaurant_id}", path)
+                self.assertNotIn("{restaurant_slug}", path)
 
     def test_login_route_is_public(self):
         from main import app

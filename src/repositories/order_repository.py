@@ -18,6 +18,26 @@ from src.models.restaurant_model import Restaurant
 NON_BILLABLE_ORDER_STATUSES = ("cancelled", "rejected")
 
 
+def _build_search_condition(search: str):
+    """Busca do painel: numero do pedido ou nome do cliente.
+
+    O lojista digita as duas coisas no mesmo campo — ora o numero que o
+    cliente leu no telefone, ora "dona maria". So da para saber qual e
+    olhando o que foi digitado: so digitos vira comparacao exata de
+    order_number (que e BigInteger; um ILIKE ali forcaria cast da coluna
+    inteira e perderia o indice), qualquer outra coisa vira ILIKE no nome.
+
+    `%` e `_` sao escapados: sem isso um cliente chamado "Ana_" nao seria
+    encontrado e um "%" sozinho listaria a base toda.
+    """
+    digits = search.strip()
+    if digits.isdigit():
+        return Order.order_number == int(digits)
+
+    escaped = digits.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return Order.customer_name_snapshot.ilike(f"%{escaped}%", escape="\\")
+
+
 class OrderRepository:
     def __init__(self, db: Session):
         self.db = db
@@ -77,16 +97,174 @@ class OrderRepository:
     def list_orders_by_restaurant(
         self,
         restaurant_id: uuid.UUID,
+        branch_id: uuid.UUID | None = None,
         status: str | None = None,
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
+        search: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Order]:
-        stmt = select(Order).where(Order.restaurant_id == restaurant_id)
-        if status:
-            stmt = stmt.where(Order.status == status)
-
-        stmt = stmt.order_by(Order.created_at.desc()).limit(limit).offset(offset)
+        stmt = (
+            select(Order)
+            .where(*self._admin_list_conditions(
+                restaurant_id=restaurant_id,
+                branch_id=branch_id,
+                status=status,
+                start_at=start_at,
+                end_at=end_at,
+                search=search,
+            ))
+            .order_by(Order.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
         return list(self.db.scalars(stmt).all())
+
+    def count_orders_by_restaurant(
+        self,
+        restaurant_id: uuid.UUID,
+        branch_id: uuid.UUID | None = None,
+        status: str | None = None,
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
+        search: str | None = None,
+    ) -> int:
+        """Total de pedidos que casam com o filtro, ignorando a pagina.
+
+        Consulta separada porque o painel precisa do numero de paginas: com
+        so a pagina em maos nao da para saber se existe uma proxima.
+        """
+        stmt = select(func.count()).select_from(Order).where(
+            *self._admin_list_conditions(
+                restaurant_id=restaurant_id,
+                branch_id=branch_id,
+                status=status,
+                start_at=start_at,
+                end_at=end_at,
+                search=search,
+            )
+        )
+        return self.db.scalar(stmt) or 0
+
+    def count_orders_grouped_by_status(
+        self,
+        restaurant_id: uuid.UUID,
+        branch_id: uuid.UUID | None = None,
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
+        search: str | None = None,
+    ) -> dict[str, int]:
+        """Quantos pedidos em cada status, para os badges da tela.
+
+        Um GROUP BY e nao uma consulta por status: sao oito status, e oito
+        COUNT(*) sequenciais por atualizacao de badge e trafego a toa no
+        banco. `status` de proposito nao entra no filtro — filtrar por
+        status aqui zeraria todos os outros contadores.
+        """
+        stmt = (
+            select(Order.status, func.count())
+            .where(*self._admin_list_conditions(
+                restaurant_id=restaurant_id,
+                branch_id=branch_id,
+                status=None,
+                start_at=start_at,
+                end_at=end_at,
+                search=search,
+            ))
+            .group_by(Order.status)
+        )
+        return {row[0]: row[1] for row in self.db.execute(stmt).all()}
+
+    def list_orders_created_since(
+        self,
+        restaurant_id: uuid.UUID,
+        branch_id: uuid.UUID | None,
+        since: datetime,
+        limit: int,
+    ) -> list[Order]:
+        """Pedidos novos desde `since`, para o stream do painel.
+
+        Ordem CRESCENTE, ao contrario da listagem: o stream entrega evento
+        na ordem em que aconteceu, e o cursor avanca para o created_at do
+        ultimo emitido.
+        """
+        conditions = [Order.restaurant_id == restaurant_id, Order.created_at > since]
+        if branch_id is not None:
+            conditions.append(Order.branch_id == branch_id)
+
+        stmt = (
+            select(Order)
+            .where(*conditions)
+            .order_by(Order.created_at.asc())
+            .limit(limit)
+        )
+        return list(self.db.scalars(stmt).all())
+
+    def list_status_changes_since(
+        self,
+        restaurant_id: uuid.UUID,
+        branch_id: uuid.UUID | None,
+        since: datetime,
+        limit: int,
+    ) -> list[tuple[OrderStatusHistory, Order]]:
+        """Mudancas de status desde `since`, para o stream do painel.
+
+        Le order_status_history e nao orders.updated_at porque updated_at
+        muda por qualquer escrita (confirmacao de pagamento, por exemplo) e
+        nao diz para qual status o pedido foi. O historico ja e gravado em
+        toda transicao por AdminOrderService.update_order_status.
+
+        A juncao com orders existe para o filtro por restaurante e filial:
+        order_status_history nao carrega restaurant_id proprio, entao sem
+        ela o stream de um lojista veria a mudanca de status de outro.
+        """
+        conditions = [
+            Order.restaurant_id == restaurant_id,
+            OrderStatusHistory.created_at > since,
+        ]
+        if branch_id is not None:
+            conditions.append(Order.branch_id == branch_id)
+
+        stmt = (
+            select(OrderStatusHistory, Order)
+            .join(Order, Order.id == OrderStatusHistory.order_id)
+            .where(*conditions)
+            .order_by(OrderStatusHistory.created_at.asc())
+            .limit(limit)
+        )
+        return [(row[0], row[1]) for row in self.db.execute(stmt).all()]
+
+    @staticmethod
+    def _admin_list_conditions(
+        restaurant_id: uuid.UUID,
+        branch_id: uuid.UUID | None,
+        status: str | None,
+        start_at: datetime | None,
+        end_at: datetime | None,
+        search: str | None,
+    ) -> list:
+        """WHERE compartilhado pelas tres consultas da listagem do painel.
+
+        Fica junto porque a pagina, o total e os contadores por status
+        precisam concordar exatamente — se um deles esquecer o filtro de
+        periodo, o lojista ve badge somando 40 numa lista de 12.
+        """
+        conditions = [Order.restaurant_id == restaurant_id]
+        if branch_id is not None:
+            conditions.append(Order.branch_id == branch_id)
+        if status:
+            conditions.append(Order.status == status)
+        if start_at is not None:
+            conditions.append(Order.created_at >= start_at)
+        if end_at is not None:
+            # Exclusivo, como em list_orders_for_commission: o service passa
+            # o instante em que o dia seguinte comeca para nao perder o
+            # pedido feito 23:59:59.7.
+            conditions.append(Order.created_at < end_at)
+        if search:
+            conditions.append(_build_search_condition(search))
+        return conditions
 
     def list_orders_for_commission(
         self,

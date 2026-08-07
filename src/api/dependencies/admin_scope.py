@@ -71,10 +71,21 @@ class AdminScope:
         return requested_branch_id
 
 
-def get_admin_scope(admin_user: AdminUser = Depends(get_current_admin)) -> AdminScope:
+def build_admin_scope(admin_user: AdminUser) -> AdminScope:
+    """Aplica a regra de filial a um lojista ja autenticado.
+
+    Separada da dependencia porque o stream SSE nao autentica por
+    `Depends(get_current_admin)` — ele valida um ticket de querystring — e
+    precisa chegar exatamente no mesmo escopo. Duas copias da regra seriam
+    duas chances de divergir.
+    """
     branch_id = None if admin_user.role == UNRESTRICTED_ROLE else admin_user.branch_id
     return AdminScope(
         admin_user=admin_user,
         restaurant_id=admin_user.restaurant_id,
         branch_id=branch_id,
     )
+
+
+def get_admin_scope(admin_user: AdminUser = Depends(get_current_admin)) -> AdminScope:
+    return build_admin_scope(admin_user)

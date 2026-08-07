@@ -4,10 +4,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from src.api.dependencies.admin_auth import ensure_restaurant_scope, get_current_admin
+from src.api.dependencies.admin_scope import AdminScope, get_admin_scope
 from src.api.dependencies.customer_auth import get_current_customer, get_optional_current_customer
 from src.api.dependencies.database import get_db
-from src.models.admin_user_model import AdminUser
 from src.models.customer_model import Customer
 from src.schemas.coupon_schema import (
     AvailableCouponsResponse,
@@ -21,11 +20,11 @@ from src.services.coupon_service import CouponService
 
 
 router = APIRouter(prefix="/restaurants", tags=["coupons"])
-# O restaurant_id no path continua existindo por compatibilidade com o
-# painel, mas nao autoriza nada: ensure_restaurant_scope exige que ele seja o
-# mesmo do token. Antes qualquer portador da X-API-Key criava e editava cupom
-# em qualquer restaurante so trocando o UUID da URL.
-admin_router = APIRouter(prefix="/admin/restaurants", tags=["admin coupons"])
+# O `restaurant_id` saiu do path. Ele nao autorizava nada — era confrontado
+# com o token por ensure_restaurant_scope —, mas manter na URL um dado que a
+# rota nao pode obedecer so cria a chance de a proxima rota obedecer. Cupom
+# nao tem filial: a campanha vale para o restaurante inteiro.
+admin_router = APIRouter(prefix="/admin/coupons", tags=["admin coupons"])
 
 
 @router.get("/{restaurant_slug}/coupons/available", response_model=AvailableCouponsResponse)
@@ -56,34 +55,28 @@ def preview_coupon(
     return CouponService(db).preview(restaurant_slug, payload, current_customer)
 
 
-@admin_router.get("/{restaurant_id}/coupons", response_model=list[CouponAdminResponse])
+@admin_router.get("", response_model=list[CouponAdminResponse])
 def list_admin_coupons(
-    restaurant_id: UUID,
-    admin_user: AdminUser = Depends(get_current_admin),
+    scope: AdminScope = Depends(get_admin_scope),
     db: Session = Depends(get_db),
 ) -> list[CouponAdminResponse]:
-    ensure_restaurant_scope(admin_user, restaurant_id)
-    return CouponService(db).list_admin(restaurant_id)
+    return CouponService(db).list_admin(scope.restaurant_id)
 
 
-@admin_router.post("/{restaurant_id}/coupons", response_model=CouponAdminResponse, status_code=status.HTTP_201_CREATED)
+@admin_router.post("", response_model=CouponAdminResponse, status_code=status.HTTP_201_CREATED)
 def create_admin_coupon(
-    restaurant_id: UUID,
     payload: CouponCreate,
-    admin_user: AdminUser = Depends(get_current_admin),
+    scope: AdminScope = Depends(get_admin_scope),
     db: Session = Depends(get_db),
 ) -> CouponAdminResponse:
-    ensure_restaurant_scope(admin_user, restaurant_id)
-    return CouponService(db).create_admin(restaurant_id, payload)
+    return CouponService(db).create_admin(scope.restaurant_id, payload)
 
 
-@admin_router.patch("/{restaurant_id}/coupons/{coupon_id}", response_model=CouponAdminResponse)
+@admin_router.patch("/{coupon_id}", response_model=CouponAdminResponse)
 def update_admin_coupon(
-    restaurant_id: UUID,
     coupon_id: UUID,
     payload: CouponUpdate,
-    admin_user: AdminUser = Depends(get_current_admin),
+    scope: AdminScope = Depends(get_admin_scope),
     db: Session = Depends(get_db),
 ) -> CouponAdminResponse:
-    ensure_restaurant_scope(admin_user, restaurant_id)
-    return CouponService(db).update_admin(restaurant_id, coupon_id, payload)
+    return CouponService(db).update_admin(scope.restaurant_id, coupon_id, payload)

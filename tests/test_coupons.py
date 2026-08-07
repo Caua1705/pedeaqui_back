@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from fastapi import HTTPException
 from pydantic import ValidationError
 
+from src.api.dependencies.admin_scope import AdminScope
 from src.schemas.coupon_schema import CouponPreviewRequest
 from src.schemas.order_schema import CreateOrderRequest
 from src.services.admin_order_service import AdminOrderService
@@ -583,7 +584,7 @@ class OrderCouponIntegrationTests(unittest.TestCase):
         with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
             result = service.update_order_status(
                 order.id,
-                restaurant_id,
+                AdminScope(admin_user=None, restaurant_id=restaurant_id, branch_id=None),
                 SimpleNamespace(status="cancelled", note=None),
                 admin_user=SimpleNamespace(id=uuid.uuid4(), email="lojista@exemplo.com"),
             )

@@ -79,6 +79,17 @@ def collect_configuration_warnings(settings: Settings) -> list[str]:
             "o comprometimento de um alcance o outro."
         )
 
+    if not settings.SUPABASE_SERVICE_ROLE_KEY:
+        # Warning e nao erro: sem a chave so o upload de imagem do painel
+        # para de funcionar (responde 503). Todo o resto da API, inclusive
+        # a LEITURA das imagens ja existentes, continua igual — o bucket e
+        # publico para leitura.
+        warnings.append(
+            "SUPABASE_SERVICE_ROLE_KEY nao definida: o upload de imagem do "
+            "painel (POST /admin/products/{id}/image) responde 503. O "
+            "restante do cardapio e as imagens ja enviadas nao sao afetados."
+        )
+
     if settings.INTERNAL_API_KEY:
         warnings.append(
             "INTERNAL_API_KEY ainda definida no ambiente: desde a Fase 1 "

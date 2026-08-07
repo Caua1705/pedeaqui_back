@@ -73,6 +73,7 @@ origins = [
 app.add_middleware(
     BodySizeLimitMiddleware,
     max_body_bytes=settings.MAX_REQUEST_BODY_BYTES,
+    max_upload_bytes=settings.MAX_IMAGE_UPLOAD_BYTES,
 )
 
 # Adicionado por ultimo para ficar na camada mais externa: assim ate as

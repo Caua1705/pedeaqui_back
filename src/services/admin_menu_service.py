@@ -15,6 +15,7 @@ Duas decisoes valem para o arquivo inteiro:
    filial.
 """
 
+import secrets
 import uuid
 
 from fastapi import HTTPException, status
@@ -22,6 +23,12 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.admin_scope import AdminScope
+from src.core.config import settings
+from src.integrations.supabase_storage_client import (
+    SupabaseStorageClient,
+    SupabaseStorageError,
+    SupabaseStorageNotConfiguredError,
+)
 from src.models.category_model import Category
 from src.models.product_model import Product
 from src.models.product_option_model import ProductOption, ProductOptionGroup
@@ -44,7 +51,10 @@ from src.schemas.admin_menu_schema import (
     AdminProductUpdate,
     CategoryReorderRequest,
     ProductAvailabilityRequest,
+    ProductImageResponse,
 )
+from src.repositories.restaurant_repository import RestaurantRepository
+from src.utils.images import IMAGE_CONTENT_TYPES, detect_image_extension
 from src.utils.money import money_to_float, quantize_money
 from src.utils.normalization import slugify
 from src.utils.storage import build_storage_url
@@ -54,11 +64,22 @@ from src.utils.storage import build_storage_url
 # um ILIKE de dez mil caracteres vindo da querystring.
 MAX_SEARCH_LENGTH = 120
 
+# Pasta da imagem de produto dentro do bucket, depois do slug do
+# restaurante. Mantem a estrutura que ja existe hoje: <slug>/products/.
+PRODUCT_IMAGE_FOLDER = "products"
+
 
 class AdminMenuService:
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, storage_client: SupabaseStorageClient | None = None):
         self.db = db
         self.repository = AdminMenuRepository(db)
+        self.restaurant_repository = RestaurantRepository(db)
+        self.storage_client = storage_client or SupabaseStorageClient(
+            base_url=settings.SUPABASE_URL,
+            bucket=settings.SUPABASE_STORAGE_BUCKET,
+            service_key=settings.SUPABASE_SERVICE_ROLE_KEY,
+            timeout_seconds=settings.SUPABASE_STORAGE_TIMEOUT_SECONDS,
+        )
 
     def list_categories(self, scope: AdminScope) -> list[AdminCategoryResponse]:
         categories = self.repository.list_categories(scope.restaurant_id)
@@ -240,6 +261,65 @@ class AdminMenuService:
         self._commit()
         return self._product_response(product)
 
+    def upload_product_image(
+        self,
+        scope: AdminScope,
+        product_id: uuid.UUID,
+        content: bytes,
+    ) -> ProductImageResponse:
+        """Grava a foto do produto no bucket e aponta o produto para ela.
+
+        A ordem importa: o objeto vai para o Storage ANTES do commit. Se
+        gravasse `image_path` primeiro, uma falha do Storage deixaria o
+        produto apontando para um arquivo que nao existe, e o cardapio
+        publico mostraria imagem quebrada. Falhando aqui, o produto fica
+        com a imagem antiga — que e o pior caso aceitavel.
+
+        O objeto antigo nao e apagado. E de proposito: o CDN do Supabase
+        pode ter a URL antiga em cache por minutos, e apagar na hora deixa
+        o cardapio sem imagem nesse intervalo. Sobra lixo no bucket, e o
+        preco por nunca mostrar imagem quebrada ao cliente.
+        """
+        product = self._get_product(product_id, scope)
+        extension = self._validate_image(content)
+
+        restaurant = self.restaurant_repository.get_by_id(scope.restaurant_id)
+        if restaurant is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Restaurante nao encontrado"
+            )
+
+        # O sufixo aleatorio existe para o CDN: reusar o mesmo caminho
+        # faria o cliente continuar vendo a foto anterior ate o cache
+        # expirar, e o lojista trocaria a imagem de novo achando que falhou.
+        object_path = (
+            f"{restaurant.slug}/{PRODUCT_IMAGE_FOLDER}/"
+            f"{product.id}-{secrets.token_hex(4)}.{extension}"
+        )
+        try:
+            self.storage_client.upload(
+                object_path,
+                content,
+                IMAGE_CONTENT_TYPES[extension],
+            )
+        except SupabaseStorageNotConfiguredError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Upload de imagem indisponivel: storage nao configurado",
+            ) from exc
+        except SupabaseStorageError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Nao foi possivel enviar a imagem agora",
+            ) from exc
+
+        product.image_path = object_path
+        self._commit()
+        return ProductImageResponse(
+            image_path=object_path,
+            image_url=build_storage_url(object_path),
+        )
+
     def list_option_groups(
         self,
         scope: AdminScope,
@@ -399,6 +479,37 @@ class AdminMenuService:
         except Exception:
             self.db.rollback()
             raise
+
+    @staticmethod
+    def _validate_image(content: bytes) -> str:
+        """Confere tamanho e tipo real do arquivo, e devolve a extensao.
+
+        O tamanho e conferido aqui TAMBEM, alem do middleware: o middleware
+        corta o corpo inteiro do multipart (arquivo + delimitadores), e o
+        que interessa gravar no bucket e o arquivo. Sao dois limites
+        diferentes medindo coisas diferentes.
+
+        O tipo sai dos bytes, nunca do `content_type` do multipart — ver
+        src/utils/images.py.
+        """
+        if not content:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Arquivo vazio"
+            )
+        if len(content) > settings.MAX_IMAGE_UPLOAD_BYTES:
+            limit_mb = settings.MAX_IMAGE_UPLOAD_BYTES / 1_048_576
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"A imagem excede o tamanho maximo de {limit_mb:.0f} MB",
+            )
+
+        extension = detect_image_extension(content)
+        if extension is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Formato invalido: envie JPEG, PNG ou WEBP",
+            )
+        return extension
 
     @staticmethod
     def _build_slug(name: str) -> str:

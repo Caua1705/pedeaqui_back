@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.admin_scope import AdminScope, get_admin_scope
@@ -22,6 +22,7 @@ from src.schemas.admin_menu_schema import (
     AdminProductUpdate,
     CategoryReorderRequest,
     ProductAvailabilityRequest,
+    ProductImageResponse,
 )
 from src.services.admin_menu_service import AdminMenuService
 
@@ -158,6 +159,26 @@ def set_product_availability(
     corpo de um campo so nao corre o risco de reenviar preco velho junto.
     """
     return AdminMenuService(db).set_product_availability(scope, product_id, payload)
+
+
+@router.post("/products/{product_id}/image", response_model=ProductImageResponse)
+async def upload_product_image(
+    product_id: UUID,
+    file: UploadFile = File(..., description="JPEG, PNG ou WEBP"),
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> ProductImageResponse:
+    """Envia a foto do produto para o bucket do restaurante (BLOCO B5).
+
+    Grava em `<slug-do-restaurante>/products/`, que e a estrutura que o
+    bucket ja usa. O tipo e conferido pelos BYTES do arquivo, nao pelo
+    content-type declarado — ver src/utils/images.py.
+
+    `async def` porque `UploadFile.read()` e assincrono; a leitura vem do
+    arquivo temporario que o Starlette ja montou, nao da rede.
+    """
+    content = await file.read()
+    return AdminMenuService(db).upload_product_image(scope, product_id, content)
 
 
 @router.get(

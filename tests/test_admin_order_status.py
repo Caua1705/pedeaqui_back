@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
+from src.api.dependencies.admin_scope import AdminScope
 from src.services.admin_order_service import AdminOrderService
 from src.services.order_service import OrderService
 
@@ -65,6 +66,11 @@ def make_order(restaurant_id, *, status="pending", payment_status="on_delivery",
     )
 
 
+def owner_scope(restaurant_id):
+    """Escopo de dono: restaurante do token e todas as filiais."""
+    return AdminScope(admin_user=ADMIN, restaurant_id=restaurant_id, branch_id=None)
+
+
 def request(status, note=None):
     return SimpleNamespace(status=status, note=note)
 
@@ -79,7 +85,7 @@ class TransitionTests(unittest.TestCase):
 
         with self.assertRaises(HTTPException) as raised:
             service.update_order_status(
-                order.id, self.restaurant_id, request("completed"), admin_user=ADMIN
+                order.id, owner_scope(self.restaurant_id), request("completed"), admin_user=ADMIN
             )
 
         self.assertEqual(raised.exception.status_code, 409)
@@ -92,7 +98,7 @@ class TransitionTests(unittest.TestCase):
 
         with self.assertRaises(HTTPException) as raised:
             service.update_order_status(
-                order.id, self.restaurant_id, request("entregue"), admin_user=ADMIN
+                order.id, owner_scope(self.restaurant_id), request("entregue"), admin_user=ADMIN
             )
 
         self.assertEqual(raised.exception.status_code, 400)
@@ -103,7 +109,7 @@ class TransitionTests(unittest.TestCase):
 
         with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
             service.update_order_status(
-                order.id, self.restaurant_id, request("accepted"), admin_user=ADMIN
+                order.id, owner_scope(self.restaurant_id), request("accepted"), admin_user=ADMIN
             )
 
         self.assertEqual(order.status, "accepted")
@@ -120,7 +126,7 @@ class PaymentGateTests(unittest.TestCase):
 
         with self.assertRaises(HTTPException) as raised:
             service.update_order_status(
-                order.id, self.restaurant_id, request("accepted"), admin_user=ADMIN
+                order.id, owner_scope(self.restaurant_id), request("accepted"), admin_user=ADMIN
             )
 
         self.assertEqual(raised.exception.status_code, 409)
@@ -133,7 +139,7 @@ class PaymentGateTests(unittest.TestCase):
 
         with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
             service.update_order_status(
-                order.id, self.restaurant_id, request("accepted"), admin_user=ADMIN
+                order.id, owner_scope(self.restaurant_id), request("accepted"), admin_user=ADMIN
             )
 
         self.assertEqual(order.status, "accepted")
@@ -144,7 +150,7 @@ class PaymentGateTests(unittest.TestCase):
 
         with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
             service.update_order_status(
-                order.id, self.restaurant_id, request("cancelled"), admin_user=ADMIN
+                order.id, owner_scope(self.restaurant_id), request("cancelled"), admin_user=ADMIN
             )
 
         self.assertEqual(order.status, "cancelled")
@@ -158,7 +164,7 @@ class HistoryAuthorTests(unittest.TestCase):
 
         with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
             service.update_order_status(
-                order.id, restaurant_id, request("accepted", note="ok"), admin_user=ADMIN
+                order.id, owner_scope(restaurant_id), request("accepted", note="ok"), admin_user=ADMIN
             )
 
         entry = service.order_repository.history[0]

@@ -14,9 +14,10 @@ class AdminUser(Base):
     a delimitar o que ele enxerga nas rotas /admin.
 
     `branch_id` opcional: nulo significa acesso a todas as filiais do
-    restaurante. A restricao por filial ainda nao e aplicada nas rotas; o
-    campo existe porque ja esta no schema e sera usado quando houver
-    operacao multi-filial de verdade.
+    restaurante. Desde a Fase 3 o campo E aplicado nas rotas /admin, em um
+    lugar so (`src/api/dependencies/admin_scope.py`): "owner" enxerga o
+    restaurante inteiro mesmo com filial preenchida; "manager" e "attendant"
+    ficam presos a filial quando ela esta preenchida.
     """
 
     __tablename__ = "admin_users"

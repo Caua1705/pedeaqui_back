@@ -24,6 +24,7 @@ from src.schemas.admin_auth_schema import (
     AdminLoginResponse,
     AdminUserResponse,
 )
+from src.schemas.admin_order_schema import AdminStreamTicketResponse
 from src.utils.normalization import normalize_email
 from src.utils.security import (
     TokenExpiredError,
@@ -38,6 +39,14 @@ from src.utils.security import (
 logger = logging.getLogger("uvicorn.error")
 
 ADMIN_TOKEN_PURPOSE = "admin_access"
+# Proposito separado do token de acesso: um ticket de stream vazado nao
+# serve para chamar PATCH /admin/orders/{id}/status, e o token de 12h nao
+# serve para abrir stream. `purpose` e conferido em decode_signed_token.
+ADMIN_STREAM_TICKET_PURPOSE = "admin_stream_ticket"
+# Vida do ticket. Curta porque ele viaja na querystring do EventSource e
+# acaba no log de acesso do proxy; 30s cobre a distancia entre pedir o
+# ticket e o navegador abrir a conexao, e nao mais que isso.
+STREAM_TICKET_SECONDS = 30
 # Piso de latencia para que o tempo de resposta nao diga se o e-mail existe,
 # mesmo padrao ja adotado em forgot_password na Fase 0.
 LOGIN_MIN_SECONDS = 0.4
@@ -100,10 +109,43 @@ class AdminAuthService:
             secret=admin_auth_secret(),
         )
 
+    @staticmethod
+    def create_stream_ticket(admin_user: AdminUser) -> AdminStreamTicketResponse:
+        """Credencial de curta duracao para abrir o SSE.
+
+        Existe porque o `EventSource` do navegador nao manda cabecalho: o
+        unico jeito de autenticar o stream e pela URL. Mandar o token de 12h
+        ali deixaria a credencial completa no log do Traefik, no Referer e no
+        historico do navegador. O ticket vale 30s e so abre stream.
+        """
+        return AdminStreamTicketResponse(
+            ticket=create_signed_token(
+                subject=str(admin_user.id),
+                purpose=ADMIN_STREAM_TICKET_PURPOSE,
+                expires_delta=timedelta(seconds=STREAM_TICKET_SECONDS),
+                extra={"type": "admin"},
+                secret=admin_auth_secret(),
+            ),
+            expires_in_seconds=STREAM_TICKET_SECONDS,
+        )
+
+    def get_admin_from_stream_ticket(self, ticket: str) -> AdminUser:
+        """Lojista por tras de um ticket de stream.
+
+        Recarrega do banco como `get_admin_from_token`, e nao so confia no
+        que esta assinado: uma conexao de stream reabre a cada 15 minutos, e
+        um lojista desativado no meio do turno tem que parar de receber
+        pedido na proxima reconexao.
+        """
+        return self._load_admin_from_token(ticket, ADMIN_STREAM_TICKET_PURPOSE)
+
     def get_admin_from_token(self, token: str) -> AdminUser:
+        return self._load_admin_from_token(token, ADMIN_TOKEN_PURPOSE)
+
+    def _load_admin_from_token(self, token: str, purpose: str) -> AdminUser:
         try:
             payload = decode_signed_token(
-                token, ADMIN_TOKEN_PURPOSE, secret=admin_auth_secret()
+                token, purpose, secret=admin_auth_secret()
             )
         except TokenExpiredError as exc:
             raise HTTPException(

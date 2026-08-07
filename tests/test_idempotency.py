@@ -20,6 +20,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
+from src.api.dependencies.admin_scope import AdminScope
 from src.core.config import settings
 from src.models.idempotency_key_model import (
     IDEMPOTENCY_COMPLETED,
@@ -440,6 +441,11 @@ def _admin(admin_id):
     return SimpleNamespace(id=admin_id, email=f"lojista-{admin_id}@exemplo.com")
 
 
+def _owner_scope(restaurant_id):
+    """Escopo de dono: restaurante do token e todas as filiais."""
+    return AdminScope(admin_user=None, restaurant_id=restaurant_id, branch_id=None)
+
+
 class StatusHistoryRepository:
     """Guarda o historico de status, que e o que duplicava a cada reenvio."""
 
@@ -492,7 +498,7 @@ class UpdateStatusIdempotencyTests(unittest.TestCase):
         ):
             first_service = self._service(db, order, shared_repository)
             first_service.update_order_status(
-                order.id, restaurant_id, request,
+                order.id, _owner_scope(restaurant_id), request,
                 admin_user=_admin(admin_id), idempotency_key="patch-key",
             )
 
@@ -501,7 +507,7 @@ class UpdateStatusIdempotencyTests(unittest.TestCase):
                 OrderDetailResponse, "model_validate", side_effect=lambda value: value
             ):
                 replay = second_service.update_order_status(
-                    order.id, restaurant_id, request,
+                    order.id, _owner_scope(restaurant_id), request,
                     admin_user=_admin(admin_id), idempotency_key="patch-key",
                 )
 
@@ -524,12 +530,12 @@ class UpdateStatusIdempotencyTests(unittest.TestCase):
         ):
             service_a = self._service(db, order, shared_repository)
             service_a.update_order_status(
-                order.id, restaurant_id, SimpleNamespace(status="accepted", note=None),
+                order.id, _owner_scope(restaurant_id), SimpleNamespace(status="accepted", note=None),
                 admin_user=_admin(uuid.uuid4()), idempotency_key="mesma-chave",
             )
             service_b = self._service(db, order, shared_repository)
             service_b.update_order_status(
-                order.id, restaurant_id, SimpleNamespace(status="preparing", note=None),
+                order.id, _owner_scope(restaurant_id), SimpleNamespace(status="preparing", note=None),
                 admin_user=_admin(uuid.uuid4()), idempotency_key="mesma-chave",
             )
 
@@ -545,7 +551,7 @@ class UpdateStatusIdempotencyTests(unittest.TestCase):
         with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
             service = self._service(db, order)
             result = service.update_order_status(
-                order.id, restaurant_id,
+                order.id, _owner_scope(restaurant_id),
                 SimpleNamespace(status="accepted", note=None),
                 admin_user=_admin(uuid.uuid4()),
             )

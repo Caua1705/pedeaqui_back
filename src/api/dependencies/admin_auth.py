@@ -1,12 +1,15 @@
 """Injeta o lojista autenticado nas rotas /admin.
 
-Toda rota /admin passa a receber um AdminUser, e o `restaurant_id` dele e a
-unica fonte de escopo aceita. Nenhuma rota deve confiar em restaurante vindo
-do path ou do corpo sem confrontar com este valor — era exatamente essa
-confianca que permitia ler pedido de outro restaurante.
-"""
+Toda rota /admin recebe um AdminUser, e o `restaurant_id` dele e a unica
+fonte de escopo que existe: desde a Fase 3 nenhuma rota /admin aceita
+restaurante no path ou no corpo, entao nao ha o que confrontar — era
+exatamente essa confianca que permitia ler pedido de outro restaurante.
 
-import uuid
+Quem quiser o escopo pronto (restaurante + filial) usa `get_admin_scope`,
+em `admin_scope.py`. Esta dependencia continua exposta para as duas rotas
+que so precisam da identidade do lojista, nao do recorte de dados: `GET
+/admin/auth/me` e a emissao do ticket de stream.
+"""
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -29,16 +32,3 @@ def get_current_admin(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Token ausente"
         )
     return AdminAuthService(db).get_admin_from_token(credentials.credentials)
-
-
-def ensure_restaurant_scope(admin_user: AdminUser, restaurant_id: uuid.UUID) -> None:
-    """Confere que o restaurante pedido na URL e o do token.
-
-    404 em vez de 403 de proposito: um 403 confirmaria que aquele
-    restaurant_id existe, e um lojista nao precisa saber quem mais esta na
-    plataforma. Para ele, o que nao e dele simplesmente nao existe.
-    """
-    if admin_user.restaurant_id != restaurant_id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Restaurante nao encontrado"
-        )

@@ -12,8 +12,11 @@ from src.api.rate_limit import limiter, rate_limit_exceeded_handler
 from src.api.validation_errors import log_contract_validation_error
 from src.api.endpoints import (
     admin_auth,
+    admin_customers,
+    admin_menu,
     admin_orders,
     admin_reports,
+    admin_settings,
     auth,
     coupons,
     customers,
@@ -72,6 +75,7 @@ origins = [
 app.add_middleware(
     BodySizeLimitMiddleware,
     max_body_bytes=settings.MAX_REQUEST_BODY_BYTES,
+    max_upload_bytes=settings.MAX_IMAGE_UPLOAD_BYTES,
 )
 
 # Adicionado por ultimo para ficar na camada mais externa: assim ate as
@@ -96,5 +100,8 @@ app.include_router(coupons.router)
 app.include_router(coupons.admin_router)
 app.include_router(admin_auth.router)
 app.include_router(admin_orders.router)
+app.include_router(admin_menu.router)
+app.include_router(admin_settings.router)
+app.include_router(admin_customers.router)
 app.include_router(admin_reports.router)
 app.include_router(chat.router)

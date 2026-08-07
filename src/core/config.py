@@ -16,6 +16,12 @@ class Settings(BaseSettings):
 
     SUPABASE_URL: str
     SUPABASE_STORAGE_BUCKET: str = "restaurant-assets"
+    # Chave de servico do Supabase, usada SOMENTE para gravar no Storage
+    # (upload de imagem do painel). O bucket e publico para leitura, entao
+    # nada mais precisa dela. Vazia = o upload responde 503; o resto da API
+    # continua funcionando.
+    SUPABASE_SERVICE_ROLE_KEY: str | None = None
+    SUPABASE_STORAGE_TIMEOUT_SECONDS: float = 15
 
     # DEPRECIADA na Fase 1. Nenhuma rota HTTP usa mais esta chave: as rotas
     # /admin passaram a exigir JWT de lojista. Continua opcional aqui apenas
@@ -60,6 +66,10 @@ class Settings(BaseSettings):
     # Teto do corpo da requisicao. O maior payload legitimo e a criacao de
     # pedido, que com os limites de order_schema fica bem abaixo disso.
     MAX_REQUEST_BODY_BYTES: int = 262_144
+    # Teto separado para as rotas de upload de imagem: uma foto de produto
+    # nao cabe em 256 KB, e subir o limite geral para 3 MB abriria a mesma
+    # folga em toda rota de JSON. Ver BodySizeLimitMiddleware.
+    MAX_IMAGE_UPLOAD_BYTES: int = 3_145_728
 
     # Janela em que reenviar a mesma Idempotency-Key devolve a resposta
     # gravada em vez de criar de novo. Passado o TTL a chave e reciclavel.

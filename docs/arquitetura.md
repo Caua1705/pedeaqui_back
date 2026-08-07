@@ -40,7 +40,7 @@ src/
 alembic/versions/          migrações versionadas (fonte da verdade do schema hoje)
 migrations/                arquivo histórico congelado dos 13 .sql aplicados a mão. NÃO rode.
 scripts/                   tarefas de operação: criar lojista, limpar chaves, reindexar IA
-tests/                     245 testes, sem banco real (usam fakes)
+tests/                     472 testes, sem banco real (usam fakes)
 ```
 
 ### Regra de quem chama quem
@@ -888,7 +888,15 @@ consultáveis pela rota pública — que era o objetivo.
 | Validade dos tokens (cliente 7d / lojista 12h) | `src/core/config.py:27`, `:34` |
 | Rate limits por rota | `src/api/rate_limit.py:33-41` |
 | Limite de corpo da requisição | `src/core/config.py:56` |
-| Escopo do lojista por restaurante | `src/api/dependencies/admin_auth.py:34-44` |
+| Escopo do lojista por restaurante | `src/api/dependencies/admin_auth.py:28-34` |
+| **Escopo do lojista por filial** (owner x manager/attendant) | `src/api/dependencies/admin_scope.py:74-91` |
+| Slug de categoria/produto derivado do nome, único por restaurante | `src/services/admin_menu_service.py` (`_build_slug`, `_ensure_*_slug_is_free`) |
+| Cardápio: nada é apagado, só desativado (FK de `order_items`) | `src/services/admin_menu_service.py` (docstring do módulo) |
+| Tipo da imagem enviada sai dos bytes, não do `content-type` | `src/utils/images.py` |
+| Faixas de horário da filial não podem se sobrepor | `src/services/admin_settings_service.py:_ensure_no_overlap` |
+| Semana da filial é substituída inteira (PUT), dia ausente = fechado | `src/services/admin_settings_service.py:replace_business_hours` |
+| `platform_commission_percent` fora do contrato do painel | `src/schemas/admin_settings_schema.py` (docstring) |
+| Clientes do painel derivam de `orders`, nunca de `customers` | `src/repositories/admin_customer_repository.py` |
 | Saldo de cashback disponível | `src/services/cashback_service.py:25-27` |
 | TTL / tamanho da sessão do chat (1h, 20 mensagens) | `src/services/chat_service.py:23-24` |
 
@@ -1187,7 +1195,7 @@ Local, com o venv ativo: `py scripts/create_admin_user.py --restaurant-slug ... 
 ### 8.5 Rodar os testes
 
 ```powershell
-py -m pytest tests -q          # 245 testes, ~6s
+py -m pytest tests -q          # 472 testes, ~7s
 py -m pytest tests -v          # com nome de cada teste
 py -m pytest tests/test_idempotency.py -v
 ```
@@ -1461,13 +1469,29 @@ Hoje o deploy é um container/um worker, então funciona. Definir `REDIS_URL` re
 
 O startup avisa sobre isso (`startup_checks.py:38-50`).
 
-### 9.10 O escopo por filial do lojista existe no banco mas não é aplicado
+### 9.10 Escopo por filial do lojista (corrigido na Fase 3)
 
-`admin_users.branch_id` é gravado (`admin_user_model.py:30-32`) e o script até aceita
-`--branch-id` (`create_admin_user.py:68-72`), mas **nenhuma rota filtra por ele** — todo
-lojista enxerga os pedidos de todas as filiais do restaurante. Está registrado no próprio
-modelo (`admin_user_model.py:16-19`). Se você criar um usuário achando que ele fica preso a
-uma filial, não fica.
+**Era uma armadilha, foi corrigida.** `admin_users.branch_id` era gravado e o script aceitava
+`--branch-id`, mas nenhuma rota filtrava por ele: quem criasse um usuário achando que ele
+ficava preso a uma filial se enganava.
+
+Agora a regra existe em **um lugar só**, `src/api/dependencies/admin_scope.py:74-91`, e chega
+às rotas como `AdminScope`:
+
+- `owner` → vê e edita todas as filiais, mesmo com `branch_id` preenchido.
+- `manager` / `attendant` → presos à filial quando `branch_id` está preenchido; nulo = tudo.
+
+O que **não** tem filial continua sendo do restaurante inteiro, para qualquer papel: cardápio
+(`categories`/`products` só têm `restaurant_id`), cupons e as configurações de
+`restaurant_settings`. Quem precisa de restrição por filial ali precisa antes de uma coluna
+de filial nessas tabelas.
+
+Duas armadilhas herdadas de estar em um lugar só: o stream SSE **não** usa
+`Depends(get_admin_scope)` (autentica por ticket na querystring) e por isso chama
+`build_admin_scope` na mão (`admin_orders.py:142`) — se a regra mudar, os dois caminhos
+precisam continuar iguais. E a filial que aparece no path das rotas de configuração
+(`/admin/branches/{branch_id}/...`) **não autoriza nada**: é conferida contra o escopo em
+`AdminSettingsService._get_branch`.
 
 ### 9.11 Máquina de estados de pedido (corrigido na Fase 2)
 
@@ -1642,3 +1666,25 @@ Um motivo legítimo e frequente: o cliente pediu a estimativa e demorou mais de
 `DELIVERY_ESTIMATE_REUSE_TTL_SECONDS` (15 min) para fechar o pedido. Aumentar
 esse TTL reduz custo e aumenta a chance de cobrar uma taxa calculada com o
 trânsito de meia hora atrás.
+
+### 9.18 O que a Fase 3 deixou de fora, de propósito
+
+Registrado aqui para não virar "esqueceram" na próxima fase. Detalhe e motivo de cada item
+em `docs/fase-3-painel.md`.
+
+- **`restaurant_settings.payment_methods` (JSONB) continua sem dono.** As formas de pagamento
+  de verdade são `branch_payment_methods`, que é o que `OrderService._resolve_payment_flow`
+  lê (`order_service.py:344`). O JSONB só alimenta o cardápio público
+  (`menu_service.py:63`) e **não** é editável pelo painel — editar os dois lados criaria
+  duas fontes de verdade divergentes. Some quando o cardápio público passar a ler a filial.
+- **Imagem antiga fica no bucket.** Cada upload grava um caminho novo (sufixo aleatório, por
+  causa do cache do CDN) e não apaga o anterior. Sobra lixo; falta uma limpeza por
+  varredura, fora do ciclo HTTP.
+- **Rotas /admin não têm rate limit.** As públicas têm (`src/api/rate_limit.py`); as do
+  painel só exigem JWT. O login de lojista já é limitado, que é a porta de força bruta.
+- **Nenhuma rota do painel é auditada além do status do pedido.** `order_status_history`
+  registra quem mudou o status; mudança de preço, de horário ou de forma de pagamento não
+  deixa rastro de autor.
+- **Não há gestão de usuários do painel.** Criar lojista continua sendo
+  `scripts/create_admin_user.py`. O `role` existe e delimita filial, mas nenhuma rota é
+  restrita *por papel* — attendant escreve o mesmo que owner dentro do escopo dele.

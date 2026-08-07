@@ -1,4 +1,8 @@
 fastapi
+# Exigida pelo FastAPI para ler multipart/form-data. Sem ela, a rota de
+# upload de imagem do painel (POST /admin/products/{id}/image) derruba o
+# boot com "Form data requires python-multipart".
+python-multipart
 uvicorn[standard]
 sqlalchemy
 psycopg[binary]

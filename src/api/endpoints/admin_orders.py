@@ -132,8 +132,10 @@ async def stream_orders(
 ) -> EventStreamResponse:
     """Pedido novo e mudanca de status em tempo real, sem polling do painel.
 
-    E `async def` — a unica rota do projeto que e — para nao prender uma
-    thread do pool durante os minutos em que a conexao fica ociosa. O
+    E `async def` para nao prender uma thread do pool durante os minutos em
+    que a conexao fica ociosa — e a unica rota do projeto em que isso e uma
+    decisao de arquitetura, e nao so a exigencia de um `await` (a de upload
+    de imagem e async porque `UploadFile.read()` e assincrono). O
     trabalho de banco de cada poll vai para o threadpool. Ver
     `AdminOrderStreamService` para a escolha de SSE sobre WebSocket e para
     como a reconexao nao perde pedido.

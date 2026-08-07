@@ -12,10 +12,10 @@ Alem disso, tres coisas deste backend especificamente:
 
 1. **O backend e sincrono, com poucos workers.** Endpoint `def` do FastAPI
    roda no threadpool; uma conexao WebSocket segurada por horas prende uma
-   thread durante todo o tempo ocioso. Por isso a rota do stream e a unica
-   `async def` do projeto e o trabalho de banco vai para o threadpool so
-   durante a consulta (`run_in_threadpool`), liberando a thread entre um
-   poll e outro.
+   thread durante todo o tempo ocioso. Por isso a rota do stream e
+   `async def` e o trabalho de banco vai para o threadpool so durante a
+   consulta (`run_in_threadpool`), liberando a thread entre um poll e
+   outro.
 2. **Reconexao vem de graca.** O `EventSource` do navegador reconecta
    sozinho e reenvia o `Last-Event-ID`. Com WebSocket, reconexao e
    backoff seriam codigo no frontend.

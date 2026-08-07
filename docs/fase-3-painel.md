@@ -129,7 +129,8 @@ por id descartaria justamente esses. O contrato não traz e-mail, CPF nem o id d
 2. **O backend é síncrono e tem poucos workers.** Endpoint `def` do FastAPI roda no
    threadpool: uma conexão WebSocket segurada por horas prende uma thread durante todo o
    tempo ocioso, e com poucos workers isso derruba a API antes de derrubar o painel. Por isso
-   `GET /admin/orders/stream` é a **única** rota `async def` do projeto; o trabalho de banco
+   `GET /admin/orders/stream` é `async def` por decisão de arquitetura (a de upload de imagem
+   é async só porque `UploadFile.read()` exige `await`); o trabalho de banco
    vai para o threadpool só durante a consulta (`run_in_threadpool`) e a thread fica livre
    entre um poll e outro.
 3. **Reconexão vem pronta e a conexão atravessa o proxy como HTTP.** O `EventSource`

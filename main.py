@@ -12,6 +12,7 @@ from src.api.rate_limit import limiter, rate_limit_exceeded_handler
 from src.api.validation_errors import log_contract_validation_error
 from src.api.endpoints import (
     admin_auth,
+    admin_customers,
     admin_menu,
     admin_orders,
     admin_reports,
@@ -101,5 +102,6 @@ app.include_router(admin_auth.router)
 app.include_router(admin_orders.router)
 app.include_router(admin_menu.router)
 app.include_router(admin_settings.router)
+app.include_router(admin_customers.router)
 app.include_router(admin_reports.router)
 app.include_router(chat.router)

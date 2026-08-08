@@ -43,7 +43,10 @@ from src.utils.normalization import normalize_email
 from src.utils.security import PasswordTooLongError, hash_password
 
 
-MIN_PASSWORD_LENGTH = 10
+# Mesmo piso das senhas de cliente, conferido em auth_service (cadastro e
+# reset) e em customer_service (troca de senha). O numero esta repetido nos
+# quatro lugares; se um deles mudar, os outros tem que mudar junto.
+MIN_PASSWORD_LENGTH = 8
 
 
 def read_password() -> str:

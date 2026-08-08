@@ -62,6 +62,11 @@ origins = [
     "https://pederapidex.com",
     "https://www.pederapidex.com",
 
+    # Painel do lojista. Origem separada da loja porque e outro app: e para
+    # ela que vao as rotas /admin, inclusive o EventSource do stream de
+    # pedidos, que so abre se a origem estiver aqui.
+    "https://admin.pederapidex.com",
+
     "http://localhost:5500",
     "http://127.0.0.1:5500",
 
@@ -71,6 +76,19 @@ origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
+
+# Previews do painel na Vercel. Nao da para listar: o subdominio muda a cada
+# deploy — por commit (`rapidex-admin-<hash>-...`) e por branch
+# (`rapidex-admin-git-<branch>-...`).
+#
+# O escopo `cauas-projects-3c9f6aea` faz parte do padrao de proposito. Sem
+# ele, `.*\.vercel\.app` aceitaria qualquer app hospedado na Vercel — de
+# qualquer pessoa — chamando a API com credenciais.
+#
+# O `$` no fim tambem nao e decoracao: o Starlette de hoje compara com
+# `fullmatch`, mas versoes antigas usavam `match`, e ai um
+# `...vercel.app.atacante.com` passaria.
+origin_regex = r"^https://rapidex-admin-(git-)?[a-z0-9-]+-cauas-projects-3c9f6aea\.vercel\.app$"
 
 app.add_middleware(
     BodySizeLimitMiddleware,
@@ -83,6 +101,7 @@ app.add_middleware(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

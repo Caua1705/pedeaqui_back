@@ -28,6 +28,7 @@ from src.schemas.admin_settings_schema import (
     AdminPaymentMethodUpdate,
     AdminRestaurantSettingsResponse,
     AdminRestaurantSettingsUpdate,
+    BranchPrepTimeAdjustRequest,
     BusinessHourInput,
     BusinessHoursReplaceRequest,
     StoreStatusRequest,
@@ -92,6 +93,22 @@ def make_branch(**overrides):
         "delivery_max_distance_km": Decimal("10.00"),
         "is_main": True,
         "is_active": True,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def make_business_hour(**overrides):
+    values = {
+        "id": uuid.uuid4(),
+        "branch_id": uuid.uuid4(),
+        "weekday": 0,
+        "opens_at": time(11, 0),
+        "closes_at": time(15, 0),
+        "prep_time_min": 30,
+        "prep_time_max": 45,
+        "is_closed": False,
+        "sort_order": 0,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -197,10 +214,28 @@ class FakeBranchRepository:
         return [period for period in self.business_hours if period.branch_id == branch_id]
 
 
-def build_service(settings_repository=None, branch_repository=None):
+class FakeBranchHoursService:
+    """Faixa vigente, ja resolvida.
+
+    A escolha da faixa e testada em test_branch_hours.py; aqui o que
+    importa e o que o ajuste faz DEPOIS de saber qual faixa esta valendo,
+    incluindo o caso em que nao ha nenhuma.
+    """
+
+    def __init__(self, current_period=None):
+        self.current_period = current_period
+
+    def find_current_period(self, branch_id, now=None):
+        if self.current_period is None or self.current_period.branch_id != branch_id:
+            return None
+        return self.current_period
+
+
+def build_service(settings_repository=None, branch_repository=None, current_period=None):
     service = AdminSettingsService(FakeDb())
     service.repository = settings_repository or FakeSettingsRepository()
     service.branch_repository = branch_repository or FakeBranchRepository()
+    service.branch_hours_service = FakeBranchHoursService(current_period)
     return service
 
 
@@ -489,6 +524,135 @@ class BusinessHourContractTests(unittest.TestCase):
                 prep_time_min=40,
                 prep_time_max=20,
             )
+
+
+class PrepTimeAdjustTests(unittest.TestCase):
+    """O atalho de +5/-10 do dia cheio.
+
+    A regra que mais importa aqui e a de ALVO: o ajuste escreve na faixa
+    que contem o agora, que e a mesma que a estimativa de entrega le
+    (BranchHoursService.find_current_period). Escrever em outra seria mudar
+    um numero que o proximo pedido nao consulta.
+    """
+
+    def setUp(self):
+        self.branch = make_branch()
+        self.branch_repository = FakeBranchRepository(branches=[self.branch])
+        self.lunch = make_business_hour(
+            branch_id=self.branch.id, prep_time_min=30, prep_time_max=45
+        )
+        self.dinner = make_business_hour(
+            branch_id=self.branch.id, sort_order=1, prep_time_min=20, prep_time_max=30
+        )
+
+    def service(self, current_period=None):
+        return build_service(
+            branch_repository=self.branch_repository,
+            current_period=self.lunch if current_period is None else current_period,
+        )
+
+    def test_delta_shifts_the_whole_window(self):
+        response = self.service().adjust_prep_time(
+            scope(), self.branch.id, BranchPrepTimeAdjustRequest(delta_minutes=5)
+        )
+
+        self.assertEqual((response.prep_time_min, response.prep_time_max), (35, 50))
+        self.assertEqual((self.lunch.prep_time_min, self.lunch.prep_time_max), (35, 50))
+
+    def test_only_the_current_period_is_touched(self):
+        self.service().adjust_prep_time(
+            scope(), self.branch.id, BranchPrepTimeAdjustRequest(delta_minutes=5)
+        )
+
+        # O aperto do almoco nao pode virar o prazo padrao do jantar.
+        self.assertEqual((self.dinner.prep_time_min, self.dinner.prep_time_max), (20, 30))
+
+    def test_negative_delta_stops_at_zero(self):
+        short = make_business_hour(branch_id=self.branch.id, prep_time_min=5, prep_time_max=15)
+        response = self.service(short).adjust_prep_time(
+            scope(), self.branch.id, BranchPrepTimeAdjustRequest(delta_minutes=-10)
+        )
+
+        # Aparar e nao recusar: quem apertou "-10" de novo quer o menor
+        # prazo possivel, nao um erro.
+        self.assertEqual((response.prep_time_min, response.prep_time_max), (0, 5))
+
+    def test_absolute_values_are_written_as_sent(self):
+        empty = make_business_hour(
+            branch_id=self.branch.id, prep_time_min=None, prep_time_max=None
+        )
+        response = self.service(empty).adjust_prep_time(
+            scope(),
+            self.branch.id,
+            BranchPrepTimeAdjustRequest(prep_time_min=25, prep_time_max=40),
+        )
+
+        self.assertEqual((response.prep_time_min, response.prep_time_max), (25, 40))
+
+    def test_delta_without_a_stored_base_is_refused(self):
+        empty = make_business_hour(
+            branch_id=self.branch.id, prep_time_min=None, prep_time_max=None
+        )
+
+        with self.assertRaises(HTTPException) as raised:
+            self.service(empty).adjust_prep_time(
+                scope(), self.branch.id, BranchPrepTimeAdjustRequest(delta_minutes=5)
+            )
+
+        # Tratar o nulo como zero transformaria "+5" em "o preparo desta
+        # filial agora e de 5 minutos".
+        self.assertEqual(raised.exception.status_code, 409)
+
+    def test_closed_branch_has_nothing_to_adjust(self):
+        with self.assertRaises(HTTPException) as raised:
+            build_service(
+                branch_repository=self.branch_repository, current_period=None
+            ).adjust_prep_time(
+                scope(), self.branch.id, BranchPrepTimeAdjustRequest(delta_minutes=5)
+            )
+
+        # Escolher "a faixa mais parecida" foi o bug que BranchHoursService
+        # nasceu para corrigir.
+        self.assertEqual(raised.exception.status_code, 409)
+
+    def test_branch_outside_the_scope_is_refused(self):
+        foreign = make_branch(restaurant_id=OTHER_RESTAURANT_ID)
+        self.branch_repository.branches.append(foreign)
+        foreign_period = make_business_hour(branch_id=foreign.id)
+
+        with self.assertRaises(HTTPException) as raised:
+            self.service(foreign_period).adjust_prep_time(
+                scope(), foreign.id, BranchPrepTimeAdjustRequest(delta_minutes=5)
+            )
+
+        self.assertEqual(raised.exception.status_code, 404)
+        self.assertEqual(foreign_period.prep_time_min, 30)
+
+
+class PrepTimeContractTests(unittest.TestCase):
+    def test_one_mode_at_a_time(self):
+        with self.assertRaises(ValueError):
+            BranchPrepTimeAdjustRequest(delta_minutes=5, prep_time_min=10, prep_time_max=20)
+
+    def test_empty_body_is_refused(self):
+        with self.assertRaises(ValueError):
+            BranchPrepTimeAdjustRequest()
+
+    def test_absolute_values_travel_together(self):
+        # So o maximo deixaria a faixa com teto abaixo do piso, o mesmo
+        # problema que AdminBranchDeliveryRules resolve para as taxas.
+        with self.assertRaises(ValueError):
+            BranchPrepTimeAdjustRequest(prep_time_max=20)
+
+    def test_inverted_absolute_range_is_refused(self):
+        with self.assertRaises(ValueError):
+            BranchPrepTimeAdjustRequest(prep_time_min=40, prep_time_max=20)
+
+    def test_delta_is_capped(self):
+        # Somar duas horas ao prazo nao e ajuste do dia; e reconfiguracao
+        # da semana, que tem rota propria.
+        with self.assertRaises(ValueError):
+            BranchPrepTimeAdjustRequest(delta_minutes=180)
 
 
 class PaymentMethodTests(unittest.TestCase):

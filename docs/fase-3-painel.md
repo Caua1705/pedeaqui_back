@@ -45,10 +45,41 @@ dele. Não há restrição por papel além da filial — ver pendências.
 |---|---|---|---|
 | GET | `/admin/orders` | Lista paginada. Filtros: `branch_id`, `status`, `start_date`, `end_date`, `search`, `limit`, `offset` | todos |
 | GET | `/admin/orders/status-counts` | Contadores por status para os badges (mesmos filtros, menos `status`) | todos |
-| GET | `/admin/orders/{order_id}` | Detalhe do pedido | todos |
+| GET | `/admin/orders/{order_id}` | Detalhe do pedido, com os adicionais de cada item | todos |
 | PATCH | `/admin/orders/{order_id}/status` | Muda o status (aceita `Idempotency-Key`) | todos |
+| PATCH | `/admin/orders/{order_id}/cancel` | **Cancela com motivo obrigatório** (aceita `Idempotency-Key`) | todos |
 | POST | `/admin/orders/stream-ticket` | Credencial de 30s para abrir o stream | todos |
 | GET | `/admin/orders/stream` | SSE: pedido novo e mudança de status | todos |
+
+**Adicionais no detalhe do pedido.** Cada item traz `option_groups`, os complementos
+escolhidos agrupados pelo grupo de opção:
+
+```json
+"items": [{
+  "product_name_snapshot": "Prato feito",
+  "unit_price_snapshot": 38.00,
+  "option_groups": [{
+    "option_group_name_snapshot": "Acompanhamento",
+    "options": [{ "option_name_snapshot": "Espaguete", "additional_price_snapshot": 0.00 }]
+  }]
+}]
+```
+
+O grupo vem junto porque é ele que separa uma **troca** ("Acompanhamento: espaguete", o
+arroz não vai) de uma **porção extra** ("Adicional: espaguete") — sem ele as duas chegam na
+cozinha como a mesma linha. Tudo é snapshot: o cardápio muda, a comanda de ontem não.
+
+`unit_price_snapshot` **já inclui** os adicionais (ver `OrderService._build_order_item`).
+Somar `additional_price_snapshot` de novo mostra o item mais caro do que o pedido cobrou —
+os valores vêm só para conferência.
+
+**Cancelamento.** `PATCH /orders/{id}/cancel` exige `{"reason": "..."}` (3 a 300
+caracteres, espaços das pontas removidos) e grava o motivo em `order_status_history.note`,
+junto do lojista que cancelou. É rota separada porque em `/status` a nota é opcional e tem
+que continuar sendo — mudar para `preparing` não pede justificativa, cancelar pede: é a
+única transição que o cliente questiona depois. Daí para baixo o caminho é o mesmo do PATCH
+de status: mesma máquina de estados (pedido em estado final responde 409), mesmo estorno de
+cupom, mesma assinatura vinda do token.
 
 ### Cardápio (Bloco B)
 
@@ -90,6 +121,7 @@ opção por FK; apagar quebraria o histórico que o cliente ainda consulta. "Exc
 | PATCH | `/admin/branches/{branch_id}` | Endereço, contato e regras de entrega | escopo |
 | GET | `/admin/branches/{branch_id}/business-hours` | Horário da semana | escopo |
 | PUT | `/admin/branches/{branch_id}/business-hours` | Substitui a semana inteira | escopo |
+| PATCH | `/admin/branches/{branch_id}/prep-time` | **Ajusta o tempo de preparo que está valendo agora** | escopo |
 | GET | `/admin/branches/{branch_id}/payment-methods` | Formas de pagamento, habilitadas e não | escopo |
 | POST | `/admin/branches/{branch_id}/payment-methods` | Habilita uma forma na filial | escopo |
 | PATCH | `/admin/payment-methods/{method_id}` | Liga/desliga, rótulo, ordem | escopo |
@@ -101,6 +133,24 @@ o transformaria em campo de tela.
 
 `GET /admin/branches` devolve **uma** filial para quem está preso a uma — o seletor de filial
 do painel já vem resolvido sem a tela precisar conhecer a regra de escopo.
+
+**Tempo de preparo no dia cheio.** `PATCH /branches/{id}/prep-time` é o botão de +5/-10 que
+o atendente aperta quando a fila cresceu:
+
+```json
+{ "delta_minutes": 5 }                          // desloca a janela inteira
+{ "prep_time_min": 25, "prep_time_max": 40 }    // valor absoluto; um modo por vez
+```
+
+Escreve **só na faixa de horário que contém o momento atual** — a mesma que o próximo pedido
+vai ler (`BranchHoursService.find_current_period`, o que a estimativa de entrega consulta).
+Ajustar outra linha mudaria um número que ninguém consulta; ajustar todas faria o aperto do
+almoço virar o prazo padrão do jantar de quinta. Devolve a faixa ajustada.
+
+Dois 409 possíveis: filial fora do horário agora (não há faixa vigente — o cadastro da semana
+é o `PUT /business-hours`) e delta sobre faixa sem prazo cadastrado (não há base; tratar o
+nulo como zero transformaria "+5" numa promessa de 5 minutos). O delta é limitado a ±120 e o
+resultado é aparado em 0–600 minutos, para o terceiro "-10" seguido não virar um 422.
 
 ### Clientes (Bloco D)
 

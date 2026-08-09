@@ -13,6 +13,7 @@ from src.schemas.admin_settings_schema import (
     AdminPaymentMethodUpdate,
     AdminRestaurantSettingsResponse,
     AdminRestaurantSettingsUpdate,
+    BranchPrepTimeAdjustRequest,
     BusinessHourResponse,
     BusinessHoursReplaceRequest,
     StoreStatusRequest,
@@ -127,6 +128,33 @@ def replace_business_hours(
     — uma grade que o lojista salva de uma vez.
     """
     return AdminSettingsService(db).replace_business_hours(scope, branch_id, payload)
+
+
+@router.patch(
+    "/branches/{branch_id}/prep-time",
+    response_model=BusinessHourResponse,
+)
+def adjust_prep_time(
+    branch_id: UUID,
+    payload: BranchPrepTimeAdjustRequest,
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> BusinessHourResponse:
+    """Ajusta o tempo de preparo que esta valendo agora.
+
+    E o atalho do dia cheio: `{"delta_minutes": 5}` empurra a janela
+    inteira em cinco minutos, `{"delta_minutes": -10}` puxa de volta. Para
+    a faixa que ainda nao tem prazo cadastrado, mande o par
+    `prep_time_min`/`prep_time_max` uma vez e depois use o delta.
+
+    Escreve SO na faixa de horario que contem o momento atual — a mesma que
+    o proximo pedido vai ler. Filial fechada agora responde 409: o cadastro
+    da semana inteira e `PUT /admin/branches/{branch_id}/business-hours`.
+
+    Devolve a faixa ajustada, para o painel mostrar o prazo que passou a
+    valer sem uma segunda chamada.
+    """
+    return AdminSettingsService(db).adjust_prep_time(scope, branch_id, payload)
 
 
 @router.get(

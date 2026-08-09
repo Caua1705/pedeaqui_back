@@ -22,6 +22,12 @@ MAX_NAME_LENGTH = 120
 # Teto de faixas por dia. Almoco e jantar sao duas; quatro cobre qualquer
 # operacao real e impede um corpo com mil linhas para o mesmo dia.
 MAX_PERIODS_PER_WEEKDAY = 4
+# Teto do tempo de preparo, o mesmo que BusinessHourInput ja aceitava.
+MAX_PREP_TIME_MINUTES = 600
+# Teto de um ajuste rapido. O atalho e para o aperto do dia (+5, -10); quem
+# precisa somar duas horas ao prazo esta reconfigurando a semana, e isso e
+# PUT /business-hours.
+MAX_PREP_TIME_DELTA_MINUTES = 120
 
 
 class AdminRestaurantSettingsResponse(BaseResponse):
@@ -151,8 +157,8 @@ class BusinessHourInput(BaseModel):
     weekday: int = Field(ge=0, le=6)
     opens_at: time | None = None
     closes_at: time | None = None
-    prep_time_min: int | None = Field(default=None, ge=0, le=600)
-    prep_time_max: int | None = Field(default=None, ge=0, le=600)
+    prep_time_min: int | None = Field(default=None, ge=0, le=MAX_PREP_TIME_MINUTES)
+    prep_time_max: int | None = Field(default=None, ge=0, le=MAX_PREP_TIME_MINUTES)
     is_closed: bool = False
 
     @model_validator(mode="after")
@@ -197,6 +203,52 @@ class BusinessHourResponse(BaseResponse):
     prep_time_max: int | None = None
     is_closed: bool
     sort_order: int
+
+
+class BranchPrepTimeAdjustRequest(BaseModel):
+    """Ajuste do tempo de preparo que esta valendo AGORA.
+
+    Existe separado do PUT da semana porque sao gestos diferentes: aquele e
+    o cadastro (uma tela, sete dias, salvo com calma), este e o botao que o
+    atendente aperta no meio do almoco quando a fila cresceu.
+
+    Dois modos, um por vez:
+
+    - `delta_minutes` — o atalho de +5/-10. Desloca a janela inteira a
+      partir do que ja esta gravado.
+    - `prep_time_min` + `prep_time_max` — valor absoluto, para a faixa que
+      ainda nao tem prazo nenhum: sem base, um delta nao tem de onde partir.
+
+    O par absoluto anda junto pelo mesmo motivo de `AdminBranchDeliveryRules`:
+    mandar so o maximo deixaria a faixa com teto abaixo do piso.
+    """
+
+    delta_minutes: int | None = Field(
+        default=None,
+        ge=-MAX_PREP_TIME_DELTA_MINUTES,
+        le=MAX_PREP_TIME_DELTA_MINUTES,
+    )
+    prep_time_min: int | None = Field(default=None, ge=0, le=MAX_PREP_TIME_MINUTES)
+    prep_time_max: int | None = Field(default=None, ge=0, le=MAX_PREP_TIME_MINUTES)
+
+    @model_validator(mode="after")
+    def validate_single_mode(self):
+        absolute_fields = (self.prep_time_min, self.prep_time_max)
+        has_absolute = any(value is not None for value in absolute_fields)
+
+        if self.delta_minutes is not None and has_absolute:
+            # Os dois juntos nao tem resposta obvia: o delta se aplicaria
+            # sobre o valor novo ou sobre o que estava no banco?
+            raise ValueError(
+                "Informe delta_minutes ou o par prep_time_min/prep_time_max, nao os dois"
+            )
+        if self.delta_minutes is None and not has_absolute:
+            raise ValueError("Informe delta_minutes ou o par prep_time_min/prep_time_max")
+        if has_absolute and any(value is None for value in absolute_fields):
+            raise ValueError("prep_time_min e prep_time_max andam juntos")
+        if has_absolute and self.prep_time_max < self.prep_time_min:
+            raise ValueError("prep_time_max nao pode ser menor que prep_time_min")
+        return self
 
 
 class AdminPaymentMethodResponse(BaseResponse):

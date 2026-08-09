@@ -14,6 +14,7 @@ from src.schemas.admin_order_schema import (
     AdminOrderStatusCountsResponse,
     AdminOrderStreamEvent,
     AdminStreamTicketResponse,
+    CancelOrderRequest,
     UpdateOrderStatusRequest,
 )
 from src.schemas.order_schema import OrderDetailResponse
@@ -178,6 +179,39 @@ def update_order_status(
     db: Session = Depends(get_db),
 ) -> OrderDetailResponse:
     return AdminOrderService(db).update_order_status(
+        order_id,
+        scope,
+        payload,
+        admin_user=scope.admin_user,
+        idempotency_key=normalize_idempotency_key(idempotency_key),
+    )
+
+
+@router.patch("/orders/{order_id}/cancel", response_model=OrderDetailResponse)
+def cancel_order(
+    order_id: UUID,
+    payload: CancelOrderRequest,
+    scope: AdminScope = Depends(get_admin_scope),
+    idempotency_key: str | None = Header(
+        default=None,
+        alias="Idempotency-Key",
+        description=(
+            "Reenviar a mesma chave com o mesmo motivo devolve a resposta "
+            "original em vez de gravar outra linha no historico."
+        ),
+    ),
+    db: Session = Depends(get_db),
+) -> OrderDetailResponse:
+    """Cancela o pedido registrando o motivo (obrigatorio).
+
+    O motivo vai para `order_status_history.note`, junto do lojista que
+    cancelou — e o unico lugar onde o suporte consegue reconstruir depois
+    por que o pedido do cliente sumiu.
+
+    Cancelar continua sujeito a mesma maquina de estados do PATCH de
+    status: pedido ja entregue ou ja cancelado responde 409.
+    """
+    return AdminOrderService(db).cancel_order(
         order_id,
         scope,
         payload,

@@ -35,6 +35,7 @@ from src.repositories.admin_settings_repository import AdminSettingsRepository
 from src.repositories.branch_repository import BranchRepository
 from src.schemas.admin_settings_schema import (
     MAX_PERIODS_PER_WEEKDAY,
+    MAX_PREP_TIME_MINUTES,
     AdminBranchDeliveryRules,
     AdminBranchResponse,
     AdminBranchUpdate,
@@ -43,11 +44,13 @@ from src.schemas.admin_settings_schema import (
     AdminPaymentMethodUpdate,
     AdminRestaurantSettingsResponse,
     AdminRestaurantSettingsUpdate,
+    BranchPrepTimeAdjustRequest,
     BusinessHourInput,
     BusinessHourResponse,
     BusinessHoursReplaceRequest,
     StoreStatusRequest,
 )
+from src.services.branch_hours_service import BranchHoursService
 from src.utils.money import money_to_float, quantize_money
 
 
@@ -59,6 +62,11 @@ class AdminSettingsService:
         self.db = db
         self.repository = AdminSettingsRepository(db)
         self.branch_repository = BranchRepository(db)
+        # Mesma classe que a estimativa de entrega usa para achar a faixa
+        # vigente. O atalho de tempo de preparo PRECISA concordar com ela:
+        # ajustar uma faixa diferente da que o pedido le seria mudar um
+        # numero que ninguem vai olhar.
+        self.branch_hours_service = BranchHoursService(db)
 
     def get_restaurant_settings(self, scope: AdminScope) -> AdminRestaurantSettingsResponse:
         return self._settings_response(self._get_or_create_settings(scope.restaurant_id))
@@ -194,6 +202,43 @@ class AdminSettingsService:
             BusinessHourResponse.model_validate(period)
             for period in self.branch_repository.list_business_hours(branch_id)
         ]
+
+    def adjust_prep_time(
+        self,
+        scope: AdminScope,
+        branch_id: uuid.UUID,
+        payload: BranchPrepTimeAdjustRequest,
+    ) -> BusinessHourResponse:
+        """Muda o tempo de preparo da faixa que esta valendo agora.
+
+        Por que a faixa ATUAL e nao "a filial": `prep_time` mora em
+        `branch_business_hours`, uma linha por faixa de horario, e o pedido
+        le exatamente a faixa que contem o agora
+        (`DeliveryEstimateService._resolve_prep_time` ->
+        `BranchHoursService.find_current_period`). Escrever em qualquer
+        outra linha mudaria um numero que o proximo pedido nao consulta;
+        escrever em todas faria o aperto do almoco de hoje virar o prazo
+        padrao do jantar de quinta.
+
+        Fora do horario de funcionamento nao ha faixa vigente, e a resposta
+        e 409 em vez de escolher uma por conta propria. Escolher "a mais
+        parecida" foi exatamente o bug que `BranchHoursService` nasceu para
+        corrigir: as 3h da manha, a estimativa cobrava o prazo do almoco.
+        """
+        self._get_branch(scope, branch_id)
+        period = self.branch_hours_service.find_current_period(branch_id)
+        if period is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "A filial esta fora do horario de funcionamento agora; "
+                    "nao ha faixa de horario para ajustar"
+                ),
+            )
+
+        period.prep_time_min, period.prep_time_max = self._resolve_prep_time(period, payload)
+        self._commit()
+        return BusinessHourResponse.model_validate(period)
 
     def list_payment_methods(
         self,
@@ -367,6 +412,31 @@ class AdminSettingsService:
                 )
 
     @staticmethod
+    def _resolve_prep_time(
+        period: BranchBusinessHour,
+        payload: BranchPrepTimeAdjustRequest,
+    ) -> tuple[int, int]:
+        """Os dois valores a gravar, ja no modo que o corpo pediu."""
+        if payload.delta_minutes is None:
+            return payload.prep_time_min, payload.prep_time_max
+
+        if period.prep_time_min is None or period.prep_time_max is None:
+            # Delta sem base nao tem resultado. Tratar o nulo como zero
+            # transformaria um "+5" em "o preparo desta filial agora e de 5
+            # minutos", que e uma promessa que a cozinha nao fez.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Esta faixa de horario nao tem tempo de preparo cadastrado; "
+                    "envie prep_time_min e prep_time_max antes de usar o ajuste rapido"
+                ),
+            )
+        return (
+            _clamp_prep_time(period.prep_time_min + payload.delta_minutes),
+            _clamp_prep_time(period.prep_time_max + payload.delta_minutes),
+        )
+
+    @staticmethod
     def _ensure_delivery_time_range(minimum: int | None, maximum: int | None) -> None:
         if minimum is not None and maximum is not None and maximum < minimum:
             raise HTTPException(
@@ -442,6 +512,17 @@ def _optional_money(value) -> float | None:
     quem esta configurando entrega.
     """
     return money_to_float(value) if value is not None else None
+
+
+def _clamp_prep_time(value: int) -> int:
+    """Mantem o prazo dentro do que o cadastro aceita (0 a 600 minutos).
+
+    Aparar e nao recusar: quem apertou "-10" tres vezes seguidas em uma
+    faixa de 20 minutos quer o menor prazo possivel, e nao um 422 no
+    terceiro clique. Como minimo e maximo se deslocam pelo mesmo delta e o
+    corte e monotonico, `min <= max` continua valendo depois de aparar.
+    """
+    return max(0, min(value, MAX_PREP_TIME_MINUTES))
 
 
 def _minutes(value: time) -> int:

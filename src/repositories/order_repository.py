@@ -17,6 +17,16 @@ from src.models.restaurant_model import Restaurant
 # contagem do que sobrou de fora) precisam concordar exatamente.
 NON_BILLABLE_ORDER_STATUSES = ("cancelled", "rejected")
 
+# Tudo o que `OrderService.to_order_detail_response` le, carregado de uma
+# vez. Ficam juntos porque as tres consultas de detalhe (painel, cliente
+# logado e token de acompanhamento) desembocam no MESMO montador de
+# resposta: uma delas esquecer os adicionais nao daria erro, so uma consulta
+# extra por item na hora de serializar.
+_ORDER_DETAIL_LOADERS = (
+    selectinload(Order.items).selectinload(OrderItem.options),
+    selectinload(Order.status_history),
+)
+
 
 def _build_search_condition(search: str):
     """Busca do painel: numero do pedido ou nome do cliente.
@@ -71,7 +81,7 @@ class OrderRepository:
         # enumeravel: order_number vem de uma sequence global.
         stmt = (
             select(Order)
-            .options(selectinload(Order.items), selectinload(Order.status_history))
+            .options(*_ORDER_DETAIL_LOADERS)
             .where(
                 Order.restaurant_id == restaurant_id,
                 Order.tracking_token == tracking_token,
@@ -89,7 +99,7 @@ class OrderRepository:
         # para quem tiver o UUID.
         stmt = (
             select(Order)
-            .options(selectinload(Order.items), selectinload(Order.status_history))
+            .options(*_ORDER_DETAIL_LOADERS)
             .where(Order.id == order_id, Order.customer_id == customer_id)
         )
         return self.db.scalar(stmt)
@@ -326,7 +336,7 @@ class OrderRepository:
         # Deixa-lo opcional convidaria a repetir o erro na proxima rota.
         stmt = (
             select(Order)
-            .options(selectinload(Order.items), selectinload(Order.status_history))
+            .options(*_ORDER_DETAIL_LOADERS)
             .where(Order.id == order_id, Order.restaurant_id == restaurant_id)
         )
         return self.db.scalar(stmt)

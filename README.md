@@ -165,8 +165,10 @@ Then send `Authorization: Bearer <access_token>` on every admin route.
 - `POST /admin/auth/login` — public
 - `GET  /admin/auth/me`
 - `GET  /admin/restaurants/{restaurant_slug}/orders`
-- `GET  /admin/orders/{order_id}`
+- `GET  /admin/orders/{order_id}` — includes each item's chosen add-ons, grouped by option group
 - `PATCH /admin/orders/{order_id}/status`
+- `PATCH /admin/orders/{order_id}/cancel` — requires `{"reason": "..."}`, stored in the status history
+- `PATCH /admin/branches/{branch_id}/prep-time` — the +5/-10 shortcut for the period in effect right now
 - `GET  /admin/reports/commission?start_date=2026-07-01&end_date=2026-07-31`
 - `GET/POST/PATCH /admin/restaurants/{restaurant_id}/coupons`
 
@@ -194,8 +196,8 @@ would land in the shell history. Roles come from `ADMIN_USER_ROLES`:
 
 ## Idempotency
 
-`POST /restaurants/{slug}/orders` and `PATCH /admin/orders/{id}/status`
-accept an `Idempotency-Key` header. Send a fresh UUID per logical operation
+`POST /restaurants/{slug}/orders`, `PATCH /admin/orders/{id}/status` and
+`PATCH /admin/orders/{id}/cancel` accept an `Idempotency-Key` header. Send a fresh UUID per logical operation
 and reuse it on every retry: resending the same key with the same body
 returns the original response instead of creating a second order.
 

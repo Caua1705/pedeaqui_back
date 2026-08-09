@@ -1075,8 +1075,9 @@ decodificação (`src/utils/security.py:118-119`) e o `/admin` exige `purpose="a
 
 - `GET /admin/auth/me`
 - `GET /admin/restaurants/{slug}/orders` — lista de pedidos
-- `GET /admin/orders/{id}` — detalhe do pedido
+- `GET /admin/orders/{id}` — detalhe do pedido, com os adicionais de cada item
 - `PATCH /admin/orders/{id}/status` — mudar status
+- `PATCH /admin/orders/{id}/cancel` — cancelar com motivo obrigatório
 - `GET /admin/reports/commission` — comissão do período com extrato
 - `GET|POST|PATCH /admin/restaurants/{id}/coupons` — campanhas de cupom
 
@@ -1514,6 +1515,13 @@ Duas armadilhas de ordem que valem conhecer:
 - `ensure_payment_allows_order_status` bloqueia a entrada na cozinha enquanto o
   pagamento online não confirma, mas **nunca** bloqueia `cancelled`/`rejected`:
   são justamente a saída para o pagamento que não chegou.
+
+`PATCH /admin/orders/{id}/cancel` **não é uma segunda escrita de status**: ele delega para o
+mesmo `AdminOrderService._apply_status_change` do PATCH de status, com `new_status="cancelled"`
+e o motivo obrigatório no lugar da nota. Duas escritas independentes seriam a chance de a
+máquina de estados valer em uma e não na outra. O que muda entre as duas rotas é só o escopo
+da idempotência (a rota entra na chave), para que a mesma `Idempotency-Key` reenviada em
+rotas diferentes não seja lida como repetição de uma só.
 
 Continua valendo o aviso sobre o estorno de cupom: ele acontece em `cancelled` e
 `rejected` e `reverse_redemption` é idempotente, então o resgate fica `reversed`

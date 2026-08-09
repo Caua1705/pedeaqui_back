@@ -111,7 +111,44 @@ class CreateOrderResponse(BaseModel):
     message: str
 
 
+class OrderItemOptionResponse(BaseResponse):
+    """Um adicional escolhido, congelado como estava no cardapio.
+
+    Tudo aqui e snapshot pelo mesmo motivo do produto: o lojista renomeia
+    "Espaguete" ou muda o preco depois, e a comanda de um pedido de ontem
+    precisa continuar dizendo o que foi vendido naquele dia.
+    """
+
+    id: UUID
+    option_id: UUID
+    option_name_snapshot: str
+    additional_price_snapshot: float
+
+
+class OrderItemOptionGroupResponse(BaseResponse):
+    """Os adicionais de um item, reunidos pelo grupo a que pertencem.
+
+    Agrupado e nao uma lista solta de nomes porque e o grupo que da sentido
+    a escolha: "Acompanhamento: espaguete" e uma TROCA (o arroz nao vai), e
+    "Adicional: espaguete" e uma porcao a mais. Sem o grupo as duas chegam
+    na cozinha como a mesma linha.
+    """
+
+    option_group_id: UUID
+    option_group_name_snapshot: str
+    options: list[OrderItemOptionResponse]
+
+
 class OrderItemResponse(BaseResponse):
+    """Um item da comanda.
+
+    `unit_price_snapshot` JA inclui os adicionais de `option_groups` (ver
+    `OrderService._build_order_item`): quem monta a tela nao deve somar
+    `additional_price_snapshot` de novo, ou o item aparece mais caro do que
+    o pedido cobrou. Os valores dos adicionais vem para a conferencia — o
+    cliente que reclama do preco quer ver de onde saiu.
+    """
+
     id: UUID
     product_id: UUID | None = None
     product_code_snapshot: str | None = None
@@ -122,6 +159,9 @@ class OrderItemResponse(BaseResponse):
     observation: str | None = None
     total: float
     created_at: datetime | None = None
+    # Vazio para item sem complemento, que e a maioria. Lista com default
+    # em vez de nulo para a tela nao precisar de dois caminhos.
+    option_groups: list[OrderItemOptionGroupResponse] = Field(default_factory=list)
 
 
 class OrderDetailResponse(BaseResponse):

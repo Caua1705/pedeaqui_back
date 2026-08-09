@@ -16,6 +16,7 @@ from src.schemas.admin_order_schema import (
     AdminOrderListResponse,
     AdminOrderStatusCount,
     AdminOrderStatusCountsResponse,
+    CancelOrderRequest,
     UpdateOrderStatusRequest,
 )
 from src.schemas.order_schema import OrderDetailResponse
@@ -32,6 +33,11 @@ from src.utils.money import money_to_float
 logger = logging.getLogger("uvicorn.error")
 
 UPDATE_STATUS_ROUTE = "PATCH /admin/orders/{order_id}/status"
+CANCEL_ROUTE = "PATCH /admin/orders/{order_id}/cancel"
+
+# O unico destino da rota de cancelamento. Constante para nao aparecer como
+# string solta ao lado das outras regras de status.
+CANCELLED_STATUS = "cancelled"
 
 PANEL_TIMEZONE = ZoneInfo(PLATFORM_TIMEZONE)
 
@@ -149,6 +155,63 @@ class AdminOrderService:
         if payload.status not in ORDER_STATUSES:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Status inválido")
 
+        return self._apply_status_change(
+            order_id=order_id,
+            scope=scope,
+            new_status=payload.status,
+            note=payload.note,
+            admin_user=admin_user,
+            idempotency_key=idempotency_key,
+            route=UPDATE_STATUS_ROUTE,
+        )
+
+    def cancel_order(
+        self,
+        order_id: UUID,
+        scope: AdminScope,
+        payload: CancelOrderRequest,
+        admin_user: AdminUser,
+        idempotency_key: str | None = None,
+    ) -> OrderDetailResponse:
+        """Cancela o pedido exigindo o motivo.
+
+        Rota propria e nao um `status="cancelled"` no PATCH de status por
+        causa justamente do motivo: exigi-lo la significaria tornar `note`
+        condicionalmente obrigatorio conforme o status, uma regra que nao
+        aparece no contrato e que o painel so descobre tomando 422.
+
+        Daqui para baixo o caminho e o MESMO do PATCH de status — mesma
+        maquina de estados (cancelar segue proibido a partir de um estado
+        final), mesmo estorno de cupom, mesma assinatura no historico. Uma
+        segunda escrita de status com regras proprias seria a chance de as
+        duas divergirem.
+        """
+        return self._apply_status_change(
+            order_id=order_id,
+            scope=scope,
+            new_status=CANCELLED_STATUS,
+            note=payload.reason,
+            admin_user=admin_user,
+            idempotency_key=idempotency_key,
+            route=CANCEL_ROUTE,
+        )
+
+    def _apply_status_change(
+        self,
+        order_id: UUID,
+        scope: AdminScope,
+        new_status: str,
+        note: str | None,
+        admin_user: AdminUser,
+        idempotency_key: str | None,
+        route: str,
+    ) -> OrderDetailResponse:
+        """Grava a mudanca de status: validacao, escrita e historico.
+
+        `route` entra no escopo da idempotencia para que a mesma
+        `Idempotency-Key` reenviada em rotas diferentes nao seja tratada
+        como repeticao de uma so.
+        """
         restaurant_id = scope.restaurant_id
         order = self._get_order_in_scope(order_id, scope)
 
@@ -158,14 +221,14 @@ class AdminOrderService:
         replayed = self.idempotency_service.begin(
             scope=IdempotencyService.build_scope(
                 restaurant_id=restaurant_id,
-                route=UPDATE_STATUS_ROUTE,
+                route=route,
                 requester=f"admin:{admin_user.id}",
             ),
             key=idempotency_key,
             request_fingerprint=IdempotencyService.fingerprint({
                 "order_id": str(order_id),
-                "status": payload.status,
-                "note": payload.note,
+                "status": new_status,
+                "note": note,
             }),
         )
         if replayed is not None:
@@ -175,23 +238,23 @@ class AdminOrderService:
         # reenvio da mesma chave chega com o pedido ja no status de destino;
         # validando antes, o retry legitimo morreria com "o pedido ja esta em
         # accepted" em vez de devolver a resposta gravada.
-        ensure_order_transition_allowed(order.status, payload.status, order.order_type)
-        ensure_payment_allows_order_status(payload.status, order.payment_status)
-        self._log_cancellation_of_paid_order(order, payload.status)
+        ensure_order_transition_allowed(order.status, new_status, order.order_type)
+        ensure_payment_allows_order_status(new_status, order.payment_status)
+        self._log_cancellation_of_paid_order(order, new_status)
 
         try:
-            self.order_repository.update_status(order, payload.status)
-            if payload.status in {"cancelled", "rejected"}:
+            self.order_repository.update_status(order, new_status)
+            if new_status in {"cancelled", "rejected"}:
                 self.coupon_service.reverse_for_order(order.id)
             self.order_repository.create_status_history(
                 OrderStatusHistory(
                     order_id=order.id,
-                    status=payload.status,
+                    status=new_status,
                     # Quem mudou sai do token, nunca do corpo: o campo era
                     # texto livre enviado pelo cliente, entao o historico
                     # dizia o que o painel quisesse ("sistema", "cliente").
                     changed_by=self._admin_signature(admin_user),
-                    note=payload.note,
+                    note=note,
                 )
             )
             if self.idempotency_service.has_reservation:

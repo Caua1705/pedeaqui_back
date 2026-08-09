@@ -27,6 +27,8 @@ from src.schemas.order_schema import (
     CreateOrderRequest,
     CreateOrderResponse,
     OrderDetailResponse,
+    OrderItemOptionGroupResponse,
+    OrderItemOptionResponse,
     OrderItemResponse,
 )
 from src.schemas.common_schema import StatusHistoryResponse
@@ -701,6 +703,51 @@ class OrderService:
         )
 
     @staticmethod
+    def _item_option_groups(item: OrderItem) -> list[OrderItemOptionGroupResponse]:
+        """Os adicionais do item, reunidos pelo grupo em que foram escolhidos.
+
+        Sem isto o detalhe do pedido nao tinha como mostrar complemento
+        nenhum, e a cozinha nao conseguia preparar um item que trocou o
+        arroz por espaguete: os snapshots estavam gravados em
+        `order_item_options` e nao apareciam no contrato.
+
+        A ordem e imposta aqui porque `order_item_options` nao tem coluna de
+        ordem nem `created_at`, e o id e aleatorio (`gen_random_uuid`) — sem
+        `sorted`, a mesma comanda sairia com os adicionais embaralhados a
+        cada requisicao e quem confere o pedido pela posicao na tela erraria.
+        Alfabetica e a unica ordem estavel disponivel: a do cardapio
+        (`sort_order` do grupo) nao foi congelada no pedido.
+        """
+        options_by_group: dict[UUID, list[OrderItemOption]] = {}
+        group_names: dict[UUID, str] = {}
+        for option in item.options:
+            options_by_group.setdefault(option.option_group_id, []).append(option)
+            group_names[option.option_group_id] = option.option_group_name_snapshot
+
+        return [
+            OrderItemOptionGroupResponse(
+                option_group_id=group_id,
+                option_group_name_snapshot=group_names[group_id],
+                options=[
+                    OrderItemOptionResponse(
+                        id=option.id,
+                        option_id=option.option_id,
+                        option_name_snapshot=option.option_name_snapshot,
+                        additional_price_snapshot=money_to_float(
+                            option.additional_price_snapshot
+                        ),
+                    )
+                    for option in sorted(
+                        group_options, key=lambda option: option.option_name_snapshot
+                    )
+                ],
+            )
+            for group_id, group_options in sorted(
+                options_by_group.items(), key=lambda pair: group_names[pair[0]]
+            )
+        ]
+
+    @staticmethod
     def to_order_detail_response(order: Order) -> OrderDetailResponse:
         fallback_date = datetime.min.replace(tzinfo=timezone.utc)
         items = sorted(order.items, key=lambda item: item.created_at or fallback_date)
@@ -761,6 +808,7 @@ class OrderService:
                     observation=item.observation,
                     total=money_to_float(item.total),
                     created_at=item.created_at,
+                    option_groups=OrderService._item_option_groups(item),
                 )
                 for item in items
             ],

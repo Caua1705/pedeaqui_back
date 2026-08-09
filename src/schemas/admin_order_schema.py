@@ -2,7 +2,16 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
+
+
+# Teto do motivo do cancelamento. Cabe uma frase ("cliente desistiu",
+# "acabou a costela"), que e o que o suporte precisa ler depois — nao um
+# relatorio.
+MAX_CANCELLATION_REASON_LENGTH = 300
+# Piso para barrar o motivo simbolico. Um "x" digitado so para o botao
+# liberar responde a exigencia sem responder a pergunta.
+MIN_CANCELLATION_REASON_LENGTH = 3
 
 
 class AdminOrderListItem(BaseModel):
@@ -69,6 +78,36 @@ class UpdateOrderStatusRequest(BaseModel):
 
     status: str
     note: str | None = None
+
+
+class CancelOrderRequest(BaseModel):
+    """Corpo do cancelamento pelo painel.
+
+    O motivo e OBRIGATORIO aqui, e o `note` do PATCH de status continua
+    opcional: mudar para `preparing` nao precisa de justificativa, cancelar
+    precisa. Cancelamento e a unica transicao que o cliente questiona
+    depois — ele ligou, esperou, e o pedido sumiu — e sem motivo gravado o
+    historico so consegue dizer que alguem cancelou as 20h14.
+
+    Nao ha campo de status: a rota so cancela. Fosse `status` do corpo, ela
+    seria o PATCH de status com nome diferente e a obrigatoriedade do motivo
+    viraria um `if` por status.
+    """
+
+    reason: str = Field(max_length=MAX_CANCELLATION_REASON_LENGTH)
+
+    @field_validator("reason")
+    @classmethod
+    def strip_reason(cls, value: str) -> str:
+        # O corte vem antes da medida de proposito: `min_length` do Field
+        # roda sobre o texto cru e deixaria passar tres espacos.
+        reason = value.strip()
+        if len(reason) < MIN_CANCELLATION_REASON_LENGTH:
+            raise ValueError(
+                f"O motivo do cancelamento precisa de ao menos "
+                f"{MIN_CANCELLATION_REASON_LENGTH} caracteres"
+            )
+        return reason
 
 
 class AdminStreamTicketResponse(BaseModel):

@@ -118,6 +118,11 @@ class AdminProductResponse(BaseResponse):
     is_active: bool | None = True
     is_available: bool | None = True
     sort_order: int | None = 0
+    # Somente leitura, como `image_path`: quem escreve e
+    # PATCH /admin/products/{id}/printing-sector, que confere se o setor e
+    # de uma filial deste lojista. Texto livre aqui apontaria o produto para
+    # a impressora de outro restaurante.
+    printing_sector_id: UUID | None = None
 
 
 class AdminProductDetailResponse(AdminProductResponse):

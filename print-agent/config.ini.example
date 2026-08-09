@@ -1,0 +1,96 @@
+; Configuracao do agente de impressao.
+;
+; Copie para config.ini (na mesma pasta) e edite. O config.ini de verdade
+; NAO vai para o git: ele guarda a senha do lojista.
+;
+;   copy config.ini.example config.ini
+;
+; Caminhos relativos sao resolvidos a partir DESTA pasta, nao do diretorio
+; de trabalho — o servico do Windows sobe com o cwd em System32.
+
+[api]
+; URL da API, sem barra no fim.
+base_url = https://api.pederapidex.com
+
+; Credencial. Duas formas, e a escolha importa:
+;
+; - email + password: o agente refaz o login sozinho quando o token vence.
+;   E a forma correta para rodar como servico. O usuario pode (e deve) ser
+;   um lojista dedicado ao agente, com papel `attendant` e preso a filial
+;   desta loja — assim ele so enxerga os pedidos daqui.
+;
+; - token: um access token colado a mao. Vale 12 HORAS e depois o agente
+;   para de imprimir. Serve para testar a instalacao, nao para producao.
+email = impressora.centro@exemplo.com
+password = troque-esta-senha
+; token =
+
+[printers]
+; setor = nome exato da impressora no Windows
+; (Configuracoes > Bluetooth e dispositivos > Impressoras e scanners)
+;
+; O nome do setor e o que aparece no painel, em [Configuracoes > Setores de
+; impressao]. Acento e caixa nao importam: "Cozinha", "cozinha" e "COZINHA"
+; sao a mesma linha.
+;
+; "Via do cliente" e o nome fixo da via com precos e endereco — geralmente
+; a impressora do balcao/caixa.
+via do cliente = EPSON TM-T20 Caixa
+cozinha = EPSON TM-T20 Cozinha
+chapa = EPSON TM-T20 Chapa
+bar = EPSON TM-T20 Bar
+
+; Via de resgate da API: recebe item cujo setor nao serve para esta filial
+; (produto apontado para outra loja, ou setor desativado). Se nao mapear,
+; ela cai no `default`.
+sem setor = EPSON TM-T20 Cozinha
+
+; Impressora que recebe qualquer setor nao listado acima. Sem ela, um setor
+; criado no painel depois da instalacao nao imprime e o agente grita no log.
+default = EPSON TM-T20 Cozinha
+
+[printing]
+; Tabela de caracteres da impressora (comando ESC t n).
+;   2  = CP850  (multilingue latino) — funciona na maioria
+;   3  = CP860  (portugues)
+;   16 = WPC1252
+; Se a comanda sair com acento errado, e este par que muda.
+codepage = 2
+encoding = cp850
+
+; Cortar o papel no fim de cada via.
+cut = sim
+
+; Linhas avancadas antes do corte, para o texto sair de dentro da
+; guilhotina. Aumente se a ultima linha estiver saindo cortada.
+feed_lines = 4
+
+[agent]
+; Status do pedido que dispara a impressao. `accepted` e o "ACEITO" do
+; painel — o momento em que o lojista assume o pedido.
+trigger_status = accepted
+
+; Espera entre tentativas de reconexao (segundos). Reconexao e NORMAL: o
+; servidor fecha o stream a cada 15 minutos de proposito.
+reconnect_min_seconds = 1
+reconnect_max_seconds = 60
+
+; Quantas vezes reenviar uma via antes de desistir, e a espera entre elas.
+; Cobre papel acabando e impressora que voltou a ficar pronta.
+print_attempts = 3
+print_retry_seconds = 5
+
+; `sim` registra no log o que seria impresso, sem mandar para a impressora.
+dry_run = nao
+
+[state]
+; Arquivo com os ids ja impressos. E ele que impede a reimpressao da fila
+; do dia quando o agente reconecta ou a maquina reinicia. NAO apague.
+file = state/printed-orders.json
+retention_days = 7
+
+[log]
+file = logs/print-agent.log
+level = INFO
+max_bytes = 5242880
+backup_count = 5

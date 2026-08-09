@@ -81,6 +81,7 @@ def make_product(**overrides):
         "is_active": True,
         "is_available": True,
         "sort_order": 0,
+        "printing_sector_id": None,
         "option_groups": [],
     }
     values.update(overrides)

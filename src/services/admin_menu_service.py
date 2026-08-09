@@ -547,6 +547,7 @@ class AdminMenuService:
             is_active=product.is_active,
             is_available=product.is_available,
             sort_order=product.sort_order,
+            printing_sector_id=product.printing_sector_id,
         )
 
     @staticmethod

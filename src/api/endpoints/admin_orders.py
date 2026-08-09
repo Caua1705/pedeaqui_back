@@ -17,10 +17,12 @@ from src.schemas.admin_order_schema import (
     CancelOrderRequest,
     UpdateOrderStatusRequest,
 )
+from src.schemas.admin_printing_schema import OrderPrintJobsResponse
 from src.schemas.order_schema import OrderDetailResponse
 from src.services.admin_auth_service import AdminAuthService
 from src.services.admin_order_service import AdminOrderService
 from src.services.admin_order_stream_service import AdminOrderStreamService
+from src.services.admin_printing_service import AdminPrintingService
 from src.services.idempotency_service import normalize_idempotency_key
 
 
@@ -161,6 +163,36 @@ def get_order_detail(
     db: Session = Depends(get_db),
 ) -> OrderDetailResponse:
     return AdminOrderService(db).get_order_detail(order_id, scope)
+
+
+@router.get("/orders/{order_id}/print-jobs", response_model=OrderPrintJobsResponse)
+def get_order_print_jobs(
+    order_id: UUID,
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> OrderPrintJobsResponse:
+    """As vias deste pedido, ja formatadas em texto de largura fixa.
+
+    Mesmo token e mesmo escopo de filial do resto de /admin/orders — quem
+    nao pode ler o pedido nao pode imprimi-lo, e a comanda carrega nome,
+    telefone e endereco do cliente.
+
+    O agente de impressao da loja e burro de proposito: ele le `content`,
+    seleciona `font_size` e manda para a impressora. Nao alinha, nao quebra
+    linha e nao decide o que entra em cada via — isso tudo vive em
+    `src/services/print_layout.py`, num lugar so, testavel, e uma correcao
+    de layout vira um deploy em vez de uma visita a cada loja.
+
+    Pedido com pagamento online ainda nao confirmado devolve SO a via do
+    cliente: comanda de producao e ordem de preparo, e a regra do
+    "aguardando pagamento, nao preparar" nao pode valer apenas para quem
+    esta olhando a tela.
+
+    A rota nao marca nada como impresso. Reimprimir e a operacao mais comum
+    do balcao (papel picotou, comanda molhou), e ela precisa ser um simples
+    GET repetido.
+    """
+    return AdminPrintingService(db).build_print_jobs(order_id, scope)
 
 
 @router.patch("/orders/{order_id}/status", response_model=OrderDetailResponse)

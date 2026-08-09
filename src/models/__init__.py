@@ -14,6 +14,7 @@ from src.models.order_item_model import OrderItem
 from src.models.order_item_option_model import OrderItemOption
 from src.models.order_model import Order
 from src.models.order_status_history_model import OrderStatusHistory
+from src.models.printing_sector_model import PrintingSector
 from src.models.product_model import Product
 from src.models.product_option_model import ProductOption, ProductOptionGroup
 from src.models.restaurant_banner_model import RestaurantBanner
@@ -41,6 +42,7 @@ __all__ = [
     "OrderItem",
     "OrderItemOption",
     "OrderStatusHistory",
+    "PrintingSector",
     "Product",
     "ProductOption",
     "ProductOptionGroup",

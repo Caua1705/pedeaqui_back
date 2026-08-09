@@ -47,3 +47,4 @@ class Branch(Base):
     restaurant = relationship("Restaurant", back_populates="branches")
     business_hours = relationship("BranchBusinessHour", back_populates="branch")
     payment_methods = relationship("BranchPaymentMethod", back_populates="branch")
+    printing_sectors = relationship("PrintingSector", back_populates="branch")

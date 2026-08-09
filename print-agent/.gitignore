@@ -1,0 +1,14 @@
+# O config.ini de verdade guarda a senha do lojista. So o .example vai para
+# o git.
+config.ini
+
+# Estado e log sao da maquina, nao do projeto.
+state/
+logs/
+*.log
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+venv/
+.venv/

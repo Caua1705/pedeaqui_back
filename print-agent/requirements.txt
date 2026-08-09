@@ -1,0 +1,13 @@
+# Dependencias do agente de impressao. Deliberadamente curtas: este pacote
+# e instalado a mao no computador do balcao, muitas vezes por telefone, e
+# cada dependencia a mais e uma chance de a instalacao falhar la.
+#
+# NAO tem nada em comum com o requirements.txt da API. O agente nao importa
+# FastAPI, SQLAlchemy nem nada do backend — ele fala com a API por HTTP.
+
+requests>=2.31
+
+# Acesso a fila de impressao do Windows (win32print). So instala no Windows;
+# em Linux/macOS o pip pula esta linha, e o agente ainda roda com --dry-run
+# para quem esta desenvolvendo.
+pywin32>=306; sys_platform == "win32"

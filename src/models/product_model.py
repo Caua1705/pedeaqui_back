@@ -16,6 +16,11 @@ class Product(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
     restaurant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("restaurants.id"), nullable=False)
     category_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=False)
+    # Setor de impressao (a praca que prepara este produto). NULO tem
+    # significado proprio: o produto nao gera via de producao — e a lata de
+    # refrigerante, que sai da geladeira do balcao. Ver a migracao
+    # 20260809_0011 e src/services/admin_printing_service.py.
+    printing_sector_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("printing_sectors.id"))
     code: Mapped[str | None] = mapped_column(Text)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     slug: Mapped[str | None] = mapped_column(Text)

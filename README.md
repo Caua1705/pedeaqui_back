@@ -169,12 +169,45 @@ Then send `Authorization: Bearer <access_token>` on every admin route.
 - `PATCH /admin/orders/{order_id}/status`
 - `PATCH /admin/orders/{order_id}/cancel` — requires `{"reason": "..."}`, stored in the status history
 - `PATCH /admin/branches/{branch_id}/prep-time` — the +5/-10 shortcut for the period in effect right now
+- `GET  /admin/orders/{order_id}/print-jobs` — the receipts, already laid out as fixed-width text
+- `GET/POST /admin/branches/{branch_id}/printing-sectors`, `PATCH /admin/printing-sectors/{sector_id}`
+- `PATCH /admin/products/{product_id}/printing-sector`, `PATCH /admin/categories/{category_id}/printing-sector`
 - `GET  /admin/reports/commission?start_date=2026-07-01&end_date=2026-07-31`
 - `GET/POST/PATCH /admin/restaurants/{restaurant_id}/coupons`
 
 Every one of these is scoped to the `restaurant_id` in the token. A
 restaurant slug or id in the URL never grants access on its own — it is
 checked against the token and returns 404 when it does not match.
+
+## Printing
+
+The local print agent is deliberately dumb: it reads a job's `content`,
+selects `font_size`, writes it to the printer and cuts. It does not wrap,
+align or decide what belongs on which copy — all of that lives in
+`src/services/print_layout.py`, so the rule sits in one place, is unit
+tested, and a layout fix is a deploy instead of a visit to every shop.
+
+`GET /admin/orders/{order_id}/print-jobs` returns one customer copy (48
+columns, prices, totals) plus one production copy per printing sector with
+items in the order (24 columns because it prints in double-width font, no
+prices at all). Each job carries `sector_name`, `columns`, `font_size` and
+`content`.
+
+Printing sectors belong to a **branch**, not to a restaurant: the printer is
+a physical machine standing in one shop. A product with
+`printing_sector_id = null` prints no production copy — that is the can of
+soda taken from the counter fridge, not a missing setting.
+
+An order whose online payment has not been confirmed gets **only** the
+customer copy. A production copy is an order to start cooking, and the
+"awaiting payment, do not prepare" rule cannot apply just to whoever is
+looking at the screen.
+
+The agent itself lives in [`print-agent/`](print-agent/README.md) — same
+repo so it cannot drift from the API it consumes, but outside this build:
+it is in `.dockerignore`, has its own `requirements.txt` (requests +
+pywin32, nothing from `src/`), and its tests are not collected by the root
+`pytest` (see `pytest.ini`).
 
 ### Creating the first merchant
 

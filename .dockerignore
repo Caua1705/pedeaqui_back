@@ -18,8 +18,15 @@ venv/
 .venv/
 env/
 
+# Agente de impressao. Roda no computador do restaurante, nao no servidor:
+# nao importa nada de src/, tem requirements proprio (requests + pywin32) e
+# so serve para Windows. Dentro da imagem da API seria peso morto — e o
+# pywin32 do requirements dele nem instala no Linux do container.
+print-agent/
+
 # Testes e caches de ferramentas
 tests/
+pytest.ini
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

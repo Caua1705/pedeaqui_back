@@ -52,6 +52,7 @@ from src.schemas.admin_menu_schema import (
     CategoryReorderRequest,
     ProductAvailabilityRequest,
     ProductImageResponse,
+    ProductReorderRequest,
 )
 from src.repositories.restaurant_repository import RestaurantRepository
 from src.utils.images import IMAGE_CONTENT_TYPES, detect_image_extension
@@ -150,6 +151,57 @@ class AdminMenuService:
         return [
             AdminCategoryResponse.model_validate(by_id[category_id])
             for category_id in payload.category_ids
+        ]
+
+    def reorder_products(
+        self,
+        scope: AdminScope,
+        payload: ProductReorderRequest,
+    ) -> list[AdminProductResponse]:
+        """Renumera os produtos de UMA categoria na ordem em que vieram.
+
+        Mesma regra da reordenacao de categorias, um nivel abaixo: exige a
+        lista completa e renumera de 0 a N-1. O conjunto que compartilha a
+        numeracao aqui e a categoria, nao o restaurante — ver
+        ProductReorderRequest.
+
+        A categoria e conferida contra o escopo ANTES dos produtos. Sem isso,
+        um `category_id` de outro restaurante com `product_ids` vazio de
+        correspondencia devolveria 400 ("envie todos os produtos") em vez de
+        404, e a diferenca entre as duas respostas contaria ao chamador que
+        aquela categoria existe.
+
+        Categoria com mais produtos que MAX_REORDER_ITEMS nao passa pelo
+        contrato (422 no schema). E o mesmo teto da reordenacao de
+        categorias; se aparecer catalogo desse tamanho, o que muda e o
+        contrato, nao esta regra.
+        """
+        category = self._get_category(payload.category_id, scope)
+
+        existing = self.repository.list_products_by_category(
+            category.id, scope.restaurant_id
+        )
+        existing_ids = {product.id for product in existing}
+        sent_ids = set(payload.product_ids)
+
+        if sent_ids - existing_ids:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Produto nao encontrado nesta categoria",
+            )
+        if existing_ids - sent_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Envie todos os produtos da categoria na nova ordem",
+            )
+
+        by_id = {product.id: product for product in existing}
+        for position, product_id in enumerate(payload.product_ids):
+            by_id[product_id].sort_order = position
+        self._commit()
+        return [
+            self._product_response(by_id[product_id])
+            for product_id in payload.product_ids
         ]
 
     def list_products(

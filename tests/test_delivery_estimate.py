@@ -196,7 +196,9 @@ class DeliveryEstimateTests(unittest.TestCase):
         self.assertIsNone(result.eta_min)
         self.assertIsNone(result.eta_max)
 
-    def test_missing_delivery_fee_config_is_not_serviceable(self):
+    def test_missing_delivery_fee_config_without_default_is_not_serviceable(self):
+        # `self.settings` nao tem default_delivery_fee: e o restaurante que
+        # nunca configurou o valor de contingencia.
         self.business_hours = [open_period(40, 60)]
         self.branch.delivery_base_fee = None
 
@@ -206,7 +208,7 @@ class DeliveryEstimateTests(unittest.TestCase):
         self.assertEqual(result.distance_km, 4.2)
         self.assertIsNone(result.delivery_fee)
 
-    def test_google_failure_uses_explicit_fallback(self):
+    def test_google_failure_without_default_is_not_serviceable(self):
         self.business_hours = [open_period(40, 60)]
         self.service.maps_client = FakeMapsClient(unavailable=True)
 
@@ -222,6 +224,104 @@ class DeliveryEstimateTests(unittest.TestCase):
         self.assertEqual(result.prep_time_max, 60)
         self.assertEqual(result.eta_min, 40)
         self.assertEqual(result.eta_max, 60)
+
+
+class DefaultDeliveryFeeFallbackTests(DeliveryEstimateTests):
+    """`restaurant_settings.default_delivery_fee` como taxa de contingencia.
+
+    Antes desta regra o campo era editavel pelo PATCH /admin/settings e nao
+    era lido por caminho nenhum: uma queda do Google derrubava TODO pedido de
+    entrega da plataforma, com o provider ja se chamando
+    "configured_fallback" e nenhum fallback configurado atras dele.
+
+    Herda de DeliveryEstimateTests so pelo setUp; os testes herdados rodam de
+    novo aqui, o que e barato e confirma que ligar o campo nao muda o caminho
+    normal — `self.settings` continua sem `default_delivery_fee` ate cada
+    teste definir o seu.
+    """
+
+    def test_google_failure_falls_back_to_the_configured_fee(self):
+        self.business_hours = [open_period(40, 60)]
+        self.settings.default_delivery_fee = Decimal("9.00")
+        self.service.maps_client = FakeMapsClient(unavailable=True)
+
+        result = self.service.estimate("restaurante", self.request(), None)
+
+        self.assertTrue(result.serviceable)
+        self.assertEqual(result.delivery_fee, 9.0)
+        self.assertTrue(result.fallback)
+        self.assertEqual(result.provider, "configured_fallback")
+        self.assertIsNone(result.reason)
+        # Sem rota nao ha distancia nem tempo de deslocamento; o ETA fica so
+        # com o preparo. E o unico numero honesto possivel aqui.
+        self.assertIsNone(result.distance_km)
+        self.assertIsNone(result.travel_time_min)
+        self.assertEqual(result.eta_min, 40)
+        self.assertEqual(result.eta_max, 60)
+
+    def test_branch_without_fee_config_falls_back_to_the_configured_fee(self):
+        # A rota existe, so falta a regra de preco da filial. A distancia
+        # continua conhecida, entao a area de entrega segue sendo conferida.
+        self.business_hours = [open_period(40, 60)]
+        self.branch.delivery_base_fee = None
+        self.settings.default_delivery_fee = Decimal("7.50")
+
+        result = self.service.estimate("restaurante", self.request(), None)
+
+        self.assertTrue(result.serviceable)
+        self.assertEqual(result.delivery_fee, 7.5)
+        self.assertTrue(result.fallback)
+        self.assertEqual(result.provider, "configured_fallback")
+        self.assertEqual(result.distance_km, 4.2)
+        self.assertEqual(result.travel_time_min, 18)
+
+    def test_max_distance_is_still_enforced_when_the_route_is_known(self):
+        self.business_hours = [open_period(40, 60)]
+        self.branch.delivery_base_fee = None
+        self.branch.delivery_max_distance_km = Decimal("4.00")
+        self.settings.default_delivery_fee = Decimal("7.50")
+
+        result = self.service.estimate("restaurante", self.request(), None)
+
+        self.assertFalse(result.serviceable)
+        self.assertEqual(result.reason, "outside_delivery_area")
+
+    def test_zero_disables_the_fallback_instead_of_meaning_free_delivery(self):
+        # A coluna tem default 0 e a maior parte das linhas em producao nunca
+        # foi tocada. Ler esse 0 como escolha faria uma queda do Google virar
+        # frete gratis para a plataforma inteira.
+        self.business_hours = [open_period(40, 60)]
+        self.settings.default_delivery_fee = Decimal("0.00")
+        self.service.maps_client = FakeMapsClient(unavailable=True)
+
+        result = self.service.estimate("restaurante", self.request(), None)
+
+        self.assertFalse(result.serviceable)
+        self.assertEqual(result.reason, "route_unavailable")
+        self.assertIsNone(result.delivery_fee)
+
+    def test_null_disables_the_fallback(self):
+        self.business_hours = [open_period(40, 60)]
+        self.settings.default_delivery_fee = None
+        self.service.maps_client = FakeMapsClient(unavailable=True)
+
+        result = self.service.estimate("restaurante", self.request(), None)
+
+        self.assertFalse(result.serviceable)
+        self.assertIsNone(result.delivery_fee)
+
+    def test_the_normal_route_ignores_the_default_fee(self):
+        # Com a regra da filial disponivel, o valor de contingencia nao tem
+        # nada a ver com o preco cobrado.
+        self.business_hours = [open_period(40, 60)]
+        self.settings.default_delivery_fee = Decimal("99.00")
+
+        result = self.service.estimate("restaurante", self.request(), None)
+
+        self.assertTrue(result.serviceable)
+        self.assertEqual(result.delivery_fee, 11.3)
+        self.assertFalse(result.fallback)
+        self.assertEqual(result.provider, "google_routes")
 
     def test_address_id_requires_authentication(self):
         with self.assertRaises(HTTPException) as raised:

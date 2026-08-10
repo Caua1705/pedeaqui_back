@@ -27,12 +27,19 @@ from src.repositories.menu_repository import MenuRepository
 from src.schemas.delivery_schema import DeliveryEstimateRequest, DeliveryEstimateResponse
 from src.services.branch_hours_service import BranchHoursService
 from src.services.restaurant_service import RestaurantService
-from src.utils.money import money_to_float, quantize_money, to_decimal
+from src.utils.money import ZERO, money_to_float, quantize_money, to_decimal
 from src.utils.security import generate_tracking_token, utcnow
 
 
 logger = logging.getLogger("uvicorn.error")
 DELIVERY_TIMEZONE = ZoneInfo("America/Fortaleza")
+
+# Valor de `provider` quando a taxa veio de
+# `restaurant_settings.default_delivery_fee` em vez da regra por km da
+# filial. Vai gravado em `orders.delivery_estimate_provider`, e e por ele que
+# se separa depois o pedido precificado por rota do precificado no modo de
+# contingencia.
+FALLBACK_FEE_PROVIDER = "configured_fallback"
 
 
 def build_address_fingerprint(payload: DeliveryEstimateRequest) -> str:
@@ -365,34 +372,47 @@ class DeliveryEstimateService:
                 branch,
                 route.distance_km,
             )
+            fee_is_fallback = False
             if delivery_fee is None or raw_delivery_fee is None:
-                result = self._not_serviceable(
-                    "delivery_fee_config_unavailable",
-                    "Configuracao de taxa de entrega nao encontrada para a filial.",
-                    provider=settings.DELIVERY_ESTIMATE_PROVIDER,
-                )
-                result.distance_km = route.distance_km
-                result.travel_time_min = route.travel_time_min
-                result.prep_time_min = prep_time_min
-                result.prep_time_max = prep_time_max
-                result.eta_min = prep_time_min + route.travel_time_min
-                result.eta_max = prep_time_max + route.travel_time_min
-                result.latitude = destination.latitude
-                result.longitude = destination.longitude
-                self._log_delivery_fee_algorithm(
-                    branch,
-                    route.distance_km,
-                    route.travel_time_min,
-                    raw_delivery_fee,
-                    result.delivery_fee,
-                    prep_time_min,
-                    prep_time_max,
-                    result.eta_min,
-                    result.eta_max,
-                    result.fallback,
-                )
-                self._log_final_result(result)
-                return result
+                # A filial nao tem base/por-km cadastrados. A rota existe, so
+                # falta a regra de preco — e e exatamente para isso que serve
+                # o `default_delivery_fee` do restaurante. Com ele
+                # configurado, o pedido segue com a taxa fixa e continua
+                # passando pela conferencia de distancia maxima logo abaixo,
+                # porque aqui a distancia E conhecida. Sem ele, vale o
+                # comportamento antigo: nao atendido.
+                fallback_fee = self._configured_fallback_fee(restaurant_settings)
+                if fallback_fee is None:
+                    result = self._not_serviceable(
+                        "delivery_fee_config_unavailable",
+                        "Configuracao de taxa de entrega nao encontrada para a filial.",
+                        provider=settings.DELIVERY_ESTIMATE_PROVIDER,
+                    )
+                    result.distance_km = route.distance_km
+                    result.travel_time_min = route.travel_time_min
+                    result.prep_time_min = prep_time_min
+                    result.prep_time_max = prep_time_max
+                    result.eta_min = prep_time_min + route.travel_time_min
+                    result.eta_max = prep_time_max + route.travel_time_min
+                    result.latitude = destination.latitude
+                    result.longitude = destination.longitude
+                    self._log_delivery_fee_algorithm(
+                        branch,
+                        route.distance_km,
+                        route.travel_time_min,
+                        raw_delivery_fee,
+                        result.delivery_fee,
+                        prep_time_min,
+                        prep_time_max,
+                        result.eta_min,
+                        result.eta_max,
+                        result.fallback,
+                    )
+                    self._log_final_result(result)
+                    return result
+                delivery_fee = fallback_fee
+                raw_delivery_fee = fallback_fee
+                fee_is_fallback = True
             if self._is_outside_max_distance(branch, route.distance_km):
                 result = self._not_serviceable(
                     "outside_delivery_area",
@@ -436,8 +456,17 @@ class DeliveryEstimateService:
                 eta_min=eta_min,
                 eta_max=eta_max,
                 delivery_fee=money_to_float(delivery_fee),
-                provider=settings.DELIVERY_ESTIMATE_PROVIDER,
-                fallback=False,
+                provider=(
+                    FALLBACK_FEE_PROVIDER
+                    if fee_is_fallback
+                    else settings.DELIVERY_ESTIMATE_PROVIDER
+                ),
+                # `fallback=True` significa "esta taxa nao saiu da regra da
+                # filial". O pedido grava o provider em
+                # `orders.delivery_estimate_provider`, que e como o lojista
+                # separa depois o que foi precificado por rota do que foi
+                # precificado pelo padrao.
+                fallback=fee_is_fallback,
                 latitude=destination.latitude,
                 longitude=destination.longitude,
             )
@@ -479,18 +508,45 @@ class DeliveryEstimateService:
             if cache_key is not None:
                 self.cache.set(cache_key, result)
         except GoogleMapsUnavailableError:
+            # O Google caiu. Sem rota nao ha distancia, e sem distancia a
+            # regra por km da filial nao tem como ser aplicada.
+            #
+            # Antes daqui sair sempre `serviceable=False`, o provider ja se
+            # chamava "configured_fallback" — o nome estava certo e o
+            # fallback e que nao existia: uma indisponibilidade do Google
+            # derrubava TODO pedido de entrega da plataforma. Agora
+            # `restaurant_settings.default_delivery_fee` e esse fallback.
+            #
+            # O que se perde ao aceitar: a distancia e desconhecida, entao
+            # `delivery_max_distance_km` NAO e conferida neste caminho. Um
+            # endereco fora da area passa pela estimativa. Isso e aceito
+            # porque o pedido nasce em `pending` e ainda precisa ser aceito
+            # pelo lojista, que ve `delivery_estimate_provider =
+            # configured_fallback` no pedido e pode recusar. A alternativa —
+            # recusar tudo — ja e o pior resultado possivel para os dois
+            # lados durante uma queda do Google.
+            fallback_fee = self._configured_fallback_fee(restaurant_settings)
             result = DeliveryEstimateResult(
-                serviceable=False,
-                reason="route_unavailable",
-                message="Nao foi possivel calcular a rota para estimar a taxa de entrega.",
+                serviceable=fallback_fee is not None,
+                reason=None if fallback_fee is not None else "route_unavailable",
+                message=(
+                    None
+                    if fallback_fee is not None
+                    else "Nao foi possivel calcular a rota para estimar a taxa de entrega."
+                ),
                 distance_km=None,
                 travel_time_min=None,
                 prep_time_min=prep_time_min,
                 prep_time_max=prep_time_max,
+                # Sem tempo de deslocamento no ETA: e o unico numero honesto
+                # possivel sem rota. Fica subestimado, e o cliente ve que a
+                # estimativa veio do modo de contingencia pelo provider.
                 eta_min=prep_time_min,
                 eta_max=prep_time_max,
-                delivery_fee=None,
-                provider="configured_fallback",
+                delivery_fee=(
+                    money_to_float(fallback_fee) if fallback_fee is not None else None
+                ),
+                provider=FALLBACK_FEE_PROVIDER,
                 fallback=True,
                 latitude=(
                     destination.latitude
@@ -624,6 +680,28 @@ class DeliveryEstimateService:
             delivery_fee = min(delivery_fee, to_decimal(max_fee))
 
         return quantize_money(delivery_fee), quantize_money(raw_fee)
+
+    @staticmethod
+    def _configured_fallback_fee(restaurant_settings) -> Decimal | None:
+        """A taxa fixa a usar quando a regra da filial nao pode ser aplicada.
+
+        `restaurant_settings.default_delivery_fee` so vale como fallback se
+        for MAIOR QUE ZERO. A coluna e nullable e tem default 0, e a maioria
+        das linhas em producao esta em 0 sem ninguem ter escolhido isso —
+        tratar esse 0 como "entrega gratis na contingencia" faria uma queda
+        do Google virar frete gratis para a plataforma inteira, sem que
+        nenhum lojista tivesse pedido.
+
+        O preco disso: nao da para configurar "entrega gratis quando a rota
+        falha". Quem quer entrega gratis configura `delivery_base_fee = 0` na
+        filial, que e o caminho normal e continua funcionando — o fallback so
+        existe para quando aquele caminho nao esta disponivel.
+        """
+        fee = getattr(restaurant_settings, "default_delivery_fee", None)
+        if fee is None:
+            return None
+        fee = quantize_money(to_decimal(fee))
+        return fee if fee > ZERO else None
 
     @staticmethod
     def _is_outside_max_distance(branch, distance_km: float) -> bool:

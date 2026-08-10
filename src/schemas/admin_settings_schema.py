@@ -45,7 +45,20 @@ class AdminRestaurantSettingsResponse(BaseResponse):
 
 
 class AdminRestaurantSettingsUpdate(BaseModel):
-    """Edicao parcial das configuracoes do restaurante (BLOCO C5)."""
+    """Edicao parcial das configuracoes do restaurante (BLOCO C5).
+
+    `default_delivery_fee` NAO e a taxa de entrega do dia a dia — essa sai da
+    regra por km da filial (`delivery_base_fee` + `delivery_fee_per_km`, em
+    PATCH /admin/branches/{id}/delivery). Este e o valor de contingencia,
+    usado quando aquela regra nao pode ser aplicada: rota indisponivel
+    (Google fora do ar) ou filial sem base/por-km cadastrados. Ver
+    DeliveryEstimateService._configured_fallback_fee.
+
+    Zero desliga o fallback em vez de significar entrega gratis. A coluna
+    tem default 0 e a maior parte das linhas nunca foi tocada; ler esse 0
+    como escolha transformaria uma queda do Google em frete gratis para
+    todo mundo.
+    """
 
     min_order_value: Decimal | None = Field(default=None, ge=0)
     estimated_delivery_time_min: int | None = Field(default=None, ge=0, le=600)

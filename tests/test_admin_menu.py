@@ -35,6 +35,7 @@ from src.schemas.admin_menu_schema import (
     AdminProductUpdate,
     CategoryReorderRequest,
     ProductAvailabilityRequest,
+    ProductReorderRequest,
 )
 from src.services.admin_menu_service import AdminMenuService
 
@@ -172,6 +173,12 @@ class TenantScopedMenuRepository:
 
     def count_products(self, **kwargs):
         return len(self.list_products(**kwargs))
+
+    def list_products_by_category(self, category_id, restaurant_id):
+        return [
+            item for item in self.products
+            if item.category_id == category_id and item.restaurant_id == restaurant_id
+        ]
 
     def get_product(self, product_id, restaurant_id):
         for item in self.products:
@@ -538,6 +545,132 @@ class OptionTests(unittest.TestCase):
         # order_item_options aponta para esta linha por FK: apagar quebraria
         # o historico do pedido que o cliente ainda consulta.
         self.assertFalse(response.is_active)
+
+
+class ProductReorderTests(unittest.TestCase):
+    """A reordenacao e por CATEGORIA, nao pelo restaurante inteiro.
+
+    `sort_order` de produto so significa alguma coisa dentro da categoria: o
+    cardapio publico ordena por categoria e SO ENTAO por produto. Renumerar
+    numa sequencia unica do restaurante faria a posicao de um produto dentro
+    da categoria depender de quantos produtos vieram antes dela na lista.
+    """
+
+    def setUp(self):
+        self.category = make_category()
+        self.other_category = make_category(name="Bebidas", slug="bebidas")
+        self.first = make_product(category_id=self.category.id, name="A", sort_order=0)
+        self.second = make_product(category_id=self.category.id, name="B", sort_order=1)
+        self.repository = TenantScopedMenuRepository(
+            categories=[self.category, self.other_category],
+            products=[self.first, self.second],
+        )
+
+    def test_new_order_is_written_as_sequential_positions(self):
+        build_service(self.repository).reorder_products(
+            scope(),
+            ProductReorderRequest(
+                category_id=self.category.id,
+                product_ids=[self.second.id, self.first.id],
+            ),
+        )
+
+        self.assertEqual((self.second.sort_order, self.first.sort_order), (0, 1))
+
+    def test_response_comes_back_in_the_requested_order(self):
+        response = build_service(self.repository).reorder_products(
+            scope(),
+            ProductReorderRequest(
+                category_id=self.category.id,
+                product_ids=[self.second.id, self.first.id],
+            ),
+        )
+
+        self.assertEqual([item.id for item in response], [self.second.id, self.first.id])
+
+    def test_incomplete_list_is_refused(self):
+        # Renumerar so uma parte deixaria os de fora com sort_order repetido,
+        # e a ordem final dependeria do desempate por nome.
+        with self.assertRaises(HTTPException) as raised:
+            build_service(self.repository).reorder_products(
+                scope(),
+                ProductReorderRequest(
+                    category_id=self.category.id, product_ids=[self.first.id]
+                ),
+            )
+
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_product_from_another_category_is_not_found(self):
+        outsider = make_product(category_id=self.other_category.id, name="Coca")
+        self.repository.products.append(outsider)
+
+        with self.assertRaises(HTTPException) as raised:
+            build_service(self.repository).reorder_products(
+                scope(),
+                ProductReorderRequest(
+                    category_id=self.category.id,
+                    product_ids=[self.first.id, self.second.id, outsider.id],
+                ),
+            )
+
+        self.assertEqual(raised.exception.status_code, 404)
+
+    def test_category_from_another_restaurant_is_not_found(self):
+        foreign = make_category(restaurant_id=OTHER_RESTAURANT_ID)
+        self.repository.categories.append(foreign)
+
+        with self.assertRaises(HTTPException) as raised:
+            build_service(self.repository).reorder_products(
+                scope(),
+                ProductReorderRequest(
+                    category_id=foreign.id, product_ids=[uuid.uuid4()]
+                ),
+            )
+
+        # 404 e nao 400: responder "envie todos os produtos" contaria ao
+        # chamador que aquela categoria existe em algum restaurante.
+        self.assertEqual(raised.exception.status_code, 404)
+
+    def test_product_from_another_restaurant_is_not_found(self):
+        foreign = make_product(
+            restaurant_id=OTHER_RESTAURANT_ID, category_id=self.category.id
+        )
+        self.repository.products.append(foreign)
+
+        with self.assertRaises(HTTPException) as raised:
+            build_service(self.repository).reorder_products(
+                scope(),
+                ProductReorderRequest(
+                    category_id=self.category.id,
+                    product_ids=[self.first.id, self.second.id, foreign.id],
+                ),
+            )
+
+        self.assertEqual(raised.exception.status_code, 404)
+
+    def test_reordering_one_category_does_not_touch_another(self):
+        outsider = make_product(
+            category_id=self.other_category.id, name="Coca", sort_order=7
+        )
+        self.repository.products.append(outsider)
+
+        build_service(self.repository).reorder_products(
+            scope(),
+            ProductReorderRequest(
+                category_id=self.category.id,
+                product_ids=[self.second.id, self.first.id],
+            ),
+        )
+
+        self.assertEqual(outsider.sort_order, 7)
+
+    def test_repeated_ids_are_refused_by_the_contract(self):
+        product_id = uuid.uuid4()
+        with self.assertRaises(ValidationError):
+            ProductReorderRequest(
+                category_id=uuid.uuid4(), product_ids=[product_id, product_id]
+            )
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ from src.schemas.admin_menu_schema import (
     CategoryReorderRequest,
     ProductAvailabilityRequest,
     ProductImageResponse,
+    ProductReorderRequest,
 )
 from src.services.admin_menu_service import AdminMenuService
 
@@ -124,6 +125,28 @@ def create_product(
     db: Session = Depends(get_db),
 ) -> AdminProductResponse:
     return AdminMenuService(db).create_product(scope, payload)
+
+
+# Declarada ANTES de /products/{product_id} pelo mesmo motivo da de
+# categorias: o FastAPI casa na ordem de registro e "reorder" nao e UUID.
+@router.patch("/products/reorder", response_model=list[AdminProductResponse])
+def reorder_products(
+    payload: ProductReorderRequest,
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> list[AdminProductResponse]:
+    """Grava a nova ordem dos produtos de uma categoria.
+
+    Uma chamada para a lista inteira, nao uma por item: arrastar um produto
+    do fim para o comeco mexe no `sort_order` de todos os que ficaram no
+    meio, e mandar isso item a item deixa o cardapio publico numa ordem
+    quebrada entre a primeira e a ultima requisicao.
+
+    Espera a lista COMPLETA dos produtos DAQUELA categoria, na ordem
+    desejada. Faltando algum, responde 400 — ver
+    AdminMenuService.reorder_products.
+    """
+    return AdminMenuService(db).reorder_products(scope, payload)
 
 
 @router.get("/products/{product_id}", response_model=AdminProductDetailResponse)

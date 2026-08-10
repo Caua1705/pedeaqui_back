@@ -82,6 +82,33 @@ class CategoryReorderRequest(BaseModel):
         return self
 
 
+class ProductReorderRequest(BaseModel):
+    """Nova ordem dos produtos DE UMA CATEGORIA, do primeiro para o ultimo.
+
+    Tem `category_id` e a reordenacao de categorias nao tem equivalente
+    porque `sort_order` de produto so significa alguma coisa dentro da
+    categoria: o cardapio publico ordena por
+    `Category.sort_order, Product.sort_order, Product.name`
+    (src/repositories/menu_repository.py:51). Uma lista "completa do
+    restaurante" renumeraria produtos de categorias diferentes numa sequencia
+    unica, e a ordem dentro de cada categoria passaria a depender de quantos
+    produtos vieram antes dela na lista — que nao e nada que o lojista
+    arrastou na tela.
+
+    Pelo mesmo motivo, a lista completa exigida e a da CATEGORIA, nao a do
+    restaurante: e o conjunto que compartilha a numeracao.
+    """
+
+    category_id: UUID
+    product_ids: list[UUID] = Field(min_length=1, max_length=MAX_REORDER_ITEMS)
+
+    @model_validator(mode="after")
+    def validate_no_duplicates(self):
+        if len(set(self.product_ids)) != len(self.product_ids):
+            raise ValueError("product_ids nao pode repetir o mesmo produto")
+        return self
+
+
 class AdminOptionResponse(BaseResponse):
     id: UUID
     option_group_id: UUID

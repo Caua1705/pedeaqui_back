@@ -112,6 +112,30 @@ class AdminMenuRepository:
         ))
         return self.db.scalar(stmt) or 0
 
+    def list_products_by_category(
+        self,
+        category_id: uuid.UUID,
+        restaurant_id: uuid.UUID,
+    ) -> list[Product]:
+        """Todos os produtos da categoria, sem paginacao.
+
+        Existe separado de `list_products` porque a reordenacao precisa do
+        conjunto INTEIRO para conferir que a lista recebida esta completa —
+        e `list_products` tem `limit` com teto de 100. Reaproveita-la com um
+        limite alto so esconderia o problema: a partir do 101o produto a
+        conferencia passaria a aprovar uma lista incompleta e renumerar por
+        cima do resto.
+        """
+        stmt = (
+            select(Product)
+            .where(
+                Product.category_id == category_id,
+                Product.restaurant_id == restaurant_id,
+            )
+            .order_by(Product.sort_order.asc(), Product.name.asc())
+        )
+        return list(self.db.scalars(stmt).all())
+
     def get_product(self, product_id: uuid.UUID, restaurant_id: uuid.UUID) -> Product | None:
         stmt = select(Product).where(
             Product.id == product_id,

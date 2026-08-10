@@ -17,6 +17,56 @@ from src.models.restaurant_model import Restaurant
 # contagem do que sobrou de fora) precisam concordar exatamente.
 NON_BILLABLE_ORDER_STATUSES = ("cancelled", "rejected")
 
+
+def billable_order_conditions(
+    restaurant_id: uuid.UUID,
+    start_at: datetime,
+    end_at: datetime,
+) -> list:
+    """WHERE de "o que virou venda neste periodo".
+
+    Funcao de modulo, e nao metodo, porque quem precisa dela nao e so este
+    repositorio: os relatorios de desempenho (AdminReportRepository) tem que
+    contar exatamente o mesmo conjunto que o extrato de comissao. Duas
+    copias da regra e o caminho garantido para o painel dizer que o
+    faturamento foi X e o extrato dizer que a base foi de menos pedidos que
+    isso, sem ninguem conseguir explicar a diferenca.
+
+    `end_at` e EXCLUSIVO: quem chama passa o instante em que o dia seguinte
+    comeca, para nao perder pedido feito 23:59:59.7.
+    """
+    return [
+        Order.restaurant_id == restaurant_id,
+        Order.created_at >= start_at,
+        Order.created_at < end_at,
+        Order.status.notin_(NON_BILLABLE_ORDER_STATUSES),
+        Order.payment_status != "refunded",
+    ]
+
+
+def excluded_order_conditions(
+    restaurant_id: uuid.UUID,
+    start_at: datetime,
+    end_at: datetime,
+) -> list:
+    """O complemento exato de `billable_order_conditions` no mesmo periodo.
+
+    Complemento de verdade: `status IN (...) OR payment_status = 'refunded'`
+    e a negacao de `status NOT IN (...) AND payment_status <> 'refunded'`.
+    Um pedido do periodo cai em um dos dois conjuntos e nunca nos dois, que
+    e o que permite ao relatorio de cancelamentos e ao de faturamento serem
+    lidos lado a lado.
+    """
+    return [
+        Order.restaurant_id == restaurant_id,
+        Order.created_at >= start_at,
+        Order.created_at < end_at,
+        or_(
+            Order.status.in_(NON_BILLABLE_ORDER_STATUSES),
+            Order.payment_status == "refunded",
+        ),
+    ]
+
 # Tudo o que `OrderService.to_order_detail_response` le, carregado de uma
 # vez. Ficam juntos porque as tres consultas de detalhe (painel, cliente
 # logado e token de acompanhamento) desembocam no MESMO montador de
@@ -291,13 +341,7 @@ class OrderRepository:
         """
         stmt = (
             select(Order)
-            .where(
-                Order.restaurant_id == restaurant_id,
-                Order.created_at >= start_at,
-                Order.created_at < end_at,
-                Order.status.notin_(NON_BILLABLE_ORDER_STATUSES),
-                Order.payment_status != "refunded",
-            )
+            .where(*billable_order_conditions(restaurant_id, start_at, end_at))
             .order_by(Order.created_at.asc())
         )
         return list(self.db.scalars(stmt).all())
@@ -317,15 +361,7 @@ class OrderRepository:
         stmt = (
             select(func.count())
             .select_from(Order)
-            .where(
-                Order.restaurant_id == restaurant_id,
-                Order.created_at >= start_at,
-                Order.created_at < end_at,
-                or_(
-                    Order.status.in_(NON_BILLABLE_ORDER_STATUSES),
-                    Order.payment_status == "refunded",
-                ),
-            )
+            .where(*excluded_order_conditions(restaurant_id, start_at, end_at))
         )
         return self.db.scalar(stmt) or 0
 

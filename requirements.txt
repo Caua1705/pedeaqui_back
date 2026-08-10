@@ -19,5 +19,7 @@ httpx
 redis
 psycopg2-binary
 slowapi
-alembic
+# >=1.16 pelo if_not_exists/if_exists de create_index/drop_index, que as
+# migracoes sobre as tabelas do baseline usam.
+alembic>=1.16
 cryptography

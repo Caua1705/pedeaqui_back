@@ -23,6 +23,19 @@ Sem restricao UNIQUE nova de proposito: o schema de producao veio dos .sql
 aplicados a mao e pode ter slug repetido de antes. Duplicidade de slug e
 barrada no service (AdminMenuService), onde da para responder 409 com
 mensagem em vez de estourar IntegrityError.
+
+Todo indice aqui e criado com IF NOT EXISTS. Estas tabelas sao anteriores
+ao Alembic (vieram dos .sql de migrations/, aplicados a mao), entao nao da
+para assumir que um nome de indice esta livre so porque nenhuma revisao o
+criou. Foi exatamente assim que esta revisao quebrou em producao. Vale a
+mesma regra para as proximas: indice sobre tabela do baseline nasce com
+IF NOT EXISTS; indice sobre tabela criada na propria revisao, nao — ali a
+colisao de nome seria bug de verdade e deve estourar.
+
+`ix_orders_restaurant_created_at` (o cursor do SSE por restaurante) NAO
+esta mais aqui: a 20260730_0006 ja cria esse indice, com o mesmo nome e as
+mesmas colunas. Era ele o indice que "ja existia" — o dono e a 0006, e e
+la que ele deve ser derrubado no downgrade.
 """
 
 from typing import Sequence, Union
@@ -43,25 +56,25 @@ def upgrade() -> None:
         "ix_orders_restaurant_branch_created_at",
         "orders",
         ["restaurant_id", "branch_id", "created_at"],
+        if_not_exists=True,
     )
-    # Cursor do SSE: "pedidos criados depois de X neste restaurante".
-    op.create_index(
-        "ix_orders_restaurant_created_at",
-        "orders",
-        ["restaurant_id", "created_at"],
-    )
+    # O cursor do SSE por restaurante ("pedidos criados depois de X") usa
+    # ix_orders_restaurant_created_at, criado pela 20260730_0006.
+    #
     # Cursor do SSE do outro lado: mudancas de status desde X. A juncao com
     # orders para achar o restaurante e feita por order_id.
     op.create_index(
         "ix_order_status_history_created_at",
         "order_status_history",
         ["created_at"],
+        if_not_exists=True,
     )
     # Agrupamento de clientes por telefone dentro do restaurante (BLOCO D).
     op.create_index(
         "ix_orders_restaurant_customer_phone",
         "orders",
         ["restaurant_id", "customer_phone_snapshot"],
+        if_not_exists=True,
     )
     # Listagem de produtos do painel, que mostra ativos e inativos por
     # categoria — o indice do cardapio publico nao serve porque aquele
@@ -70,12 +83,21 @@ def upgrade() -> None:
         "ix_products_restaurant_category",
         "products",
         ["restaurant_id", "category_id"],
+        if_not_exists=True,
     )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_products_restaurant_category", table_name="products")
-    op.drop_index("ix_orders_restaurant_customer_phone", table_name="orders")
-    op.drop_index("ix_order_status_history_created_at", table_name="order_status_history")
-    op.drop_index("ix_orders_restaurant_created_at", table_name="orders")
-    op.drop_index("ix_orders_restaurant_branch_created_at", table_name="orders")
+    # IF EXISTS pelo mesmo motivo do upgrade: o indice pode nao ser desta
+    # revisao, e um downgrade nao deve quebrar por causa de um objeto que
+    # ela nunca criou.
+    op.drop_index("ix_products_restaurant_category", table_name="products", if_exists=True)
+    op.drop_index("ix_orders_restaurant_customer_phone", table_name="orders", if_exists=True)
+    op.drop_index(
+        "ix_order_status_history_created_at",
+        table_name="order_status_history",
+        if_exists=True,
+    )
+    op.drop_index(
+        "ix_orders_restaurant_branch_created_at", table_name="orders", if_exists=True
+    )

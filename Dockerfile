@@ -11,6 +11,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# O bit de execucao nao sobrevive ao checkout no Windows, entao e marcado
+# aqui. Precisa vir antes do `chmod -R a-w` (que so tira escrita, nao +x).
+RUN chmod +x /app/docker-entrypoint.sh
+
 # Executa como usuario sem privilegios; o codigo da aplicacao fica read-only para ele.
 RUN useradd --system --create-home --uid 10001 appuser \
     && chown -R root:root /app \
@@ -19,6 +23,12 @@ RUN useradd --system --create-home --uid 10001 appuser \
 USER appuser
 
 EXPOSE 8000
+
+# O entrypoint roda `alembic upgrade head` e so entao passa o CMD adiante.
+# Fica como ENTRYPOINT, e nao embutido no CMD, para que sobrescrever o
+# comando (`docker compose run api bash`) continue migrando primeiro — e
+# para que o CMD continue sendo so "como servir".
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 # --proxy-headers para que o IP do cliente atras do Traefik chegue correto
 # ao rate limiting e aos logs.

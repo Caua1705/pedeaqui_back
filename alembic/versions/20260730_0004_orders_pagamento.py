@@ -67,17 +67,20 @@ def upgrade() -> None:
     # O webhook chega com o id do pagamento no gateway e precisa achar o
     # pedido por ele. O indice e unico porque dois pedidos nao podem
     # reivindicar o mesmo pagamento — seria dinheiro contado duas vezes.
+    # IF NOT EXISTS porque `orders` e do baseline: veio dos .sql aplicados a
+    # mao, onde um indice com este nome pode ter sido criado antes do Alembic.
     op.create_index(
         "uq_orders_provider_payment",
         "orders",
         ["payment_provider", "provider_payment_id"],
         unique=True,
         postgresql_where=sa.text("provider_payment_id IS NOT NULL"),
+        if_not_exists=True,
     )
 
 
 def downgrade() -> None:
-    op.drop_index("uq_orders_provider_payment", table_name="orders")
+    op.drop_index("uq_orders_provider_payment", table_name="orders", if_exists=True)
     op.drop_constraint("ck_orders_payment_flow", "orders", type_="check")
     op.drop_constraint("ck_orders_payment_status", "orders", type_="check")
     op.drop_column("orders", "provider_payment_id")

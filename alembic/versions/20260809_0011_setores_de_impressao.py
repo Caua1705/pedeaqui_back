@@ -103,15 +103,20 @@ def upgrade() -> None:
     # A aplicacao em massa por categoria ("todos os produtos de Bebidas vao
     # para o Bar") e a unica escrita que varre produto por setor; sem indice
     # ela e um seq scan na tabela inteira de produtos do banco.
+    #
+    # IF NOT EXISTS porque `products` e do baseline (veio dos .sql aplicados
+    # a mao). O indice de printing_sectors logo acima nao leva: aquela tabela
+    # nasce nesta revisao, entao colisao de nome ali seria bug e deve estourar.
     op.create_index(
         "ix_products_printing_sector",
         "products",
         ["printing_sector_id"],
+        if_not_exists=True,
     )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_products_printing_sector", table_name="products")
+    op.drop_index("ix_products_printing_sector", table_name="products", if_exists=True)
     op.drop_column("products", "printing_sector_id")
     op.drop_constraint(
         "uq_printing_sectors_branch_name", "printing_sectors", type_="unique"

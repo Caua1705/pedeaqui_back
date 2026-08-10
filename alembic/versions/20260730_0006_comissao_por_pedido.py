@@ -63,16 +63,22 @@ def upgrade() -> None:
         sa.Column("commission_amount", sa.Numeric(12, 2), nullable=False, server_default=sa.text("0")),
     )
 
-    # O relatorio filtra por restaurante e recorta por data de criacao.
+    # O relatorio filtra por restaurante e recorta por data de criacao. O
+    # cursor do SSE do painel (20260806_0010) usa este mesmo indice: ele
+    # nasce aqui e e derrubado aqui.
+    #
+    # IF NOT EXISTS porque `orders` e do baseline: veio dos .sql aplicados a
+    # mao, onde um indice com este nome pode ter sido criado antes do Alembic.
     op.create_index(
         "ix_orders_restaurant_created_at",
         "orders",
         ["restaurant_id", "created_at"],
+        if_not_exists=True,
     )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_orders_restaurant_created_at", table_name="orders")
+    op.drop_index("ix_orders_restaurant_created_at", table_name="orders", if_exists=True)
     op.drop_column("orders", "commission_amount")
     op.drop_column("orders", "commission_base_amount")
     op.drop_column("orders", "commission_percent")

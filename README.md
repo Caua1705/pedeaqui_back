@@ -104,23 +104,49 @@ read the generated file before applying: the production database has objects
 the ORM does not map (sequences, hand-made indexes from the old `.sql`
 files), and autogenerate will propose dropping them. Delete those lines.
 
+#### Convention: `IF NOT EXISTS` on baseline tables
+
+An index created on a table that predates Alembic — anything built by the
+frozen `.sql` files (`orders`, `products`, `categories`, `branches`, …) — must
+pass `if_not_exists=True`, and its `drop_index` must pass `if_exists=True`.
+The name may already be taken by an object nobody recorded, and a migration
+has no way to know. `20260806_0010` broke in production for exactly this.
+
+An index on a table the same revision creates does **not** get it: there the
+name collision would be a genuine bug and should fail loudly. Same rule for
+`create_table` and `add_column` when you touch a baseline table.
+
 ### Production
 
-Migrations do **not** run automatically at container start. That is
-deliberate: an automatic `upgrade head` on boot means a bad migration takes
-the API down with it, and with more than one container they race. Run it as
-an explicit step:
+Migrations run automatically at container start. `docker-entrypoint.sh` runs
+`alembic upgrade head` and only then hands off to Uvicorn, so deploying new
+code cannot leave the API answering against the old schema.
 
 ```bash
 # 1. Back up first — this is Supabase/Postgres, a failed DDL can be costly
-docker exec pedeaqui-api alembic current      # confirm current revision
-docker compose up -d --build                  # deploy new code
-docker exec pedeaqui-api alembic upgrade head # then migrate
-docker exec pedeaqui-api alembic current      # confirm new revision
+docker exec pedeaqui-api alembic current  # confirm current revision
+docker compose up -d --build              # migrates, then serves
+docker logs -f pedeaqui-api               # "[entrypoint] alembic upgrade head"
+docker exec pedeaqui-api alembic current  # confirm new revision
 ```
 
+Two consequences to know about:
+
+- **A failing migration keeps the API down.** The entrypoint does not swallow
+  the error, so the container exits and `restart: always` retries it in a
+  loop. That is the intended trade: a visible restart loop beats an API
+  serving requests against a schema it does not match.
+- **Scaling past one container makes them race.** They would all run
+  `upgrade head` at once. Before adding a replica, move the migration to a
+  one-shot step (or take a Postgres advisory lock inside `env.py`).
+
+A database that already has the schema must be stamped (see the baseline
+section above) **before** its first `up` with this entrypoint — otherwise the
+upgrade tries to apply `0002` onward on top of tables that already exist.
+
 Migrations in this project are written to be backward compatible with the
-previous code version, so deploying the image before migrating is safe.
+previous code version, so a container still on the old image keeps working
+while the new one migrates.
 
 ## Public Endpoints
 

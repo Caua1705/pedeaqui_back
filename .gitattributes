@@ -1,0 +1,7 @@
+# O repositorio e editado no Windows com core.autocrlf=true, que devolveria
+# estes arquivos com CRLF no checkout. O Dockerfile faz `COPY . .` da arvore
+# de trabalho, e um shebang terminado em \r vira
+# "exec /app/docker-entrypoint.sh: no such file or directory" no container.
+*.sh text eol=lf
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf

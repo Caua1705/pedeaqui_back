@@ -95,12 +95,20 @@ def _build_search_condition(search: str):
     "Antônio" composto e decomposto sao iguais na tela e diferentes no
     banco. `customer_name_snapshot` e gravado normalizado pelo mesmo motivo.
     """
-    digits = normalize_text(search)
-    if digits.isdigit():
-        return Order.order_number == int(digits)
+    termo = normalize_text(search)
+    if termo.isdigit():
+        return Order.order_number == int(termo)
 
-    escaped = digits.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return Order.customer_name_snapshot.ilike(f"%{escaped}%", escape="\\")
+    return Order.customer_name_snapshot.ilike(f"%{_escape_like(termo)}%", escape="\\")
+
+
+def _escape_like(termo: str) -> str:
+    """Neutraliza os curingas do LIKE dentro do que o lojista digitou.
+
+    A contrabarra vem primeiro: escapando-a depois, ela escaparia tambem as
+    contrabarras que as duas linhas seguintes acabaram de inserir.
+    """
+    return termo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 class OrderRepository:
@@ -239,7 +247,8 @@ class OrderRepository:
             ))
             .group_by(Order.status)
         )
-        return {row[0]: row[1] for row in self.db.execute(stmt).all()}
+        # Cada linha ja e o par (status, quantidade) que o dicionario quer.
+        return dict(self.db.execute(stmt).all())
 
     def list_orders_created_since(
         self,
@@ -298,7 +307,7 @@ class OrderRepository:
             .order_by(OrderStatusHistory.created_at.asc())
             .limit(limit)
         )
-        return [(row[0], row[1]) for row in self.db.execute(stmt).all()]
+        return list(self.db.execute(stmt).tuples().all())
 
     @staticmethod
     def _admin_list_conditions(
@@ -391,7 +400,7 @@ class OrderRepository:
             .where(Order.customer_id == customer_id)
             .order_by(Order.created_at.desc())
         )
-        return [(row[0], row[1], row[2]) for row in self.db.execute(stmt).all()]
+        return list(self.db.execute(stmt).tuples().all())
 
     def update_status(self, order: Order, status: str) -> Order:
         order.status = status

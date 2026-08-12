@@ -225,6 +225,28 @@ class TestProductResponseFiltering:
         assert [group.name for group in groups] == ["Quase vazio"]
         assert [option.name for option in groups[0].options] == ["viva"]
 
+    def test_only_the_required_one_is_logged(self, caplog):
+        """O log e como o lojista descobre que desativou a ultima opcao de um
+        grupo obrigatorio — e por que aquele passo sumiu do produto dele.
+
+        So o OBRIGATORIO vira log: um grupo opcional vazio nao tira nada do
+        cliente, e avisar sobre ele encheria o arquivo de ruido justamente
+        onde alguem vai procurar o caso que importa.
+        """
+        obrigatorio = make_group("Escolha o tamanho", [make_option("x", is_active=False)])
+        obrigatorio.is_required = True
+        opcional = make_group("Bordas", [make_option("y", is_active=False)])
+        opcional.is_required = False
+        product = make_product(option_groups=[obrigatorio, opcional])
+
+        with caplog.at_level("WARNING"):
+            assert MenuService.product_response(product).option_groups == []
+
+        avisos = [registro.getMessage() for registro in caplog.records]
+        assert len(avisos) == 1
+        assert "Escolha o tamanho" in avisos[0]
+        assert "Bordas" not in avisos[0]
+
     def test_an_empty_optional_group_disappears_too(self):
         """A regra e uma so: grupo sem opcao ativa nao existe para o cliente.
         O obrigatorio e o que trava a venda, mas o opcional vazio tambem nao

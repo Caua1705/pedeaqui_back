@@ -33,6 +33,10 @@ from src.utils.security import hash_password, verify_password
 
 SENHA_ATUAL = "senha-atual-123"
 
+# Hasheado uma vez por modulo: o bcrypt leva ~0,3s de proposito, e um hash
+# por `make_customer` cobraria isso em cada teste.
+SENHA_ATUAL_HASH = hash_password(SENHA_ATUAL)
+
 
 class FakeDb:
     def __init__(self, falha=None):
@@ -92,7 +96,7 @@ def make_customer(password=SENHA_ATUAL, **overrides):
         "birth_date": date(1990, 5, 20),
         "email_verified_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
         "marketing_opt_in": True,
-        "password_hash": hash_password(password) if password else None,
+        "password_hash": (SENHA_ATUAL_HASH if password == SENHA_ATUAL else hash_password(password)) if password else None,
         "password_changed_at": None,
     }
     valores.update(overrides)

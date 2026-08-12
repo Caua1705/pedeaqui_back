@@ -43,6 +43,239 @@ narra a linha abaixo é ruído.
 
 ---
 
+# Como escrever código aqui
+
+**Vale para todo código novo deste repositório**, não só para refatoração.
+
+**Quem lê este código é uma pessoa só, sozinha, que entende Python e SQL sem ser
+especialista.** Isso é um requisito, não um detalhe biográfico. Código esperto que
+o autor não entende quando volta nele em três meses é, para este projeto, pior que
+código simples e repetitivo — porque o repetitivo se lê de cima a baixo às duas da
+manhã com a operação parada, e o esperto precisa ser destrinchado antes.
+
+Nenhuma das regras abaixo é sobre estética. Todas são sobre **quanto custa
+entender a função na segunda leitura.**
+
+## As regras
+
+1. **Uma função faz uma coisa.** Se o nome precisa de "e" para descrever o que
+   ela faz, são duas funções.
+2. **Retorno cedo.** Trate o caso de saída primeiro e retorne.
+3. **Máximo de 3 níveis de indentação dentro de uma função.**
+4. **Nome que dispensa comentário ao lado.**
+5. **Comentário só para o PORQUÊ de uma decisão não óbvia**, nunca para o QUE uma
+   linha faz.
+6. **Decorador escrito à mão: não crie.** Os de rota do FastAPI e os de fixture do
+   pytest ficam — são da ferramenta, não nossos.
+7. **Repetição clara vence abstração esperta.** Duas funções parecidas que se leem
+   inteiras valem mais que uma genérica que precisa ser destrinchada.
+8. **Nada de list comprehension aninhada, ternário dentro de ternário, nem
+   walrus.**
+9. **Type hint em toda assinatura pública.**
+
+Os três exemplos abaixo são **código real deste repositório**, não ilustração
+genérica. O "antes" é o que está lá hoje; o "depois" mostra a forma, e é candidato
+de refatoração — não algo já feito.
+
+---
+
+### Regra 1 — o nome precisa de "e", então são duas funções
+
+`DeliveryEstimateService.estimate_and_store` (`services/delivery_estimate_service.py`).
+O nome é honesto sobre o problema: ela calcula **e** grava.
+
+```python
+# ANTES
+def estimate_and_store(self, restaurant_slug, payload, current_customer):
+    result = self.estimate(restaurant_slug, payload, current_customer)
+    if not result.serviceable:
+        return result, None
+
+    restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
+    branch = self._resolve_branch(restaurant.id, payload.branch_id)
+    stored = DeliveryEstimate(...)          # 18 linhas de montagem
+    try:
+        self.delivery_estimate_repository.create(stored)
+        self.db.commit()
+    except Exception:
+        self.db.rollback()
+        raise
+    return result, stored
+```
+
+O `estimate` puro já existe ao lado — e o próprio docstring diz por que ele é
+separado ("continua sem efeito colateral, que é o que permite chamá-lo de dentro
+da transação do pedido"). Falta terminar a separação: quem grava vira função
+própria, e quem chama compõe as duas.
+
+```python
+# DEPOIS
+def store_estimate(
+    self,
+    restaurant_slug: str,
+    payload: DeliveryEstimateRequest,
+    current_customer: Customer | None,
+    result: DeliveryEstimateResult,
+) -> DeliveryEstimate | None:
+    # Fora de area e loja fechada nao geram token: os dois precisam ser
+    # reavaliados no momento do pedido, nao reaproveitados.
+    if not result.serviceable:
+        return None
+    ...
+    return stored
+
+
+# no endpoint, as duas na ordem obvia:
+result = service.estimate(slug, payload, customer)
+stored = service.store_estimate(slug, payload, customer, result)
+```
+
+O ganho não é o tamanho: é que **"calcular" e "gravar" passam a poder ser lidos,
+testados e mudados separados** — e o retorno deixa de ser uma tupla cujo segundo
+item às vezes é `None` por um motivo que só o corpo explica.
+
+---
+
+### Regra 2 — retorno cedo
+
+`AuthService.resend_email_code` (`services/auth_service.py`). Todo o corpo vive
+dentro de um `if`, e a mesma resposta é construída em dois lugares:
+
+```python
+# ANTES
+def resend_email_code(self, payload: ResendEmailCodeRequest) -> MessageResponse:
+    email = normalize_email(payload.email)
+    customer = self.customer_repository.get_by_email(email)
+    if customer and not customer.email_verified_at:
+        latest = self.customer_repository.latest_unused_email_code(email)
+        if latest and latest.created_at and (utcnow() - latest.created_at).total_seconds() < RESEND_COOLDOWN_SECONDS:
+            return MessageResponse(message="Se este e-mail estiver cadastrado, enviaremos um codigo de verificacao.")
+        recent_count = self.customer_repository.count_email_codes_since(
+            email=email,
+            since=utcnow() - timedelta(minutes=RESEND_WINDOW_MINUTES),
+        )
+        if recent_count < MAX_RESENDS:
+            resend_count = (latest.resend_count + 1) if latest else 0
+            self._create_email_verification_code(customer, resend_count=resend_count)
+            self.db.commit()
+
+    return MessageResponse(message="Se este e-mail estiver cadastrado, enviaremos um codigo de verificacao.")
+```
+
+Cada saída antecipada vira uma linha, e a condição de cooldown — que hoje é uma
+linha de 120 caracteres com três `and` — vira uma função com nome:
+
+```python
+# DEPOIS
+def resend_email_code(self, payload: ResendEmailCodeRequest) -> MessageResponse:
+    # Resposta unica em TODO caminho, inclusive e-mail inexistente: variar a
+    # mensagem deixaria enumerar a base de clientes (armadilha 18).
+    answer = MessageResponse(message="Se este e-mail estiver cadastrado, enviaremos um codigo de verificacao.")
+
+    email = normalize_email(payload.email)
+    customer = self.customer_repository.get_by_email(email)
+    if not customer:
+        return answer
+    if customer.email_verified_at:
+        return answer
+
+    latest = self.customer_repository.latest_unused_email_code(email)
+    if self._is_in_resend_cooldown(latest):
+        return answer
+    if self._resends_in_window(email) >= MAX_RESENDS:
+        return answer
+
+    resend_count = (latest.resend_count + 1) if latest else 0
+    self._create_email_verification_code(customer, resend_count=resend_count)
+    self.db.commit()
+    return answer
+```
+
+Quatro níveis de indentação viram dois, e as quatro razões para não reenviar ficam
+alinhadas na mesma coluna — dá para conferir a lista batendo o olho.
+
+---
+
+### Regra 3 — no máximo 3 níveis de indentação
+
+`MenuService.product_response` (`services/menu_service.py`). É o pior caso do
+repositório: uma list comprehension dentro de outra, cada uma com `sorted` de um
+generator com `lambda` dentro.
+
+```python
+# ANTES
+@staticmethod
+def product_response(product) -> ProductResponse:      # <- sem type hint em `product`
+    return ProductResponse(
+        ...
+        option_groups=[
+            ProductOptionGroupResponse(
+                id=group.id,
+                ...
+                options=[
+                    ProductOptionResponse(
+                        id=option.id,
+                        ...
+                    )
+                    for option in sorted(
+                        (option for option in group.options if option.is_active),
+                        key=lambda option: (option.sort_order or 0, option.name),
+                    )
+                ],
+            )
+            for group in sorted(
+                (group for group in product.option_groups if group.is_active),
+                key=lambda group: (group.sort_order or 0, group.name),
+            )
+        ],
+    )
+```
+
+O filtro-e-ordenação é **o mesmo nos dois níveis** — e é justamente a repetição que
+paga uma função, porque ela tem nome e a regra passa a estar escrita uma vez:
+
+```python
+# DEPOIS
+@staticmethod
+def _active_in_menu_order(items: list) -> list:
+    """Ativos, na ordem do cardapio. O nome desempata sort_order repetido —
+    sem isso a mesma tela sai com os adicionais em ordens diferentes."""
+    active = [item for item in items if item.is_active]
+    return sorted(active, key=lambda item: (item.sort_order or 0, item.name))
+
+
+@staticmethod
+def _option_response(option: ProductOption) -> ProductOptionResponse:
+    return ProductOptionResponse(...)
+
+
+@staticmethod
+def _option_group_response(group: ProductOptionGroup) -> ProductOptionGroupResponse:
+    return ProductOptionGroupResponse(
+        ...
+        options=[
+            MenuService._option_response(option)
+            for option in MenuService._active_in_menu_order(group.options)
+        ],
+    )
+
+
+@staticmethod
+def product_response(product: Product) -> ProductResponse:
+    return ProductResponse(
+        ...
+        option_groups=[
+            MenuService._option_group_response(group)
+            for group in MenuService._active_in_menu_order(product.option_groups)
+        ],
+    )
+```
+
+Nenhuma comprehension aninhada sobrou, o `product` ganhou o type hint que faltava
+(regra 9), e cada uma das três funções cabe na tela.
+
+---
+
 ## 1. `weekday` 0 = segunda no backend, 0 = domingo no JavaScript
 
 O backend usa `datetime.weekday()` do Python: **0 = segunda, 6 = domingo**. Está

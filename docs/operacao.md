@@ -16,6 +16,48 @@ O compose **não expõe porta**: o Traefik roteia pela rede externa `n8n_default
 pelas labels em `docker-compose.yml`. O container roda como usuário sem
 privilégios (uid 10001) e com `/app` somente-leitura.
 
+São **dois** serviços: `pedeaqui-api` e `redis`.
+
+### Redis
+
+Guarda os contadores de rate limit e o cache de estimativa de entrega. Sem ele
+os dois vivem no processo, e aí o limite efetivo vira **N × o configurado** (um
+balde por worker) e o cache do Google é perdido a cada deploy, em chamadas
+pagas.
+
+Não expõe porta e não passa pelo Traefik: quem fala com ele é a API, pelo nome
+de serviço, dentro da rede.
+
+⚠️ **O compose exige `REDIS_PASSWORD` no `.env` e se recusa a subir sem ela** —
+inclusive a API, porque é o mesmo `docker compose up`. Ponha a variável **antes**
+de puxar a versão que trouxe o serviço.
+
+A senha existe mesmo sem porta publicada: `n8n_default` é uma rede
+**compartilhada** (o n8n mora nela), e Redis sem senha aceita comando de
+qualquer container que entre ali, `FLUSHALL` incluído.
+
+Duas variáveis, um segredo só, e elas **têm** que bater:
+
+| Variável | Quem lê |
+|---|---|
+| `REDIS_PASSWORD` | o `docker-compose.yml`, para subir o container |
+| `REDIS_URL` | a API (`redis://:SENHA@redis:6379/0`) |
+
+Errar uma das duas não derruba nada: o rate limiter tem `swallow_errors=True` e
+o cache de entrega cai para memória. A API sobe, responde e **fica exatamente
+como estava antes do Redis**, com `NOAUTH Authentication required` no log do
+Redis e um `redis_write_failed=true` no da API. Confira depois de subir:
+
+```bash
+docker exec pedeaqui-redis redis-cli -a "$REDIS_PASSWORD" ping        # PONG
+docker exec pedeaqui-redis redis-cli -a "$REDIS_PASSWORD" dbsize      # > 0 com tráfego
+```
+
+Sem persistência de propósito (`--save "" --appendonly no`): os dois usos são
+cache e janela curta, e um dump em disco só traria contador velho de volta
+depois de um restart. `--maxmemory 256mb` com `volatile-lru` — todas as chaves
+que a API grava têm TTL.
+
 ### O entrypoint migra antes de servir
 
 **Isto mudou e é a coisa mais importante deste documento.**
@@ -233,7 +275,7 @@ produção: `ENABLE_API_DOCS=true`.
 
 | Warning | Consequência |
 |---|---|
-| `REDIS_URL` vazia | cache de estimativa e rate limit só em memória; com N workers o limite vira N × o configurado |
+| `REDIS_URL` vazia | cache de estimativa e rate limit só em memória; com N workers o limite vira N × o configurado (o serviço `redis` do compose existe justamente para isto — ver §1) |
 | `SUPABASE_SERVICE_ROLE_KEY` vazia | upload de imagem do painel responde 503; leitura das imagens segue |
 | `PAYMENT_WEBHOOK_SECRET` vazia com provider sandbox | webhook responde 503 e nenhum pedido online sai de "aguardando pagamento" |
 | `PAYMENT_PROVIDER=sandbox` em produção | cobranças criadas localmente, nenhum dinheiro movimentado de verdade |

@@ -5,12 +5,57 @@ services:
     restart: always
     env_file:
       - .env
+    depends_on:
+      # Só ordem de partida, não garantia: a API sobe e funciona com o Redis
+      # fora do ar (o rate limiter tem `swallow_errors` e o cache de entrega
+      # cai para memória). Isto evita apenas o minuto de log de erro a cada
+      # `docker compose up`.
+      - redis
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.pedeaqui-api.rule=Host(`api.pederapidex.com`)"
       - "traefik.http.routers.pedeaqui-api.entrypoints=websecure"
       - "traefik.http.routers.pedeaqui-api.tls.certresolver=mytlschallenge"
       - "traefik.http.services.pedeaqui-api.loadbalancer.server.port=8000"
+    networks:
+      - n8n_default
+
+  # Contadores de rate limit e cache de estimativa de entrega. Sem ele os dois
+  # vivem no processo: o limite efetivo vira N x o configurado (um balde por
+  # worker) e o cache do Google é perdido a cada deploy, em chamadas pagas.
+  #
+  # Não expõe porta e não passa pelo Traefik: quem fala com ele é a API, pelo
+  # nome de serviço, dentro da rede.
+  redis:
+    image: redis:7-alpine
+    container_name: pedeaqui-redis
+    restart: always
+    # `requirepass` mesmo sem porta publicada: `n8n_default` é uma rede
+    # COMPARTILHADA (o n8n mora nela), e Redis sem senha aceita comando de
+    # qualquer container que entre ali — inclusive FLUSHALL.
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?defina REDIS_PASSWORD no .env}
+      - --maxmemory
+      - 256mb
+      # Todas as chaves que a API grava têm TTL (contador de limite e
+      # estimativa de entrega). `volatile-lru` diz exatamente isso: sob
+      # pressão, descarta a que expira e não a que ficou.
+      - --maxmemory-policy
+      - volatile-lru
+      # Sem persistência de propósito: os dois usos são cache e janela curta.
+      # Um dump em disco só traria contador velho de volta depois de um
+      # restart, e o custo do fsync não compra nada aqui.
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     networks:
       - n8n_default
 

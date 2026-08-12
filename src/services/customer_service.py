@@ -7,6 +7,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.models.customer_model import Customer, CustomerAddress
+from src.models.order_item_model import OrderItem
+from src.models.order_model import Order
 from src.repositories.customer_repository import CustomerRepository
 from src.repositories.order_repository import OrderRepository
 from src.schemas.auth_schema import MessageResponse
@@ -135,40 +137,53 @@ class CustomerService:
     def list_orders(self, customer: Customer) -> list[CustomerOrderHistoryItem]:
         rows = self.order_repository.list_orders_by_customer(customer.id)
         return [
-            CustomerOrderHistoryItem(
-                id=order.id,
-                order_number=order.order_number,
-                restaurant_name=restaurant_name,
-                branch_name=branch_name,
-                status=order.status,
-                order_type=order.order_type,
-                subtotal=money_to_float(order.subtotal),
-                delivery_fee=money_to_float(order.delivery_fee),
-                service_fee=money_to_float(order.service_fee),
-                coupon_code=order.coupon_code_snapshot,
-                coupon_discount_amount=quantize_money(order.coupon_discount_amount),
-                cashback_redeemed_amount=quantize_money(order.cashback_redeemed_amount),
-                discount_total=quantize_money(order.discount_total),
-                total=money_to_float(order.total),
-                created_at=order.created_at,
-                items=[
-                    OrderItemResponse(
-                        id=item.id,
-                        product_id=item.product_id,
-                        product_code_snapshot=item.product_code_snapshot,
-                        product_name_snapshot=item.product_name_snapshot,
-                        product_description_snapshot=item.product_description_snapshot,
-                        unit_price_snapshot=money_to_float(item.unit_price_snapshot),
-                        quantity=item.quantity,
-                        observation=item.observation,
-                        total=money_to_float(item.total),
-                        created_at=item.created_at,
-                    )
-                    for item in order.items
-                ],
-            )
+            self._order_history_item(order, restaurant_name, branch_name)
             for order, restaurant_name, branch_name in rows
         ]
+
+    @classmethod
+    def _order_history_item(
+        cls,
+        order: Order,
+        restaurant_name: str,
+        branch_name: str,
+    ) -> CustomerOrderHistoryItem:
+        return CustomerOrderHistoryItem(
+            id=order.id,
+            order_number=order.order_number,
+            restaurant_name=restaurant_name,
+            branch_name=branch_name,
+            status=order.status,
+            order_type=order.order_type,
+            subtotal=money_to_float(order.subtotal),
+            delivery_fee=money_to_float(order.delivery_fee),
+            service_fee=money_to_float(order.service_fee),
+            coupon_code=order.coupon_code_snapshot,
+            coupon_discount_amount=quantize_money(order.coupon_discount_amount),
+            cashback_redeemed_amount=quantize_money(order.cashback_redeemed_amount),
+            discount_total=quantize_money(order.discount_total),
+            total=money_to_float(order.total),
+            created_at=order.created_at,
+            items=[cls._order_item_response(item) for item in order.items],
+        )
+
+    @staticmethod
+    def _order_item_response(item: OrderItem) -> OrderItemResponse:
+        # `unit_price_snapshot` JA vem com os adicionais somados (armadilha 2).
+        # Nao some order_item_options aqui: o adicional entraria em dobro e o
+        # total do pedido pararia de bater com a soma das linhas.
+        return OrderItemResponse(
+            id=item.id,
+            product_id=item.product_id,
+            product_code_snapshot=item.product_code_snapshot,
+            product_name_snapshot=item.product_name_snapshot,
+            product_description_snapshot=item.product_description_snapshot,
+            unit_price_snapshot=money_to_float(item.unit_price_snapshot),
+            quantity=item.quantity,
+            observation=item.observation,
+            total=money_to_float(item.total),
+            created_at=item.created_at,
+        )
 
     def list_addresses(self, customer: Customer) -> list[CustomerAddress]:
         return self.customer_repository.list_addresses(customer.id)

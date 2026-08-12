@@ -1,10 +1,16 @@
 """Conversa com a API.
 
-Tres chamadas, nesta ordem, e o motivo de serem tres:
+Tres chamadas para o caminho principal, nesta ordem, e o motivo de serem tres:
 
 1. `POST /admin/auth/login` — devolve o token de acesso (vale 12h).
 2. `POST /admin/orders/stream-ticket` — devolve um ticket de 30 SEGUNDOS.
 3. `GET  /admin/orders/stream?ticket=...` — o stream em si.
+
+Mais `GET /admin/orders/{id}/print-jobs`, que busca as vias de um pedido, e
+duas rotas que so contam o que esta acontecendo nesta maquina — o heartbeat
+e a lista de impressoras. Essas duas nao imprimem nada: elas existem para o
+painel poder responder "o agente do Centro esta no ar?" sem alguem ligar
+para a loja.
 
 O passo 2 parece burocracia e nao e. A rota do stream so aceita ticket na
 querystring, porque foi desenhada para o `EventSource` do navegador, que nao
@@ -92,6 +98,34 @@ class ApiClient:
             raise ApiError("resposta de stream-ticket sem ticket")
         return ticket
 
+    def heartbeat(self, agent_version: str) -> dict:
+        """Diz a API que este agente esta vivo, e em qual versao.
+
+        E o unico jeito de o painel responder "o agente do Centro esta no
+        ar?" sem alguem ligar para a loja. Antes disso, a resposta so
+        existia no log da maquina do balcao.
+        """
+        return self._request(
+            "POST", "/admin/print-agent/heartbeat", body={"agent_version": agent_version}
+        )
+
+    def report_printers(self, printers: list[tuple[str, bool]]) -> dict:
+        """Manda a lista de impressoras desta maquina para o painel.
+
+        Substitui a anterior inteira do lado da API: impressora desinstalada
+        precisa sumir do seletor, senao o lojista escolhe uma que nao existe
+        mais e a via nao sai.
+        """
+        return self._request(
+            "POST",
+            "/admin/print-agent/printers",
+            body={
+                "printers": [
+                    {"name": name, "is_default": is_default} for name, is_default in printers
+                ]
+            },
+        )
+
     def open_stream(self, last_event_id: str | None = None) -> Iterator[str]:
         """Abre o SSE e devolve as linhas, uma a uma.
 
@@ -144,13 +178,20 @@ class ApiClient:
         response.encoding = "utf-8"
         return _iter_lines(response)
 
-    def _request(self, method: str, path: str, retry_on_auth: bool = True) -> dict:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        retry_on_auth: bool = True,
+        body: dict | None = None,
+    ) -> dict:
         headers = {"Authorization": f"Bearer {self._authorize()}"}
         try:
             response = self.session.request(
                 method,
                 f"{self.base_url}{path}",
                 headers=headers,
+                json=body,
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
         except requests.RequestException as exc:
@@ -162,7 +203,7 @@ class ApiClient:
             # como servico por semanas.
             logger.info("credencial recusada em %s, refazendo login", path)
             self._token = None
-            return self._request(method, path, retry_on_auth=False)
+            return self._request(method, path, retry_on_auth=False, body=body)
         if response.status_code in (401, 403):
             raise AuthError(f"{method} {path} recusado ({response.status_code})")
         if response.status_code >= 400:

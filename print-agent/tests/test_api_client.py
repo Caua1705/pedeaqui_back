@@ -57,6 +57,7 @@ class FakeSession:
         self.stream_response = stream_response
         self.json_response = json_response
         self.requested = []
+        self.bodies = []
 
     def post(self, url, **kwargs):
         self.requested.append(("POST", url))
@@ -68,6 +69,7 @@ class FakeSession:
 
     def request(self, method, url, **kwargs):
         self.requested.append((method, url))
+        self.bodies.append(kwargs.get("json"))
         # `stream_ticket` passa por aqui (é um `_request`), e ele roda antes
         # de todo `open_stream`. Sem o ticket o teste do stream nem chega no
         # que quer testar.
@@ -148,6 +150,56 @@ class PrintJobsEncodingTests(unittest.TestCase):
 
         self.assertEqual(jobs[0]["content"], COMANDA)
         self.assertEqual(jobs[0]["sector_name"], "Praça Quente")
+
+
+class AgentReportingTests(unittest.TestCase):
+    """As duas rotas que so contam o que esta acontecendo nesta maquina.
+
+    Nenhuma delas imprime nada. Elas existem para o painel poder responder
+    "o agente do Centro esta no ar?" sem alguem ligar para a loja.
+    """
+
+    def _client(self):
+        session = FakeSession(
+            json_response=make_response(b'{"is_online": true}', "application/json")
+        )
+        return ApiClient("https://api.exemplo.com", token="tok", session=session), session
+
+    def test_the_heartbeat_sends_the_version(self):
+        client, session = self._client()
+
+        client.heartbeat("1.4.0")
+
+        self.assertEqual(session.requested[-1][0], "POST")
+        self.assertTrue(session.requested[-1][1].endswith("/admin/print-agent/heartbeat"))
+        self.assertEqual(session.bodies[-1], {"agent_version": "1.4.0"})
+
+    def test_the_printer_report_keeps_the_name_byte_for_byte(self):
+        """O nome tem que casar com o do Windows exatamente. Um acento
+        alterado no caminho faz o painel oferecer uma impressora que nao
+        existe, e a via nao sai."""
+        client, session = self._client()
+
+        client.report_printers([("Impressora Cozinha Ação", True), ("PDF", False)])
+
+        self.assertEqual(
+            session.bodies[-1],
+            {
+                "printers": [
+                    {"name": "Impressora Cozinha Ação", "is_default": True},
+                    {"name": "PDF", "is_default": False},
+                ]
+            },
+        )
+
+    def test_an_empty_list_is_still_a_valid_report(self):
+        """Maquina sem impressora instalada e um estado que o painel precisa
+        poder mostrar — nao um erro."""
+        client, session = self._client()
+
+        client.report_printers([])
+
+        self.assertEqual(session.bodies[-1], {"printers": []})
 
 
 if __name__ == "__main__":

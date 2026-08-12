@@ -33,6 +33,13 @@ balcao, sem erro nenhum em lugar nenhum. O `config.ini` continua valendo
 como fallback: e ele que mantem imprimindo toda loja instalada antes de a
 coluna existir.
 
+## O canal de comando
+
+O painel manda ordens (hoje: a via de teste) pelo MESMO stream dos pedidos,
+como um evento `print_agent.command`. Nao ha canal separado nem polling — o
+stream ja tem cursor no banco, replay e reconexao, e um segundo mecanismo
+seria um segundo lugar para errar.
+
 ## O que impede a reimpressao
 
 Duas coisas, e as duas sao necessarias:
@@ -49,10 +56,11 @@ import random
 import time
 from dataclasses import dataclass
 
+from print_agent import __version__
 from print_agent.api_client import ApiClient, ApiError, AuthError, AuthFatalError
 from print_agent.config import Config
 from print_agent.escpos import build_payload
-from print_agent.printers import Printer, PrinterError
+from print_agent.printers import Printer, PrinterError, installed_printers
 from print_agent.sse import parse_events
 from print_agent.state import PrintedOrders
 
@@ -70,6 +78,24 @@ HEALTHY_CONNECTION_SECONDS = 30.0
 # que descobrir isso com a cozinha parada.
 ORDER_EVENT_TYPES = ("order.created", "order.status_changed")
 
+# Evento de ordem do painel (hoje: a via de teste). Vem pelo MESMO stream dos
+# pedidos, e nao por um canal proprio — ver o docstring de
+# `src/services/print_agent_service.py` na API.
+COMMAND_EVENT_TYPE = "print_agent.command"
+
+# De quanto em quanto tempo o agente diz que esta vivo.
+#
+# Trinta segundos contra a janela de 90s do lado da API: tres batidas
+# perdidas antes de o painel mostrar offline. Mais frequente que isso seria
+# ruido; menos, e a cozinha fica meia hora sem imprimir antes de alguem
+# desconfiar.
+HEARTBEAT_INTERVAL_SECONDS = 30.0
+
+# Prefixo das chaves de comando no arquivo de estado. O mesmo arquivo guarda
+# ids de pedido; sem o prefixo, um uuid de comando poderia (em tese) colidir
+# com um de pedido e um deles seria tratado como ja feito.
+COMMAND_STATE_PREFIX = "cmd:"
+
 
 @dataclass
 class Stats:
@@ -79,6 +105,7 @@ class Stats:
     printed_jobs: int = 0
     failed_jobs: int = 0
     reconnects: int = 0
+    commands: int = 0
 
 
 class PrintAgent:
@@ -90,6 +117,11 @@ class PrintAgent:
         self.stats = Stats()
         self.last_event_id: str | None = None
         self._running = True
+        # Zero, e nao "agora": a primeira batida sai junto com a primeira
+        # conexao, senao o painel mostraria o agente offline por meio minuto
+        # depois de alguem ligar a maquina — que e exatamente o momento em
+        # que estao olhando a tela.
+        self._last_heartbeat_at = 0.0
 
     def stop(self) -> None:
         """Pedido de parada, atendido no fim do evento em andamento.
@@ -165,13 +197,62 @@ class PrintAgent:
             logger.info("conectando ao servidor")
         lines = self.client.open_stream(self.last_event_id)
         logger.info("conectado. Aguardando pedidos.")
+        self._report_printers()
 
-        for event in parse_events(lines):
+        for event in parse_events(self._with_heartbeat(lines)):
             if not self._running:
                 return
             if event.event_id:
                 self.last_event_id = event.event_id
             self._handle_event(event)
+
+    def _with_heartbeat(self, lines):
+        """Bate o heartbeat entre uma linha e outra do stream.
+
+        O agente nao tem thread: ele fica bloqueado lendo o socket, e o
+        unico instante em que volta a ter controle e a chegada de uma linha.
+        O `: ping` que a API manda a cada 20 segundos garante que isso
+        aconteca mesmo numa madrugada sem pedido nenhum — e por isso o
+        heartbeat mora aqui e nao num timer.
+        """
+        for line in lines:
+            self._heartbeat_if_due()
+            yield line
+
+    def _heartbeat_if_due(self) -> None:
+        """Diz a API que este agente esta vivo, se ja passou o intervalo.
+
+        Falha aqui NAO interrompe nada: o heartbeat e informacao para o
+        painel, e uma tela que mostra "offline" e infinitamente melhor que
+        um agente que parou de imprimir porque nao conseguiu se anunciar.
+        """
+        now = time.monotonic()
+        if now - self._last_heartbeat_at < HEARTBEAT_INTERVAL_SECONDS:
+            return
+        self._last_heartbeat_at = now
+
+        try:
+            self.client.heartbeat(__version__)
+        except ApiError as exc:
+            logger.debug("heartbeat nao foi entregue: %s", exc)
+
+    def _report_printers(self) -> None:
+        """Manda para o painel a lista de impressoras desta maquina.
+
+        Uma vez por conexao (a cada ~15 minutos, que e quando o servidor
+        fecha o stream), e nao uma vez no boot: uma impressora instalada no
+        meio da tarde precisa aparecer no seletor do painel sem alguem
+        reiniciar o agente.
+
+        Como o heartbeat, falha aqui nao interrompe a impressao.
+        """
+        printers = installed_printers()
+        if not printers:
+            return
+        try:
+            self.client.report_printers(printers)
+        except ApiError as exc:
+            logger.debug("lista de impressoras nao foi entregue: %s", exc)
 
     def _handle_event(self, event) -> None:
         if event.event == "sync_required":
@@ -184,6 +265,10 @@ class PrintAgent:
                 "durante a queda podem NAO ter sido impressos. Confira o "
                 "painel."
             )
+            return
+
+        if event.event == COMMAND_EVENT_TYPE:
+            self._handle_command(event)
             return
 
         if event.event not in ORDER_EVENT_TYPES:
@@ -204,6 +289,69 @@ class PrintAgent:
             return
 
         self._print_order(order_id, order.get("order_number"))
+
+    def _handle_command(self, event) -> None:
+        """Uma ordem do painel — hoje so a via de teste.
+
+        A via ja vem pronta da API, como as vias de pedido: o agente nao
+        desenha nada. Ver o docstring do modulo sobre por que ele e burro.
+        """
+        payload = event.json()
+        command = (payload or {}).get("command") or {}
+        command_id = command.get("command_id")
+        if not command_id:
+            return
+
+        # O replay do stream volta ate uma hora, entao o mesmo comando chega
+        # de novo a cada reconexao. Sem esta memoria, um teste apertado as
+        # 14h sairia de novo as 14h05, as 14h20 e assim por diante.
+        key = f"{COMMAND_STATE_PREFIX}{command_id}"
+        if key in self.state:
+            logger.debug("comando %s ja executado, ignorando", command_id)
+            return
+
+        content = command.get("content")
+        if not content:
+            logger.error("comando %s veio sem conteudo", command_id)
+            return
+
+        sector = command.get("printing_sector_name") or "teste"
+        printer_name = self._printer_for(command.get("printer_name"), sector)
+        if not printer_name:
+            logger.error(
+                "o teste de impressao nao tem impressora: nem o painel nem o "
+                "config.ini dizem para onde mandar o setor '%s'.",
+                sector,
+            )
+            return
+
+        # Marcado ANTES de imprimir, ao contrario do pedido. A assimetria e
+        # deliberada: pedido que sai pela metade precisa ser tentado de novo
+        # (a cozinha nao pode perder um item), mas uma via de teste repetida
+        # a cada reconexao so gasta bobina e faz alguem achar que apertou
+        # duas vezes. Quem confere se o teste saiu e a pessoa em pe na
+        # impressora.
+        self.state.mark(key)
+        self.stats.commands += 1
+
+        payload_bytes = build_payload(
+            content,
+            font_size=command.get("font_size", "large"),
+            codepage=self.config.codepage,
+            encoding=self.config.encoding,
+            cut=self.config.cut,
+            feed_lines=self.config.feed_lines,
+        )
+        try:
+            self.printer.send(printer_name, payload_bytes, f"teste - {sector}")
+            logger.info("via de teste impressa em '%s'", printer_name)
+        except PrinterError as exc:
+            logger.error(
+                "a via de teste NAO saiu em '%s': %s. Confira papel, energia "
+                "e cabo.",
+                printer_name,
+                exc,
+            )
 
     def _printer_for(self, chosen_in_panel: str | None, sector_name: str) -> str | None:
         """A impressora de uma via: a do painel, senao a do config.ini.

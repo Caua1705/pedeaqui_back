@@ -110,6 +110,40 @@ class WindowsRawPrinter(Printer):
             win32print.ClosePrinter(handle)
 
 
+def installed_printers() -> list[tuple[str, bool]]:
+    """As impressoras desta maquina: `(nome, e_a_padrao)`.
+
+    Reportadas a API para o painel poder oferecer uma LISTA em vez de um
+    campo de texto. O nome tem que casar byte a byte com o do Windows, e um
+    espaco a mais digitado a mao no painel faz a via nao sair — sem erro,
+    porque quem descobre isso e a impressora que nao recebeu nada.
+
+    Funcao de modulo, e nao metodo de `Printer`, de proposito: e leitura, nao
+    envio. Assim ela vale igual no `--dry-run`, que e justamente quando
+    alguem esta conferindo uma instalacao nova e precisa que o painel enxergue
+    as impressoras de verdade.
+
+    Lista vazia fora do Windows (e quando o `pywin32` nao esta instalado):
+    quem chama trata isso como "nao ha o que reportar", nunca como erro.
+    """
+    try:
+        import win32print
+    except ImportError:  # pragma: no cover - depende do SO
+        logger.debug("pywin32 indisponivel: nenhuma impressora a reportar")
+        return []
+
+    names = _enum_printers(win32print)
+    if not names:
+        return []
+
+    try:
+        default = win32print.GetDefaultPrinter()
+    except Exception:  # pragma: no cover - maquina sem impressora padrao
+        default = None
+
+    return [(name, name == default) for name in names]
+
+
 def _enum_printers(win32print) -> list[str]:
     flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
     try:

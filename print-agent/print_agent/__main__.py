@@ -141,11 +141,13 @@ def main(argv=None) -> int:
         logger.info("Encerrado pelo teclado (Ctrl+C).")
 
     logger.info(
-        "Encerrando. Resumo: %d pedidos impressos, %d vias, %d falhas, %d reconexoes.",
+        "Encerrando. Resumo: %d pedidos impressos, %d vias, %d falhas, "
+        "%d reconexoes, %d comandos do painel.",
         agent.stats.printed_orders,
         agent.stats.printed_jobs,
         agent.stats.failed_jobs,
         agent.stats.reconnects,
+        agent.stats.commands,
     )
 
     if not finished_cleanly:

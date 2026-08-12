@@ -42,16 +42,29 @@ class FakePrinter(Printer):
 
 
 class FakeClient:
-    def __init__(self, jobs_by_order=None, error=None):
+    def __init__(self, jobs_by_order=None, error=None, heartbeat_error=None):
         self.jobs_by_order = jobs_by_order or {}
         self.error = error
+        self.heartbeat_error = heartbeat_error
         self.calls = []
+        self.heartbeats = []
+        self.reported_printers = []
 
     def print_jobs(self, order_id):
         self.calls.append(order_id)
         if self.error:
             raise self.error
         return self.jobs_by_order.get(order_id, [])
+
+    def heartbeat(self, agent_version):
+        if self.heartbeat_error:
+            raise self.heartbeat_error
+        self.heartbeats.append(agent_version)
+        return {}
+
+    def report_printers(self, printers):
+        self.reported_printers.append(printers)
+        return {}
 
 
 def make_job(sector="Cozinha", content="COMANDA", font_size="large", printer_name=None):
@@ -65,6 +78,34 @@ def make_job(sector="Cozinha", content="COMANDA", font_size="large", printer_nam
         "content": content,
     }
 
+
+def make_command_event(
+    command_id=None,
+    content="TESTE",
+    printer_name=None,
+    sector_name="Cozinha",
+):
+    command_id = command_id or str(uuid.uuid4())
+    return SseEvent(
+        event="print_agent.command",
+        event_id="2026-08-12T10:00:00+00:00",
+        data=json.dumps({
+            "type": "print_agent.command",
+            "event_key": f"print-agent-command:{command_id}",
+            "occurred_at": "2026-08-12T10:00:00+00:00",
+            "command": {
+                "command_id": command_id,
+                "command_type": "print_test",
+                "branch_id": str(uuid.uuid4()),
+                "printer_name": printer_name,
+                "printing_sector_id": None,
+                "printing_sector_name": sector_name,
+                "content": content,
+                "columns": 24,
+                "font_size": "large",
+            },
+        }),
+    )
 
 
 def make_event(order_id, status="accepted", event="order.status_changed", number=1234):
@@ -378,6 +419,126 @@ class PrinterChoiceTests(AgentTestCase):
 
         self.assertEqual(printer.sent[0][0], "IMP-COZINHA")
 
+
+class CommandTests(AgentTestCase):
+    def test_a_print_test_command_prints_the_content_the_api_sent(self):
+        printer = FakePrinter()
+        agent = self.build(FakeClient(), printer)
+
+        agent._handle_event(make_command_event(content="TESTE DE IMPRESSAO"))
+
+        self.assertEqual(len(printer.sent), 1)
+        self.assertIn(b"TESTE DE IMPRESSAO", printer.sent[0][1])
+
+    def test_the_command_goes_to_the_printer_the_panel_chose(self):
+        printer = FakePrinter()
+        agent = self.build(FakeClient(), printer, printers={"cozinha": "IMP-DO-INI"})
+
+        agent._handle_event(make_command_event(printer_name="IMP-ESCOLHIDA"))
+
+        self.assertEqual(printer.sent[0][0], "IMP-ESCOLHIDA")
+
+    def test_without_a_printer_it_falls_back_to_the_ini(self):
+        printer = FakePrinter()
+        agent = self.build(FakeClient(), printer, printers={"cozinha": "IMP-DO-INI"})
+
+        agent._handle_event(make_command_event(printer_name=None, sector_name="Cozinha"))
+
+        self.assertEqual(printer.sent[0][0], "IMP-DO-INI")
+
+    def test_the_same_command_does_not_print_twice(self):
+        """O replay do stream volta ate uma hora. Sem a memoria, um teste
+        apertado as 14h sairia de novo a cada reconexao."""
+        printer = FakePrinter()
+        agent = self.build(FakeClient(), printer)
+        command_id = str(uuid.uuid4())
+
+        agent._handle_event(make_command_event(command_id=command_id))
+        agent._handle_event(make_command_event(command_id=command_id))
+
+        self.assertEqual(len(printer.sent), 1)
+
+    def test_a_command_that_fails_to_print_is_still_marked(self):
+        """Assimetria deliberada com o pedido: pedido incompleto e tentado de
+        novo (a cozinha nao pode perder um item), mas via de teste repetida a
+        cada reconexao so gasta bobina."""
+        printer = FakePrinter(failing_printers={"IMP-ESCOLHIDA"})
+        agent = self.build(FakeClient(), printer)
+        command_id = str(uuid.uuid4())
+
+        agent._handle_event(
+            make_command_event(command_id=command_id, printer_name="IMP-ESCOLHIDA")
+        )
+
+        self.assertEqual(printer.sent, [])
+        self.assertIn(f"cmd:{command_id}", agent.state)
+
+    def test_a_command_without_content_is_ignored(self):
+        printer = FakePrinter()
+        agent = self.build(FakeClient(), printer)
+
+        agent._handle_event(make_command_event(content=""))
+
+        self.assertEqual(printer.sent, [])
+
+    def test_a_command_without_a_printer_anywhere_does_not_crash(self):
+        printer = FakePrinter()
+        agent = self.build(FakeClient(), printer, printers={}, default_printer=None)
+
+        agent._handle_event(make_command_event(printer_name=None))
+
+        self.assertEqual(printer.sent, [])
+
+    def test_an_order_is_not_confused_with_a_command(self):
+        """As chaves do arquivo de estado convivem: pedido cru, comando com
+        prefixo. Sem o prefixo, um uuid poderia (em tese) valer pelos dois."""
+        order_id = str(uuid.uuid4())
+        client = FakeClient({order_id: [make_job()]})
+        agent = self.build(client, FakePrinter())
+
+        agent._handle_event(make_command_event(command_id=order_id))
+        agent._handle_event(make_event(order_id))
+
+        self.assertIn(order_id, agent.state)
+        self.assertIn(f"cmd:{order_id}", agent.state)
+
+
+class HeartbeatTests(AgentTestCase):
+    def test_the_first_line_of_the_stream_already_beats(self):
+        """Zero, e nao "agora", no estado inicial: o painel nao pode mostrar
+        offline por meio minuto depois de alguem ligar a maquina — que e
+        exatamente quando estao olhando a tela."""
+        client = FakeClient()
+        agent = self.build(client, FakePrinter())
+
+        list(agent._with_heartbeat([": ping"]))
+
+        self.assertEqual(len(client.heartbeats), 1)
+
+    def test_it_does_not_beat_on_every_line(self):
+        client = FakeClient()
+        agent = self.build(client, FakePrinter())
+
+        list(agent._with_heartbeat([": ping"] * 50))
+
+        self.assertEqual(len(client.heartbeats), 1)
+
+    def test_a_failed_heartbeat_does_not_stop_the_stream(self):
+        """O heartbeat e informacao para o painel. Uma tela que mostra
+        "offline" e infinitamente melhor que um agente que parou de imprimir
+        porque nao conseguiu se anunciar."""
+        client = FakeClient(heartbeat_error=ApiError("servidor fora"))
+        agent = self.build(client, FakePrinter())
+
+        entregues = list(agent._with_heartbeat(["a", "b", "c"]))
+
+        self.assertEqual(entregues, ["a", "b", "c"])
+
+    def test_the_lines_pass_through_untouched(self):
+        agent = self.build(FakeClient(), FakePrinter())
+
+        self.assertEqual(list(agent._with_heartbeat(["id: 1", "", "data: {}"])),
+                         ["id: 1", "", "data: {}"])
 
 
 class StopTests(AgentTestCase):

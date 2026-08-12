@@ -30,13 +30,30 @@ Docs interativas: `http://localhost:8000/docs` — desligadas quando
 
 ## Rodar os testes
 
+São **duas suítes**, separadas pelo marcador `db`:
+
 ```powershell
-py -m pytest -q                     # 614 testes da API
-cd print-agent && py -m pytest -q   # 65 testes do agente de impressão
+py -m pytest -q -m "not db"         # rápida, sem Docker — o laço de desenvolvimento
+py -m pytest -q                     # tudo, antes de commitar
+cd print-agent && py -m pytest -q   # 90 testes do agente de impressão
 ```
 
-Não precisam de banco (usam fakes em memória), mas precisam de um `.env` válido:
-`src.core.config` é importado na cadeia.
+A rápida usa fakes em memória e não abre conexão nenhuma, mas precisa de um
+`.env` válido: `src.core.config` é importado na cadeia.
+
+A marcada `db` roda contra um Postgres 17 descartável, o mesmo major do
+Supabase:
+
+```powershell
+docker compose -f docker-compose.test.yml up -d
+py -m pytest -q -m db
+docker compose -f docker-compose.test.yml down -v
+```
+
+O schema desse banco sai de `alembic/schema_baseline.sql` + `alembic upgrade
+head`, **nunca** de `Base.metadata.create_all()` — o ORM não mapeia as
+sequences (inclusive a de `order_number`), os defaults nem os índices criados à
+mão. Detalhes em [`docs/testes.md`](docs/testes.md).
 
 O `print-agent/` é um projeto separado e **não** roda no `pytest` da raiz, de
 propósito.

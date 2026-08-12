@@ -1,15 +1,6 @@
 # Testes: o que roda hoje e o que falta
 
-## As duas suites
-
-Hoje existe **uma** suite, rápida, com fakes em memória:
-
-```bash
-pytest            # ~22s, sem banco, sem rede
-```
-
-O plano é ela continuar sendo o laço de desenvolvimento e ganhar uma irmã
-lenta, marcada, que roda contra um Postgres de verdade:
+## As duas suítes
 
 ```bash
 pytest -m "not db"   # o laço de desenvolvimento, sem Docker aberto
@@ -19,21 +10,67 @@ pytest               # tudo, antes de commitar
 A separação é por marcador e não por diretório, porque um teste de repositório
 costuma querer viver ao lado do teste de service do mesmo assunto.
 
+`--strict-markers` está ligado: um marcador com nome errado é erro de coleta, e
+não um teste que silenciosamente escapa do filtro `-m`.
+
 ## Por que os fakes não bastam para o repositório
 
 Nenhum repositório passa de ~67% de cobertura, e a causa é estrutural: os
 testes usam fakes em memória, então **a query real nunca executa**. O fake
 prova que o parâmetro chegou, não que o SQL está certo.
 
-E o schema de teste **não pode** nascer de `Base.metadata.create_all()`: o ORM
-não mapeia as sequences (inclusive a de `order_number`), os defaults e os
-índices criados à mão nos 12 `.sql` de `migrations/` — é a armadilha 24. O
-schema sai de `alembic upgrade head`.
+## Como o banco de teste é montado
 
-O obstáculo a resolver antes de qualquer coisa é o **engine**:
-`src/db/session.py` o cria no import, a partir de `settings.DATABASE_URL`. Ou
-a variável está no ambiente antes de qualquer import de `src`, ou o engine
-passa a ser criado sob demanda.
+```bash
+docker compose -f docker-compose.test.yml up -d
+pytest -m db
+docker compose -f docker-compose.test.yml down -v
+```
+
+Postgres **17**, o mesmo major do Supabase, em `localhost:55432`
+(`TEST_DATABASE_URL` sobrepõe). Sem volume: os dados vivem em `tmpfs` e morrem
+com o container. Imagem `pgvector/pgvector:pg17` por causa de uma coluna só,
+`ai_product_embeddings.embedding`.
+
+O schema **não** nasce de `Base.metadata.create_all()`: o ORM não mapeia as
+sequences (inclusive a de `order_number`), os defaults nem os índices criados à
+mão nos 12 `.sql` de `migrations/` — é a armadilha 24.
+
+Ele nasce de três passos, em `tests/conftest.py`:
+
+1. `alembic/schema_baseline.sql` — `pg_dump --schema-only` do banco de
+   produção na revisão `20260810_0012`;
+2. `alembic stamp 20260810_0012` — marca essa foto como aplicada;
+3. `alembic upgrade head` — aplica o que vier **depois** dela.
+
+O `.sql` no meio não é atalho, é a única saída: a revisão de baseline do
+Alembic (`20260726_0001`) é um **no-op**, porque o schema é anterior ao Alembic
+e nunca teve um `CREATE TABLE` versionado. Num banco vazio, `alembic upgrade
+head` sozinho morre na revisão `0002` com `relation "orders" does not exist`.
+Quem chegar aqui querendo entender o arquivo: o cabeçalho dele conta a história
+inteira, inclusive quando (quase nunca) regerá-lo.
+
+Toda revisão nova daqui em diante entra pelo passo 3 e o arquivo do passo 1 não
+precisa saber dela.
+
+### As duas fixtures
+
+| Fixture | Escopo | O que faz |
+|---|---|---|
+| `engine_de_teste` | sessão | derruba e remonta o schema uma vez por execução |
+| `db` | função | sessão dentro de uma transação revertida no fim do teste |
+
+A `db` entra na transação com `join_transaction_mode="create_savepoint"`: um
+`commit()` do código sob teste solta um savepoint em vez de gravar, então dá
+para testar service (que commita) e repositório (que não) com a mesma fixture.
+
+**Sequence não volta no rollback**, de propósito — `nextval` é imune. Teste que
+dependa do valor exato de `order_number` está errado pelo mesmo motivo da
+armadilha 19.
+
+Antes de apagar qualquer coisa, a fixture recusa banco que não seja local **e**
+cujo nome não termine em `_teste`. O primeiro comando que ela executa é um
+`DROP SCHEMA public CASCADE`.
 
 ## A fila do marcador `db`
 

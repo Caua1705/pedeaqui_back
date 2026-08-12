@@ -50,7 +50,10 @@ jobs:
           APP_ENV=test
           EOF
 
-      - run: pytest -q
+      # Só a suíte rápida. A marcada `db` precisa do Postgres de
+      # docker-compose.test.yml e ainda não roda aqui — quando rodar, é um job
+      # próprio com `services: postgres`, e não um passo a mais deste.
+      - run: pytest -q -m "not db"
 
   print-agent:
     name: Testes do agente de impressão

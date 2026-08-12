@@ -1,0 +1,60 @@
+# Postgres descartável para a suíte marcada `db`.
+#
+# Arquivo separado do docker-compose.yml de propósito: aquele é o deploy
+# (Traefik, rede externa `n8n_default`, `restart: always`) e um `docker
+# compose up` distraído na raiz não pode subir banco de teste junto da API de
+# produção — nem o contrário.
+#
+#     docker compose -f docker-compose.test.yml up -d
+#     pytest -m db
+#     docker compose -f docker-compose.test.yml down -v
+#
+services:
+  postgres-teste:
+    # Mesma major de produção (Supabase, PG 17). A major importa e não é
+    # detalhe: `gen_random_uuid()` sem extensão só existe do 13 em diante, o
+    # ILIKE compara bytes conforme a collation do banco (armadilha 31) e o
+    # planejador muda entre majors. Testar em 15 e rodar em 17 é testar outro
+    # banco.
+    #
+    # `pgvector/pgvector` e não `postgres` puro por uma coluna só:
+    # `ai_product_embeddings.embedding` é `vector(1536)`, e sem a extensão o
+    # schema não carrega inteiro. É a mesma imagem oficial do Postgres com a
+    # extensão compilada dentro.
+    image: pgvector/pgvector:pg17
+    container_name: pedeaqui-postgres-teste
+    environment:
+      POSTGRES_USER: pedeaqui
+      POSTGRES_PASSWORD: pedeaqui
+      POSTGRES_DB: pedeaqui_teste
+      # As duas de produção (Supabase). A collation entra no ILIKE e na
+      # ordenação de nome de produto; deixar no default do container faria a
+      # ordem do cardápio no teste não ser a da loja.
+      POSTGRES_INITDB_ARGS: "--locale=C.UTF-8 --encoding=UTF8"
+    ports:
+      # 55432 e não 5432: a porta padrão costuma já estar ocupada por um
+      # Postgres instalado na máquina, e o erro disso ("porta em uso") é bem
+      # menos confuso que a suíte rodar contra o banco errado.
+      - "55432:5432"
+    # Sem `volumes:`. O banco vive no filesystem do container e morre com ele:
+    # é o que faz `down -v` devolver um banco limpo, e o que impede um teste
+    # de depender de linha deixada pela execução anterior.
+    tmpfs:
+      # O diretório de dados na RAM. Um Postgres de teste não precisa
+      # sobreviver a nada, e sem fsync a suíte fica sensivelmente mais rápida.
+      - /var/lib/postgresql/data
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - full_page_writes=off
+      - -c
+      - synchronous_commit=off
+    healthcheck:
+      # `pytest -m db` logo depois do `up -d` pegaria o container de pé e o
+      # Postgres ainda inicializando.
+      test: ["CMD-SHELL", "pg_isready -U pedeaqui -d pedeaqui_teste"]
+      interval: 2s
+      timeout: 3s
+      retries: 15

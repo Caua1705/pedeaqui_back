@@ -395,18 +395,21 @@ class TestGetRestaurantMenu:
         # `sort_order or 0`: nulo vira zero em vez de quebrar a ordenacao.
         assert response.sort_order == 0
 
-    def test_a_coupon_without_a_template_raises_attribute_error(self):
-        """ESQUISITO, e registrado como esta.
+    def test_a_coupon_without_a_template_leaves_the_menu_standing(self):
+        """MUDANCA DE COMPORTAMENTO INTENCIONAL — nao e refatoracao.
 
-        `_coupon_response` le `coupon.template.image_path` sem conferir se o
-        template existe. Um cupom ativo cujo template foi apagado derruba o
-        CARDAPIO INTEIRO com AttributeError — nao so aquele cupom — porque a
-        montagem e uma comprehension so.
+        ANTES: `_coupon_response` lia `coupon.template.image_path` sem
+        conferir o template, e a montagem da lista era uma comprehension so.
+        Um cupom ativo cujo template foi apagado levantava AttributeError e
+        derrubava o CARDAPIO INTEIRO — o cliente nao via "cupom
+        indisponivel", via a loja fora do ar. Este teste afirmava
+        `pytest.raises(AttributeError)`.
 
-        E a pior forma da falha: o cliente nao ve "cupom indisponivel", ve a
-        loja fora do ar. Nao e corrigido aqui.
+        DEPOIS: o cupom quebrado sai da lista e o resto da vitrine continua
+        de pe. A ausencia do template e registrada no log, porque e defeito
+        de dado e alguem precisa ter onde procurar.
         """
-        coupon = SimpleNamespace(
+        orfao = SimpleNamespace(
             id=uuid.uuid4(),
             code="ORFAO",
             title="Orfao",
@@ -417,7 +420,39 @@ class TestGetRestaurantMenu:
             sort_order=0,
             is_active=True,
         )
-        service = make_service(menu_repository=FakeMenuRepository(coupons=[coupon]))
+        bom = SimpleNamespace(
+            id=uuid.uuid4(),
+            code="BEMVINDO",
+            title="Bem-vindo",
+            template=SimpleNamespace(image_path="cupons/bemvindo.png"),
+            discount_type="percent",
+            discount_value=Decimal("10.00"),
+            min_order_value=Decimal("30.00"),
+            sort_order=0,
+            is_active=True,
+        )
+        service = make_service(menu_repository=FakeMenuRepository(coupons=[orfao, bom]))
 
-        with pytest.raises(AttributeError):
-            service.get_restaurant_menu("pizzaria-do-ze")
+        menu = service.get_restaurant_menu("pizzaria-do-ze")
+
+        # O cupom bom sobrevive; o quebrado some sem levar nada junto.
+        assert [cupom.code for cupom in menu.coupons] == ["BEMVINDO"]
+        assert menu.products is not None
+
+    def test_a_menu_whose_only_coupon_is_broken_is_still_served(self):
+        """O caso extremo do teste acima: sem cupom nenhum sobrando, a vitrine
+        continua respondendo — com a lista de cupons vazia."""
+        orfao = SimpleNamespace(
+            id=uuid.uuid4(),
+            code="ORFAO",
+            title="Orfao",
+            template=None,
+            discount_type="percent",
+            discount_value=Decimal("10.00"),
+            min_order_value=Decimal("30.00"),
+            sort_order=0,
+            is_active=True,
+        )
+        service = make_service(menu_repository=FakeMenuRepository(coupons=[orfao]))
+
+        assert service.get_restaurant_menu("pizzaria-do-ze").coupons == []

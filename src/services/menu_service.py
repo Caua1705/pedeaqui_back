@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -11,6 +13,9 @@ from src.schemas.restaurant_schema import BranchResponse, CategoryResponse, Rest
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import money_to_float
 from src.utils.storage import build_storage_url
+
+
+logger = logging.getLogger("uvicorn.error")
 
 
 class MenuService:
@@ -32,7 +37,7 @@ class MenuService:
                 self._banner_response(banner)
                 for banner in self.menu_repository.get_banners_by_type(restaurant.id, "highlight")
             ],
-            coupons=[self._coupon_response(coupon) for coupon in self.menu_repository.get_active_coupons(restaurant.id)],
+            coupons=self._coupon_responses(restaurant.id),
             categories=[CategoryResponse.model_validate(category) for category in self.menu_repository.get_active_categories(restaurant.id)],
             products=[self.product_response(product) for product in self.menu_repository.get_active_products(restaurant.id)],
         )
@@ -123,6 +128,33 @@ class MenuService:
             sort_order=banner.sort_order,
             is_active=banner.is_active,
         )
+
+    def _coupon_responses(self, restaurant_id) -> list[PublicCouponResponse]:
+        """Os cupons da vitrine — sem os que nao tem como ser montados.
+
+        UM CUPOM QUEBRADO NAO DERRUBA O CARDAPIO. `_coupon_response` le
+        `coupon.template.image_path`, e um cupom ativo cujo template foi
+        apagado levantava AttributeError bem no meio da comprehension que
+        montava a lista — ou seja, a vitrine INTEIRA respondia 500. O cliente
+        nao via "cupom indisponivel", via a loja fora do ar, e o lojista nao
+        tinha como adivinhar que a causa era um cupom.
+
+        O template ausente e sempre defeito de dado (a FK deveria impedir),
+        entao ele e REGISTRADO no log em vez de ignorado em silencio: sem
+        isso, o cupom que o lojista criou simplesmente nao apareceria e nao
+        haveria onde procurar o porque.
+        """
+        responses = []
+        for coupon in self.menu_repository.get_active_coupons(restaurant_id):
+            if coupon.template is None:
+                logger.warning(
+                    "[Cardapio] cupom ativo sem template, fora da vitrine | coupon_id=%s | code=%s",
+                    coupon.id,
+                    coupon.code,
+                )
+                continue
+            responses.append(self._coupon_response(coupon))
+        return responses
 
     @staticmethod
     def _coupon_response(coupon) -> PublicCouponResponse:

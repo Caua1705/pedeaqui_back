@@ -1,8 +1,8 @@
 import uuid
 
-from datetime import datetime
+from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.models.customer_model import Customer, CustomerAddress, EmailVerificationCode, PasswordResetCode
@@ -67,11 +67,14 @@ class CustomerRepository:
         return self.db.scalar(stmt)
 
     def count_email_codes_since(self, email: str, since: datetime) -> int:
-        stmt = select(EmailVerificationCode).where(
+        # COUNT no banco. Antes eram todas as linhas trazidas para a memoria
+        # so para chamar len() nelas — no caminho de um cliente insistindo em
+        # reenviar, e a cada tentativa.
+        stmt = select(func.count()).select_from(EmailVerificationCode).where(
             EmailVerificationCode.email == email,
             EmailVerificationCode.created_at >= since,
         )
-        return len(self.db.scalars(stmt).all())
+        return self.db.scalar(stmt) or 0
 
     def create_password_reset_code(self, **values) -> PasswordResetCode:
         code = PasswordResetCode(**values)
@@ -93,22 +96,25 @@ class CustomerRepository:
         return self.db.scalar(stmt)
 
     def count_password_reset_codes_since(self, email: str, since: datetime) -> int:
-        stmt = select(PasswordResetCode).where(
+        stmt = select(func.count()).select_from(PasswordResetCode).where(
             PasswordResetCode.email == email,
             PasswordResetCode.created_at >= since,
         )
-        return len(self.db.scalars(stmt).all())
+        return self.db.scalar(stmt) or 0
 
     def invalidate_unused_password_reset_codes(self, customer_id: uuid.UUID) -> None:
-        for code in self.db.scalars(
-            select(PasswordResetCode).where(
-                PasswordResetCode.customer_id == customer_id,
-                PasswordResetCode.used_at.is_(None),
-            )
-        ).all():
-            code.used_at = datetime.now(code.expires_at.tzinfo)
+        agora = datetime.now(timezone.utc)
+        for code in self._unused_password_reset_codes(customer_id):
+            code.used_at = agora
             self.db.add(code)
         self.db.flush()
+
+    def _unused_password_reset_codes(self, customer_id: uuid.UUID) -> list[PasswordResetCode]:
+        stmt = select(PasswordResetCode).where(
+            PasswordResetCode.customer_id == customer_id,
+            PasswordResetCode.used_at.is_(None),
+        )
+        return list(self.db.scalars(stmt).all())
 
     def list_addresses(self, customer_id: uuid.UUID) -> list[CustomerAddress]:
         stmt = (
@@ -132,8 +138,17 @@ class CustomerRepository:
         return address
 
     def unset_default_addresses(self, customer_id: uuid.UUID) -> None:
-        for address in self.list_addresses(customer_id):
-            if address.is_default:
-                address.is_default = False
-                self.db.add(address)
+        # A consulta ja filtra por is_default: antes, ela trazia TODOS os
+        # enderecos (ordenados, ainda por cima) para descartar quase todos num
+        # `if` logo em seguida.
+        for address in self._default_addresses(customer_id):
+            address.is_default = False
+            self.db.add(address)
         self.db.flush()
+
+    def _default_addresses(self, customer_id: uuid.UUID) -> list[CustomerAddress]:
+        stmt = select(CustomerAddress).where(
+            CustomerAddress.customer_id == customer_id,
+            CustomerAddress.is_default.is_(True),
+        )
+        return list(self.db.scalars(stmt).all())

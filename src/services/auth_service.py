@@ -53,9 +53,42 @@ RESEND_COOLDOWN_SECONDS = 60
 CODE_TTL_MINUTES = 10
 RESEND_WINDOW_MINUTES = 15
 
+RESEND_EMAIL_CODE_MESSAGE = "Se este e-mail estiver cadastrado, enviaremos um codigo de verificacao."
 FORGOT_PASSWORD_MESSAGE = "Enviamos um código de recuperação para o seu e-mail."
 # Piso de latencia para que o tempo de resposta nao denuncie se o e-mail existe.
 FORGOT_PASSWORD_MIN_SECONDS = 0.6
+
+
+def _hash_new_password(password: str) -> str:
+    """A senha nova, conferida e hasheada.
+
+    As duas recusas moram juntas porque respondem a mesma pergunta — "esta
+    senha serve?" — e porque `register` e `reset_password` faziam a dupla
+    inteira, cada um com sua copia. Duas copias de uma regra de senha e onde
+    uma delas fica para tras no dia em que o piso mudar de 8 para 10.
+
+    O teto de 72 BYTES vem do bcrypt, que trunca em silencio acima disso: sem
+    virar 400 aqui, duas senhas diferentes com os mesmos 72 primeiros bytes
+    autenticariam uma a outra.
+    """
+    if len(password) < 8:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Senha fraca")
+    try:
+        return hash_password(password)
+    except PasswordTooLongError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Senha muito longa") from exc
+
+
+def _is_within_resend_cooldown(code_row) -> bool:
+    """Se o ultimo codigo saiu ha menos de `RESEND_COOLDOWN_SECONDS`.
+
+    Sem `created_at` nao da para datar o codigo, e a ausencia e tratada como
+    "fora do cooldown" — errar para o lado de reenviar e barato; errar para o
+    outro deixaria o cliente sem conseguir um codigo novo.
+    """
+    if code_row is None or code_row.created_at is None:
+        return False
+    return (utcnow() - code_row.created_at).total_seconds() < RESEND_COOLDOWN_SECONDS
 
 
 def _pad_latency(started_at: float, minimum_seconds: float) -> None:
@@ -110,12 +143,7 @@ class AuthService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email invalido")
         if not is_valid_cpf(cpf):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CPF invalido")
-        if len(payload.password) < 8:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Senha fraca")
-        try:
-            password_hash = hash_password(payload.password)
-        except PasswordTooLongError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Senha muito longa") from exc
+        password_hash = _hash_new_password(payload.password)
         if not payload.privacy_accepted:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Aceite de privacidade obrigatorio")
 
@@ -179,22 +207,34 @@ class AuthService:
         return VerifyEmailCodeResponse(verified=True, message="E-mail verificado com sucesso.")
 
     def resend_email_code(self, payload: ResendEmailCodeRequest) -> MessageResponse:
+        # A MESMA resposta em todo caminho, inclusive e-mail inexistente:
+        # variar a mensagem transformaria o reenvio numa sonda de quais
+        # e-mails estao cadastrados (armadilha 18).
+        answer = MessageResponse(message=RESEND_EMAIL_CODE_MESSAGE)
+
         email = normalize_email(payload.email)
         customer = self.customer_repository.get_by_email(email)
-        if customer and not customer.email_verified_at:
-            latest = self.customer_repository.latest_unused_email_code(email)
-            if latest and latest.created_at and (utcnow() - latest.created_at).total_seconds() < RESEND_COOLDOWN_SECONDS:
-                return MessageResponse(message="Se este e-mail estiver cadastrado, enviaremos um codigo de verificacao.")
-            recent_count = self.customer_repository.count_email_codes_since(
-                email=email,
-                since=utcnow() - timedelta(minutes=RESEND_WINDOW_MINUTES),
-            )
-            if recent_count < MAX_RESENDS:
-                resend_count = (latest.resend_count + 1) if latest else 0
-                self._create_email_verification_code(customer, resend_count=resend_count)
-                self.db.commit()
+        if not customer:
+            return answer
+        if customer.email_verified_at:
+            return answer
 
-        return MessageResponse(message="Se este e-mail estiver cadastrado, enviaremos um codigo de verificacao.")
+        latest = self.customer_repository.latest_unused_email_code(email)
+        if _is_within_resend_cooldown(latest):
+            return answer
+        if self._email_codes_in_window(email) >= MAX_RESENDS:
+            return answer
+
+        resend_count = (latest.resend_count + 1) if latest else 0
+        self._create_email_verification_code(customer, resend_count=resend_count)
+        self.db.commit()
+        return answer
+
+    def _email_codes_in_window(self, email: str) -> int:
+        return self.customer_repository.count_email_codes_since(
+            email=email,
+            since=utcnow() - timedelta(minutes=RESEND_WINDOW_MINUTES),
+        )
 
     def login(self, payload: LoginRequest) -> LoginResponse:
         identifier = payload.login.strip()
@@ -245,19 +285,28 @@ class AuthService:
         return MessageResponse(message=FORGOT_PASSWORD_MESSAGE)
 
     def _issue_password_reset_code(self, email: str) -> None:
-        # As consultas rodam mesmo sem cliente cadastrado para manter o mesmo
-        # perfil de acesso ao banco nos dois caminhos.
+        # AS CONSULTAS RODAM MESMO SEM CLIENTE CADASTRADO, e por isso o
+        # `customer` NAO e um retorno cedo aqui: o perfil de acesso ao banco
+        # precisa ser o mesmo nos dois caminhos, senao o tempo de resposta
+        # denuncia quais e-mails existem (armadilha 18).
         customer = self.customer_repository.get_by_email(email)
         latest = self.customer_repository.latest_unused_password_reset_code(email)
-        if latest and latest.created_at and (utcnow() - latest.created_at).total_seconds() < RESEND_COOLDOWN_SECONDS:
+        if _is_within_resend_cooldown(latest):
             return
-        recent_count = self.customer_repository.count_password_reset_codes_since(
+
+        if self._reset_codes_in_window(email) >= MAX_RESENDS:
+            return
+        if customer is None:
+            return
+
+        self._create_password_reset_code(customer)
+        self.db.commit()
+
+    def _reset_codes_in_window(self, email: str) -> int:
+        return self.customer_repository.count_password_reset_codes_since(
             email=email,
             since=utcnow() - timedelta(minutes=RESEND_WINDOW_MINUTES),
         )
-        if customer and recent_count < MAX_RESENDS:
-            self._create_password_reset_code(customer)
-            self.db.commit()
 
     def verify_reset_code(self, payload: VerifyResetCodeRequest) -> VerifyResetCodeResponse:
         code_row = self.customer_repository.latest_unused_password_reset_code(normalize_email(payload.email))
@@ -284,12 +333,7 @@ class AuthService:
     def reset_password(self, payload: ResetPasswordRequest) -> MessageResponse:
         if payload.new_password != payload.confirm_password:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confirmacao de senha nao confere")
-        if len(payload.new_password) < 8:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Senha fraca")
-        try:
-            password_hash = hash_password(payload.new_password)
-        except PasswordTooLongError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Senha muito longa") from exc
+        password_hash = _hash_new_password(payload.new_password)
 
         code_row = self.customer_repository.get_password_reset_by_token_hash(hash_reset_token(payload.reset_token))
         if not self._valid_reset_token(code_row, payload.reset_token):

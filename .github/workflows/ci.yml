@@ -50,10 +50,77 @@ jobs:
           APP_ENV=test
           EOF
 
-      # Só a suíte rápida. A marcada `db` precisa do Postgres de
-      # docker-compose.test.yml e ainda não roda aqui — quando rodar, é um job
-      # próprio com `services: postgres`, e não um passo a mais deste.
+      # Só a suíte rápida: sem banco, sem rede, é o sinal que precisa voltar
+      # em segundos. A marcada `db` é o job abaixo.
       - run: pytest -q -m "not db"
+
+  banco:
+    name: Testes contra o Postgres
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # A MESMA imagem de docker-compose.test.yml. Postgres 17 porque é a
+        # major do Supabase, e `pgvector` por uma coluna só —
+        # `ai_product_embeddings.embedding` é `vector(1536)` e o
+        # schema_baseline.sql não carrega sem o tipo existir.
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: pedeaqui
+          POSTGRES_PASSWORD: pedeaqui
+          # O sufixo `_teste` não é enfeite: a fixture recusa apagar o schema
+          # de um banco cujo nome não termine assim (tests/conftest.py).
+          POSTGRES_DB: pedeaqui_teste
+        ports:
+          # A porta esquisita é a de docker-compose.test.yml, para o
+          # TEST_DATABASE_URL daqui ser igual ao de quem roda na própria
+          # máquina. 5432 costuma estar ocupada em máquina de desenvolvimento.
+          - 55432:5432
+        # Sem isto o pytest começa com o container de pé e o Postgres ainda
+        # inicializando, e a falha sai como "connection refused" intermitente.
+        options: >-
+          --health-cmd "pg_isready -U pedeaqui -d pedeaqui_teste"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+
+      # Mesmo .env do job da API, e o DATABASE_URL continua fictício de
+      # propósito: quem aponta para o Postgres de verdade é TEST_DATABASE_URL,
+      # lido só pela fixture. Se um dia um teste da suíte rápida abrir conexão
+      # sem querer, ele falha aqui em vez de passar de carona no banco do
+      # vizinho.
+      - name: Montar .env de teste
+        run: |
+          cat > .env <<'EOF'
+          DATABASE_URL=postgresql+psycopg://ci:ci@localhost:5432/ci
+          SUPABASE_URL=https://ci.supabase.invalid
+          CUSTOMER_AUTH_SECRET=ci-customer-auth-secret-nao-usar-em-lugar-nenhum
+          ADMIN_AUTH_SECRET=ci-admin-auth-secret-nao-usar-em-lugar-nenhum
+          EMAIL_CODE_SECRET=ci-email-code-secret-nao-usar-em-lugar-nenhum
+          PASSWORD_RESET_SECRET=ci-password-reset-secret-nao-usar-em-lugar-nenhum
+          OPENAI_API_KEY=ci-openai-key-fake
+          GOOGLE_MAPS_ROUTES_API_KEY=ci-google-key-fake
+          APP_ENV=test
+          EOF
+
+      # O schema sai da fixture, não de um passo de shell daqui: ela aplica
+      # `alembic/schema_baseline.sql`, dá `alembic stamp 20260810_0012` e roda
+      # `alembic upgrade head`. Repetir isso em YAML criaria uma segunda
+      # versão do procedimento para envelhecer sozinha — e a que quebraria em
+      # silêncio é justamente a que ninguém roda na própria máquina.
+      - run: pytest -q -m db
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
 
   print-agent:
     name: Testes do agente de impressão

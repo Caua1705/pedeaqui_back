@@ -72,6 +72,14 @@ Antes de apagar qualquer coisa, a fixture recusa banco que não seja local **e**
 cujo nome não termine em `_teste`. O primeiro comando que ela executa é um
 `DROP SCHEMA public CASCADE`.
 
+### No CI
+
+O job `banco` do workflow sobe a **mesma** imagem (`pgvector/pgvector:pg17`) como
+`services:` do GitHub Actions, na mesma porta 55432, e roda `pytest -m db`. O
+schema sai da fixture, e não de um passo de shell no YAML: um segundo
+procedimento em paralelo envelheceria sozinho, e o que quebraria em silêncio
+seria justamente o que ninguém roda na própria máquina.
+
 ## A fila do marcador `db`
 
 ### 1. `AdminMenuRepository.product_ids_blocked_by_required_group` — **primeiro**

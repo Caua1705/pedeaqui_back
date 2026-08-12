@@ -16,7 +16,7 @@ from fastapi import HTTPException
 
 from src.schemas.order_schema import CreateOrderRequest
 from src.services.order_service import OrderService
-from src.utils.security import generate_tracking_token
+from src.utils.security import generate_tracking_token, hash_tracking_token
 
 
 class FakeDb:
@@ -132,8 +132,23 @@ class TokenGenerationTests(unittest.TestCase):
         response = service.create_order("junior", payload)
 
         stored = service.order_repository.orders[0]
-        self.assertEqual(response.tracking_token, stored.tracking_token)
-        self.assertTrue(stored.tracking_token)
+        self.assertTrue(response.tracking_token)
+        self.assertEqual(hash_tracking_token(response.tracking_token), stored.tracking_token_hash)
+
+    def test_the_plaintext_token_is_never_written_to_the_order(self):
+        """O que a coluna em claro fazia e nao faz mais.
+
+        O pedido gravado nao tem o token: quem le a linha (dump, backup,
+        replica, log de query) nao consegue abrir a consulta de
+        acompanhamento daquele cliente.
+        """
+        service, payload = build_create_service()
+
+        response = service.create_order("junior", payload)
+
+        stored = service.order_repository.orders[0]
+        self.assertFalse(hasattr(stored, "tracking_token"))
+        self.assertNotIn(response.tracking_token, stored.tracking_token_hash)
 
     def test_two_orders_never_share_a_token(self):
         first_service, first_payload = build_create_service()

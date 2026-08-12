@@ -97,7 +97,9 @@ quebraria pedidos antigos.
 `orders` carrega, em blocos:
 
 ```
-identidade      id, order_number (sequence GLOBAL, UNIQUE), tracking_token (UNIQUE)
+identidade      id, order_number (sequence GLOBAL, UNIQUE),
+                tracking_token_hash (UNIQUE — sha-256; o token em claro
+                nunca é gravado, ver revisões 0016/0017)
 dono            restaurant_id (NOT NULL), branch_id, customer_id (NULLABLE)
 snapshot        customer_name_snapshot, customer_phone_snapshot  (ambos NOT NULL)
 operação        order_type, status, notes

@@ -43,7 +43,7 @@ from src.services.idempotency_service import IdempotencyService
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import ZERO, money_to_float, quantize_money, to_decimal
 from src.utils.normalization import normalize_digits
-from src.utils.security import generate_tracking_token, utcnow
+from src.utils.security import generate_tracking_token, hash_tracking_token, utcnow
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -156,9 +156,14 @@ class OrderService:
             customer_phone = normalize_digits(
                 current_customer.phone if current_customer else payload.customer.phone
             )
+            # O UNICO lugar em que o token existe em claro. Ele vive nesta
+            # variavel local ate entrar na resposta; o banco recebe so o
+            # hash, e nao ha caminho de volta (armadilha 19: nao existe rota
+            # de reemissao, e agora tambem nao existiria como atende-la).
+            tracking_token = generate_tracking_token()
             order = Order(
                 restaurant_id=restaurant.id,
-                tracking_token=generate_tracking_token(),
+                tracking_token_hash=hash_tracking_token(tracking_token),
                 branch_id=branch.id,
                 customer_id=current_customer.id if current_customer else None,
                 customer_address_id=payload.customer_address_id if current_customer else None,
@@ -232,10 +237,11 @@ class OrderService:
             response = CreateOrderResponse(
                 id=order.id,
                 order_number=order.order_number,
-                # Unica vez que o token sai da API. Se o cliente perder,
-                # nao ha como reemitir sem estar logado — e o preco de o
-                # segredo ser a propria chave de acesso.
-                tracking_token=order.tracking_token,
+                # Unica vez que o token sai da API, e a unica vez que ele
+                # existe em claro fora da memoria deste processo. Se o
+                # cliente perder, nao ha como reemitir: o banco so tem o
+                # hash.
+                tracking_token=tracking_token,
                 status=order.status,
                 payment_flow=order.payment_flow,
                 payment_status=order.payment_status,

@@ -1,4 +1,3 @@
-import hmac
 import uuid
 from datetime import datetime
 
@@ -9,6 +8,7 @@ from src.models.order_item_model import OrderItem
 from src.models.order_item_option_model import OrderItemOption
 from src.models.order_model import Order
 from src.utils.normalization import normalize_text
+from src.utils.security import hash_tracking_token, verify_tracking_token
 from src.models.order_status_history_model import OrderStatusHistory
 from src.models.branch_model import Branch
 from src.models.restaurant_model import Restaurant
@@ -143,12 +143,17 @@ class OrderRepository:
     ) -> Order | None:
         # Substituiu a busca por (order_number, telefone), que era
         # enumeravel: order_number vem de uma sequence global.
+        #
+        # A busca e pelo HASH: o token em claro nao existe mais no banco, e o
+        # que chega pela URL e transformado aqui antes de virar WHERE. Um
+        # dump vazado passa a nao conter nenhuma credencial utilizavel.
+        token_hash = hash_tracking_token(tracking_token)
         stmt = (
             select(Order)
             .options(*_ORDER_DETAIL_LOADERS)
             .where(
                 Order.restaurant_id == restaurant_id,
-                Order.tracking_token == tracking_token,
+                Order.tracking_token_hash == token_hash,
             )
         )
         order = self.db.scalar(stmt)
@@ -159,23 +164,17 @@ class OrderRepository:
         # token de acompanhamento por nome.
         #
         # SEJA HONESTO SOBRE O QUE ISTO COMPRA. Se a linha voltou, o `=` do
-        # Postgres ja disse que os textos sao iguais, e este `compare_digest`
+        # Postgres ja disse que os hashes sao iguais, e este `compare_digest`
         # devolve True sempre. Ele NAO fecha um canal de tempo: a comparacao
-        # de verdade acontece dentro do banco, sobre um indice, e o token tem
-        # 256 bits.
+        # de verdade acontece dentro do banco, sobre um indice.
         #
         # O que ele compra e a falha fechada se o WHERE acima deixar de ser
         # igualdade exata um dia — um `ilike` para "facilitar o suporte", um
         # `like` com o escape errado (o mesmo defeito que ja apareceu em
         # admin_menu_repository), uma collation que aproxime formas Unicode
-        # (armadilha 31). Em qualquer um desses casos o token deixa de ser
-        # segredo e esta linha e a que ainda diz nao.
-        #
-        # A inconsistencia que sobra, e que esta NAO resolve: o token e
-        # guardado em texto puro em `orders.tracking_token`. Todo outro
-        # segredo do projeto (codigo de verificacao, token de reset) e
-        # gravado em hash. Trocar isso e migracao de coluna, nao uma linha.
-        if not hmac.compare_digest(order.tracking_token, tracking_token):
+        # (armadilha 31). Em qualquer um desses casos o hash deixa de
+        # identificar um pedido so, e esta linha e a que ainda diz nao.
+        if not verify_tracking_token(tracking_token, order.tracking_token_hash):
             return None
         return order
 

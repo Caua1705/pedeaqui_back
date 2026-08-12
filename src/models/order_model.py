@@ -15,10 +15,15 @@ class Order(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
     order_number: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, server_default=text("nextval('orders_order_number_seq'::regclass)"))
-    # Segredo de acompanhamento. Sorteado na criacao, devolvido UMA vez a
-    # quem fez o pedido e exigido na consulta publica. O order_number nao
-    # serve para isso: e sequence global e previsivel.
-    tracking_token: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    # Segredo de acompanhamento, em HASH. Sorteado na criacao, devolvido UMA
+    # vez em claro a quem fez o pedido e exigido na consulta publica. O
+    # order_number nao serve para isso: e sequence global e previsivel.
+    #
+    # A coluna `orders.tracking_token`, em texto puro, existiu ate a revisao
+    # 0017 e NAO e mapeada aqui de proposito — nao ha caminho de leitura do
+    # token em claro a partir do banco, e e isso que um dump vazado deixa de
+    # entregar. Ver src/utils/security.py:hash_tracking_token.
+    tracking_token_hash: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     restaurant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("restaurants.id"), nullable=False)
     branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"), nullable=False)
     customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("customers.id"))

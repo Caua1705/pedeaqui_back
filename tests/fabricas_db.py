@@ -26,6 +26,7 @@ from src.models.order_model import Order
 from src.models.product_model import Product
 from src.models.product_option_model import ProductOption, ProductOptionGroup
 from src.models.restaurant_model import Restaurant
+from src.utils.security import hash_tracking_token
 
 
 def _sufixo() -> str:
@@ -194,12 +195,15 @@ def criar_pedido(
     customer_phone_snapshot: str = "85999999999",
     order_type: str = "delivery",
     order_number: int | None = None,
+    tracking_token: str | None = None,
 ) -> Order:
     pedido = Order(
         restaurant_id=restaurante.id,
         branch_id=filial.id,
         customer_id=cliente.id if cliente else None,
-        tracking_token=f"token-{uuid.uuid4().hex}",
+        # O banco só guarda o hash. Um teste que precise do token em claro
+        # (para chamar a rota de acompanhamento) passa `tracking_token`.
+        tracking_token_hash=hash_tracking_token(tracking_token or f"token-{uuid.uuid4().hex}"),
         customer_name_snapshot=customer_name_snapshot,
         customer_phone_snapshot=customer_phone_snapshot,
         order_type=order_type,

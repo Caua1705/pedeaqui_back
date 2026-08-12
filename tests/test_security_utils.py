@@ -35,10 +35,12 @@ from src.utils.security import (
     hash_code,
     hash_password,
     hash_reset_token,
+    hash_tracking_token,
     hash_verification_code,
     verify_code,
     verify_password,
     verify_reset_token,
+    verify_tracking_token,
     verify_verification_code,
 )
 
@@ -212,6 +214,37 @@ class TestTrackingToken:
 
     def test_two_tokens_are_never_the_same(self):
         assert len({generate_tracking_token() for _ in range(200)}) == 200
+
+    def test_the_round_trip_works(self):
+        token = generate_tracking_token()
+        assert verify_tracking_token(token, hash_tracking_token(token)) is True
+
+    def test_another_token_does_not_validate(self):
+        assert verify_tracking_token("chute", hash_tracking_token(generate_tracking_token())) is False
+
+    def test_the_hash_is_stable_for_the_same_token(self):
+        """E o que permite procurar a linha no banco pelo hash. Um hash com
+        sal — bcrypt, por exemplo — obrigaria a varrer `orders` inteira."""
+        token = generate_tracking_token()
+        assert hash_tracking_token(token) == hash_tracking_token(token)
+
+    def test_the_hash_does_not_contain_the_token(self):
+        token = generate_tracking_token()
+        assert token not in hash_tracking_token(token)
+
+    def test_it_is_sha256_without_a_key(self):
+        """Registrado de proposito: e o UNICO segredo do projeto que nao
+        passa por `_hmac_hex`.
+
+        A chave compra resistencia a forca bruta sobre a ENTRADA, e a entrada
+        aqui tem 256 bits. Em troca, o backfill da revisao 0016 nao precisou
+        de segredo dentro da migracao e nao existe variavel de ambiente cuja
+        perda apague o acesso de todo cliente ao proprio pedido.
+
+        Se alguem trocar isto por HMAC, TODO link de acompanhamento em
+        circulacao para de casar — e nao ha rota de reemissao (armadilha 19).
+        """
+        assert hash_tracking_token("token") == hashlib.sha256(b"token").hexdigest()
 
 
 # ---------------------------------------------------------------------------

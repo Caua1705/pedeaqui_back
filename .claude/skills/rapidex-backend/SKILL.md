@@ -634,18 +634,34 @@ A rota `GET /orders/{order_number}?phone=...` casava um número de sequence glob
 com o telefone. **Com o telefone de alguém, dava para varrer os números vizinhos e
 ler endereço residencial, itens e histórico de outras pessoas.**
 
-Foi removida. Em lugar dela, `tracking_token` (`secrets.token_urlsafe(32)`,
-UNIQUE), que não é enumerável.
+Foi removida. Em lugar dela, `tracking_token` (`secrets.token_urlsafe(32)`),
+que não é enumerável.
 
-Duas consequências:
+**O token é gravado em HASH** desde as revisões 0016/0017:
+`orders.tracking_token_hash`, sha-256 sem chave, UNIQUE. A coluna em claro não
+existe mais e o model não a mapeia. A busca hasheia o que chega pela URL antes
+do `WHERE`.
+
+sha-256 e não `_hmac_hex` (que é o dos outros segredos) porque chave compra
+resistência a **força bruta sobre a entrada**, e a entrada aqui tem 256 bits —
+enquanto o código de verificação tem seis dígitos e por isso precisa da chave.
+Em troca não existe variável de ambiente cuja perda apague o acesso de todo
+cliente ao próprio pedido de uma vez. **Trocar isso por HMAC mata todo link em
+circulação**, e não há como devolvê-los.
+
+Três consequências:
 
 - **O token só sai da API uma vez**, em `CreateOrderResponse`. Não há rota para
   reemitir — o segredo **é** a chave de acesso, e uma rota de "me manda de novo"
   precisaria autenticar por telefone e número de pedido, que é exatamente o buraco
   que se fechou. O front tem que guardar (localStorage) ao criar pedido de
   convidado.
-- O token fica gravado em `idempotency_keys.response_body`, porque a resposta
-  inteira é armazenada lá. Conta na hora de decidir quem lê aquela tabela.
+- Agora nem o servidor consegue reemitir: o banco só tem o hash.
+- **O token em claro continua gravado em `idempotency_keys.response_body`**, por
+  até 24h, porque a resposta inteira é armazenada lá e o replay precisa devolver
+  o mesmo token. É o resíduo que o hash **não** fecha: um dump vazado ainda
+  entrega os pedidos das últimas 24h. Conta na hora de decidir quem lê aquela
+  tabela e por quanto tempo ela é retida.
 
 E: `order_number` continua sendo sequence global e UNIQUE na tabela inteira, não
 numeração por restaurante. O primeiro pedido de um restaurante novo pode ser o

@@ -119,7 +119,7 @@ taxa de serviço / taxa de entrega
 trava e valida o cupom (SELECT FOR UPDATE) .. 400/401/404
 total = subtotal + serviço + entrega − descontos
 comissão da plataforma (congelada no pedido)  _calculate_commission
-INSERT orders  (tracking_token, payment_status, comissão)
+INSERT orders  (tracking_token_hash, payment_status, comissão)
 INSERT coupon_redemptions / order_items / order_item_options
 INSERT order_status_history ("pending", changed_by "system")
 UPDATE idempotency_keys → completed + resposta gravada

@@ -67,7 +67,16 @@ class Tenant:
         self.grupo = fab.criar_grupo_de_opcoes(db, self.produto)
         self.opcao = fab.criar_opcao(db, self.grupo)
         self.cliente = fab.criar_cliente(db)
-        self.pedido = fab.criar_pedido(db, self.restaurante, self.filial, self.cliente)
+        # O token em claro fica no objeto do teste porque o banco não o tem:
+        # `orders` só guarda o hash desde a revisão 0016.
+        self.tracking_token = f"token-de-{self.restaurante.slug}"
+        self.pedido = fab.criar_pedido(
+            db,
+            self.restaurante,
+            self.filial,
+            self.cliente,
+            tracking_token=self.tracking_token,
+        )
         self.admin = _admin(db, self.restaurante, self.filial)
         db.add(
             RestaurantSetting(
@@ -279,7 +288,7 @@ def test_cliente_nao_le_pedido_de_outro_cliente(cliente_http, a_e_b, db):
 def test_tracking_token_de_um_pedido_nao_serve_em_outro_restaurante(cliente_http, a_e_b):
     a, b = a_e_b
     resposta = cliente_http.get(
-        f"/restaurants/{a.restaurante.slug}/orders/track/{b.pedido.tracking_token}"
+        f"/restaurants/{a.restaurante.slug}/orders/track/{b.tracking_token}"
     )
     assert resposta.status_code == 404, (resposta.status_code, resposta.text[:300])
 

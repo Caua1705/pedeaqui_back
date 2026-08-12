@@ -382,16 +382,19 @@ class TestOEscopoDosDetalhes:
         assert repositorio.get_order_detail_for_customer(pedido.id, dono.id).id == pedido.id
 
     def test_o_token_de_acompanhamento_vale_so_no_restaurante_dele(self, db):
+        # O token em claro é passado à fábrica porque o banco não o guarda
+        # mais: `orders` só tem o hash desde a revisão 0016. É o próprio
+        # ponto — ler a linha não devolve a credencial.
         vizinho = criar_restaurante(db, nome="O Vizinho")
         filial = criar_filial(db, vizinho)
-        pedido = criar_pedido(db, vizinho, filial)
+        pedido = criar_pedido(db, vizinho, filial, tracking_token="o-token-em-claro")
         meu = criar_restaurante(db, nome="O Meu")
 
         repositorio = OrderRepository(db)
 
-        assert repositorio.get_order_by_tracking_token(meu.id, pedido.tracking_token) is None
+        assert repositorio.get_order_by_tracking_token(meu.id, "o-token-em-claro") is None
         assert (
-            repositorio.get_order_by_tracking_token(vizinho.id, pedido.tracking_token).id
+            repositorio.get_order_by_tracking_token(vizinho.id, "o-token-em-claro").id
             == pedido.id
         )
 

@@ -120,6 +120,27 @@ def generate_tracking_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def hash_tracking_token(token: str) -> str:
+    """Forma em que o token de acompanhamento e GRAVADO.
+
+    sha-256 sem chave, ao contrario do codigo de verificacao e do token de
+    reset, que sao HMAC. A diferenca nao e descuido: chave compra
+    resistencia a forca bruta sobre a ENTRADA, e a entrada aqui e
+    `secrets.token_urlsafe(32)` — 256 bits, sem dicionario e sem rainbow
+    table possiveis. O codigo de verificacao tem seis digitos, um milhao de
+    possibilidades, e por isso precisa da chave.
+
+    O que se ganha em troca: nao existe uma variavel de ambiente cuja perda
+    apague, de uma vez, o acesso de todo cliente ao proprio pedido — e o
+    backfill da revisao 0016 nao precisou de segredo dentro da migracao.
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def verify_tracking_token(token: str, token_hash: str) -> bool:
+    return hmac.compare_digest(hash_tracking_token(token), token_hash)
+
+
 def hash_reset_token(token: str) -> str:
     return _hmac_hex(token, settings.PASSWORD_RESET_SECRET)
 

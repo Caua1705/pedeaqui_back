@@ -1,8 +1,11 @@
 import logging
+from collections.abc import Sequence
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from src.models.product_model import Product
+from src.models.product_option_model import ProductOption, ProductOptionGroup
 from src.repositories.menu_repository import MenuRepository
 from src.repositories.product_repository import ProductRepository
 from src.schemas.banner_schema import BannerResponse
@@ -90,7 +93,7 @@ class MenuService:
         )
 
     @staticmethod
-    def product_response(product) -> ProductResponse:
+    def product_response(product: Product) -> ProductResponse:
         return ProductResponse(
             id=product.id,
             restaurant_id=product.restaurant_id,
@@ -106,49 +109,71 @@ class MenuService:
             is_available=product.is_available,
             sort_order=product.sort_order,
             option_groups=[
-                ProductOptionGroupResponse(
-                    id=group.id,
-                    name=group.name,
-                    description=group.description,
-                    min_select=group.min_select,
-                    max_select=group.max_select,
-                    is_required=group.is_required,
-                    sort_order=group.sort_order,
-                    options=[
-                        ProductOptionResponse(
-                            id=option.id,
-                            name=option.name,
-                            description=option.description,
-                            additional_price=money_to_float(option.additional_price),
-                            sort_order=option.sort_order,
-                        )
-                        for option in sorted(
-                            (option for option in group.options if option.is_active),
-                            key=lambda option: (option.sort_order or 0, option.name),
-                        )
-                    ],
-                )
-                for group in sorted(
-                    MenuService._answerable_option_groups(product),
-                    key=lambda group: (group.sort_order or 0, group.name),
-                )
+                MenuService._option_group_response(group)
+                for group in MenuService._answerable_option_groups(product)
             ],
         )
 
     @staticmethod
-    def _answerable_option_groups(product) -> list:
-        """Os grupos que o cliente CONSEGUE responder.
+    def _option_group_response(group: ProductOptionGroup) -> ProductOptionGroupResponse:
+        return ProductOptionGroupResponse(
+            id=group.id,
+            name=group.name,
+            description=group.description,
+            min_select=group.min_select,
+            max_select=group.max_select,
+            is_required=group.is_required,
+            sort_order=group.sort_order,
+            options=[
+                MenuService._option_response(option)
+                for option in MenuService._in_menu_order(group.options)
+            ],
+        )
+
+    @staticmethod
+    def _option_response(option: ProductOption) -> ProductOptionResponse:
+        return ProductOptionResponse(
+            id=option.id,
+            name=option.name,
+            description=option.description,
+            additional_price=money_to_float(option.additional_price),
+            sort_order=option.sort_order,
+        )
+
+    @staticmethod
+    def _in_menu_order(items: Sequence) -> list:
+        """Os ativos, na ordem em que o lojista os pos no cardapio.
+
+        O nome desempata `sort_order` repetido, e sem esse desempate a MESMA
+        tela sairia com os adicionais em ordens diferentes entre duas cargas —
+        quem confere o pedido pela posicao erraria (mesmo motivo do `sorted`
+        da comanda, armadilha 14).
+
+        `sort_order` nulo conta como zero, entao linha antiga sem ele
+        preenchido vai para o comeco e nao para o fim.
+
+        Uma funcao para os dois niveis: o filtro e a ordenacao eram identicos
+        para grupo e para opcao, escritos duas vezes dentro de uma list
+        comprehension aninhada na outra.
+        """
+        active = [item for item in items if item.is_active]
+        return sorted(active, key=lambda item: (item.sort_order or 0, item.name))
+
+    @staticmethod
+    def _answerable_option_groups(product: Product) -> list:
+        """Os grupos que o cliente CONSEGUE responder, na ordem do cardapio.
 
         Grupo sem nenhuma opcao ativa nao oferece escolha nenhuma, entao nao
         aparece. Isto aqui e cosmetico e vale so para o grupo OPCIONAL: quando
         o grupo vazio e obrigatorio, o produto inteiro sai de venda antes de
         chegar aqui (`services/menu_rules.blocking_required_group`).
         """
-        return [
+        com_escolha = [
             group
             for group in product.option_groups
-            if group.is_active and any(option.is_active for option in group.options)
+            if any(option.is_active for option in group.options)
         ]
+        return MenuService._in_menu_order(com_escolha)
 
     def _sellable_product_responses(self, products) -> list[ProductResponse]:
         """A lista do cardapio, sem os produtos que nao tem como ser vendidos."""

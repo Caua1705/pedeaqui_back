@@ -33,9 +33,17 @@ def _build_product_search_condition(search: str):
     diferentes no banco. Os nomes gravados passam pelo mesmo NFC no schema
     de escrita — os dois lados juntos e que fazem a busca encontrar.
     """
-    escaped = normalize_text(search).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    pattern = f"%{escaped}%"
-    return Product.name.ilike(pattern, escape="\\") | Product.code.ilike(pattern, escape="\\")
+    padrao = f"%{_escape_like(normalize_text(search))}%"
+    return Product.name.ilike(padrao, escape="\\") | Product.code.ilike(padrao, escape="\\")
+
+
+def _escape_like(termo: str) -> str:
+    """Neutraliza os curingas do LIKE dentro do que o lojista digitou.
+
+    A contrabarra vem primeiro: escapando-a depois, ela escaparia tambem as
+    contrabarras que as duas linhas seguintes acabaram de inserir.
+    """
+    return termo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 class AdminMenuRepository:

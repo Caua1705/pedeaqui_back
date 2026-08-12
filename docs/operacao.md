@@ -196,17 +196,23 @@ inacessível derruba o container em loop. A linha `[entrypoint] alembic upgrade 
 é a última coisa que aparece antes do erro.
 
 **3. `StartupConfigurationError`.**
-É a validação de boot recusando de propósito. Três coisas derrubam:
+É a validação de boot recusando de propósito. Quatro coisas derrubam:
 
 - `GOOGLE_MAPS_ROUTES_API_KEY` vazia com `DELIVERY_ESTIMATE_PROVIDER=google_routes`
   (com Routes API **e** Geocoding API habilitadas no projeto GCP);
+- `ADMIN_AUTH_SECRET` com o **mesmo valor** de `CUSTOMER_AUTH_SECRET`;
 - `PAYMENT_PROVIDER=mercadopago` sem `PAYMENT_CREDENTIALS_ENCRYPTION_KEY`;
 - `MERCADOPAGO_ENVIRONMENT` diferente de `test` ou `production`.
 
 **4. `ValidationError` do pydantic-settings.**
 Falta variável obrigatória no `.env`. As sem default são: `DATABASE_URL`,
-`SUPABASE_URL`, `CUSTOMER_AUTH_SECRET`, `EMAIL_CODE_SECRET`,
-`PASSWORD_RESET_SECRET`, `OPENAI_API_KEY`.
+`SUPABASE_URL`, `CUSTOMER_AUTH_SECRET`, `ADMIN_AUTH_SECRET`,
+`EMAIL_CODE_SECRET`, `PASSWORD_RESET_SECRET`, `OPENAI_API_KEY`.
+
+Trocar `ADMIN_AUTH_SECRET` num deploy **invalida todo token de lojista em
+circulação**: quem estiver no painel volta para a tela de login, e o agente de
+impressão configurado com `token =` fixo para de imprimir até receber um token
+novo. O agente com `email`/`password` refaz o login sozinho.
 
 **5. Erro de conexão com o banco.**
 `DATABASE_URL` precisa do driver: `postgresql+psycopg://...`. Sem o `+psycopg` o
@@ -228,7 +234,6 @@ produção: `ENABLE_API_DOCS=true`.
 | Warning | Consequência |
 |---|---|
 | `REDIS_URL` vazia | cache de estimativa e rate limit só em memória; com N workers o limite vira N × o configurado |
-| `ADMIN_AUTH_SECRET` vazia | tokens de lojista assinados com o segredo do cliente |
 | `SUPABASE_SERVICE_ROLE_KEY` vazia | upload de imagem do painel responde 503; leitura das imagens segue |
 | `PAYMENT_WEBHOOK_SECRET` vazia com provider sandbox | webhook responde 503 e nenhum pedido online sai de "aguardando pagamento" |
 | `PAYMENT_PROVIDER=sandbox` em produção | cobranças criadas localmente, nenhum dinheiro movimentado de verdade |

@@ -263,12 +263,13 @@ class TestSignedToken:
 
 
 class TestAuthSecrets:
-    def test_admin_falls_back_to_the_customer_secret(self, monkeypatch):
-        """Documentado no proprio modulo: a Fase 1 sobe sem exigir variavel
-        nova. O `purpose` continua separando os dois usos."""
-        monkeypatch.setattr(settings, "ADMIN_AUTH_SECRET", None)
+    def test_admin_never_falls_back_to_the_customer_secret(self, monkeypatch):
+        """O fallback existia e foi removido: dois publicos com a mesma chave
+        de assinatura fazem um token forjado de um lado valer do outro.
+        ADMIN_AUTH_SECRET e obrigatoria na configuracao desde entao."""
+        monkeypatch.setattr(settings, "ADMIN_AUTH_SECRET", "segredo-de-admin")
         monkeypatch.setattr(settings, "CUSTOMER_AUTH_SECRET", "segredo-de-cliente")
-        assert admin_auth_secret() == "segredo-de-cliente"
+        assert admin_auth_secret() != "segredo-de-cliente"
 
     def test_admin_prefers_its_own_secret_when_set(self, monkeypatch):
         monkeypatch.setattr(settings, "ADMIN_AUTH_SECRET", "segredo-de-admin")

@@ -885,3 +885,42 @@ mantém limpa é o item 1.
 
 **Resíduo conhecido:** `admin_settings_schema` normaliza `label` só com `strip()`.
 Ficou de fora porque não é campo de busca — se um dia virar, entra aqui.
+
+---
+
+## 32. Dois públicos não compartilham chave de assinatura — e `purpose` não salva
+
+`ADMIN_AUTH_SECRET` era opcional e caía em `CUSTOMER_AUTH_SECRET` quando vazia.
+Em produção ela **estava vazia**: o token do lojista e o token do cliente eram
+assinados com a mesma chave, e o startup só emitia warning.
+
+A defesa que existia era o campo `purpose` (`admin_access` × `customer_access`),
+conferido em `decode_signed_token`. **Ele não defende contra quem tem a chave:**
+`purpose` viaja dentro do token, então quem conhece o segredo de cliente assina
+um `purpose="admin_access"` com `type="admin"` e um `sub` de `admin_users`, e o
+painel inteiro abre — pedidos, faturamento, cardápio, dados de cliente. Vazar o
+segredo do app do cliente passava a valer o painel de todo restaurante.
+
+Hoje:
+
+- `ADMIN_AUTH_SECRET` é obrigatória (sem default em `config.py`) — falta dela
+  derruba o boot com `ValidationError`, como os outros segredos;
+- valor **igual** ao de `CUSTOMER_AUTH_SECRET` derruba o boot também
+  (`startup_checks`): preencher o campo copiando o valor do lado é o outro jeito
+  de chegar no mesmo lugar;
+- `admin_auth_secret()` não tem mais fallback.
+
+O `purpose` continua e continua necessário — mas para o que ele de fato faz:
+separar usos que **compartilham** a mesma chave. O token de lojista de 12h e o
+ticket de stream de 30s são os dois assinados com `ADMIN_AUTH_SECRET`, e um
+ticket vazado no log do proxy não pode virar `PATCH /admin/orders/{id}/status`.
+
+**Custo de trocar o segredo:** todo token de lojista em circulação morre na
+hora. O painel volta para a tela de login (aceitável), e o agente de impressão
+instalado com `token =` fixo no `config.ini` **para de imprimir em silêncio** até
+alguém colar um token novo na máquina do balcão. O que roda com
+`email`/`password` refaz o login sozinho — é por isso que a instalação com senha
+é a recomendada em `print-agent/config.ini.example`.
+
+Regra que fica: **segredo novo por público novo.** Reaproveitar chave "porque o
+`purpose` separa" é confundir quem-assinou com para-que-serve.

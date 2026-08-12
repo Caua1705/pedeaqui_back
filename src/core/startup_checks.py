@@ -44,6 +44,19 @@ def collect_configuration_errors(settings: Settings) -> list[str]:
             "ou volte PAYMENT_PROVIDER para sandbox."
         )
 
+    if settings.ADMIN_AUTH_SECRET.strip() == settings.CUSTOMER_AUTH_SECRET.strip():
+        # A variavel ser obrigatoria (config.py) resolve o caso de estar
+        # ausente; este erro cobre o outro jeito de chegar ao mesmo lugar,
+        # que e copiar o valor do cliente para preencher o campo. Token
+        # forjado de um publico passaria a valer no outro.
+        errors.append(
+            "ADMIN_AUTH_SECRET e CUSTOMER_AUTH_SECRET tem o MESMO valor: os "
+            "tokens de lojista e de cliente ficam assinados com a mesma "
+            "chave, e comprometer um segredo compromete os dois publicos. "
+            "Gere um valor proprio com "
+            '`python -c "import secrets; print(secrets.token_urlsafe(48))"`.'
+        )
+
     if settings.MERCADOPAGO_ENVIRONMENT not in ("test", "production"):
         errors.append(
             f"MERCADOPAGO_ENVIRONMENT='{settings.MERCADOPAGO_ENVIRONMENT}' invalido: "
@@ -69,14 +82,6 @@ def collect_configuration_warnings(settings: Settings) -> list[str]:
             "REDIS_URL nao definida: o cache de estimativa de entrega fica so "
             "em memoria e e perdido a cada deploy, aumentando o custo de "
             "chamadas ao Google Maps."
-        )
-
-    if not settings.ADMIN_AUTH_SECRET:
-        warnings.append(
-            "ADMIN_AUTH_SECRET nao definida: os tokens de lojista sao "
-            "assinados com CUSTOMER_AUTH_SECRET. Funciona (o campo `purpose` "
-            "separa os dois tipos de token), mas um segredo proprio evita que "
-            "o comprometimento de um alcance o outro."
         )
 
     if not settings.SUPABASE_SERVICE_ROLE_KEY:

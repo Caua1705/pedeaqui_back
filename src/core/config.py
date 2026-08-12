@@ -33,8 +33,10 @@ class Settings(BaseSettings):
     CUSTOMER_ACCESS_TOKEN_MINUTES: int = 10080
     PASSWORD_RESET_TOKEN_MINUTES: int = 15
 
-    # Segredo dos tokens de lojista. Vazio = usa CUSTOMER_AUTH_SECRET.
-    ADMIN_AUTH_SECRET: str | None = None
+    # Segredo dos tokens de lojista. Obrigatorio e SEPARADO do de cliente:
+    # os dois publicos nao podem compartilhar chave de assinatura (armadilha
+    # 32). Sem default de propriedade — o boot falha aqui, e nao meses depois.
+    ADMIN_AUTH_SECRET: str
     # Jornada de lojista e turno de trabalho, nao sessao de semanas como a do
     # cliente: o token do painel expira em 12h.
     ADMIN_ACCESS_TOKEN_MINUTES: int = 720

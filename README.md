@@ -63,9 +63,21 @@ Sem estas, o boot falha com `ValidationError` do pydantic-settings:
 | `DATABASE_URL` | conexão Postgres. **Precisa do driver**: `postgresql+psycopg://...` |
 | `SUPABASE_URL` | URL do projeto Supabase |
 | `CUSTOMER_AUTH_SECRET` | segredo de assinatura dos tokens de cliente |
+| `ADMIN_AUTH_SECRET` | segredo dos tokens de lojista. **Precisa ser diferente do de cliente** — mesmo valor derruba o boot |
 | `EMAIL_CODE_SECRET` | segredo dos códigos de verificação de e-mail |
 | `PASSWORD_RESET_SECRET` | segredo dos códigos de recuperação de senha |
 | `OPENAI_API_KEY` | chat do Rapi (embeddings + LLM) |
+
+Gere cada segredo separadamente:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+⚠️ **Trocar `ADMIN_AUTH_SECRET` invalida todo token de lojista em circulação.**
+Quem estiver no painel precisa logar de novo, e o agente de impressão instalado
+com `token =` fixo no `config.ini` para de imprimir até receber um token novo —
+o que roda com `email`/`password` refaz o login sozinho.
 
 Condicionalmente obrigatórias — o boot **derruba** se faltarem no cenário delas:
 

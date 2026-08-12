@@ -43,7 +43,7 @@ conferido dentro de `decode_signed_token`.
 | | |
 |---|---|
 | Emitido em | `POST /admin/auth/login` → `services/admin_auth_service.py` |
-| Segredo | `ADMIN_AUTH_SECRET`, com fallback para o do cliente |
+| Segredo | `ADMIN_AUTH_SECRET` — obrigatório e diferente do de cliente |
 | Claims | `sub` = admin_user_id, `purpose` = `admin_access`, `type` = `admin`, + `restaurant_id` e `role` (**informativos**) |
 | Validade | `ADMIN_ACCESS_TOKEN_MINUTES`, padrão 720 min = **12h**, um turno |
 | Verificado em | `api/dependencies/admin_auth.py` |
@@ -81,14 +81,19 @@ pode ser autenticado pela URL, e o token de 12h não pode ir para a querystring
 
 ---
 
-## 4. Como os três convivem com o mesmo segredo
+## 4. Dois segredos, e o `purpose` só separa dentro de cada um
 
-Se `ADMIN_AUTH_SECRET` estiver vazio, todos são assinados com
-`CUSTOMER_AUTH_SECRET`. Um token de cliente **ainda assim não vira token de
-admin**, porque o `purpose` é diferente e é conferido na decodificação.
+**Cliente e lojista assinam com chaves diferentes**, e é obrigatório que seja
+assim: `ADMIN_AUTH_SECRET` não tem default, e valor igual ao de
+`CUSTOMER_AUTH_SECRET` derruba o boot.
 
-Funciona, mas o startup emite warning e o recomendado é ter segredo próprio: aí
-vazar um não alcança o outro.
+Havia fallback para o segredo de cliente, e ele era falha real: os dois públicos
+compartilhando chave fazem um token forjado de um lado valer do outro. O
+`purpose` não salva — ele viaja **dentro** do token que o atacante assina.
+
+O que o `purpose` faz é separar os usos que **compartilham** a mesma chave: o
+token de lojista de 12h e o ticket de stream de 30s são os dois assinados com
+`ADMIN_AUTH_SECRET`, e um não vale pelo outro.
 
 ---
 

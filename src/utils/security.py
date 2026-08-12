@@ -167,8 +167,10 @@ def decode_signed_token(token: str, purpose: str, secret: str | None = None) -> 
     except (jwt.InvalidTokenError, ValueError, TypeError) as exc:
         raise TokenInvalidError from exc
 
-    # `purpose` e o que impede um token de cliente de valer como token de
-    # admin quando os dois segredos coincidem (ver `admin_auth_secret`).
+    # `purpose` separa usos que compartilham o MESMO segredo — o ticket de
+    # stream de 30s e o token de lojista de 12h sao os dois assinados com
+    # ADMIN_AUTH_SECRET, e um nao pode valer pelo outro. A separacao entre
+    # cliente e lojista quem faz e o segredo (ver `admin_auth_secret`).
     if payload.get("purpose") != purpose:
         raise TokenInvalidError
     return payload
@@ -184,13 +186,12 @@ def _customer_auth_secret() -> str:
 def admin_auth_secret() -> str:
     """Segredo dos tokens de lojista.
 
-    Cai no segredo de cliente quando ADMIN_AUTH_SECRET nao esta definido, para
-    que a Fase 1 suba sem exigir variavel nova. Mesmo nesse caso um token de
-    cliente nao vira token de admin: `purpose` e conferido na decodificacao.
-    Definir o segredo separado ainda e o recomendado — ai o comprometimento
-    de um nao alcanca o outro.
+    Sem fallback para o segredo de cliente, de proposito: sao dois publicos
+    diferentes e uma chave compartilhada faz o comprometimento de um alcancar
+    o outro. `ADMIN_AUTH_SECRET` e obrigatoria na configuracao, entao aqui
+    nao ha caminho de ausencia a tratar.
     """
-    return settings.ADMIN_AUTH_SECRET or _customer_auth_secret()
+    return settings.ADMIN_AUTH_SECRET
 
 
 def _hmac_hex(value: str, secret: str | None) -> str:

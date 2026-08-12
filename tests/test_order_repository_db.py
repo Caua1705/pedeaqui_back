@@ -18,6 +18,7 @@ from decimal import Decimal
 
 import pytest
 
+from src.models.order_status_history_model import OrderStatusHistory
 from src.repositories.order_repository import OrderRepository
 from tests.fabricas_db import (
     criar_cliente,
@@ -144,6 +145,18 @@ class TestOsFiltrosDaListagem:
 
         assert total == 2
 
+    def test_o_filtro_de_status_vale_na_pagina_e_no_total(self, db):
+        restaurante = criar_restaurante(db)
+        filial = criar_filial(db, restaurante)
+        pendente = criar_pedido(db, restaurante, filial, status="pending")
+        criar_pedido(db, restaurante, filial, status="accepted")
+
+        repositorio = OrderRepository(db)
+        encontrados = repositorio.list_orders_by_restaurant(restaurante.id, status="pending")
+
+        assert [pedido.id for pedido in encontrados] == [pendente.id]
+        assert repositorio.count_orders_by_restaurant(restaurante.id, status="pending") == 1
+
     def test_o_filtro_de_filial_separa_as_lojas(self, db):
         restaurante = criar_restaurante(db)
         centro = criar_filial(db, restaurante, nome="Centro")
@@ -223,6 +236,122 @@ class TestOStreamDoPainel:
         )
 
         assert [pedido.id for pedido in encontrados] == [do_centro.id]
+
+
+class TestOStreamDeMudancaDeStatus:
+    """Lê `order_status_history`, e não `orders.updated_at`: updated_at muda
+    por qualquer escrita (confirmação de pagamento, por exemplo) e não diz para
+    qual status o pedido foi."""
+
+    def test_a_juncao_com_orders_e_o_que_separa_os_restaurantes(self, db):
+        """`order_status_history` não carrega `restaurant_id` próprio. Sem a
+        junção, o stream de um lojista veria a mudança de status de outro."""
+        cursor = instante(2026, 8, 1, 9)
+
+        meu = criar_restaurante(db, nome="O Meu")
+        minha_filial = criar_filial(db, meu)
+        meu_pedido = criar_pedido(db, meu, minha_filial)
+        minha_mudanca = self._registrar_mudanca(
+            db, meu_pedido, "accepted", cursor + timedelta(minutes=1)
+        )
+
+        vizinho = criar_restaurante(db, nome="O Vizinho")
+        filial_do_vizinho = criar_filial(db, vizinho)
+        pedido_do_vizinho = criar_pedido(db, vizinho, filial_do_vizinho)
+        self._registrar_mudanca(db, pedido_do_vizinho, "accepted", cursor + timedelta(minutes=2))
+
+        encontrados = OrderRepository(db).list_status_changes_since(
+            meu.id,
+            branch_id=None,
+            since=cursor,
+            limit=10,
+        )
+
+        assert [(historico.id, pedido.id) for historico, pedido in encontrados] == [
+            (minha_mudanca.id, meu_pedido.id)
+        ]
+
+    def test_o_cursor_e_estrito_e_a_ordem_e_crescente(self, db):
+        restaurante = criar_restaurante(db)
+        filial = criar_filial(db, restaurante)
+        pedido = criar_pedido(db, restaurante, filial)
+        cursor = instante(2026, 8, 1, 9)
+
+        self._registrar_mudanca(db, pedido, "no-cursor", cursor)
+        primeira = self._registrar_mudanca(db, pedido, "accepted", cursor + timedelta(minutes=1))
+        segunda = self._registrar_mudanca(db, pedido, "preparing", cursor + timedelta(minutes=2))
+
+        encontrados = OrderRepository(db).list_status_changes_since(
+            restaurante.id,
+            branch_id=None,
+            since=cursor,
+            limit=10,
+        )
+
+        assert [historico.id for historico, _ in encontrados] == [primeira.id, segunda.id]
+
+    def test_o_filtro_de_filial_vale_pela_filial_do_pedido(self, db):
+        restaurante = criar_restaurante(db)
+        centro = criar_filial(db, restaurante, nome="Centro")
+        aldeota = criar_filial(db, restaurante, nome="Aldeota")
+        cursor = instante(2026, 8, 1, 9)
+
+        pedido_do_centro = criar_pedido(db, restaurante, centro)
+        do_centro = self._registrar_mudanca(
+            db, pedido_do_centro, "accepted", cursor + timedelta(minutes=1)
+        )
+        pedido_da_aldeota = criar_pedido(db, restaurante, aldeota)
+        self._registrar_mudanca(
+            db, pedido_da_aldeota, "accepted", cursor + timedelta(minutes=2)
+        )
+
+        encontrados = OrderRepository(db).list_status_changes_since(
+            restaurante.id,
+            branch_id=centro.id,
+            since=cursor,
+            limit=10,
+        )
+
+        assert [historico.id for historico, _ in encontrados] == [do_centro.id]
+
+    @staticmethod
+    def _registrar_mudanca(db, pedido, status, criado_em):
+        historico = OrderStatusHistory(order_id=pedido.id, status=status)
+        historico.created_at = criado_em
+        db.add(historico)
+        db.flush()
+        return historico
+
+
+class TestAsEscritasDeStatus:
+    def test_update_status_grava_o_novo_status(self, db):
+        """O repositório só escreve o campo. Quem decide se a transição é
+        permitida é a máquina de estados, no service — e é por isso que este
+        teste consegue ir de `completed` para `pending` sem erro nenhum."""
+        restaurante = criar_restaurante(db)
+        filial = criar_filial(db, restaurante)
+        pedido = criar_pedido(db, restaurante, filial, status="pending")
+
+        OrderRepository(db).update_status(pedido, "accepted")
+
+        assert pedido.status == "accepted"
+
+    def test_update_payment_status_so_grava_paid_at_quando_ele_vem(self, db):
+        """`paid_at=None` é "não mexa", e não "apague". Sem isso, uma
+        atualização posterior de status apagaria a hora em que o dinheiro
+        entrou."""
+        restaurante = criar_restaurante(db)
+        filial = criar_filial(db, restaurante)
+        pedido = criar_pedido(db, restaurante, filial, payment_status="pending")
+        pago_em = instante(2026, 8, 1, 12)
+
+        repositorio = OrderRepository(db)
+        repositorio.update_payment_status(pedido, "paid", paid_at=pago_em)
+        assert pedido.paid_at == pago_em
+
+        repositorio.update_payment_status(pedido, "refunded")
+        assert pedido.payment_status == "refunded"
+        assert pedido.paid_at == pago_em
 
 
 class TestOEscopoDosDetalhes:

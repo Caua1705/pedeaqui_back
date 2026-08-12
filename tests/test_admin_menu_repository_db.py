@@ -276,6 +276,74 @@ class TestListagemDeProdutos:
         assert len(todos) == 2
 
 
+class TestAsCategorias:
+    def test_a_ordem_e_sort_order_e_o_nome_desempata(self, db):
+        restaurante = criar_restaurante(db)
+        criar_categoria(db, restaurante, nome="Zebra")
+        criar_categoria(db, restaurante, nome="Abacaxi")
+        criar_categoria(db, restaurante, nome="Banana")
+
+        encontradas = AdminMenuRepository(db).list_categories(restaurante.id)
+
+        assert [categoria.name for categoria in encontradas] == ["Abacaxi", "Banana", "Zebra"]
+
+    def test_categoria_de_outro_restaurante_nao_e_encontrada(self, db):
+        vizinho = criar_restaurante(db, nome="O Vizinho")
+        categoria = criar_categoria(db, vizinho)
+        meu = criar_restaurante(db, nome="O Meu")
+
+        repositorio = AdminMenuRepository(db)
+
+        assert repositorio.list_categories(meu.id) == []
+        assert repositorio.get_category(categoria.id, meu.id) is None
+        assert repositorio.get_category(categoria.id, vizinho.id).id == categoria.id
+        assert repositorio.get_category_by_slug(categoria.slug, meu.id) is None
+        assert repositorio.get_category_by_slug(categoria.slug, vizinho.id).id == categoria.id
+
+    def test_listar_por_ids_recorta_e_confere_o_restaurante(self, db):
+        meu = criar_restaurante(db, nome="O Meu")
+        minha = criar_categoria(db, meu, nome="Minha")
+        vizinho = criar_restaurante(db, nome="O Vizinho")
+        do_vizinho = criar_categoria(db, vizinho, nome="Do Vizinho")
+
+        encontradas = AdminMenuRepository(db).list_categories_by_ids(
+            [minha.id, do_vizinho.id],
+            meu.id,
+        )
+
+        assert [categoria.id for categoria in encontradas] == [minha.id]
+
+    def test_o_filtro_de_categoria_vale_na_pagina_e_no_total(self, db):
+        restaurante = criar_restaurante(db)
+        bebidas = criar_categoria(db, restaurante, nome="Bebidas")
+        carnes = criar_categoria(db, restaurante, nome="Carnes")
+        suco = criar_produto(db, restaurante, bebidas, nome="Suco")
+        criar_produto(db, restaurante, carnes, nome="Picanha")
+
+        repositorio = AdminMenuRepository(db)
+        encontrados = repositorio.list_products(restaurante.id, category_id=bebidas.id)
+
+        assert [produto.id for produto in encontrados] == [suco.id]
+        assert repositorio.count_products(restaurante.id, category_id=bebidas.id) == 1
+        assert repositorio.count_products(restaurante.id) == 2
+
+    def test_listar_por_categoria_ignora_a_paginacao(self, db):
+        """Existe separado de `list_products` porque a reordenação precisa do
+        conjunto INTEIRO: com `limit`, a partir do 101º produto a conferência
+        aprovaria uma lista incompleta e renumeraria por cima do resto."""
+        restaurante = criar_restaurante(db)
+        categoria = criar_categoria(db, restaurante)
+        for indice in range(7):
+            criar_produto(db, restaurante, categoria, nome=f"Produto {indice}")
+
+        encontrados = AdminMenuRepository(db).list_products_by_category(
+            categoria.id,
+            restaurante.id,
+        )
+
+        assert len(encontrados) == 7
+
+
 class TestEscopoPorRestaurante:
     """Grupo e opção não têm `restaurant_id`: chegam nele pela junção com
     `products`. É o que impede um UUID descoberto de outro restaurante de ser
@@ -307,3 +375,53 @@ class TestEscopoPorRestaurante:
 
         assert repositorio.get_option(opcao.id, meu.id) is None
         assert repositorio.get_option(opcao.id, vizinho.id) is not None
+
+    def test_produto_de_outro_restaurante_nao_e_encontrado_por_id_nem_por_slug(self, db):
+        vizinho = criar_restaurante(db, nome="O Vizinho")
+        categoria = criar_categoria(db, vizinho)
+        produto = criar_produto(db, vizinho, categoria)
+        meu = criar_restaurante(db, nome="O Meu")
+
+        repositorio = AdminMenuRepository(db)
+
+        assert repositorio.get_product(produto.id, meu.id) is None
+        assert repositorio.get_product(produto.id, vizinho.id).id == produto.id
+        assert repositorio.get_product_by_slug(produto.slug, meu.id) is None
+        assert repositorio.get_product_by_slug(produto.slug, vizinho.id).id == produto.id
+        assert repositorio.get_product_with_options(produto.id, meu.id) is None
+
+    def test_o_produto_com_opcoes_traz_grupos_e_opcoes_carregados(self, db):
+        restaurante = criar_restaurante(db)
+        categoria = criar_categoria(db, restaurante)
+        produto = criar_produto(db, restaurante, categoria)
+        grupo = criar_grupo_de_opcoes(db, produto, nome="Tamanho")
+        criar_opcao(db, grupo, nome="Grande")
+
+        encontrado = AdminMenuRepository(db).get_product_with_options(produto.id, restaurante.id)
+
+        assert [g.name for g in encontrado.option_groups] == ["Tamanho"]
+        assert [o.name for o in encontrado.option_groups[0].options] == ["Grande"]
+
+    def test_os_grupos_do_produto_vem_na_ordem_do_cardapio(self, db):
+        restaurante = criar_restaurante(db)
+        categoria = criar_categoria(db, restaurante)
+        produto = criar_produto(db, restaurante, categoria)
+        criar_grupo_de_opcoes(db, produto, nome="Zebra")
+        criar_grupo_de_opcoes(db, produto, nome="Abacaxi")
+
+        encontrados = AdminMenuRepository(db).list_option_groups(produto.id)
+
+        assert [grupo.name for grupo in encontrados] == ["Abacaxi", "Zebra"]
+
+    def test_os_grupos_desativados_tambem_aparecem_para_o_lojista(self, db):
+        """O oposto do cardápio público: o lojista precisa enxergar o que está
+        desligado, senão não tem como religar."""
+        restaurante = criar_restaurante(db)
+        categoria = criar_categoria(db, restaurante)
+        produto = criar_produto(db, restaurante, categoria)
+        criar_grupo_de_opcoes(db, produto, nome="Ligado", is_active=True)
+        criar_grupo_de_opcoes(db, produto, nome="Desligado", is_active=False)
+
+        encontrados = AdminMenuRepository(db).list_option_groups(produto.id)
+
+        assert len(encontrados) == 2

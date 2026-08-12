@@ -62,6 +62,16 @@ class TestAsBuscasPorIdentificador:
 
         assert encontrado.id == dona_do_email.id
 
+    def test_get_by_email_or_phone_cai_no_telefone_sem_email(self, db):
+        dono_do_telefone = criar_cliente(db, phone="85933333333")
+
+        encontrado = CustomerRepository(db).get_by_email_or_phone(
+            email=None,
+            phone="85933333333",
+        )
+
+        assert encontrado.id == dono_do_telefone.id
+
     def test_sem_email_e_sem_telefone_devolve_none_sem_consultar(self, db):
         criar_cliente(db)
         assert CustomerRepository(db).get_by_email_or_phone(email=None, phone=None) is None
@@ -176,6 +186,42 @@ class TestOsCodigosDeRecuperacaoDeSenha:
         assert usado_antes.used_at == instante(2026, 8, 1, 9)
         assert do_outro.used_at is None
 
+    def test_o_ultimo_nao_usado_e_o_mais_recente(self, db):
+        """Mesma regra dos códigos de e-mail, em consulta separada. Estão
+        duplicadas de propósito? Não — é o par que o Bloco 5 olha."""
+        cliente = criar_cliente(db, email="joana@exemplo.com")
+        self._criar_codigo(db, cliente, "antigo", criado_em=instante(2026, 8, 1, 10))
+        recente = self._criar_codigo(db, cliente, "recente", criado_em=instante(2026, 8, 1, 11))
+
+        encontrado = CustomerRepository(db).latest_unused_password_reset_code("joana@exemplo.com")
+
+        assert encontrado.id == recente.id
+
+    def test_codigo_usado_nao_conta_como_ultimo(self, db):
+        cliente = criar_cliente(db, email="joana@exemplo.com")
+        pendente = self._criar_codigo(db, cliente, "pendente", criado_em=instante(2026, 8, 1, 10))
+        usado = self._criar_codigo(db, cliente, "usado", criado_em=instante(2026, 8, 1, 11))
+        usado.used_at = instante(2026, 8, 1, 11, 30)
+        db.flush()
+
+        encontrado = CustomerRepository(db).latest_unused_password_reset_code("joana@exemplo.com")
+
+        assert encontrado.id == pendente.id
+
+    def test_a_janela_de_contagem_inclui_o_instante_exato(self, db):
+        cliente = criar_cliente(db, email="joana@exemplo.com")
+        limite = instante(2026, 8, 1, 10)
+        self._criar_codigo(db, cliente, "no-limite", criado_em=limite)
+        self._criar_codigo(db, cliente, "antes", criado_em=limite - timedelta(seconds=1))
+        self._criar_codigo(db, cliente, "depois", criado_em=limite + timedelta(seconds=1))
+
+        quantos = CustomerRepository(db).count_password_reset_codes_since(
+            email="joana@exemplo.com",
+            since=limite,
+        )
+
+        assert quantos == 2
+
     def test_encontra_pelo_hash_do_token(self, db):
         cliente = criar_cliente(db)
         codigo = self._criar_codigo(db, cliente, "codigo")
@@ -191,13 +237,15 @@ class TestOsCodigosDeRecuperacaoDeSenha:
         assert CustomerRepository(db).get_password_reset_by_token_hash("nao-existe") is None
 
     @staticmethod
-    def _criar_codigo(db, cliente, code_hash):
+    def _criar_codigo(db, cliente, code_hash, criado_em=None):
         codigo = PasswordResetCode(
             customer_id=cliente.id,
             email=cliente.email,
             code_hash=code_hash,
             expires_at=instante(2026, 8, 1, 12),
         )
+        if criado_em is not None:
+            codigo.created_at = criado_em
         db.add(codigo)
         db.flush()
         return codigo

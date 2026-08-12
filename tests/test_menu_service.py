@@ -187,7 +187,7 @@ class TestProductResponseFiltering:
         groups = MenuService.product_response(product).option_groups
         assert [option.name for option in groups[0].options] == ["fica"]
 
-    def test_a_group_with_no_active_options_disappears(self):
+    def test_an_empty_optional_group_disappears_from_the_product(self):
         """MUDANCA DE COMPORTAMENTO INTENCIONAL — nao e refatoracao.
 
         ANTES: o filtro de grupo e o de opcao eram independentes, entao um
@@ -195,20 +195,17 @@ class TestProductResponseFiltering:
         cardapio com a lista vazia. Este teste afirmava `len(groups) == 1` e
         `groups[0].options == []`.
 
-        E sendo o grupo OBRIGATORIO, o estrago passava do visual: o produto
-        ficava impossivel de vender, porque
-        `OrderService._validate_selected_options` recusava o pedido com
-        "Opcao obrigatoria nao selecionada" e nao havia opcao nenhuma para o
-        cliente mandar. Nenhum caminho de compra, e nada no log.
+        DEPOIS: grupo sem opcao ativa nao oferece escolha nenhuma, entao nao
+        aparece.
 
-        DEPOIS: o grupo some do cardapio E deixa de bloquear o pedido (o outro
-        lado esta em `test_order_option_groups.py`). O produto continua a
-        venda, sem aquele passo — perder a escolha e melhor que perder a
-        venda.
+        Isto vale para o grupo OPCIONAL, e e cosmetico. Quando o grupo vazio e
+        OBRIGATORIO o produto inteiro sai de venda, e isso esta em
+        `TestProductsOutOfSale` — sao decisoes diferentes com pesos
+        diferentes.
         """
-        product = make_product(
-            option_groups=[make_group("Vazio", [make_option("x", is_active=False)])]
-        )
+        opcional = make_group("Bordas", [make_option("x", is_active=False)])
+        opcional.is_required = False
+        product = make_product(option_groups=[opcional])
 
         assert MenuService.product_response(product).option_groups == []
 
@@ -225,36 +222,10 @@ class TestProductResponseFiltering:
         assert [group.name for group in groups] == ["Quase vazio"]
         assert [option.name for option in groups[0].options] == ["viva"]
 
-    def test_only_the_required_one_is_logged(self, caplog):
-        """O log e como o lojista descobre que desativou a ultima opcao de um
-        grupo obrigatorio — e por que aquele passo sumiu do produto dele.
-
-        So o OBRIGATORIO vira log: um grupo opcional vazio nao tira nada do
-        cliente, e avisar sobre ele encheria o arquivo de ruido justamente
-        onde alguem vai procurar o caso que importa.
-        """
-        obrigatorio = make_group("Escolha o tamanho", [make_option("x", is_active=False)])
-        obrigatorio.is_required = True
-        opcional = make_group("Bordas", [make_option("y", is_active=False)])
-        opcional.is_required = False
-        product = make_product(option_groups=[obrigatorio, opcional])
-
-        with caplog.at_level("WARNING"):
-            assert MenuService.product_response(product).option_groups == []
-
-        avisos = [registro.getMessage() for registro in caplog.records]
-        assert len(avisos) == 1
-        assert "Escolha o tamanho" in avisos[0]
-        assert "Bordas" not in avisos[0]
-
-    def test_an_empty_optional_group_disappears_too(self):
-        """A regra e uma so: grupo sem opcao ativa nao existe para o cliente.
-        O obrigatorio e o que trava a venda, mas o opcional vazio tambem nao
-        oferece nada — e duas regras seriam duas coisas para lembrar."""
+    def test_an_inactive_group_disappears_whatever_its_options(self):
         product = make_product(
-            option_groups=[make_group("Opcional vazio", [make_option("x", is_active=False)], is_active=True)]
+            option_groups=[make_group("Desligado", [make_option("viva")], is_active=False)]
         )
-        product.option_groups[0].is_required = False
 
         assert MenuService.product_response(product).option_groups == []
 
@@ -330,6 +301,116 @@ class TestProductResponseValues:
         response = MenuService.product_response(make_product(image_path="produtos/x.jpg"))
         assert response.image_url is not None
         assert response.image_url.endswith("produtos/x.jpg")
+
+
+# ---------------------------------------------------------------------------
+# Produto fora de venda por grupo obrigatorio vazio
+# ---------------------------------------------------------------------------
+
+
+def make_required_group(name="Escolha o ponto", options=()):
+    group = make_group(name, list(options))
+    group.is_required = True
+    return group
+
+
+def make_blocked_product(name="Picanha"):
+    """Produto com um grupo obrigatorio cuja ultima opcao foi desativada.
+
+    E o caso real: o lojista esgota o ultimo ponto de carne e nao percebe que
+    tirou a picanha de venda.
+    """
+    return make_product(
+        name=name,
+        slug=name.lower(),
+        option_groups=[make_required_group(options=[make_option("mal passado", is_active=False)])],
+    )
+
+
+class TestProductsOutOfSale:
+    """GRUPO OBRIGATORIO EXISTE PORQUE A COZINHA NAO PRODUZ SEM AQUELE DADO.
+
+    Sem nenhuma opcao ativa nele, o produto nao tem como ser vendido — vender
+    sem a escolha mandaria uma picanha sem ponto para a chapa, e esconderia o
+    erro do lojista, porque os pedidos continuariam entrando.
+    """
+
+    def test_a_blocked_product_is_not_in_the_menu(self):
+        service = make_service(
+            menu_repository=FakeMenuRepository(products=[make_blocked_product(), make_product(name="Coca")])
+        )
+
+        menu = service.get_restaurant_menu("pizzaria-do-ze")
+
+        assert [produto.name for produto in menu.products] == ["Coca"]
+
+    def test_a_blocked_product_is_not_in_its_category(self):
+        service = make_service(
+            product_repository=FakeProductRepository(
+                by_category=[make_blocked_product(), make_product(name="Coca")]
+            )
+        )
+
+        produtos = service.get_products_by_category("pizzaria-do-ze", "carnes")
+
+        assert [produto.name for produto in produtos] == ["Coca"]
+
+    def test_the_direct_link_to_a_blocked_product_is_404(self):
+        """404 igual a produto inexistente, e nao uma mensagem propria: o link
+        do produto e publico e compartilhavel, e distinguir os dois casos
+        contaria a quem tem o link o que esta acontecendo dentro da loja."""
+        service = make_service(product_repository=FakeProductRepository(by_slug=make_blocked_product()))
+
+        with pytest.raises(HTTPException) as exc:
+            service.get_product_detail("pizzaria-do-ze", "picanha")
+
+        assert exc.value.status_code == 404
+
+    def test_one_active_option_is_enough_to_keep_it_selling(self):
+        """A fronteira. O lojista reativa uma opcao e o produto volta."""
+        produto = make_product(
+            name="Picanha",
+            option_groups=[
+                make_required_group(options=[make_option("mal passado", is_active=False), make_option("ao ponto")])
+            ],
+        )
+        service = make_service(menu_repository=FakeMenuRepository(products=[produto]))
+
+        assert [p.name for p in service.get_restaurant_menu("pizzaria-do-ze").products] == ["Picanha"]
+
+    def test_an_empty_optional_group_does_not_take_the_product_out_of_sale(self):
+        """So o OBRIGATORIO tira o produto de venda. Uma pizza sem borda
+        recheada disponivel continua sendo uma pizza vendavel."""
+        opcional = make_group("Bordas", [make_option("catupiry", is_active=False)])
+        opcional.is_required = False
+        produto = make_product(name="Pizza", option_groups=[opcional])
+        service = make_service(menu_repository=FakeMenuRepository(products=[produto]))
+
+        assert [p.name for p in service.get_restaurant_menu("pizzaria-do-ze").products] == ["Pizza"]
+
+    def test_an_inactive_required_group_does_not_block_either(self):
+        """Grupo obrigatorio DESATIVADO nao exige nada — nem no cardapio nem
+        no pedido —, entao nao tira o produto de venda."""
+        grupo = make_required_group(options=[make_option("x", is_active=False)])
+        grupo.is_active = False
+        produto = make_product(name="Picanha", option_groups=[grupo])
+        service = make_service(menu_repository=FakeMenuRepository(products=[produto]))
+
+        assert [p.name for p in service.get_restaurant_menu("pizzaria-do-ze").products] == ["Picanha"]
+
+    def test_it_names_the_product_and_the_group_in_the_log(self, caplog):
+        """O log e metade do "nao perder a venda em silencio" — a outra metade
+        e o sinal no /admin. Sem os dois, o produto some da loja e ninguem
+        tem onde procurar o porque."""
+        service = make_service(menu_repository=FakeMenuRepository(products=[make_blocked_product()]))
+
+        with caplog.at_level("WARNING"):
+            service.get_restaurant_menu("pizzaria-do-ze")
+
+        avisos = [registro.getMessage() for registro in caplog.records]
+        assert len(avisos) == 1
+        assert "Picanha" in avisos[0]
+        assert "Escolha o ponto" in avisos[0]
 
 
 # ---------------------------------------------------------------------------

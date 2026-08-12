@@ -39,7 +39,7 @@ class MenuService:
             ],
             coupons=self._coupon_responses(restaurant.id),
             categories=[CategoryResponse.model_validate(category) for category in self.menu_repository.get_active_categories(restaurant.id)],
-            products=[self.product_response(product) for product in self.menu_repository.get_active_products(restaurant.id)],
+            products=self._sellable_product_responses(self.menu_repository.get_active_products(restaurant.id)),
         )
 
     def get_products_by_category(self, restaurant_slug: str, category_slug: str) -> list[ProductResponse]:
@@ -47,13 +47,30 @@ class MenuService:
         if not self.product_repository.active_category_exists(restaurant.id, category_slug):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Categoria não encontrada")
         products = self.product_repository.list_active_by_category_slug(restaurant.id, category_slug)
-        return [self.product_response(product) for product in products]
+        return self._sellable_product_responses(products)
 
     def get_product_detail(self, restaurant_slug: str, product_slug: str) -> ProductResponse:
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
         product = self.product_repository.get_active_by_slug(restaurant.id, product_slug)
         if not product:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Produto não encontrado")
+
+        # Fora de venda responde 404 igual a produto inexistente, e nao uma
+        # mensagem propria: o link do produto e publico e compartilhavel, e
+        # distinguir os dois casos aqui contaria a quem tem o link o que esta
+        # acontecendo dentro da loja. O lojista descobre pelo /admin.
+        blocking = self._blocking_required_group(product)
+        if blocking is not None:
+            logger.warning(
+                "[Cardapio] produto fora de venda: grupo obrigatorio sem opcao ativa "
+                "| product_id=%s | produto=%s | option_group_id=%s | grupo=%s",
+                product.id,
+                product.name,
+                blocking.id,
+                blocking.name,
+            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Produto não encontrado")
+
         return self.product_response(product)
 
     @staticmethod
@@ -121,40 +138,65 @@ class MenuService:
     def _answerable_option_groups(product) -> list:
         """Os grupos que o cliente CONSEGUE responder.
 
-        GRUPO SEM NENHUMA OPCAO ATIVA NAO EXISTE PARA O CLIENTE. O filtro de
-        grupo e o de opcao eram independentes, entao um grupo ativo cujas
-        opcoes foram todas desativadas continuava saindo no cardapio com a
-        lista vazia. Sendo ele obrigatorio, o produto ficava IMPOSSIVEL DE
-        VENDER: sem opcao para escolher, `_validate_selected_options` recusava
-        o pedido com "Opcao obrigatoria nao selecionada" e nao havia nada que
-        o cliente pudesse fazer.
-
-        E o caso acontece sozinho — o lojista desativa opcao todo dia, e
-        desativar a ultima de um grupo obrigatorio nao avisa nada.
-
-        Some do cardapio E deixa de bloquear o pedido (o outro lado disto esta
-        em `OrderService._validate_selected_options`): o produto continua a
-        venda, sem aquele passo. Perder a escolha e melhor que perder a venda,
-        e o log abaixo e como o lojista descobre.
+        Grupo sem nenhuma opcao ativa nao oferece escolha nenhuma, entao nao
+        aparece. Isto aqui e cosmetico e vale so para o grupo OPCIONAL: quando
+        o grupo vazio e obrigatorio, o produto inteiro sai de venda antes de
+        chegar aqui (`_blocking_required_group`).
         """
-        groups = []
+        return [
+            group
+            for group in product.option_groups
+            if group.is_active and any(option.is_active for option in group.options)
+        ]
+
+    @staticmethod
+    def _blocking_required_group(product):
+        """O grupo obrigatorio que tira este produto de venda, se houver.
+
+        GRUPO OBRIGATORIO EXISTE PORQUE A COZINHA NAO PRODUZ SEM AQUELA
+        INFORMACAO. Quando o lojista desativa a ultima opcao ativa de um deles
+        — e ele desativa opcao todo dia —, nao sobra nada para o cliente
+        escolher, e as duas saidas possiveis eram ruins:
+
+        - deixar o produto no cardapio SEM o passo mandava uma picanha sem
+          ponto para a chapa, e escondia o erro do lojista: os pedidos
+          continuavam entrando e ninguem descobria;
+        - deixar o produto no cardapio COM o passo vazio travava o cliente num
+          passo sem escolha, e o pedido era recusado com 400 de qualquer jeito
+          (`OrderService._validate_selected_options`) — produto impossivel de
+          vender, sem nada no log.
+
+        Entao o produto sai de venda: some do cardapio publico, e quem ja o
+        tinha no carrinho leva o 400 do checkout — o mesmo padrao do produto
+        esgotado (armadilha 23). O lojista perde a venda ate reativar uma
+        opcao, e e por isso que o log abaixo e o sinal no /admin
+        (`unavailable_by_required_group`) existem: sem eles, "perde a venda"
+        vira "perde a venda em silencio".
+        """
         for group in product.option_groups:
-            if not group.is_active:
+            if not group.is_active or not group.is_required:
                 continue
-            if any(option.is_active for option in group.options):
-                groups.append(group)
-                continue
-            # So o obrigatorio vira log: um grupo opcional vazio nao tira nada
-            # do cliente, e avisar sobre ele encheria o log de ruido.
-            if group.is_required:
+            if not any(option.is_active for option in group.options):
+                return group
+        return None
+
+    def _sellable_product_responses(self, products) -> list[ProductResponse]:
+        """A lista do cardapio, sem os produtos que nao tem como ser vendidos."""
+        responses = []
+        for product in products:
+            blocking = self._blocking_required_group(product)
+            if blocking is not None:
                 logger.warning(
-                    "[Cardapio] grupo obrigatorio sem opcao ativa, fora do produto "
-                    "| product_id=%s | option_group_id=%s | grupo=%s",
+                    "[Cardapio] produto fora de venda: grupo obrigatorio sem opcao ativa "
+                    "| product_id=%s | produto=%s | option_group_id=%s | grupo=%s",
                     product.id,
-                    group.id,
-                    group.name,
+                    product.name,
+                    blocking.id,
+                    blocking.name,
                 )
-        return groups
+                continue
+            responses.append(self.product_response(product))
+        return responses
 
     @staticmethod
     def _banner_response(banner) -> BannerResponse:

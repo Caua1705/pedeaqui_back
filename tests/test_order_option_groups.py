@@ -1,20 +1,18 @@
-"""Grupo de adicionais sem nenhuma opcao ativa nao bloqueia o pedido.
+"""Grupo obrigatorio sem opcao ativa continua RECUSANDO o pedido.
 
-O outro lado de `MenuService._answerable_option_groups`, e os dois precisam
-concordar: escondendo o grupo so no cardapio, o cliente fecharia o pedido e
-levaria um 400 sobre um passo que ele nunca viu — mais dificil de diagnosticar
-que o problema original.
+E o outro lado de `MenuService._blocking_required_group`, e os dois precisam
+concordar: o produto sai do cardapio publico, e quem ja o tinha no carrinho
+leva este 400 no checkout — o mesmo papel que o 400 de `is_available` cumpre
+para o produto esgotado (armadilha 23).
 
-O PROBLEMA ORIGINAL: um grupo `is_required` cujas opcoes foram todas
-desativadas deixava o produto IMPOSSIVEL DE VENDER. O cliente nao tinha o que
-selecionar, entao:
+POR QUE NAO VENDER SEM A ESCOLHA: grupo obrigatorio existe porque a cozinha
+nao produz sem aquela informacao. Vender sem ela manda uma picanha sem ponto
+para a chapa — e esconde o erro do lojista, porque os pedidos continuam
+entrando e ninguem descobre que ele desativou tudo por engano.
 
-    nao seleciona nada        -> 400 "Opcao obrigatoria nao selecionada"
-    manda a opcao inativa     -> 400 "Opcao invalida para este grupo"
-
-Nenhum caminho de compra, nada no log, e acontecendo sozinho — o lojista
-desativa opcao todo dia, e desativar a ultima de um grupo obrigatorio nao
-avisava nada.
+O que ESTE arquivo trava e que a recusa continua de pe. Que o produto some da
+vitrine esta em `test_menu_service.py::TestProductsOutOfSale`, e o sinal para
+o lojista em `test_admin_product_availability.py`.
 """
 
 import uuid
@@ -61,44 +59,54 @@ def service():
 
 
 class TestRequiredGroupWithoutActiveOptions:
-    def test_the_order_goes_through_without_the_choice(self):
-        """O caso que travava a venda. Hoje o pedido passa sem aquele grupo."""
-        grupo = make_group(options=[make_option(is_active=False), make_option(is_active=False)])
+    def test_the_order_is_refused_and_there_is_no_way_around_it(self):
+        """As DUAS saidas do cliente batem na parede, e e proposital.
+
+        O produto ja nao esta no cardapio nesse estado, entao quem chega aqui
+        e carrinho montado antes. Nao ha o que aceitar: mandar o pedido para a
+        cozinha sem a escolha obrigatoria e o que esta correcao existe para
+        impedir.
+        """
+        morta = make_option(is_active=False)
+        grupo = make_group(options=[morta, make_option(is_active=False)])
         produto = make_product([grupo])
 
-        assert service()._validate_selected_options(produto, []) == []
+        # 1. nao selecionar nada
+        with pytest.raises(HTTPException) as sem_escolha:
+            service()._validate_selected_options(produto, [])
+        assert sem_escolha.value.detail == "Opcao obrigatoria nao selecionada: Escolha o tamanho"
 
-    def test_an_inactive_group_never_blocked_anyway(self):
-        """Grupo desativado inteiro ja era ignorado antes — nao e o caso que
-        mudou. Fica registrado para a fronteira ficar visivel."""
+        # 2. mandar a opcao desativada
+        with pytest.raises(HTTPException) as com_opcao_morta:
+            service()._validate_selected_options(produto, [selecao(grupo, morta)])
+        assert com_opcao_morta.value.detail == "Opcao invalida para este grupo"
+
+    def test_an_inactive_group_does_not_block(self):
+        """Grupo obrigatorio DESATIVADO nao exige nada — o lojista desligou o
+        passo inteiro de proposito. E a mesma fronteira que mantem o produto
+        no cardapio (`test_menu_service.py`)."""
         grupo = make_group(is_active=False, options=[make_option(is_active=False)])
 
         assert service()._validate_selected_options(make_product([grupo]), []) == []
 
-    def test_a_second_group_that_still_has_options_keeps_being_required(self):
-        """A permissao vale SO para o grupo vazio. Um grupo obrigatorio ao
-        lado, com opcao ativa, continua obrigatorio — senao um grupo vazio
-        desligaria a exigencia do produto inteiro."""
+    def test_an_empty_optional_group_does_not_block(self):
+        """So o obrigatorio recusa. Uma pizza sem borda recheada disponivel
+        continua vendavel — e continua no cardapio."""
+        grupo = make_group("Bordas", [make_option(is_active=False)], is_required=False, min_select=0)
+
+        assert service()._validate_selected_options(make_product([grupo]), []) == []
+
+    def test_a_healthy_group_next_to_it_does_not_rescue_the_order(self):
+        """Escolher o que da para escolher nao libera o pedido: o grupo vazio
+        continua exigindo o que ninguem tem como dar."""
         vazio = make_group("Tamanho", [make_option(is_active=False)])
         com_opcao = make_group("Ponto da carne", [make_option()])
         produto = make_product([vazio, com_opcao])
 
         with pytest.raises(HTTPException) as exc:
-            service()._validate_selected_options(produto, [])
+            service()._validate_selected_options(produto, [selecao(com_opcao, com_opcao.options[0])])
 
-        assert exc.value.status_code == 400
-        assert "Ponto da carne" in exc.value.detail
-
-    def test_choosing_the_option_of_the_healthy_group_is_enough(self):
-        vazio = make_group("Tamanho", [make_option(is_active=False)])
-        com_opcao = make_group("Ponto da carne", [make_option()])
-        produto = make_product([vazio, com_opcao])
-
-        resultado = service()._validate_selected_options(
-            produto, [selecao(com_opcao, com_opcao.options[0])]
-        )
-
-        assert len(resultado) == 1
+        assert "Tamanho" in exc.value.detail
 
 
 class TestTheChecksThatDidNotChange:

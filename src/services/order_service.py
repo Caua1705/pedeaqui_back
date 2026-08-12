@@ -51,15 +51,6 @@ logger = logging.getLogger("uvicorn.error")
 CREATE_ORDER_ROUTE = "POST /restaurants/{restaurant_slug}/orders"
 
 
-def _has_active_option(group) -> bool:
-    """Se sobrou alguma opcao para o cliente escolher neste grupo.
-
-    Um grupo pode estar ativo e nao ter nenhuma opcao ativa — basta o lojista
-    esgotar a ultima. Ver `_validate_selected_options`.
-    """
-    return any(option.is_active for option in group.options)
-
-
 class OrderService:
     def __init__(self, db: Session):
         self.db = db
@@ -580,29 +571,16 @@ class OrderService:
             selected_by_group[group.id].append(option)
 
         for group in active_groups:
-            # GRUPO SEM NENHUMA OPCAO ATIVA NAO BLOQUEIA O PEDIDO.
+            # GRUPO OBRIGATORIO SEM OPCAO ATIVA CONTINUA RECUSANDO O PEDIDO, e
+            # isso e proposital: grupo obrigatorio existe porque a cozinha nao
+            # produz sem aquela informacao, e vender sem ela manda uma picanha
+            # sem ponto para a chapa.
             #
-            # Sendo obrigatorio, ele deixava o produto IMPOSSIVEL DE VENDER:
-            # nao havia opcao para o cliente escolher, e a exigencia logo
-            # abaixo recusava o pedido com "Opcao obrigatoria nao
-            # selecionada". Nenhum caminho de compra, e nada no log.
-            #
-            # O cardapio ja esconde esse grupo (`MenuService.
-            # _answerable_option_groups`); aqui e o outro lado da mesma
-            # decisao, e os dois precisam concordar — escondendo so no
-            # cardapio, o cliente fecharia o pedido e levaria um 400 sobre um
-            # passo que ele nunca viu.
-            if not _has_active_option(group):
-                if group.is_required:
-                    logger.warning(
-                        "[Pedido] grupo obrigatorio sem opcao ativa, item vendido sem a escolha "
-                        "| product_id=%s | option_group_id=%s | grupo=%s",
-                        product.id,
-                        group.id,
-                        group.name,
-                    )
-                continue
-
+            # O produto ja nao aparece no cardapio nesse estado
+            # (`MenuService._blocking_required_group`), entao quem chega aqui
+            # e carrinho montado ANTES de o lojista desativar a ultima opcao.
+            # Este 400 e a rede desse caso — o mesmo papel que o 400 de
+            # `is_available` cumpre para o produto esgotado (armadilha 23).
             selected_count = len(selected_by_group[group.id])
             min_select = group.min_select or 0
             max_select = group.max_select or 0

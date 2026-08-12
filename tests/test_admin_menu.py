@@ -174,6 +174,30 @@ class TenantScopedMenuRepository:
     def count_products(self, **kwargs):
         return len(self.list_products(**kwargs))
 
+    def product_ids_blocked_by_required_group(self, product_ids):
+        """A mesma regra do `NOT EXISTS` do repositorio real, em Python.
+
+        Grupo obrigatorio ATIVO sem nenhuma opcao ativa tira o produto de
+        venda. O fake percorre `self.groups`/`self.options` porque e assim que
+        ele ja representa a juncao — os grupos deste fake nao carregam a
+        colecao `options` do ORM.
+        """
+        alvo = set(product_ids)
+        bloqueados = set()
+        for group in self.groups:
+            if group.product_id not in alvo:
+                continue
+            if not getattr(group, "is_active", True) or not getattr(group, "is_required", False):
+                continue
+            ativas = [
+                option
+                for option in self.options
+                if option.option_group_id == group.id and getattr(option, "is_active", True)
+            ]
+            if not ativas:
+                bloqueados.add(group.product_id)
+        return bloqueados
+
     def list_products_by_category(self, category_id, restaurant_id):
         return [
             item for item in self.products
@@ -675,3 +699,101 @@ class ProductReorderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnavailableByRequiredGroupTests(unittest.TestCase):
+    """O sinal que diz ao lojista POR QUE o produto sumiu do cardapio.
+
+    Um grupo obrigatorio ativo sem nenhuma opcao ativa tira o produto de
+    venda. No painel, `is_active` e `is_available` continuam ligados — sem
+    este campo o produto some do cliente e nada explica.
+
+    A listagem e a tela de edicao chegam a resposta por CAMINHOS DIFERENTES: a
+    listagem por uma consulta agregada (uma para a pagina inteira), a edicao
+    lendo os grupos ja carregados. Os dois estao testados porque e entre eles
+    que a divergencia apareceria.
+    """
+
+    def _produto_bloqueado(self):
+        product = make_product()
+        group = make_option_group(product_id=product.id, is_required=True, is_active=True)
+        option = make_option(option_group_id=group.id, is_active=False)
+        return product, group, option
+
+    def test_the_listing_marks_the_blocked_product(self):
+        product, group, option = self._produto_bloqueado()
+        saudavel = make_product(name="Coca", slug="coca")
+        repository = TenantScopedMenuRepository(
+            products=[product, saudavel], groups=[group], options=[option]
+        )
+
+        items = build_service(repository).list_products(scope()).items
+
+        por_nome = {item.name: item for item in items}
+        self.assertTrue(por_nome["Pizza Calabresa"].unavailable_by_required_group)
+        self.assertFalse(por_nome["Coca"].unavailable_by_required_group)
+
+    def test_the_listing_asks_the_database_once_for_the_whole_page(self):
+        """A consulta agregada existe para a listagem nao virar uma leitura
+        por produto — a tela tem 200 deles."""
+        product, group, option = self._produto_bloqueado()
+        repository = TenantScopedMenuRepository(
+            products=[product], groups=[group], options=[option]
+        )
+        chamadas = []
+        original = repository.product_ids_blocked_by_required_group
+
+        def contando(product_ids):
+            chamadas.append(list(product_ids))
+            return original(product_ids)
+
+        repository.product_ids_blocked_by_required_group = contando
+
+        build_service(repository).list_products(scope())
+
+        self.assertEqual(len(chamadas), 1)
+
+    def test_the_edit_screen_marks_it_too(self):
+        product, group, option = self._produto_bloqueado()
+        group.options = [option]
+        product.option_groups = [group]
+        repository = TenantScopedMenuRepository(
+            products=[product], groups=[group], options=[option]
+        )
+
+        response = build_service(repository).get_product(scope(), product.id)
+
+        self.assertTrue(response.unavailable_by_required_group)
+
+    def test_a_healthy_product_is_not_marked(self):
+        product = make_product()
+        group = make_option_group(product_id=product.id, is_required=True)
+        option = make_option(option_group_id=group.id, is_active=True)
+        group.options = [option]
+        product.option_groups = [group]
+        repository = TenantScopedMenuRepository(
+            products=[product], groups=[group], options=[option]
+        )
+
+        response = build_service(repository).get_product(scope(), product.id)
+
+        self.assertFalse(response.unavailable_by_required_group)
+
+    def test_turning_the_last_option_back_on_clears_the_flag(self):
+        """O caminho de volta: o lojista reativa uma opcao e o produto volta a
+        venda. Se o campo nao limpasse, ele ficaria marcado para sempre."""
+        product = make_product()
+        group = make_option_group(product_id=product.id, is_required=True)
+        option = make_option(option_group_id=group.id, is_active=False)
+        group.options = [option]
+        product.option_groups = [group]
+        repository = TenantScopedMenuRepository(
+            products=[product], groups=[group], options=[option]
+        )
+        service = build_service(repository)
+
+        self.assertTrue(service.get_product(scope(), product.id).unavailable_by_required_group)
+
+        option.is_active = True
+
+        self.assertFalse(service.get_product(scope(), product.id).unavailable_by_required_group)

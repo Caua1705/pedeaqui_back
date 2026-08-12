@@ -55,6 +55,7 @@ from src.schemas.admin_menu_schema import (
     ProductReorderRequest,
 )
 from src.repositories.restaurant_repository import RestaurantRepository
+from src.services.menu_rules import blocking_required_group
 from src.utils.images import IMAGE_CONTENT_TYPES, detect_image_extension
 from src.utils.money import money_to_float, quantize_money
 from src.utils.normalization import slugify
@@ -199,8 +200,12 @@ class AdminMenuService:
         for position, product_id in enumerate(payload.product_ids):
             by_id[product_id].sort_order = position
         self._commit()
+        bloqueados = self.repository.product_ids_blocked_by_required_group(list(payload.product_ids))
         return [
-            self._product_response(by_id[product_id])
+            self._product_response(
+                by_id[product_id],
+                unavailable_by_required_group=product_id in bloqueados,
+            )
             for product_id in payload.product_ids
         ]
 
@@ -228,8 +233,17 @@ class AdminMenuService:
             search=normalized_search,
             is_active=is_active,
         )
+        bloqueados = self.repository.product_ids_blocked_by_required_group(
+            [product.id for product in products]
+        )
         return AdminProductListResponse(
-            items=[self._product_response(product) for product in products],
+            items=[
+                self._product_response(
+                    product,
+                    unavailable_by_required_group=product.id in bloqueados,
+                )
+                for product in products
+            ],
             total=total,
             limit=limit,
             offset=offset,
@@ -242,7 +256,7 @@ class AdminMenuService:
                 status_code=status.HTTP_404_NOT_FOUND, detail="Produto nao encontrado"
             )
         return AdminProductDetailResponse(
-            **self._product_response(product).model_dump(),
+            **self._one_product_response(product).model_dump(),
             option_groups=[
                 self._option_group_response(group)
                 for group in sorted(
@@ -274,7 +288,7 @@ class AdminMenuService:
             sort_order=payload.sort_order,
         )
         self._commit(lambda: self.repository.add_product(product))
-        return self._product_response(product)
+        return self._one_product_response(product)
 
     def update_product(
         self,
@@ -294,7 +308,7 @@ class AdminMenuService:
         for field, value in changes.items():
             setattr(product, field, value)
         self._commit()
-        return self._product_response(product)
+        return self._one_product_response(product)
 
     def set_product_availability(
         self,
@@ -311,7 +325,7 @@ class AdminMenuService:
         product = self._get_product(product_id, scope)
         product.is_available = payload.is_available
         self._commit()
-        return self._product_response(product)
+        return self._one_product_response(product)
 
     def upload_product_image(
         self,
@@ -585,7 +599,32 @@ class AdminMenuService:
         return cleaned[:MAX_SEARCH_LENGTH]
 
     @staticmethod
-    def _product_response(product: Product) -> AdminProductResponse:
+    def _one_product_response(product: Product) -> AdminProductResponse:
+        """A resposta de uma rota que mexe em UM produto.
+
+        Aqui ler `product.option_groups` custa uma consulta, num produto so —
+        e vale a pena: o lojista que acabou de salvar precisa ver na hora que
+        o produto saiu de venda.
+        """
+        return AdminMenuService._product_response(
+            product,
+            unavailable_by_required_group=blocking_required_group(product) is not None,
+        )
+
+    @staticmethod
+    def _product_response(
+        product: Product,
+        *,
+        unavailable_by_required_group: bool,
+    ) -> AdminProductResponse:
+        """O sinal e OBRIGATORIO no parametro, e nao calculado aqui dentro.
+
+        Calcular aqui leria `product.option_groups`, e na LISTAGEM isso
+        dispararia uma consulta por produto — exatamente o que a listagem
+        evita nao carregando os grupos. Cada quem chama diz o que sabe: a
+        listagem passa o resultado da consulta agregada, as rotas de um
+        produto so calculam pela regra.
+        """
         return AdminProductResponse(
             id=product.id,
             category_id=product.category_id,
@@ -600,6 +639,7 @@ class AdminMenuService:
             is_available=product.is_available,
             sort_order=product.sort_order,
             printing_sector_id=product.printing_sector_id,
+            unavailable_by_required_group=unavailable_by_required_group,
         )
 
     @staticmethod

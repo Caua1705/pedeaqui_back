@@ -103,6 +103,49 @@ class AdminMenuRepository:
         )
         return list(self.db.scalars(stmt).all())
 
+    def product_ids_blocked_by_required_group(
+        self,
+        product_ids: list[uuid.UUID],
+    ) -> set[uuid.UUID]:
+        """Quais destes produtos tem um grupo obrigatorio sem opcao ativa.
+
+        UMA consulta para a pagina inteira, e nao uma por produto: a listagem
+        do painel nao carrega `option_groups` justamente para nao fazer 200
+        subconsultas numa tela de 200 produtos (ver `get_product_with_options`,
+        que carrega, e e a tela de edicao de UM).
+
+        `NOT EXISTS` e nao `LEFT JOIN ... HAVING count = 0`: o Postgres para na
+        primeira opcao ativa que encontra, em vez de contar todas.
+
+        ESTA CONSULTA E A MESMA REGRA DE `services/menu_rules.
+        blocking_required_group`, escrita em SQL porque nao ha como
+        compartilhar codigo entre as duas. As duas mudam juntas — divergindo,
+        a lista do painel marca um conjunto de produtos e a tela de edicao
+        marca outro.
+        """
+        if not product_ids:
+            return set()
+
+        tem_opcao_ativa = (
+            select(ProductOption.id)
+            .where(
+                ProductOption.option_group_id == ProductOptionGroup.id,
+                ProductOption.is_active.is_(True),
+            )
+            .exists()
+        )
+        stmt = (
+            select(ProductOptionGroup.product_id)
+            .where(
+                ProductOptionGroup.product_id.in_(product_ids),
+                ProductOptionGroup.is_active.is_(True),
+                ProductOptionGroup.is_required.is_(True),
+                ~tem_opcao_ativa,
+            )
+            .distinct()
+        )
+        return set(self.db.scalars(stmt).all())
+
     def count_products(
         self,
         restaurant_id: uuid.UUID,

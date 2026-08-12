@@ -10,6 +10,7 @@ from src.schemas.coupon_schema import PublicCouponResponse
 from src.schemas.menu_schema import RestaurantMenuResponse
 from src.schemas.product_schema import ProductOptionGroupResponse, ProductOptionResponse, ProductResponse
 from src.schemas.restaurant_schema import BranchResponse, CategoryResponse, RestaurantSettingsResponse
+from src.services.menu_rules import blocking_required_group
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import money_to_float
 from src.utils.storage import build_storage_url
@@ -59,7 +60,7 @@ class MenuService:
         # mensagem propria: o link do produto e publico e compartilhavel, e
         # distinguir os dois casos aqui contaria a quem tem o link o que esta
         # acontecendo dentro da loja. O lojista descobre pelo /admin.
-        blocking = self._blocking_required_group(product)
+        blocking = blocking_required_group(product)
         if blocking is not None:
             logger.warning(
                 "[Cardapio] produto fora de venda: grupo obrigatorio sem opcao ativa "
@@ -141,7 +142,7 @@ class MenuService:
         Grupo sem nenhuma opcao ativa nao oferece escolha nenhuma, entao nao
         aparece. Isto aqui e cosmetico e vale so para o grupo OPCIONAL: quando
         o grupo vazio e obrigatorio, o produto inteiro sai de venda antes de
-        chegar aqui (`_blocking_required_group`).
+        chegar aqui (`services/menu_rules.blocking_required_group`).
         """
         return [
             group
@@ -149,42 +150,11 @@ class MenuService:
             if group.is_active and any(option.is_active for option in group.options)
         ]
 
-    @staticmethod
-    def _blocking_required_group(product):
-        """O grupo obrigatorio que tira este produto de venda, se houver.
-
-        GRUPO OBRIGATORIO EXISTE PORQUE A COZINHA NAO PRODUZ SEM AQUELA
-        INFORMACAO. Quando o lojista desativa a ultima opcao ativa de um deles
-        — e ele desativa opcao todo dia —, nao sobra nada para o cliente
-        escolher, e as duas saidas possiveis eram ruins:
-
-        - deixar o produto no cardapio SEM o passo mandava uma picanha sem
-          ponto para a chapa, e escondia o erro do lojista: os pedidos
-          continuavam entrando e ninguem descobria;
-        - deixar o produto no cardapio COM o passo vazio travava o cliente num
-          passo sem escolha, e o pedido era recusado com 400 de qualquer jeito
-          (`OrderService._validate_selected_options`) — produto impossivel de
-          vender, sem nada no log.
-
-        Entao o produto sai de venda: some do cardapio publico, e quem ja o
-        tinha no carrinho leva o 400 do checkout — o mesmo padrao do produto
-        esgotado (armadilha 23). O lojista perde a venda ate reativar uma
-        opcao, e e por isso que o log abaixo e o sinal no /admin
-        (`unavailable_by_required_group`) existem: sem eles, "perde a venda"
-        vira "perde a venda em silencio".
-        """
-        for group in product.option_groups:
-            if not group.is_active or not group.is_required:
-                continue
-            if not any(option.is_active for option in group.options):
-                return group
-        return None
-
     def _sellable_product_responses(self, products) -> list[ProductResponse]:
         """A lista do cardapio, sem os produtos que nao tem como ser vendidos."""
         responses = []
         for product in products:
-            blocking = self._blocking_required_group(product)
+            blocking = blocking_required_group(product)
             if blocking is not None:
                 logger.warning(
                     "[Cardapio] produto fora de venda: grupo obrigatorio sem opcao ativa "

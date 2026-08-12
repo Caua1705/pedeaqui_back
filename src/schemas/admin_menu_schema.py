@@ -151,6 +151,21 @@ class AdminProductResponse(BaseResponse):
     # de uma filial deste lojista. Texto livre aqui apontaria o produto para
     # a impressora de outro restaurante.
     printing_sector_id: UUID | None = None
+    # POR QUE ESTE PRODUTO SUMIU DO CARDAPIO SEM NINGUEM DESLIGA-LO.
+    #
+    # `True` quando um grupo obrigatorio ATIVO ficou sem nenhuma opcao ativa.
+    # O produto nao tem como ser vendido nesse estado — a cozinha nao produz
+    # sem aquela informacao —, entao ele sai do cardapio publico e o pedido de
+    # quem ja o tinha no carrinho e recusado.
+    #
+    # Sem este campo o lojista perde a venda em silencio: `is_active` continua
+    # ligado, `is_available` continua ligado, e o produto simplesmente nao
+    # aparece para o cliente. E somente leitura — o jeito de resolver e
+    # reativar uma opcao do grupo, nao mexer aqui.
+    #
+    # Default `False` de proposito: campo novo com default nao quebra cliente
+    # antigo do contrato (ver armadilha 7).
+    unavailable_by_required_group: bool = False
 
 
 class AdminProductDetailResponse(AdminProductResponse):

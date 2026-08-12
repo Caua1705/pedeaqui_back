@@ -6,6 +6,8 @@ a confronta com o escopo antes de qualquer leitura ou escrita — mesma regra
 de `admin_settings_schema`.
 """
 
+from datetime import datetime
+from enum import Enum
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -34,6 +36,16 @@ FONT_LARGE = "large"
 # impressora local e 220 caracteres; 255 cobre com folga sem virar campo
 # livre de texto.
 MAX_PRINTER_NAME_LENGTH = 255
+
+# Os comandos que o painel manda para o agente. Um so, por enquanto. Vive
+# como `str, Enum` e nao como constante solta porque assim a LISTA sai no
+# /openapi.json e o painel consegue conhecer os valores sem ler o backend
+# (armadilha 16).
+
+
+class PrintAgentCommandType(str, Enum):
+    PRINT_TEST = "print_test"
+
 
 def _clean_printer_name(value: str | None) -> str | None:
     """Tira o espaco das pontas e trata vazio como ausente.
@@ -186,3 +198,100 @@ class OrderPrintJobsResponse(BaseModel):
     branch_id: UUID
     jobs: list[PrintJobResponse]
 
+
+# ---------------------------------------------------------------------------
+# O agente: sinal de vida, impressoras da maquina e comandos do painel
+# ---------------------------------------------------------------------------
+
+
+class PrintAgentHeartbeatRequest(BaseModel):
+    """O que o agente conta sobre si a cada sinal.
+
+    Nao tem `branch_id`: a filial sai do token, como em toda rota /admin. Um
+    agente que pudesse escolher a filial no corpo poderia se anunciar como
+    outra loja.
+    """
+
+    agent_version: str | None = Field(default=None, max_length=40)
+
+
+class PrintAgentStatusResponse(BaseResponse):
+    """O que o painel mostra no bloco "Agente" da tela de Impressao."""
+
+    branch_id: UUID
+    agent_version: str | None = None
+    last_seen_at: datetime | None = None
+    seconds_since_last_seen: int | None = None
+    # Calculado, nao gravado: "online" e uma pergunta sobre o AGORA, e uma
+    # coluna booleana no banco ficaria mentindo assim que o agente caisse
+    # sem avisar.
+    is_online: bool
+
+
+class PrintAgentPrinterInput(BaseModel):
+    name: str = Field(min_length=1, max_length=MAX_PRINTER_NAME_LENGTH)
+    is_default: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        cleaned = _clean_printer_name(value)
+        if cleaned is None:
+            raise ValueError("nome de impressora vazio")
+        return cleaned
+
+
+class PrintAgentPrintersRequest(BaseModel):
+    """A lista COMPLETA de impressoras daquela maquina.
+
+    Substitui a anterior inteira, e nao acrescenta: impressora removida do
+    Windows tem que sumir do seletor do painel, senao o lojista escolhe uma
+    que nao existe mais e a via nao sai.
+    """
+
+    printers: list[PrintAgentPrinterInput] = Field(default_factory=list, max_length=50)
+
+
+class PrintAgentPrinterResponse(BaseResponse):
+    name: str
+    is_default: bool
+    reported_at: datetime
+
+
+class PrintAgentPrintersResponse(BaseModel):
+    branch_id: UUID
+    printers: list[PrintAgentPrinterResponse]
+
+
+class PrintTestRequest(BaseModel):
+    """Para onde mandar a via de teste.
+
+    Os dois campos sao opcionais e a ordem de resolucao e:
+    `printer_name` > a impressora do setor > a padrao do agente. Mandar o
+    setor e o caso comum ("testar a Cozinha"); mandar a impressora direto e
+    o que serve para conferir uma maquina recem-instalada, antes de existir
+    setor nenhum.
+    """
+
+    printing_sector_id: UUID | None = None
+    printer_name: str | None = Field(default=None, max_length=MAX_PRINTER_NAME_LENGTH)
+
+    @field_validator("printer_name")
+    @classmethod
+    def clean_printer_name(cls, value: str | None) -> str | None:
+        return _clean_printer_name(value)
+
+
+class PrintTestResponse(BaseModel):
+    """O comando foi enfileirado — nao "a via saiu".
+
+    A diferenca importa para a tela: o agente pode estar offline, e quem
+    responde se a bobina saiu e a pessoa que esta olhando a impressora. O
+    painel usa `agent_is_online` para avisar antes de o lojista ficar
+    esperando.
+    """
+
+    command_id: UUID
+    branch_id: UUID
+    created_at: datetime
+    agent_is_online: bool

@@ -17,6 +17,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from src.repositories.delivery_estimate_repository import DeliveryEstimateRepository
 from src.schemas.delivery_schema import DeliveryAddressInput, DeliveryEstimateRequest
 from src.schemas.order_schema import AddressInput, CreateOrderRequest
 from src.services.delivery_estimate_service import (
@@ -309,6 +310,45 @@ class GoogleIsNotCalledTests(unittest.TestCase):
             )
 
         self.assertEqual(called, ["junior"])
+
+
+class TokenComparisonTests(unittest.TestCase):
+    """A reconferencia em tempo constante do repositorio de estimativa.
+
+    Ela e inalcancavel pelo caminho normal: se o SELECT devolveu a linha, o
+    `=` do Postgres ja disse que os tokens sao iguais. O teste chega nela
+    trocando o que a consulta devolve — que e exatamente o cenario que a
+    linha existe para cobrir: o dia em que o WHERE deixar de ser igualdade
+    exata (um `ilike`, uma collation que aproxime formas Unicode).
+    """
+
+    def _repository(self, returned_estimate):
+        repository = DeliveryEstimateRepository(SimpleNamespace())
+        repository.db = SimpleNamespace(scalar=lambda stmt: returned_estimate)
+        return repository
+
+    def test_a_row_whose_token_does_not_match_is_discarded(self):
+        outra = SimpleNamespace(token="token-de-outra-estimativa")
+        repository = self._repository(outra)
+
+        found = repository.get_valid_by_token("token-pedido", datetime.now(timezone.utc))
+
+        self.assertIsNone(found)
+
+    def test_the_matching_row_comes_back(self):
+        minha = SimpleNamespace(token="token-pedido")
+        repository = self._repository(minha)
+
+        found = repository.get_valid_by_token("token-pedido", datetime.now(timezone.utc))
+
+        self.assertIs(found, minha)
+
+    def test_no_row_is_none(self):
+        repository = self._repository(None)
+
+        self.assertIsNone(
+            repository.get_valid_by_token("token-pedido", datetime.now(timezone.utc))
+        )
 
 
 def _no_google(*args, **kwargs):

@@ -9,6 +9,16 @@ backfill que regerasse os tokens passaria em qualquer teste de "a coluna
 ficou preenchida" e mataria todo link em circulação em silêncio — não há
 rota de reemissão (armadilha 19).
 
+O ESTADO QUE ESTES TESTES PRECISAM NÃO EXISTE MAIS NO SCHEMA. A fixture do
+banco aplica `upgrade head`, e o head é a 0017 — que já apagou a coluna em
+claro. A fixture `schema_entre_as_duas_revisoes` reconstrói a janela: coluna
+em claro de volta, hash nullable de novo. É a mesma transação revertida no
+fim, então o DDL some junto (DDL no Postgres é transacional).
+
+Reconstruir o estado é o preço de testar uma migração de dado depois que ela
+já rodou. A alternativa — não testar — deixaria sem prova justamente a linha
+que decide se cliente perde ou não o acesso ao próprio pedido.
+
 Marcado `db`: o backfill é SQL sobre a tabela real.
 """
 
@@ -86,7 +96,20 @@ def _token_em_claro(db: Session, id_do_pedido: uuid.UUID) -> str | None:
 
 
 @pytest.fixture
-def loja(db: Session):
+def schema_entre_as_duas_revisoes(db: Session):
+    """Devolve `orders` ao estado em que a 0016 a deixou.
+
+    Sem isto não há como exercitar o backfill: no head a coluna em claro não
+    existe e o hash é NOT NULL.
+    """
+    db.execute(text("ALTER TABLE orders ADD COLUMN tracking_token text"))
+    db.execute(text("ALTER TABLE orders ALTER COLUMN tracking_token_hash DROP NOT NULL"))
+    db.flush()
+    return None
+
+
+@pytest.fixture
+def loja(db: Session, schema_entre_as_duas_revisoes):
     restaurante = fab.criar_restaurante(db)
     filial = fab.criar_filial(db, restaurante)
     cliente = fab.criar_cliente(db)
@@ -156,31 +179,34 @@ def test_o_lote_nao_deixa_pedido_para_tras(db: Session, loja):
         assert _hash_gravado(db, id_do_pedido) == esperado
 
 
-def test_a_coluna_em_claro_aceita_nulo_depois_da_revisao(db: Session, loja):
-    """O que permite ao código novo parar de escrever a coluna em claro antes
-    de a 0017 apagá-la. Sem isso, todo pedido criado após o deploy morreria
-    no NOT NULL."""
-    restaurante, filial, cliente = loja
+def test_no_head_a_coluna_em_claro_nao_existe_mais(db: Session):
+    """O que a 0017 entregou, e o motivo de tudo isto.
 
-    id_do_pedido = db.execute(
+    Não é redundante com os testes acima: eles rodam sobre a janela
+    reconstruída pela fixture. Este confere o schema de verdade — se alguém
+    recriar a coluna "para facilitar o suporte", ele acende.
+    """
+    existe = db.execute(
         text(
-            "INSERT INTO orders (restaurant_id, branch_id, customer_id, tracking_token_hash, "
-            "customer_name_snapshot, customer_phone_snapshot, order_type, status, "
-            "payment_method, subtotal, delivery_fee, service_fee, discount_total, total) "
-            "VALUES (:restaurant_id, :branch_id, :customer_id, :hash, "
-            "'Cliente', '85999999999', 'delivery', 'pending', "
-            "'cash', 10, 0, 0, 0, 10) RETURNING id"
-        ),
-        {
-            "restaurant_id": restaurante.id,
-            "branch_id": filial.id,
-            "customer_id": cliente.id,
-            "hash": hashlib.sha256(b"sem-coluna-em-claro").hexdigest(),
-        },
+            "SELECT count(*) FROM information_schema.columns "
+            "WHERE table_name = 'orders' AND column_name = 'tracking_token'"
+        )
     ).scalar_one()
-    db.flush()
 
-    assert _token_em_claro(db, id_do_pedido) is None
+    assert existe == 0
+
+
+def test_no_head_o_hash_e_obrigatorio(db: Session):
+    """NOT NULL desde a 0017: pedido sem hash é pedido sem acompanhamento, e
+    não há como devolver o token depois."""
+    nullable = db.execute(
+        text(
+            "SELECT is_nullable FROM information_schema.columns "
+            "WHERE table_name = 'orders' AND column_name = 'tracking_token_hash'"
+        )
+    ).scalar_one()
+
+    assert nullable == "NO"
 
 
 def test_o_hash_e_unico(db: Session, loja):

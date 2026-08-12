@@ -39,21 +39,55 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, password_hash: str | None) -> bool:
+    """Confere a senha contra o hash gravado, no formato em que ele estiver.
+
+    Sao DOIS formatos convivendo, e o antigo nao pode parar de funcionar:
+    senha gravada por versao anterior da API e login de lojista, e quebrar
+    aqui tranca gente fora da propria loja.
+
+    O prefixo `$2` e o do bcrypt (`$2a$`, `$2b$`, `$2y$`); o que nao comeca
+    assim e tratado como o formato antigo.
+    """
     if not password_hash:
         return False
     if password_hash.startswith("$2"):
-        try:
-            return _PASSWORD_CONTEXT.verify(password, password_hash)
-        except (ValueError, TypeError):
-            return False
+        return _verify_bcrypt(password, password_hash)
+    return _verify_legacy_pbkdf2(password, password_hash)
+
+
+def _verify_bcrypt(password: str, password_hash: str) -> bool:
+    try:
+        return _PASSWORD_CONTEXT.verify(password, password_hash)
+    except (ValueError, TypeError):
+        # Hash corrompido no banco vira "senha errada" na tela de login, e nao
+        # um 500 que derruba a rota de login inteira.
+        return False
+
+
+def _verify_legacy_pbkdf2(password: str, password_hash: str) -> bool:
+    """O formato que a versao anterior da API gravava.
+
+    `pbkdf2_sha256$<iteracoes>$<salt>$<digest>`, com salt e digest em base64
+    url-safe SEM padding.
+
+    O numero de iteracoes sai do PROPRIO hash, e nao da constante do modulo:
+    e o que permite subir `_PASSWORD_ITERATIONS` sem invalidar o que ja esta
+    gravado.
+    """
     try:
         algorithm, iterations, salt, expected = password_hash.split("$", 3)
-        if algorithm != "pbkdf2_sha256":
-            return False
+    except ValueError:
+        return False
+
+    if algorithm != "pbkdf2_sha256":
+        return False
+
+    try:
         digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), _b64decode(salt), int(iterations))
-        return hmac.compare_digest(_b64encode(digest), expected)
     except (ValueError, TypeError):
         return False
+
+    return hmac.compare_digest(_b64encode(digest), expected)
 
 
 def generate_6_digit_code() -> str:
@@ -123,15 +157,21 @@ def create_signed_token(
 
 
 def decode_signed_token(token: str, purpose: str, secret: str | None = None) -> dict[str, Any]:
+    # O `try` cobre so a decodificacao. Envolvendo tambem a conferencia de
+    # `purpose`, qualquer ValueError/TypeError vindo dela seria convertido em
+    # "token invalido" — e um erro nosso sairia como culpa do cliente.
     try:
         payload = jwt.decode(token, secret or _customer_auth_secret(), algorithms=["HS256"])
-        if payload.get("purpose") != purpose:
-            raise TokenInvalidError
-        return payload
     except jwt.ExpiredSignatureError as exc:
         raise TokenExpiredError from exc
     except (jwt.InvalidTokenError, ValueError, TypeError) as exc:
         raise TokenInvalidError from exc
+
+    # `purpose` e o que impede um token de cliente de valer como token de
+    # admin quando os dois segredos coincidem (ver `admin_auth_secret`).
+    if payload.get("purpose") != purpose:
+        raise TokenInvalidError
+    return payload
 
 
 def _customer_auth_secret() -> str:

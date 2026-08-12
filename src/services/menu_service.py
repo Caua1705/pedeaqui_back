@@ -111,11 +111,50 @@ class MenuService:
                     ],
                 )
                 for group in sorted(
-                    (group for group in product.option_groups if group.is_active),
+                    MenuService._answerable_option_groups(product),
                     key=lambda group: (group.sort_order or 0, group.name),
                 )
             ],
         )
+
+    @staticmethod
+    def _answerable_option_groups(product) -> list:
+        """Os grupos que o cliente CONSEGUE responder.
+
+        GRUPO SEM NENHUMA OPCAO ATIVA NAO EXISTE PARA O CLIENTE. O filtro de
+        grupo e o de opcao eram independentes, entao um grupo ativo cujas
+        opcoes foram todas desativadas continuava saindo no cardapio com a
+        lista vazia. Sendo ele obrigatorio, o produto ficava IMPOSSIVEL DE
+        VENDER: sem opcao para escolher, `_validate_selected_options` recusava
+        o pedido com "Opcao obrigatoria nao selecionada" e nao havia nada que
+        o cliente pudesse fazer.
+
+        E o caso acontece sozinho — o lojista desativa opcao todo dia, e
+        desativar a ultima de um grupo obrigatorio nao avisa nada.
+
+        Some do cardapio E deixa de bloquear o pedido (o outro lado disto esta
+        em `OrderService._validate_selected_options`): o produto continua a
+        venda, sem aquele passo. Perder a escolha e melhor que perder a venda,
+        e o log abaixo e como o lojista descobre.
+        """
+        groups = []
+        for group in product.option_groups:
+            if not group.is_active:
+                continue
+            if any(option.is_active for option in group.options):
+                groups.append(group)
+                continue
+            # So o obrigatorio vira log: um grupo opcional vazio nao tira nada
+            # do cliente, e avisar sobre ele encheria o log de ruido.
+            if group.is_required:
+                logger.warning(
+                    "[Cardapio] grupo obrigatorio sem opcao ativa, fora do produto "
+                    "| product_id=%s | option_group_id=%s | grupo=%s",
+                    product.id,
+                    group.id,
+                    group.name,
+                )
+        return groups
 
     @staticmethod
     def _banner_response(banner) -> BannerResponse:

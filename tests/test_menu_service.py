@@ -110,7 +110,20 @@ def make_option(name, sort_order=0, is_active=True, additional_price="2.50"):
     )
 
 
-def make_group(name, options=(), sort_order=0, is_active=True):
+def make_group(name, options=None, sort_order=0, is_active=True):
+    """Um grupo de adicionais VALIDO por padrao — com uma opcao ativa dentro.
+
+    O default era `()`, e os testes de ordenacao aproveitavam isso para nao
+    escrever opcao nenhuma. Depois que "grupo sem opcao ativa nao existe para
+    o cliente" virou regra, um grupo vazio deixou de sair no cardapio e
+    aqueles testes passaram a medir a remocao em vez da ordem.
+
+    A ASSERCAO DELES NAO MUDOU — o que mudou foi o fixture, que agora entrega
+    um grupo que o cliente consegue responder. Quem precisa de um grupo vazio
+    passa as opcoes inativas explicitamente.
+    """
+    if options is None:
+        options = [make_option("padrao")]
     return SimpleNamespace(
         id=uuid.uuid4(),
         name=name,
@@ -174,23 +187,54 @@ class TestProductResponseFiltering:
         groups = MenuService.product_response(product).option_groups
         assert [option.name for option in groups[0].options] == ["fica"]
 
-    def test_a_group_whose_options_are_all_inactive_still_appears_empty(self):
-        """ESQUISITO, e registrado como esta.
+    def test_a_group_with_no_active_options_disappears(self):
+        """MUDANCA DE COMPORTAMENTO INTENCIONAL — nao e refatoracao.
 
-        O filtro de grupo e o de opcao sao independentes: um grupo ATIVO cujas
-        opcoes estao todas inativas continua saindo no cardapio, com a lista
-        de opcoes vazia. Se ele for obrigatorio (`is_required`), o cliente ve
-        um passo que nao tem o que escolher.
+        ANTES: o filtro de grupo e o de opcao eram independentes, entao um
+        grupo ATIVO cujas opcoes estavam todas inativas continuava saindo no
+        cardapio com a lista vazia. Este teste afirmava `len(groups) == 1` e
+        `groups[0].options == []`.
 
-        Nao e corrigido aqui: decidir se o grupo some ou se vira erro de
-        configuracao e decisao separada.
+        E sendo o grupo OBRIGATORIO, o estrago passava do visual: o produto
+        ficava impossivel de vender, porque
+        `OrderService._validate_selected_options` recusava o pedido com
+        "Opcao obrigatoria nao selecionada" e nao havia opcao nenhuma para o
+        cliente mandar. Nenhum caminho de compra, e nada no log.
+
+        DEPOIS: o grupo some do cardapio E deixa de bloquear o pedido (o outro
+        lado esta em `test_order_option_groups.py`). O produto continua a
+        venda, sem aquele passo — perder a escolha e melhor que perder a
+        venda.
         """
         product = make_product(
             option_groups=[make_group("Vazio", [make_option("x", is_active=False)])]
         )
+
+        assert MenuService.product_response(product).option_groups == []
+
+    def test_a_group_that_still_has_one_active_option_stays(self):
+        """A fronteira: basta UMA opcao ativa para o grupo continuar de pe."""
+        product = make_product(
+            option_groups=[
+                make_group("Quase vazio", [make_option("viva"), make_option("morta", is_active=False)])
+            ]
+        )
+
         groups = MenuService.product_response(product).option_groups
-        assert len(groups) == 1
-        assert groups[0].options == []
+
+        assert [group.name for group in groups] == ["Quase vazio"]
+        assert [option.name for option in groups[0].options] == ["viva"]
+
+    def test_an_empty_optional_group_disappears_too(self):
+        """A regra e uma so: grupo sem opcao ativa nao existe para o cliente.
+        O obrigatorio e o que trava a venda, mas o opcional vazio tambem nao
+        oferece nada — e duas regras seriam duas coisas para lembrar."""
+        product = make_product(
+            option_groups=[make_group("Opcional vazio", [make_option("x", is_active=False)], is_active=True)]
+        )
+        product.option_groups[0].is_required = False
+
+        assert MenuService.product_response(product).option_groups == []
 
 
 class TestProductResponseOrdering:

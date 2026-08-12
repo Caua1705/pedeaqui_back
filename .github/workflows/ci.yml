@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Um push novo cancela a execução anterior do mesmo branch: não adianta
+# esperar o CI de um commit que já foi substituído.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: Testes da API
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Mesma versão do Dockerfile (python:3.12-slim). CI numa versão e
+          # produção em outra faz o verde aqui não valer nada lá.
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+
+      # `src.core.config` é importado na cadeia de qualquer teste, e as
+      # variáveis sem default derrubam o import com ValidationError. Os
+      # valores são fictícios de propósito: nenhum teste da suíte rápida
+      # abre conexão de banco, chama o Google ou fala com o Supabase — eles
+      # existem só para o Settings validar.
+      #
+      # Nenhum segredo real entra no repositório nem em secrets do Actions:
+      # se um dia um teste precisar de credencial de verdade, ele não
+      # pertence a esta suíte.
+      - name: Montar .env de teste
+        run: |
+          cat > .env <<'EOF'
+          DATABASE_URL=postgresql+psycopg://ci:ci@localhost:5432/ci
+          SUPABASE_URL=https://ci.supabase.invalid
+          CUSTOMER_AUTH_SECRET=ci-customer-auth-secret-nao-usar-em-lugar-nenhum
+          ADMIN_AUTH_SECRET=ci-admin-auth-secret-nao-usar-em-lugar-nenhum
+          EMAIL_CODE_SECRET=ci-email-code-secret-nao-usar-em-lugar-nenhum
+          PASSWORD_RESET_SECRET=ci-password-reset-secret-nao-usar-em-lugar-nenhum
+          OPENAI_API_KEY=ci-openai-key-fake
+          GOOGLE_MAPS_ROUTES_API_KEY=ci-google-key-fake
+          APP_ENV=test
+          EOF
+
+      - run: pytest -q
+
+  print-agent:
+    name: Testes do agente de impressão
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: print-agent/requirements-dev.txt
+
+      # Job separado, e não um passo a mais do job da API, porque são dois
+      # projetos: o agente não importa FastAPI nem SQLAlchemy, roda no
+      # Windows do balcão e não precisa de nenhuma variável de ambiente.
+      # Instalar os dois requirements juntos esconderia uma dependência que
+      # o agente passou a usar sem declarar.
+      #
+      # `pywin32` está marcado `sys_platform == "win32"` no requirements, então
+      # o pip o pula aqui — os testes do agente rodam sem a fila de impressão.
+      - run: pip install -r print-agent/requirements-dev.txt
+
+      - run: pytest -q
+        working-directory: print-agent

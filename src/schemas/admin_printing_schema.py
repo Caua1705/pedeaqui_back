@@ -30,6 +30,27 @@ PRINT_JOB_PRODUCTION = "production"
 FONT_NORMAL = "normal"
 FONT_LARGE = "large"
 
+# Nome de impressora do Windows. O limite da API para o nome de uma
+# impressora local e 220 caracteres; 255 cobre com folga sem virar campo
+# livre de texto.
+MAX_PRINTER_NAME_LENGTH = 255
+
+def _clean_printer_name(value: str | None) -> str | None:
+    """Tira o espaco das pontas e trata vazio como ausente.
+
+    O nome tem que casar BYTE A BYTE com o do Windows. Um espaco colado
+    junto do nome no copiar-e-colar do painel faria a via nao sair — e o
+    unico sintoma seria a impressora que nao recebeu nada.
+
+    Nao aplica `normalize_text` (que faz NFC): o nome nao e nosso, e do
+    Windows, e ele tem que ser gravado exatamente como aquela maquina o
+    reportou.
+    """
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
 
 class PrintingSectorResponse(BaseResponse):
     id: UUID
@@ -37,17 +58,25 @@ class PrintingSectorResponse(BaseResponse):
     name: str
     is_active: bool
     sort_order: int
+    # Nulo = o agente resolve pelo config.ini da maquina, como sempre fez.
+    printer_name: str | None = None
 
 
 class PrintingSectorCreate(BaseModel):
     name: str = Field(min_length=1, max_length=MAX_NAME_LENGTH)
     sort_order: int = Field(default=0, ge=0)
     is_active: bool = True
+    printer_name: str | None = Field(default=None, max_length=MAX_PRINTER_NAME_LENGTH)
 
     @field_validator("name")
     @classmethod
     def normalize_name(cls, value: str) -> str:
         return normalize_text(value)
+
+    @field_validator("printer_name")
+    @classmethod
+    def clean_printer_name(cls, value: str | None) -> str | None:
+        return _clean_printer_name(value)
 
 
 class PrintingSectorUpdate(BaseModel):
@@ -66,11 +95,20 @@ class PrintingSectorUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=MAX_NAME_LENGTH)
     sort_order: int | None = Field(default=None, ge=0)
     is_active: bool | None = None
+    # `null` explicito aqui e "volte a resolver pelo config.ini", e nao
+    # "campo ausente" — o service usa `exclude_unset`, entao os dois casos
+    # sao distinguiveis.
+    printer_name: str | None = Field(default=None, max_length=MAX_PRINTER_NAME_LENGTH)
 
     @field_validator("name")
     @classmethod
     def normalize_name(cls, value: str | None) -> str | None:
         return normalize_text(value) if value is not None else None
+
+    @field_validator("printer_name")
+    @classmethod
+    def clean_printer_name(cls, value: str | None) -> str | None:
+        return _clean_printer_name(value)
 
 
 class ProductPrintingSectorRequest(BaseModel):
@@ -122,6 +160,13 @@ class PrintJobResponse(BaseModel):
     # Preenchido SEMPRE, inclusive na via do cliente ("Via do cliente"): e o
     # que o agente mostra no log e o que sai impresso no topo da bobina.
     sector_name: str
+    # Impressora escolhida no painel para este setor. Nulo = o agente
+    # resolve pelo config.ini, como antes de a coluna existir — e o que faz
+    # toda instalacao antiga continuar imprimindo sem ser reconfigurada.
+    #
+    # E o campo que conserta o rename silencioso: com ele o agente para de
+    # depender do NOME do setor para achar a impressora.
+    printer_name: str | None = None
     columns: int
     font_size: str = Field(description=f"'{FONT_NORMAL}' ou '{FONT_LARGE}'")
     content: str
@@ -140,3 +185,4 @@ class OrderPrintJobsResponse(BaseModel):
     order_number: int
     branch_id: UUID
     jobs: list[PrintJobResponse]
+

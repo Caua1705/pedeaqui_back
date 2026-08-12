@@ -26,6 +26,18 @@ class PrintingSector(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
     branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id"), nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
+    # Nome EXATO da impressora no Windows da maquina do balcao.
+    #
+    # Antes desta coluna, o vinculo setor -> impressora existia so no
+    # `config.ini` local e era casado pelo NOME do setor. Renomear "Cozinha"
+    # no painel nao dava erro nenhum: a via passava a cair na impressora
+    # padrao e a comanda da cozinha comecava a sair no balcao. Aqui o vinculo
+    # e por id, e o rename para de quebrar.
+    #
+    # Nulo = "resolva pelo config.ini", que e o comportamento antigo. E o que
+    # permite a coluna existir sem obrigar toda loja instalada a ser
+    # reconfigurada.
+    printer_name: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())

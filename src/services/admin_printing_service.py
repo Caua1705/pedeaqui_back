@@ -122,6 +122,7 @@ class AdminPrintingService:
             name=payload.name,
             sort_order=payload.sort_order,
             is_active=payload.is_active,
+            printer_name=payload.printer_name,
         )
         self._commit(lambda: self.repository.add(sector))
         return PrintingSectorResponse.model_validate(sector)
@@ -232,6 +233,10 @@ class AdminPrintingService:
                 type=PRINT_JOB_CUSTOMER,
                 sector_id=None,
                 sector_name=CUSTOMER_JOB_NAME,
+                # A via do cliente nao pertence a setor nenhum, entao nao
+                # tem impressora escolhida: ela cai na padrao do agente. Foi
+                # sempre assim; a coluna nova nao muda isso.
+                printer_name=None,
                 columns=RECEIPT_WIDTH,
                 font_size=FONT_NORMAL,
                 content=build_customer_receipt(order, RECEIPT_WIDTH),
@@ -267,6 +272,11 @@ class AdminPrintingService:
                 type=PRINT_JOB_PRODUCTION,
                 sector_id=sector.id,
                 sector_name=sector.name,
+                # O que faz o rename de setor no painel parar de quebrar a
+                # impressao em silencio: o agente passa a receber a
+                # impressora, em vez de procura-la pelo nome do setor no
+                # config.ini dele.
+                printer_name=sector.printer_name,
                 columns=PRODUCTION_WIDTH,
                 font_size=FONT_LARGE,
                 content=build_production_ticket(order, sector.name, items, PRODUCTION_WIDTH),
@@ -279,6 +289,9 @@ class AdminPrintingService:
                     type=PRINT_JOB_PRODUCTION,
                     sector_id=None,
                     sector_name=UNASSIGNED_SECTOR_NAME,
+                    # A via de resgate nao tem setor, logo nao tem impressora
+                    # escolhida: cai na padrao, que e onde alguem a encontra.
+                    printer_name=None,
                     columns=PRODUCTION_WIDTH,
                     font_size=FONT_LARGE,
                     content=build_production_ticket(

@@ -20,6 +20,19 @@ que durou mais que `HEALTHY_CONNECTION_SECONDS` zera a espera, senao o
 agente que roda a noite inteira chegaria de manha esperando um minuto entre
 tentativas por ter reconectado normalmente centenas de vezes.
 
+## Qual impressora recebe cada via
+
+Duas fontes, nesta ordem: a impressora escolhida no PAINEL para aquele setor
+(`printer_name`, que vem junto da via) e, se ela nao existir, o mapa do
+`config.ini` local.
+
+O painel vem primeiro porque o `config.ini` casa pelo NOME do setor —
+renomear "Cozinha" para "Cozinha Quente" no painel fazia a via deixar de
+casar, cair na impressora padrao e a comanda da cozinha comecar a sair no
+balcao, sem erro nenhum em lugar nenhum. O `config.ini` continua valendo
+como fallback: e ele que mantem imprimindo toda loja instalada antes de a
+coluna existir.
+
 ## O que impede a reimpressao
 
 Duas coisas, e as duas sao necessarias:
@@ -192,6 +205,20 @@ class PrintAgent:
 
         self._print_order(order_id, order.get("order_number"))
 
+    def _printer_for(self, chosen_in_panel: str | None, sector_name: str) -> str | None:
+        """A impressora de uma via: a do painel, senao a do config.ini.
+
+        O painel vence porque e o unico dos dois que nao quebra quando o
+        setor e renomeado — o `config.ini` casa pelo NOME do setor, e um
+        rename fazia a via cair na impressora padrao sem nenhum erro
+        aparecer.
+
+        O config.ini continua valendo como fallback, e nao como legado a
+        remover: e ele que mantem imprimindo toda loja instalada antes de a
+        coluna `printer_name` existir.
+        """
+        return chosen_in_panel or self.config.printer_for(sector_name)
+
     def _print_order(self, order_id: str, order_number=None) -> None:
         """Busca as vias do pedido e manda cada uma para a sua impressora.
 
@@ -245,13 +272,14 @@ class PrintAgent:
             self.stats.failed_jobs += 1
             return False
 
-        printer_name = self.config.printer_for(sector)
+        printer_name = self._printer_for(job.get("printer_name"), sector)
         if not printer_name:
-            # Setor criado no painel depois da instalacao, ou nome digitado
-            # diferente. Grita no log: e uma via que nao vai sair.
+            # Setor sem impressora escolhida no painel, sem linha no
+            # config.ini e sem 'default'. Grita no log: e uma via que nao vai
+            # sair.
             logger.error(
-                "setor '%s' (pedido %s) nao tem impressora no config.ini e nao "
-                "ha 'default'. A via NAO foi impressa.",
+                "setor '%s' (pedido %s) nao tem impressora escolhida no painel "
+                "nem no config.ini, e nao ha 'default'. A via NAO foi impressa.",
                 sector,
                 label,
             )

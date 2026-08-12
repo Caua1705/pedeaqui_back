@@ -54,15 +54,17 @@ class FakeClient:
         return self.jobs_by_order.get(order_id, [])
 
 
-def make_job(sector="Cozinha", content="COMANDA", font_size="large"):
+def make_job(sector="Cozinha", content="COMANDA", font_size="large", printer_name=None):
     return {
         "type": "production",
         "sector_id": None,
         "sector_name": sector,
+        "printer_name": printer_name,
         "columns": 24,
         "font_size": font_size,
         "content": content,
     }
+
 
 
 def make_event(order_id, status="accepted", event="order.status_changed", number=1234):
@@ -329,6 +331,53 @@ class FailureTests(AgentTestCase):
         agent._handle_event(make_event(order_id))
 
         self.assertNotIn(order_id, agent.state)
+
+
+class PrinterChoiceTests(AgentTestCase):
+    """De onde sai a impressora de cada via.
+
+    O painel vence o config.ini, e a razao e um defeito concreto: o
+    config.ini casa pelo NOME do setor, entao renomear "Cozinha" no painel
+    fazia a via cair na impressora padrao e a comanda da cozinha comecar a
+    sair no balcao — sem erro em lugar nenhum.
+    """
+
+    def test_the_printer_chosen_in_the_panel_wins(self):
+        order_id = str(uuid.uuid4())
+        client = FakeClient({order_id: [make_job(printer_name="IMP-DO-PAINEL")]})
+        printer = FakePrinter()
+        agent = self.build(client, printer, printers={"cozinha": "IMP-DO-INI"})
+
+        agent._handle_event(make_event(order_id))
+
+        self.assertEqual(printer.sent[0][0], "IMP-DO-PAINEL")
+
+    def test_without_a_panel_choice_the_ini_still_answers(self):
+        """A instalacao anterior a coluna `printer_name` nao pode parar de
+        imprimir por causa dela."""
+        order_id = str(uuid.uuid4())
+        client = FakeClient({order_id: [make_job(printer_name=None)]})
+        printer = FakePrinter()
+        agent = self.build(client, printer, printers={"cozinha": "IMP-DO-INI"})
+
+        agent._handle_event(make_event(order_id))
+
+        self.assertEqual(printer.sent[0][0], "IMP-DO-INI")
+
+    def test_a_renamed_sector_still_prints_when_the_panel_says_where(self):
+        """O caso que a coluna existe para consertar: o setor foi renomeado
+        no painel e o config.ini nao sabe. Antes, isto caia na padrao."""
+        order_id = str(uuid.uuid4())
+        client = FakeClient(
+            {order_id: [make_job(sector="Cozinha Quente", printer_name="IMP-COZINHA")]}
+        )
+        printer = FakePrinter()
+        agent = self.build(client, printer, printers={"cozinha": "IMP-COZINHA"})
+
+        agent._handle_event(make_event(order_id))
+
+        self.assertEqual(printer.sent[0][0], "IMP-COZINHA")
+
 
 
 class StopTests(AgentTestCase):

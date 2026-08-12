@@ -38,6 +38,7 @@ from src.utils.security import (
     hash_reset_token,
     hash_verification_code,
     hash_password,
+    token_was_issued_before_password_change,
     utcnow,
     verify_password,
     verify_reset_token,
@@ -98,34 +99,14 @@ def _pad_latency(started_at: float, minimum_seconds: float) -> None:
 
 
 def _token_was_issued_before_password_change(payload: dict, customer: Customer) -> bool:
-    """Revogacao de JWT na troca de senha.
+    """A regra vive em `utils/security`, compartilhada com o lojista.
 
-    Nao ha lista de tokens revogados nem refresh token: comparamos o `iat`
-    do token com `customers.password_changed_at`. Trocou a senha, todo token
-    emitido antes daquele instante morre — inclusive o do ladrao, que era o
-    ponto. Antes disso o token roubado sobrevivia ate 7 dias a troca de
-    senha da vitima (CUSTOMER_ACCESS_TOKEN_MINUTES).
-
-    Sem `password_changed_at` (contas que nunca trocaram a senha depois
-    desta versao) nada e revogado, que e o comportamento de sempre.
-
-    O `iat` do JWT tem resolucao de segundos. Um token emitido no MESMO
-    segundo da troca e tratado como anterior e cai — errar para o lado de
-    derrubar uma sessao legitima e barato (basta logar de novo); o outro
-    lado deixa a conta invadida aberta.
+    Antes o token roubado sobrevivia ate 7 dias a troca de senha da vitima
+    (CUSTOMER_ACCESS_TOKEN_MINUTES).
     """
-    if customer.password_changed_at is None:
-        return False
-    issued_at_epoch = payload.get("iat")
-    if issued_at_epoch is None:
-        # Token sem `iat` nao da para datar. Tratamos como antigo: quem
-        # emite hoje sempre inclui o campo (utils/security.create_signed_token).
-        return True
-    issued_at = datetime.fromtimestamp(issued_at_epoch, timezone.utc)
-    password_changed_at = customer.password_changed_at
-    if password_changed_at.tzinfo is None:
-        password_changed_at = password_changed_at.replace(tzinfo=timezone.utc)
-    return issued_at < password_changed_at
+    return token_was_issued_before_password_change(
+        payload, customer.password_changed_at
+    )
 
 
 class AuthService:

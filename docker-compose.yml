@@ -20,6 +20,54 @@ services:
     networks:
       - n8n_default
 
+  # Expurgo do que venceu: chaves de idempotência e estimativas de entrega.
+  #
+  # POR QUE UM CONTAINER, E NÃO UM CRON NO HOST. O script já existia desde
+  # sempre e, em 12/08/2026, a auditoria encontrou 40 chaves e 216 estimativas
+  # em produção — todas vencidas, 39 delas ainda carregando `tracking_token` e
+  # o endereço completo do cliente dentro do `response_body`. Ele nunca tinha
+  # rodado. Cron no host resolveria igual e teria o mesmo destino: mora fora do
+  # repositório, não aparece em `git`, não acompanha o deploy e um servidor
+  # novo nasce sem ele. Aqui o expurgo sobe junto com a API e um
+  # `docker compose up -d` já o traz.
+  #
+  # A alternativa era `pg_cron` (o Supabase o tem disponível), agendando o
+  # DELETE dentro do banco. Ficou de fora por dois motivos: o agendamento
+  # deixaria de ser visível em `docker compose ps`, e a regra de retenção
+  # passaria a existir em SQL solto no banco em vez de no script versionado
+  # que os testes já cobrem.
+  limpeza:
+    build: .
+    container_name: pedeaqui-limpeza
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      # Ordem de partida só. O que importa é que a API já tenha rodado o
+      # `alembic upgrade head` antes do primeiro expurgo num servidor novo;
+      # se não tiver, o laço abaixo erra, espera 5 min e tenta de novo.
+      - pedeaqui-api
+    # ENTRYPOINT VAZIO, e isto não é detalhe: o `docker-entrypoint.sh` roda
+    # `alembic upgrade head`, e dois containers migrando o mesmo banco ao
+    # mesmo tempo é corrida de verdade. Só a API migra.
+    entrypoint: []
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          if python scripts/cleanup_idempotency_keys.py; then
+            sleep 86400
+          else
+            echo "[limpeza] falhou; nova tentativa em 5 min"
+            sleep 300
+          fi
+        done
+    # Não passa pelo Traefik e não publica porta: ele só fala com o Postgres,
+    # pela DATABASE_URL do .env.
+    networks:
+      - n8n_default
+
   # Contadores de rate limit e cache de estimativa de entrega. Sem ele os dois
   # vivem no processo: o limite efetivo vira N x o configurado (um balde por
   # worker) e o cache do Google é perdido a cada deploy, em chamadas pagas.

@@ -36,6 +36,10 @@ def make_admin(**overrides):
         "password_hash": PASSWORD_HASH,
         "role": "owner",
         "is_active": True,
+        # Nulo = nunca trocou a senha, entao nada e revogado. O dublê precisa
+        # do campo porque `_load_admin_from_token` o lê para decidir se o
+        # token e anterior a troca — ver test_admin_password_e_revogacao.py.
+        "password_changed_at": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)

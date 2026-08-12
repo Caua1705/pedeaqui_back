@@ -2,7 +2,16 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.database import get_db
-from src.api.rate_limit import FORGOT_PASSWORD_RATE_LIMIT, LOGIN_RATE_LIMIT, limiter
+from src.api.rate_limit import (
+    FORGOT_PASSWORD_RATE_LIMIT,
+    LOGIN_RATE_LIMIT,
+    REGISTER_RATE_LIMIT,
+    RESEND_EMAIL_CODE_RATE_LIMIT,
+    RESET_PASSWORD_RATE_LIMIT,
+    VERIFY_EMAIL_CODE_RATE_LIMIT,
+    VERIFY_RESET_CODE_RATE_LIMIT,
+    limiter,
+)
 from src.schemas.auth_schema import (
     ForgotPasswordRequest,
     LoginRequest,
@@ -24,17 +33,32 @@ router = APIRouter(prefix="/auth", tags=["customer auth"])
 
 
 @router.post("/register", response_model=RegisterCustomerResponse)
-def register_customer(payload: RegisterCustomerRequest, db: Session = Depends(get_db)) -> RegisterCustomerResponse:
+@limiter.limit(REGISTER_RATE_LIMIT)
+def register_customer(
+    request: Request,
+    payload: RegisterCustomerRequest,
+    db: Session = Depends(get_db),
+) -> RegisterCustomerResponse:
     return AuthService(db).register(payload)
 
 
 @router.post("/verify-email-code", response_model=VerifyEmailCodeResponse)
-def verify_email_code(payload: VerifyEmailCodeRequest, db: Session = Depends(get_db)) -> VerifyEmailCodeResponse:
+@limiter.limit(VERIFY_EMAIL_CODE_RATE_LIMIT)
+def verify_email_code(
+    request: Request,
+    payload: VerifyEmailCodeRequest,
+    db: Session = Depends(get_db),
+) -> VerifyEmailCodeResponse:
     return AuthService(db).verify_email_code(payload)
 
 
 @router.post("/resend-email-code", response_model=MessageResponse)
-def resend_email_code(payload: ResendEmailCodeRequest, db: Session = Depends(get_db)) -> MessageResponse:
+@limiter.limit(RESEND_EMAIL_CODE_RATE_LIMIT)
+def resend_email_code(
+    request: Request,
+    payload: ResendEmailCodeRequest,
+    db: Session = Depends(get_db),
+) -> MessageResponse:
     return AuthService(db).resend_email_code(payload)
 
 
@@ -59,10 +83,20 @@ def forgot_password(
 
 
 @router.post("/verify-reset-code", response_model=VerifyResetCodeResponse)
-def verify_reset_code(payload: VerifyResetCodeRequest, db: Session = Depends(get_db)) -> VerifyResetCodeResponse:
+@limiter.limit(VERIFY_RESET_CODE_RATE_LIMIT)
+def verify_reset_code(
+    request: Request,
+    payload: VerifyResetCodeRequest,
+    db: Session = Depends(get_db),
+) -> VerifyResetCodeResponse:
     return AuthService(db).verify_reset_code(payload)
 
 
 @router.post("/reset-password", response_model=MessageResponse)
-def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)) -> MessageResponse:
+@limiter.limit(RESET_PASSWORD_RATE_LIMIT)
+def reset_password(
+    request: Request,
+    payload: ResetPasswordRequest,
+    db: Session = Depends(get_db),
+) -> MessageResponse:
     return AuthService(db).reset_password(payload)

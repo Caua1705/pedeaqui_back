@@ -8,6 +8,7 @@ from slowapi.errors import RateLimitExceeded
 
 from src.api import chat
 from src.api.middleware.body_size import BodySizeLimitMiddleware
+from src.api.middleware.rate_limit_state import RateLimitStateMiddleware
 from src.api.rate_limit import limiter, rate_limit_exceeded_handler
 from src.api.validation_errors import log_contract_validation_error
 from src.api.endpoints import (
@@ -96,6 +97,10 @@ app.add_middleware(
     max_body_bytes=settings.MAX_REQUEST_BODY_BYTES,
     max_upload_bytes=settings.MAX_IMAGE_UPLOAD_BYTES,
 )
+
+# Precisa rodar antes da rota, para o atributo existir quando o wrapper do
+# @limiter.limit for le-lo. Ver o modulo para o 500 que isto evita.
+app.add_middleware(RateLimitStateMiddleware)
 
 # Adicionado por ultimo para ficar na camada mais externa: assim ate as
 # respostas de erro (413, 429) saem com os cabecalhos de CORS.

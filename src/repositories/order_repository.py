@@ -1,3 +1,4 @@
+import hmac
 import uuid
 from datetime import datetime
 
@@ -150,7 +151,33 @@ class OrderRepository:
                 Order.tracking_token == tracking_token,
             )
         )
-        return self.db.scalar(stmt)
+        order = self.db.scalar(stmt)
+        if order is None:
+            return None
+
+        # Reconferencia em tempo constante, pela armadilha 18 — que cita o
+        # token de acompanhamento por nome.
+        #
+        # SEJA HONESTO SOBRE O QUE ISTO COMPRA. Se a linha voltou, o `=` do
+        # Postgres ja disse que os textos sao iguais, e este `compare_digest`
+        # devolve True sempre. Ele NAO fecha um canal de tempo: a comparacao
+        # de verdade acontece dentro do banco, sobre um indice, e o token tem
+        # 256 bits.
+        #
+        # O que ele compra e a falha fechada se o WHERE acima deixar de ser
+        # igualdade exata um dia — um `ilike` para "facilitar o suporte", um
+        # `like` com o escape errado (o mesmo defeito que ja apareceu em
+        # admin_menu_repository), uma collation que aproxime formas Unicode
+        # (armadilha 31). Em qualquer um desses casos o token deixa de ser
+        # segredo e esta linha e a que ainda diz nao.
+        #
+        # A inconsistencia que sobra, e que esta NAO resolve: o token e
+        # guardado em texto puro em `orders.tracking_token`. Todo outro
+        # segredo do projeto (codigo de verificacao, token de reset) e
+        # gravado em hash. Trocar isso e migracao de coluna, nao uma linha.
+        if not hmac.compare_digest(order.tracking_token, tracking_token):
+            return None
+        return order
 
     def get_order_detail_for_customer(
         self,

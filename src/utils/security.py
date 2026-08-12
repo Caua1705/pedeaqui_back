@@ -194,6 +194,44 @@ def admin_auth_secret() -> str:
     return settings.ADMIN_AUTH_SECRET
 
 
+def token_was_issued_before_password_change(
+    payload: dict,
+    password_changed_at: datetime | None,
+) -> bool:
+    """Revogacao de JWT na troca de senha, para cliente e para lojista.
+
+    Nao ha lista de tokens revogados nem refresh token: comparamos o `iat` do
+    token com o instante da ultima troca de senha. Trocou a senha, todo token
+    emitido antes daquele momento morre — inclusive o do ladrao, que era o
+    ponto.
+
+    Mora aqui, e nao em cada service, porque a regra e a mesma nos dois
+    publicos e duas copias seriam duas chances de divergir. O que muda entre
+    eles e so de qual coluna sai o `password_changed_at`.
+
+    Sem `password_changed_at` nada e revogado — e o comportamento de quem
+    nunca trocou a senha depois de a coluna existir.
+
+    O `iat` do JWT tem resolucao de segundos. Um token emitido no MESMO
+    segundo da troca e tratado como anterior e cai: errar para o lado de
+    derrubar uma sessao legitima custa um login novo; o outro lado deixa a
+    conta invadida aberta.
+    """
+    if password_changed_at is None:
+        return False
+
+    issued_at_epoch = payload.get("iat")
+    if issued_at_epoch is None:
+        # Token sem `iat` nao da para datar. Tratamos como antigo: quem emite
+        # hoje sempre inclui o campo (create_signed_token, logo acima).
+        return True
+
+    issued_at = datetime.fromtimestamp(issued_at_epoch, timezone.utc)
+    if password_changed_at.tzinfo is None:
+        password_changed_at = password_changed_at.replace(tzinfo=timezone.utc)
+    return issued_at < password_changed_at
+
+
 def _hmac_hex(value: str, secret: str | None) -> str:
     key = (secret or settings.CUSTOMER_AUTH_SECRET).encode("utf-8")
     return hmac.new(key, value.encode("utf-8"), hashlib.sha256).hexdigest()

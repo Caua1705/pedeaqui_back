@@ -1,5 +1,18 @@
 ADMIN_USER_ROLES = ("owner", "manager", "attendant")
 
+# Minimo da senha de LOJISTA — 12, contra os 8 do cliente. A diferenca e
+# proposital e vem da conta de estrago: a conta de cliente da acesso ao
+# proprio historico; a de lojista da acesso a todos os pedidos, a lista de
+# clientes com telefone e ao faturamento do restaurante. E ha um agravante
+# que o cliente nao tem: essa senha fica em TEXTO PURO no config.ini do
+# agente de impressao, na maquina do balcao.
+#
+# Mora aqui, e nao no schema nem no script, porque quem cria o usuario
+# (scripts/create_admin_user.py) e quem o deixa trocar a senha
+# (PATCH /admin/auth/password) precisam concordar — dois numeros seriam a
+# porta de criar uma senha curta por um caminho que o outro recusa.
+MIN_ADMIN_PASSWORD_LENGTH = 12
+
 ORDER_TYPES = ("delivery", "pickup")
 
 ORDER_STATUSES = (

@@ -279,14 +279,24 @@ class DeliveryEstimateService:
             getattr(branch, "longitude", None),
         )
         address = self._resolve_address(payload, current_customer)
+        # Bairro, cidade e estado bastam para depurar area de entrega — sao o
+        # recorte que a regra usa. A COORDENADA nao entra: ela e mais precisa
+        # que rua e numero, e quem tivesse o log do container reconstruiria a
+        # casa de todo mundo que pediu entrega. Saber SE ela existe e o que
+        # separa "endereco sem geocode" de "rota falhou", que era a pergunta
+        # que a coordenada respondia aqui. Se um dia o valor for mesmo
+        # necessario, `logger.debug` (que nao roda em producao) — nunca info.
+        has_coordinates = (
+            getattr(address, "latitude", None) is not None
+            and getattr(address, "longitude", None) is not None
+        )
         logger.info(
             "[Delivery estimate debug] event=address_resolved neighborhood=%s city=%s "
-            "state=%s latitude=%s longitude=%s",
+            "state=%s has_coordinates=%s",
             getattr(address, "neighborhood", None),
             getattr(address, "city", None),
             getattr(address, "state", None),
-            getattr(address, "latitude", None),
-            getattr(address, "longitude", None),
+            str(has_coordinates).lower(),
         )
 
         prep_time_min, prep_time_max, prep_time_source, prep_time_weekday = self._resolve_prep_time(

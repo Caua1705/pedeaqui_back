@@ -126,10 +126,24 @@ def collect_configuration_warnings(settings: Settings) -> list[str]:
             "localmente e nenhum dinheiro e movimentado de verdade."
         )
 
-    if not settings.RATE_LIMIT_CLIENT_IP_HEADER.strip():
+    header = settings.RATE_LIMIT_CLIENT_IP_HEADER.strip()
+    if not header:
         warnings.append(
             "RATE_LIMIT_CLIENT_IP_HEADER vazio: atras de um proxy o rate "
             "limiting vai agrupar todos os clientes no IP do proxy."
+        )
+    elif settings.is_production:
+        # Nao da para conferir no boot se o proxy preenche o cabecalho — isso
+        # so aparece na primeira requisicao. O aviso existe para que a
+        # dependencia esteja escrita em algum lugar que alguem le no deploy:
+        # com o cabecalho ausente, `client_ip` manda todo mundo para o balde
+        # compartilhado e o login publico passa a estourar 429 no primeiro
+        # minuto de movimento. Confira ANTES de subir (docs/operacao.md).
+        warnings.append(
+            f"RATE_LIMIT_CLIENT_IP_HEADER={header}: o proxy na frente PRECISA "
+            "sobrescrever esse cabecalho em toda requisicao. Se ele nao vier, "
+            "todos os clientes caem num balde unico e as rotas publicas "
+            "comecam a responder 429."
         )
 
     return warnings

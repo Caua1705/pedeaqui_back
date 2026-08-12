@@ -36,6 +36,12 @@ class AdminUser(Base):
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     role: Mapped[str] = mapped_column(Text, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Instante da ultima troca de senha. E o que revoga token: o `iat` de todo
+    # token emitido antes deste momento deixa de valer. Nulo = nunca trocou a
+    # senha depois da revisao 0013, e ai nada e revogado.
+    password_changed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True)
+    )
     created_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now()
     )

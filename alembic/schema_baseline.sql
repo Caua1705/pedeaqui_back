@@ -2220,3 +2220,30 @@ ALTER TABLE public.restaurants ENABLE ROW LEVEL SECURITY;
 --
 
 
+
+--
+-- Name: ensure_rls; Type: EVENT TRIGGER; Schema: -; Owner: -
+--
+-- ACRESCENTADO A MAO EM 12/08/2026 (achado A-baseline da auditoria).
+--
+-- O `pg_dump --schema-only` que gerou este arquivo trouxe a FUNCAO
+-- `rls_auto_enable()` la em cima, mas nao o gatilho que a dispara. Sem esta
+-- linha, um banco montado so a partir deste arquivo — que e exatamente o que
+-- a fixture da suite `db` faz — ganha a funcao e nenhuma automacao: tabela
+-- criada por revisao futura do Alembic nasceria SEM RLS no teste e COM RLS em
+-- producao. O teste passaria verde contra um banco que nao e o de producao,
+-- que e a armadilha 33 aparecendo de novo por outra porta.
+--
+-- Fica no FIM do arquivo, e nao junto da funcao, de proposito: aqui em cima
+-- ele dispararia a cada CREATE TABLE do proprio baseline, refazendo um
+-- trabalho que os `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` acima ja
+-- fizeram explicitamente. No fim, ele passa a valer para o que vier DEPOIS —
+-- que e a unica coisa que ele precisa cobrir.
+--
+-- Os tres command tags e o `ddl_command_end` sao os de producao, conferidos
+-- em `pg_event_trigger` no dia.
+--
+
+CREATE EVENT TRIGGER ensure_rls ON ddl_command_end
+   WHEN TAG IN ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')
+   EXECUTE FUNCTION public.rls_auto_enable();

@@ -23,15 +23,21 @@ from src.schemas.admin_auth_schema import (
     AdminLoginRequest,
     AdminLoginResponse,
     AdminUserResponse,
+    ChangeAdminPasswordRequest,
 )
 from src.schemas.admin_order_schema import AdminStreamTicketResponse
+from src.schemas.auth_schema import MessageResponse
 from src.utils.normalization import normalize_email
 from src.utils.security import (
+    PasswordTooLongError,
     TokenExpiredError,
     TokenInvalidError,
     admin_auth_secret,
     create_signed_token,
     decode_signed_token,
+    hash_password,
+    token_was_issued_before_password_change,
+    utcnow,
     verify_password,
 )
 
@@ -177,7 +183,77 @@ class AdminAuthService:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail="Usuario inativo"
             )
+        # Alcanca o token de acesso E o ticket de stream, porque os dois
+        # passam por aqui: trocar a senha derruba a sessao do painel e a
+        # conexao SSE junto. Uma reconexao de stream vale ate 15 minutos, e
+        # deixar o ticket de fora manteria o pedido chegando na tela de quem
+        # acabou de ser expulso.
+        if token_was_issued_before_password_change(
+            payload, admin_user.password_changed_at
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token revogado pela troca de senha",
+            )
         return admin_user
+
+    def change_password(
+        self,
+        admin_user: AdminUser,
+        payload: ChangeAdminPasswordRequest,
+    ) -> MessageResponse:
+        """Troca de senha pelo proprio lojista.
+
+        Nao existia rota nenhuma: a senha so mudava por
+        `scripts/create_admin_user.py`, ou seja, por quem tem acesso ao
+        servidor. Um lojista que desconfiasse do proprio vazamento nao tinha o
+        que fazer sozinho — e o `config.ini` do balcao guarda essa senha em
+        texto puro.
+
+        Gravar `password_changed_at` e o que revoga os tokens antigos; sem
+        essa linha a rota trocaria a senha e deixaria a sessao do ladrao viva
+        pelas 12h restantes, que e o oposto do motivo de ela existir.
+        """
+        if not verify_password(payload.current_password, admin_user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Senha atual incorreta",
+            )
+        if payload.new_password != payload.confirm_password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="As senhas nao conferem",
+            )
+        if payload.new_password == payload.current_password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A nova senha precisa ser diferente da atual",
+            )
+
+        try:
+            admin_user.password_hash = hash_password(payload.new_password)
+        except PasswordTooLongError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Senha muito longa",
+            ) from exc
+
+        admin_user.password_changed_at = utcnow()
+        try:
+            self.db.add(admin_user)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+
+        logger.info(
+            "[AdminAuth] senha trocada admin_user_id=%s restaurant_id=%s",
+            admin_user.id,
+            admin_user.restaurant_id,
+        )
+        return MessageResponse(
+            message="Senha alterada. Entre de novo em todos os dispositivos."
+        )
 
     @staticmethod
     def _pad_latency(started_at: float) -> None:

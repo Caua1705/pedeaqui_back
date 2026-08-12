@@ -282,7 +282,14 @@ class StreamTicketTests(unittest.TestCase):
 
     def _admin(self):
         return SimpleNamespace(
-            id=uuid.uuid4(), restaurant_id=uuid.uuid4(), role="owner", is_active=True
+            id=uuid.uuid4(),
+            restaurant_id=uuid.uuid4(),
+            role="owner",
+            is_active=True,
+            # Nulo = nada revogado. O ticket passa pelo mesmo
+            # `_load_admin_from_token` do token do painel, que le este campo —
+            # trocar a senha derruba a conexao SSE junto.
+            password_changed_at=None,
         )
 
     def test_ticket_is_short_lived(self):

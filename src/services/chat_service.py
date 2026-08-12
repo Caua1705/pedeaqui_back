@@ -55,11 +55,6 @@ class ChatService:
         message: str,
     ) -> ChatResponse:
         started_at = perf_counter()
-        validation_started_at = perf_counter()
-        logger.info(
-            "[AI /chat perf] validation_ms=%.2f",
-            (perf_counter() - validation_started_at) * 1000,
-        )
         # A mensagem do usuario e dado pessoal e nao vai para o log.
         # O digest permite correlacionar requisicoes sem expor o conteudo.
         logger.info(
@@ -77,39 +72,7 @@ class ChatService:
         self._ensure_active_restaurant(restaurant_id)
 
         try:
-            now = _utc_now()
-            _cleanup_inactive_sessions(now)
-            conversation = _get_session_conversation(session_id)
-            logger.info("[AI /chat cache] final_response_cache_hit=false")
-
-            retrieved_products = self.retrieval_service.retrieve_products(
-                restaurant_id=restaurant_id,
-                question=message,
-            )
-            llm_response = self._invoke_llm(
-                restaurant_id=restaurant_id,
-                conversation=conversation,
-                retrieved_products=retrieved_products,
-                message=message,
-            )
-            selected_product_ids = self._validate_selected_product_ids(
-                retrieved_products=retrieved_products,
-                selected_product_ids=llm_response.selected_product_ids,
-            )
-            products = self._hydrate_products(restaurant_id, selected_product_ids)
-            response = self._build_response(
-                llm_response=llm_response,
-                selected_product_ids=selected_product_ids,
-                products=products,
-            )
-
-            _store_session_turn(session_id, message, response.message, now)
-            logger.info(
-                "[AI /chat] Retorno final | response_type=%s | products_count=%d",
-                response.response_type,
-                len(response.products),
-            )
-            return response
+            return self._answer(restaurant_id, session_id, message)
         except Exception:
             logger.exception(
                 "[AI /chat] Erro no pipeline | restaurant_id=%s | session_id=%s",
@@ -122,6 +85,59 @@ class ChatService:
                 "[AI /chat perf] total_ms=%.2f",
                 (perf_counter() - started_at) * 1000,
             )
+
+    def _answer(
+        self,
+        restaurant_id: uuid.UUID,
+        session_id: str,
+        message: str,
+    ) -> ChatResponse:
+        """Busca, pergunta ao modelo, confere o que ele devolveu e responde.
+
+        Separada do `chat` para que aquele fique com o que e enquadramento —
+        o log de entrada, a barreira do restaurante e o tratamento de erro —
+        e este com o pipeline. Junto, um `try` cobria as duas coisas e a
+        leitura tinha de separa-las na cabeca.
+        """
+        # UM `now` para o turno inteiro: a limpeza das sessoes vencidas e o
+        # registro deste turno precisam concordar sobre que horas sao, senao
+        # uma sessao pode ser limpa e regravada no mesmo pedido.
+        now = _utc_now()
+        _cleanup_inactive_sessions(now)
+        conversation = _get_session_conversation(session_id)
+        logger.info("[AI /chat cache] final_response_cache_hit=false")
+
+        retrieved_products = self.retrieval_service.retrieve_products(
+            restaurant_id=restaurant_id,
+            question=message,
+        )
+        llm_response = self._invoke_llm(
+            restaurant_id=restaurant_id,
+            conversation=conversation,
+            retrieved_products=retrieved_products,
+            message=message,
+        )
+        selected_product_ids = self._validate_selected_product_ids(
+            retrieved_products=retrieved_products,
+            selected_product_ids=llm_response.selected_product_ids,
+        )
+        products = self._hydrate_products(restaurant_id, selected_product_ids)
+        response = self._build_response(
+            llm_response=llm_response,
+            selected_product_ids=selected_product_ids,
+            products=products,
+        )
+
+        # Gravado SO depois da resposta pronta: uma falha no meio nao pode
+        # deixar a pergunta no historico sem a resposta, senao ela envenena o
+        # proximo prompt daquela sessao.
+        _store_session_turn(session_id, message, response.message, now)
+        logger.info(
+            "[AI /chat] Retorno final | response_type=%s | products_count=%d",
+            response.response_type,
+            len(response.products),
+        )
+        return response
 
     def _ensure_active_restaurant(self, restaurant_id: uuid.UUID) -> None:
         if self.restaurant_repository.get_active_by_id(restaurant_id) is None:
@@ -159,22 +175,32 @@ class ChatService:
         retrieved_products: list[dict],
         selected_product_ids: list[uuid.UUID],
     ) -> list[uuid.UUID]:
-        ids_validation_started_at = perf_counter()
-        retrieved_product_ids = {
-            uuid.UUID(str(product["id"])) for product in retrieved_products
-        }
-        valid_product_ids = list(
-            dict.fromkeys(
-                uuid.UUID(str(product_id))
-                for product_id in selected_product_ids
-                if uuid.UUID(str(product_id)) in retrieved_product_ids
-            )
-        )
+        """So os ids que a BUSCA devolveu, sem repeticao e na ordem do modelo.
+
+        E a unica coisa entre um produto que o modelo inventou e a tela do
+        cliente. A ordem e a da ESCOLHA, e nao a da busca: e nela que o modelo
+        explicou os produtos no texto, e trocar desalinha texto e carrossel.
+        """
+        started_at = perf_counter()
+
+        # O modelo devolve JSON, entao id chega como texto. Os dois lados sao
+        # convertidos antes de comparar.
+        retrieved = {uuid.UUID(str(product["id"])) for product in retrieved_products}
+
+        valid: list[uuid.UUID] = []
+        for raw_id in selected_product_ids:
+            product_id = uuid.UUID(str(raw_id))
+            if product_id not in retrieved:
+                continue
+            if product_id in valid:
+                continue
+            valid.append(product_id)
+
         logger.info(
             "[AI /chat perf] selected_ids_validation_ms=%.2f",
-            (perf_counter() - ids_validation_started_at) * 1000,
+            (perf_counter() - started_at) * 1000,
         )
-        return valid_product_ids
+        return valid
 
     def _hydrate_products(
         self,
@@ -205,21 +231,9 @@ class ChatService:
         selected_product_ids: list[uuid.UUID],
         products: list,
     ) -> ChatResponse:
-        response_build_started_at = perf_counter()
-        response_type = llm_response.response_type
-        if products:
-            response_type = "products"
-        elif response_type == "products":
-            logger.warning(
-                "[AI /chat] Nenhum produto valido para response_type=products "
-                "| selected=%d | validados=%d",
-                len(llm_response.selected_product_ids),
-                len(selected_product_ids),
-            )
-            response_type = "text"
-
+        started_at = perf_counter()
         response = ChatResponse(
-            response_type=response_type,
+            response_type=ChatService._response_type(llm_response, selected_product_ids, products),
             message=llm_response.message,
             products=products,
         )
@@ -230,9 +244,36 @@ class ChatService:
             )
         logger.info(
             "[AI /chat perf] response_build_ms=%.2f",
-            (perf_counter() - response_build_started_at) * 1000,
+            (perf_counter() - started_at) * 1000,
         )
         return response
+
+    @staticmethod
+    def _response_type(
+        llm_response,
+        selected_product_ids: list[uuid.UUID],
+        products: list,
+    ) -> str:
+        """Quem manda e o que SOBROU da validacao, nao o que o modelo disse.
+
+        Havendo produto para mostrar, a resposta e de produtos mesmo que o
+        modelo tenha dito "text". E o contrario tambem: "products" com a lista
+        vazia — todos os ids eram inventados — deixaria a tela com um
+        carrossel sem nada dentro, entao vira "text".
+        """
+        if products:
+            return "products"
+
+        if llm_response.response_type == "products":
+            logger.warning(
+                "[AI /chat] Nenhum produto valido para response_type=products "
+                "| selected=%d | validados=%d",
+                len(llm_response.selected_product_ids),
+                len(selected_product_ids),
+            )
+            return "text"
+
+        return llm_response.response_type
 
 
 def _get_session_conversation(session_id: str) -> list[SessionMessage]:

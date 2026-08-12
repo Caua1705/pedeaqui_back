@@ -4,6 +4,10 @@ Roda **no computador do restaurante**, não no servidor. Fica escutando o
 stream de pedidos da API e, quando um pedido é **aceito**, imprime as vias
 nas impressoras térmicas da loja.
 
+> **Vai instalar numa loja?** Use [`INSTALACAO.md`](INSTALACAO.md) — é o passo
+> a passo para quem não é programador, e é o que vai junto no pendrive.
+> Para gerar o executável: `build.bat`.
+
 Mora neste repositório para não sair de sincronia com a API que ele consome,
 mas não faz parte do build da API: está no `.dockerignore`, tem
 `requirements.txt` próprio e os testes dele não rodam junto com os do

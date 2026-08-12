@@ -98,13 +98,107 @@ class LoadTests(ConfigTestCase):
             load_config(self.write(MINIMAL + "\n[printing]\ncut = talvez\n"))
 
 
+class EncodingTests(ConfigTestCase):
+    """O config.ini e editado no Bloco de Notas da maquina do balcao.
+
+    O Bloco de Notas grava BOM (sempre, no Windows antigo; ao escolher "UTF-8
+    com BOM", no novo). Lido como `utf-8` puro, o BOM gruda no comeco da
+    primeira linha, `[rapidex]` deixa de ser reconhecido como secao e o erro
+    que sai — "File contains no section headers" — aponta para uma linha que
+    na tela e um cabecalho de secao. E um beco sem saida para quem esta no
+    balcao com o pendrive na mao.
+    """
+
+    def test_a_file_saved_with_a_bom_still_loads(self):
+        self.path.write_bytes(MINIMAL.encode("utf-8-sig"))
+
+        config = load_config(self.path)
+
+        self.assertEqual(config.api_base_url, "https://api.exemplo.com")
+        self.assertEqual(config.printers, {"cozinha": "IMP-COZINHA"})
+
+    def test_a_file_saved_without_a_bom_still_loads(self):
+        # O par do teste acima: `utf-8-sig` nao pode ter quebrado o caso
+        # normal, que e o do arquivo gerado pelo proprio programa.
+        self.path.write_bytes(MINIMAL.encode("utf-8"))
+
+        config = load_config(self.path)
+
+        self.assertEqual(config.api_base_url, "https://api.exemplo.com")
+
+    def test_accented_values_survive_a_bom(self):
+        # O nome do setor vem do painel e costuma ter acento. Se a leitura do
+        # BOM estivesse errada, o acento seria a segunda vitima.
+        self.path.write_bytes(
+            ("[api]\nbase_url = https://x\ntoken = abc\n"
+             "\n[printers]\nPraça Quente = IMP-QUENTE\n").encode("utf-8-sig")
+        )
+
+        config = load_config(self.path)
+
+        self.assertEqual(config.printer_for("praca quente"), "IMP-QUENTE")
+
+    def test_a_file_saved_as_ansi_still_loads(self):
+        # "Salvar como > ANSI" e o padrao do Bloco de Notas das maquinas mais
+        # antigas — que sao justamente as de balcao. Em ANSI (CP1252) o "ç" e
+        # um byte 0xE7 solto, que nao e UTF-8 valido: a leitura levantava
+        # UnicodeDecodeError, que nao e ConfigError, escapava pelo __main__ e
+        # o lojista via um traceback de Python.
+        self.path.write_bytes(
+            ("[rapidex]\napi_url = https://x\ntoken = abc\n"
+             "printer = Impressora Cozinha Ação\n").encode("cp1252")
+        )
+
+        config = load_config(self.path)
+
+        self.assertEqual(config.default_printer, "Impressora Cozinha Ação")
+
+    def test_ansi_sector_names_also_survive(self):
+        self.path.write_bytes(
+            ("[api]\nbase_url = https://x\ntoken = abc\n"
+             "\n[printers]\nPraça Quente = IMP-QUENTE\n").encode("cp1252")
+        )
+
+        config = load_config(self.path)
+
+        self.assertEqual(config.printer_for("Praça Quente"), "IMP-QUENTE")
+
+    def test_utf8_is_tried_before_cp1252(self):
+        # A ordem importa e nao da para inverter: CP1252 aceita QUALQUER byte,
+        # entao tentada primeiro ela leria um arquivo UTF-8 legitimo como
+        # mojibake ("Ação" -> "AÃ§Ã£o") sem reclamar, e o nome nunca casaria
+        # com o da impressora instalada no Windows.
+        self.path.write_bytes(
+            ("[rapidex]\napi_url = https://x\ntoken = abc\n"
+             "printer = Impressora Ação\n").encode("utf-8")
+        )
+
+        config = load_config(self.path)
+
+        self.assertEqual(config.default_printer, "Impressora Ação")
+
+
 class PathTests(ConfigTestCase):
     def test_relative_paths_hang_off_the_config_folder(self):
-        # O servico do Windows sobe com o cwd em System32.
+        # O servico do Windows sobe com o cwd em System32, e o executavel do
+        # PyInstaller roda de uma pasta temporaria que some no fim. Nos dois
+        # casos, o que salva e o caminho sair da pasta do config.
+        config = load_config(self.write(
+            MINIMAL + "\n[state]\nfile = estado/impressos.json\n"
+            "\n[log]\nfile = registros/agente.log\n"
+        ))
+
+        self.assertEqual(config.state_file, self.root / "estado" / "impressos.json")
+        self.assertEqual(config.log_file, self.root / "registros" / "agente.log")
+
+    def test_the_default_files_sit_next_to_the_config(self):
+        # Sem subpasta: o lojista e instruido por telefone a abrir a pasta e
+        # mandar o arquivo .log, e uma pasta a mais e um passo a mais para
+        # errar.
         config = load_config(self.write(MINIMAL))
 
-        self.assertEqual(config.state_file, self.root / "state" / "printed-orders.json")
-        self.assertEqual(config.log_file, self.root / "logs" / "print-agent.log")
+        self.assertEqual(config.state_file, self.root / "pedidos-impressos.json")
+        self.assertEqual(config.log_file, self.root / "rapidex-impressao.log")
 
     def test_an_absolute_path_is_respected(self):
         absolute = Path(self.root / "outro" / "estado.json").resolve()

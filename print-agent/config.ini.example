@@ -1,12 +1,28 @@
-; Configuracao do agente de impressao.
+; Configuracao do agente de impressao — FORMATO COMPLETO.
 ;
 ; Copie para config.ini (na mesma pasta) e edite. O config.ini de verdade
 ; NAO vai para o git: ele guarda a senha do lojista.
 ;
 ;   copy config.ini.example config.ini
 ;
-; Caminhos relativos sao resolvidos a partir DESTA pasta, nao do diretorio
-; de trabalho — o servico do Windows sobe com o cwd em System32.
+; Caminhos relativos sao resolvidos a partir da pasta do config.ini, nao do
+; diretorio de trabalho — o servico do Windows sobe com o cwd em System32, e
+; o executavel do PyInstaller roda de uma pasta temporaria que some no fim.
+;
+; ---------------------------------------------------------------------
+; EXISTE UM FORMATO CURTO, e e ele que o programa cria sozinho na primeira
+; execucao. Para uma loja com UMA impressora, isto basta:
+;
+;   [rapidex]
+;   api_url  = https://api.pederapidex.com
+;   email    = impressora.centro@exemplo.com
+;   password = ...
+;   printer  = EPSON TM-T20
+;
+; `printer` do formato curto e o mesmo `default` de [printers] la embaixo.
+; Use o formato completo abaixo quando a loja tiver uma impressora por praca,
+; ou quando precisar mexer em codepage, tempos ou corte de papel.
+; ---------------------------------------------------------------------
 
 [api]
 ; URL da API, sem barra no fim.
@@ -51,9 +67,19 @@ default = EPSON TM-T20 Cozinha
 
 [printing]
 ; Tabela de caracteres da impressora (comando ESC t n).
-;   2  = CP850  (multilingue latino) — funciona na maioria
-;   3  = CP860  (portugues)
-;   16 = WPC1252
+;
+; A termica NAO entende UTF-8: ela le byte a byte na tabela que este
+; comando seleciona. `codepage` diz a IMPRESSORA qual tabela usar e
+; `encoding` diz ao PROGRAMA em quais bytes escrever — os dois tem que
+; falar da mesma tabela:
+;
+;   codepage = 2   ->  encoding = cp850   (multilingue latino, a maioria)
+;   codepage = 3   ->  encoding = cp860   (portugues)
+;   codepage = 16  ->  encoding = cp1252  (WPC1252)
+;
+; Trocar so um imprime "Picanha Ó Moda" sem nenhum erro em lugar nenhum. O
+; programa avisa no log quando o par nao bate.
+;
 ; Se a comanda sair com acento errado, e este par que muda.
 codepage = 2
 encoding = cp850

@@ -11,6 +11,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator
 
 from src.schemas.common_schema import BaseResponse
+from src.utils.normalization import normalize_text
 
 
 # Mesmo teto de nome do cardapio. Setor com nome de paragrafo estoura a
@@ -45,8 +46,8 @@ class PrintingSectorCreate(BaseModel):
 
     @field_validator("name")
     @classmethod
-    def strip_name(cls, value: str) -> str:
-        return value.strip()
+    def normalize_name(cls, value: str) -> str:
+        return normalize_text(value)
 
 
 class PrintingSectorUpdate(BaseModel):
@@ -68,8 +69,8 @@ class PrintingSectorUpdate(BaseModel):
 
     @field_validator("name")
     @classmethod
-    def strip_name(cls, value: str | None) -> str | None:
-        return value.strip() if value is not None else None
+    def normalize_name(cls, value: str | None) -> str | None:
+        return normalize_text(value) if value is not None else None
 
 
 class ProductPrintingSectorRequest(BaseModel):

@@ -14,6 +14,8 @@ em "Dispositivos e Impressoras", que e o que vai no config.ini.
 
 import logging
 
+from print_agent.config import normalize_sector
+
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +59,33 @@ class WindowsRawPrinter(Printer):
         try:
             handle = win32print.OpenPrinter(printer_name)
         except Exception as exc:  # pragma: no cover - depende da maquina
-            raise PrinterError(
-                f"nao foi possivel abrir a impressora '{printer_name}': {exc}"
-            ) from exc
+            # O pywin32 fala Unicode direto com a API W do Windows: nome com
+            # acento chega intacto e nao precisa de tratamento. O que falha e
+            # o nome que so PARECE igual — "Cozinha Ação" digitado com acento
+            # combinante casa byte a byte com nada, e na tela e identico ao
+            # nome certo. O Windows responde "o nome da impressora e
+            # invalido" e o lojista jura que copiou certo.
+            resolved = _resolve_printer_name(win32print, printer_name)
+            if resolved is None:
+                raise PrinterError(
+                    f"nao foi possivel abrir a impressora '{printer_name}': {exc}. "
+                    f"Instaladas nesta maquina: {_installed_names(win32print)}"
+                ) from exc
+
+            logger.warning(
+                "o nome '%s' do config.ini nao existe exatamente assim no "
+                "Windows; usando '%s', que e o unico parecido. Corrija o "
+                "config.ini para o nome exato.",
+                printer_name,
+                resolved,
+            )
+            try:
+                handle = win32print.OpenPrinter(resolved)
+            except Exception as retry_exc:
+                raise PrinterError(
+                    f"nao foi possivel abrir a impressora '{resolved}': {retry_exc}"
+                ) from retry_exc
+            printer_name = resolved
 
         try:
             # O terceiro elemento e o datatype. "RAW" e o que impede o
@@ -82,6 +108,35 @@ class WindowsRawPrinter(Printer):
             ) from exc
         finally:
             win32print.ClosePrinter(handle)
+
+
+def _enum_printers(win32print) -> list[str]:
+    flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
+    try:
+        return [entry[2] for entry in win32print.EnumPrinters(flags)]
+    except Exception:  # pragma: no cover - depende da maquina
+        return []
+
+
+def _resolve_printer_name(win32print, wanted: str) -> str | None:
+    """O nome real da impressora que so difere do configurado no acento.
+
+    Devolve `None` quando nao ha candidato OU quando ha mais de um: adivinhar
+    entre duas impressoras e imprimir a comanda na praca errada, que e pior
+    que nao imprimir — nao imprimir grita no log, sair na impressora errada
+    nao grita em lugar nenhum.
+
+    Usa a mesma normalizacao dos setores (`normalize_sector`), entao vale
+    tambem para acento perdido de vez ("Impressora Acao") e caixa diferente.
+    """
+    alvo = normalize_sector(wanted)
+    candidates = [name for name in _enum_printers(win32print) if normalize_sector(name) == alvo]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _installed_names(win32print) -> str:
+    names = _enum_printers(win32print)
+    return ", ".join(f"'{name}'" for name in names) if names else "nenhuma encontrada"
 
 
 class LoggingPrinter(Printer):

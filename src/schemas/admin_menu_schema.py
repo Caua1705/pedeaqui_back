@@ -14,6 +14,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from src.schemas.common_schema import BaseResponse
+from src.utils.normalization import normalize_text
 
 
 # Teto do nome de categoria/produto/opcao. Bate com o que a coluna aceita
@@ -41,8 +42,8 @@ class AdminCategoryCreate(BaseModel):
 
     @field_validator("name")
     @classmethod
-    def strip_name(cls, value: str) -> str:
-        return value.strip()
+    def normalize_name(cls, value: str) -> str:
+        return normalize_text(value)
 
 
 class AdminCategoryUpdate(BaseModel):
@@ -60,8 +61,8 @@ class AdminCategoryUpdate(BaseModel):
 
     @field_validator("name")
     @classmethod
-    def strip_name(cls, value: str | None) -> str | None:
-        return value.strip() if value is not None else None
+    def normalize_name(cls, value: str | None) -> str | None:
+        return normalize_text(value) if value is not None else None
 
 
 class CategoryReorderRequest(BaseModel):
@@ -189,8 +190,8 @@ class AdminProductCreate(BaseModel):
 
     @field_validator("name")
     @classmethod
-    def strip_name(cls, value: str) -> str:
-        return value.strip()
+    def normalize_name(cls, value: str) -> str:
+        return normalize_text(value)
 
 
 class AdminProductUpdate(BaseModel):
@@ -215,8 +216,8 @@ class AdminProductUpdate(BaseModel):
 
     @field_validator("name")
     @classmethod
-    def strip_name(cls, value: str | None) -> str | None:
-        return value.strip() if value is not None else None
+    def normalize_name(cls, value: str | None) -> str | None:
+        return normalize_text(value) if value is not None else None
 
 
 class ProductAvailabilityRequest(BaseModel):
@@ -255,8 +256,8 @@ class AdminOptionGroupFields(BaseModel):
 
     @field_validator("name")
     @classmethod
-    def strip_name(cls, value: str) -> str:
-        return value.strip()
+    def normalize_name(cls, value: str) -> str:
+        return normalize_text(value)
 
     @model_validator(mode="after")
     def validate_selection_limits(self):
@@ -285,8 +286,8 @@ class AdminOptionGroupUpdate(BaseModel):
 
     @field_validator("name")
     @classmethod
-    def strip_name(cls, value: str | None) -> str | None:
-        return value.strip() if value is not None else None
+    def normalize_name(cls, value: str | None) -> str | None:
+        return normalize_text(value) if value is not None else None
 
 
 class AdminOptionCreate(BaseModel):
@@ -298,8 +299,8 @@ class AdminOptionCreate(BaseModel):
 
     @field_validator("name")
     @classmethod
-    def strip_name(cls, value: str) -> str:
-        return value.strip()
+    def normalize_name(cls, value: str) -> str:
+        return normalize_text(value)
 
 
 class AdminOptionUpdate(BaseModel):
@@ -311,5 +312,5 @@ class AdminOptionUpdate(BaseModel):
 
     @field_validator("name")
     @classmethod
-    def strip_name(cls, value: str | None) -> str | None:
-        return value.strip() if value is not None else None
+    def normalize_name(cls, value: str | None) -> str | None:
+        return normalize_text(value) if value is not None else None

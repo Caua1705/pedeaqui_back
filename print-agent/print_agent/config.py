@@ -6,12 +6,39 @@ acento e sem caixa**. O nome chega da API como o lojista digitou no painel
 chave para minusculas. Comparar cru faria a comanda da "Cozinha" nao achar
 a impressora cadastrada como "cozinha" — e o defeito apareceria so no dia em
 que alguem renomeasse o setor no painel.
+
+## Dois formatos aceitos, e por que
+
+O formato longo (`[api]` + `[printers]` + `[printing]` + `[agent]` + ...) e o
+original e continua valendo inteiro. Ele e o que a loja com varias pracas
+precisa: uma impressora por setor.
+
+O formato curto (`[rapidex]`) existe para a instalacao de balcao, onde a loja
+tem UMA impressora e quem preenche o arquivo esta com o pendrive na mao:
+
+    [rapidex]
+    api_url = https://api.pederapidex.com
+    email   = impressora.centro@exemplo.com
+    password = ...
+    printer = EPSON TM-T20
+
+`printer` do formato curto e exatamente o `default` do `[printers]`: a
+impressora que recebe todo setor nao mapeado. Nao e um mecanismo novo — e o
+fallback que ja existia, com um nome que cabe numa instrucao por telefone.
+Por isso o formato curto NAO muda comportamento nenhum: uma loja de uma
+impressora ja funcionava assim, escrevendo `default = ...`.
+
+Os dois podem conviver: `[rapidex]` da a base, e um `[printers]` ao lado
+acrescenta as pracas. Onde os dois dizem a mesma coisa, o formato longo
+vence, por ser o mais especifico.
 """
 
 import configparser
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from print_agent import paths
 
 
 # Status do pedido que dispara a impressao. Vem de ORDER_STATUSES da API.
@@ -39,7 +66,11 @@ DEFAULT_PRINT_RETRY_SECONDS = 5.0
 # fim de semana prolongado; alem disso o arquivo so cresceria.
 DEFAULT_STATE_RETENTION_DAYS = 7
 
-DEFAULT_LOG_MAX_BYTES = 5 * 1024 * 1024
+# 1 MB por arquivo, 5 arquivos: 5 MB no teto absoluto. O agente roda por
+# meses sem ninguem tocar nele, e a maquina do balcao costuma ser a mais
+# apertada da loja. 1 MB tambem e o tamanho que o lojista consegue mandar por
+# WhatsApp quando alguem pedir o log.
+DEFAULT_LOG_MAX_BYTES = 1024 * 1024
 DEFAULT_LOG_BACKUP_COUNT = 5
 
 
@@ -76,10 +107,10 @@ class Config:
     printers: dict[str, str] = field(default_factory=dict)
     default_printer: str | None = None
 
-    state_file: Path = Path("state/printed-orders.json")
+    state_file: Path = field(default_factory=paths.default_state_path)
     state_retention_days: int = DEFAULT_STATE_RETENTION_DAYS
 
-    log_file: Path = Path("logs/print-agent.log")
+    log_file: Path = field(default_factory=paths.default_log_path)
     log_level: str = "INFO"
     log_max_bytes: int = DEFAULT_LOG_MAX_BYTES
     log_backup_count: int = DEFAULT_LOG_BACKUP_COUNT
@@ -108,6 +139,59 @@ class Config:
         return self.printers.get(normalize_sector(sector_name), self.default_printer)
 
 
+# Modelo criado na primeira execucao, quando nao ha config.ini nenhum.
+#
+# Formato curto de proposito: quem le isto esta em pe no balcao com um
+# pendrive. As opcoes avancadas (uma impressora por setor, codepage, tempos
+# de reconexao) estao no config.ini.example, e sao raras.
+CONFIG_TEMPLATE = """\
+; Configuracao do Rapidex Impressao.
+;
+; Preencha os quatro campos abaixo e salve. Depois feche e abra o programa.
+; Linhas que comecam com ; sao comentario e podem ficar como estao.
+
+[rapidex]
+
+; 1. Endereco do servidor. Normalmente nao muda.
+api_url = https://api.pederapidex.com
+
+; 2. E-mail e senha do usuario do painel criado para ESTA impressora.
+;    Use um usuario dedicado ao agente, nao o do dono da loja.
+;
+;    IMPORTANTE: e por aqui que o programa continua funcionando sozinho.
+;    Ele refaz o login automaticamente quando precisa.
+email =
+password =
+
+; 3. Nome EXATO da impressora, como aparece no Windows em
+;    Configuracoes > Bluetooth e dispositivos > Impressoras e scanners.
+;    Copie e cole o nome, com maiusculas e espacos iguais.
+printer =
+
+; --------------------------------------------------------------------
+; Alternativa a e-mail e senha: um token colado a mao.
+; So para teste rapido. O token VENCE EM 12 HORAS e depois o programa
+; para de imprimir ate alguem trocar. Nao use no dia a dia.
+; token =
+;
+; Loja com mais de uma impressora: apague a linha `printer` acima e use
+; uma secao [printers], uma linha por setor do painel. Veja exemplos em
+; config.ini.example.
+; --------------------------------------------------------------------
+"""
+
+
+def write_template(path: Path) -> None:
+    """Cria o config.ini modelo, com os campos vazios.
+
+    Existe para a primeira execucao nao ser um traceback. O lojista (ou quem
+    instalou) abre o arquivo que acabou de aparecer ao lado do programa,
+    preenche tres linhas e roda de novo.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(CONFIG_TEMPLATE, encoding="utf-8")
+
+
 def load_config(path: Path) -> Config:
     if not path.is_file():
         raise ConfigError(f"config.ini nao encontrado em {path}")
@@ -115,20 +199,40 @@ def load_config(path: Path) -> Config:
     parser = configparser.ConfigParser(interpolation=None)
     # `interpolation=None` porque senha e token podem conter '%', que o
     # ConfigParser interpretaria como interpolacao e recusaria o arquivo.
+    #
+    # `utf-8-sig` e nao `utf-8`: o config.ini e editado no Bloco de Notas da
+    # maquina do balcao, e o Bloco de Notas grava BOM (sempre, nas versoes
+    # antigas do Windows; ao escolher "UTF-8 com BOM" em Salvar como, nas
+    # novas). Lido como `utf-8`, o BOM entra no comeco da primeira linha e
+    # `[rapidex]` vira `﻿[rapidex]` — o ConfigParser nao reconhece mais
+    # a secao e responde "File contains no section headers" apontando para
+    # uma linha que, na tela, E um cabecalho de secao. Ninguem no balcao sai
+    # dessa sozinho.
+    #
+    # `utf-8-sig` le os dois casos: come o BOM quando existe e se comporta
+    # como `utf-8` quando nao existe.
+    #
+    # E se nem UTF-8 for: o "Salvar como > ANSI" do Bloco de Notas (padrao nas
+    # maquinas mais antigas, que sao justamente as do balcao) grava CP1252, e
+    # ai o "ç" de "Impressora Cozinha Ação" e um byte 0xE7 solto que nao e
+    # UTF-8 valido. Isso levanta `UnicodeDecodeError`, que NAO e
+    # `configparser.Error` e NAO e `ConfigError` — escapava inteiro pelo
+    # `__main__` e o lojista via um traceback de Python, exatamente o que o
+    # tratamento de config ausente existe para evitar. Nome de impressora e
+    # nome de setor tem acento no Brasil; isso ia acontecer.
     try:
-        parser.read(path, encoding="utf-8")
+        _read_ini(parser, path)
     except configparser.Error as exc:
         raise ConfigError(f"config.ini invalido: {exc}") from exc
 
-    if not parser.has_section("api"):
-        raise ConfigError("config.ini precisa da secao [api]")
+    if not (parser.has_section("api") or parser.has_section("rapidex")):
+        raise ConfigError(
+            "config.ini precisa da secao [rapidex] (formato curto) ou [api] "
+            "(formato completo)"
+        )
 
-    api = parser["api"]
-    base_url = api.get("base_url", "").strip().rstrip("/")
-    if not base_url:
-        raise ConfigError("[api] base_url e obrigatorio")
-
-    token, email, password = _read_credentials(api)
+    base_url = _read_base_url(parser)
+    token, email, password = _read_credentials(parser)
     printers, default_printer = _read_printers(parser)
     root = path.parent
 
@@ -139,11 +243,11 @@ def load_config(path: Path) -> Config:
         password=password,
         printers=printers,
         default_printer=default_printer,
-        state_file=_resolve(root, parser, "state", "file", "state/printed-orders.json"),
+        state_file=_resolve(root, parser, "state", "file", paths.STATE_NAME),
         state_retention_days=_get_int(
             parser, "state", "retention_days", DEFAULT_STATE_RETENTION_DAYS
         ),
-        log_file=_resolve(root, parser, "log", "file", "logs/print-agent.log"),
+        log_file=_resolve(root, parser, "log", "file", paths.LOG_NAME),
         log_level=_get(parser, "log", "level", "INFO").upper(),
         log_max_bytes=_get_int(parser, "log", "max_bytes", DEFAULT_LOG_MAX_BYTES),
         log_backup_count=_get_int(parser, "log", "backup_count", DEFAULT_LOG_BACKUP_COUNT),
@@ -166,7 +270,63 @@ def load_config(path: Path) -> Config:
     )
 
 
-def _read_credentials(api) -> tuple[str | None, str | None, str | None]:
+def _read_ini(parser: configparser.ConfigParser, path: Path) -> None:
+    """Le o config.ini em UTF-8 e, se nao for, em CP1252.
+
+    CP1252 e a ultima tentativa e nao a primeira porque ela NUNCA falha:
+    todo byte tem um caractere correspondente. Tentada antes, ela leria um
+    arquivo UTF-8 legitimo como mojibake ("Ação" -> "AÃ§Ã£o") em silencio, e
+    o nome da impressora nunca casaria com o do Windows.
+
+    A ordem certa e esta: UTF-8 e restritivo o bastante para falhar quando o
+    arquivo nao e UTF-8, e so entao o CP1252 entra como palpite.
+    """
+    try:
+        parser.read(path, encoding="utf-8-sig")
+        return
+    except UnicodeDecodeError:
+        pass
+
+    # `parser.read` pode ter absorvido as secoes iniciais antes de bater no
+    # primeiro byte invalido. Zera para nao misturar as duas leituras.
+    for section in parser.sections():
+        parser.remove_section(section)
+
+    try:
+        parser.read(path, encoding="cp1252")
+    except UnicodeDecodeError as exc:  # pragma: no cover - cp1252 nao rejeita byte
+        raise ConfigError(
+            f"nao foi possivel ler {path}: o arquivo nao parece ser texto ({exc})"
+        ) from exc
+
+
+def _option(parser: configparser.ConfigParser, *candidates: tuple[str, str]) -> str | None:
+    """O primeiro (secao, opcao) preenchido, na ordem dada.
+
+    A ordem dos candidatos e a precedencia: o formato longo vem primeiro
+    porque e o mais especifico.
+    """
+    for section, option in candidates:
+        if not parser.has_section(section):
+            continue
+        value = (parser[section].get(option) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _read_base_url(parser: configparser.ConfigParser) -> str:
+    raw = _option(parser, ("api", "base_url"), ("rapidex", "api_url"))
+    if not raw:
+        raise ConfigError(
+            "informe a URL da API: [rapidex] api_url (ou [api] base_url)"
+        )
+    return raw.rstrip("/")
+
+
+def _read_credentials(
+    parser: configparser.ConfigParser,
+) -> tuple[str | None, str | None, str | None]:
     """Token estatico, ou e-mail e senha.
 
     Os dois caminhos existem por um motivo pratico: o token de acesso da API
@@ -176,16 +336,25 @@ def _read_credentials(api) -> tuple[str | None, str | None, str | None]:
     login sozinho.
 
     O token continua aceito porque e o que serve para testar a instalacao
-    sem colocar senha num arquivo de texto.
+    sem colocar senha num arquivo de texto. Quem sobe so com token recebe um
+    aviso no boot — ver `__main__`.
+
+    `password` nao passa por `_option` (que aplica `.strip()`): espaco no
+    comeco ou no fim de uma senha e caractere, nao sujeira.
     """
-    token = (api.get("token") or "").strip() or None
-    email = (api.get("email") or "").strip() or None
-    password = api.get("password") or None
+    token = _option(parser, ("api", "token"), ("rapidex", "token"))
+    email = _option(parser, ("api", "email"), ("rapidex", "email"))
+
+    password = None
+    for section in ("api", "rapidex"):
+        if parser.has_section(section) and parser[section].get("password"):
+            password = parser[section].get("password")
+            break
 
     if not token and not (email and password):
         raise ConfigError(
-            "[api] informe token, ou email e password. Sem credencial nao "
-            "ha stream para escutar."
+            "informe token, ou email e password. Sem credencial nao ha "
+            "stream para escutar."
         )
     return token, email, password
 
@@ -196,26 +365,30 @@ def _read_printers(parser: configparser.ConfigParser) -> tuple[dict[str, str], s
     A chave `default` e reservada: ela nao e um setor, e a impressora que
     recebe o que nao casou com nenhuma linha. Sem ela, um setor criado no
     painel depois da instalacao simplesmente nao imprimiria.
-    """
-    if not parser.has_section("printers"):
-        raise ConfigError(
-            "config.ini precisa da secao [printers] com o mapeamento "
-            "setor = nome da impressora do Windows"
-        )
 
+    `[rapidex] printer` alimenta esse MESMO default. E a loja de uma
+    impressora so: tudo cai no fallback, que e como ela ja funcionava
+    escrevendo `default = ...` no formato longo.
+    """
     printers: dict[str, str] = {}
-    default_printer: str | None = None
-    for key, value in parser["printers"].items():
-        printer = value.strip()
-        if not printer:
-            continue
-        if normalize_sector(key) == "default":
-            default_printer = printer
-            continue
-        printers[normalize_sector(key)] = printer
+    default_printer = _option(parser, ("rapidex", "printer"))
+
+    if parser.has_section("printers"):
+        for key, value in parser["printers"].items():
+            printer = value.strip()
+            if not printer:
+                continue
+            if normalize_sector(key) == "default":
+                default_printer = printer
+                continue
+            printers[normalize_sector(key)] = printer
 
     if not printers and default_printer is None:
-        raise ConfigError("[printers] esta vazia: nenhuma via teria para onde ir")
+        raise ConfigError(
+            "nenhuma impressora configurada: preencha [rapidex] printer "
+            "(uma impressora) ou a secao [printers] (uma por setor). Sem "
+            "isso nenhuma via teria para onde ir."
+        )
     return printers, default_printer
 
 

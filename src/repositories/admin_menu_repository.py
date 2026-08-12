@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, selectinload
 from src.models.category_model import Category
 from src.models.product_model import Product
 from src.models.product_option_model import ProductOption, ProductOptionGroup
+from src.utils.normalization import normalize_text
 
 
 def _build_product_search_condition(search: str):
@@ -26,8 +27,13 @@ def _build_product_search_condition(search: str):
     `%` e `_` sao escapados pelo mesmo motivo da busca de pedidos: sem isso
     um "%" digitado sozinho lista tudo e um produto chamado "Combo_1" nunca
     e encontrado.
+
+    O `normalize_text` poe o termo em NFC porque o ILIKE compara BYTES: o
+    "é" composto e o decomposto sao a mesma letra na tela e strings
+    diferentes no banco. Os nomes gravados passam pelo mesmo NFC no schema
+    de escrita — os dois lados juntos e que fazem a busca encontrar.
     """
-    escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    escaped = normalize_text(search).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     pattern = f"%{escaped}%"
     return Product.name.ilike(pattern, escape="\\") | Product.code.ilike(pattern, escape="\\")
 

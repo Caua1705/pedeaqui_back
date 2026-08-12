@@ -6,7 +6,12 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from src.schemas.common_schema import BaseResponse
 from src.schemas.order_schema import OrderItemResponse
-from src.utils.normalization import is_valid_email, normalize_digits, normalize_email
+from src.utils.normalization import (
+    is_valid_email,
+    normalize_digits,
+    normalize_email,
+    normalize_text,
+)
 
 
 class CustomerAddressBase(BaseModel):
@@ -148,7 +153,10 @@ class UpdateCurrentCustomerRequest(BaseModel):
     @field_validator("name")
     @classmethod
     def normalize_name(cls, value: str) -> str:
-        name = value.strip()
+        # NFC alem do strip: `customer_name_snapshot` e procurado com ILIKE
+        # no painel, e ILIKE compara bytes — "Antônio" decomposto nao seria
+        # encontrado por quem digita a forma composta.
+        name = normalize_text(value)
         if not name:
             raise ValueError("name is required")
         return name

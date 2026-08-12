@@ -41,6 +41,21 @@ class EventStreamResponse(StreamingResponse):
     da classe de resposta. Sem ela o schema do evento sairia publicado como
     `application/json`, e o cliente gerado para o frontend descreveria
     errado o unico endpoint que nao devolve JSON.
+
+    **NAO acrescente `; charset=utf-8` aqui.** A tentacao e real: a regra
+    default do HTTP para `text/*` sem charset e ISO-8859-1, e cliente que a
+    aplica (o `requests`, ate hoje, em `get_encoding_from_headers`) leria
+    todo acento do stream como mojibake.
+
+    So que o Starlette JA acrescenta o charset sozinho: `init_headers` poe
+    `; charset=utf-8` em todo media_type que comece com `text/` e nao traga
+    um. O cabecalho que sai na rede e identico com ou sem esta declaracao —
+    conferido.
+
+    O que muda e o OpenAPI, que usa este valor como CHAVE do `content`: a
+    rota passaria a ser publicada sob `text/event-stream; charset=utf-8` em
+    vez de `text/event-stream`. O painel consome o `/openapi.json`, entao
+    isso e mudanca de contrato — custo real, beneficio zero.
     """
 
     media_type = "text/event-stream"

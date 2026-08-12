@@ -18,6 +18,7 @@ o passo 2 se repete a cada reconexao. O passo 1 so quando o token expira.
 """
 
 import logging
+import re
 from collections.abc import Iterator
 
 import requests
@@ -39,11 +40,30 @@ class ApiError(Exception):
 
 
 class AuthError(ApiError):
-    """Credencial recusada.
+    """Credencial recusada, mas ainda ha o que tentar.
 
-    Separada porque o tratamento e outro: erro de rede se resolve tentando
-    de novo, credencial errada nao. Com token estatico vencido, o agente
-    para e diz o que fazer.
+    O caso normal: o token de 12h venceu durante a noite e existe
+    email/password no config.ini para refazer o login. O agente reconecta e
+    segue.
+    """
+
+
+class AuthFatalError(AuthError):
+    """Credencial recusada e NAO ha como recuperar.
+
+    Dois casos, e os dois so se resolvem com alguem editando o config.ini:
+
+    - email/senha errados (o login respondeu 401);
+    - token estatico vencido ou invalido, sem email/password ao lado para
+      refazer o login.
+
+    Separada de `AuthError` porque o tratamento e oposto: aqui insistir e
+    inutil. O agente encerra com mensagem em vez de tentar para sempre — um
+    processo vivo que nunca imprime e pior que um processo morto, porque
+    ninguem percebe.
+
+    Subclasse de `AuthError` de proposito: quem so quer saber "foi problema
+    de credencial?" continua pegando as duas com um `except AuthError`.
     """
 
 
@@ -94,7 +114,12 @@ class ApiClient:
                 timeout=(CONNECT_TIMEOUT_SECONDS, STREAM_READ_TIMEOUT_SECONDS),
             )
         except requests.RequestException as exc:
-            raise ApiError(f"nao foi possivel abrir o stream: {exc}") from exc
+            # `exc` costuma trazer a URL inteira, e a URL leva o ticket. Ele
+            # vale 30 segundos, mas e credencial do mesmo jeito e o log vai
+            # parar no WhatsApp de alguem.
+            raise ApiError(
+                f"nao foi possivel abrir o stream: {_hide_ticket(exc)}"
+            ) from exc
 
         if response.status_code in (401, 403):
             response.close()
@@ -104,6 +129,19 @@ class ApiClient:
             response.close()
             raise ApiError(f"stream respondeu {response.status_code}")
 
+        # Cinto de seguranca, nao correcao de defeito: a API HOJE responde
+        # `text/event-stream; charset=utf-8` (o Starlette poe o charset
+        # sozinho em todo media_type `text/*`), entao o `requests` ja
+        # decodifica certo.
+        #
+        # O que esta linha cobre e o cabecalho chegar SEM o charset — proxy
+        # que reescreve content-type, ou a API trocando de framework. Ai o
+        # `requests` aplica a regra default do HTTP para `text/*`, que e
+        # ISO-8859-1, e todo acento do stream vira mojibake ("Praça" ->
+        # "PraÃ§a") sem erro em lugar nenhum. Forcar e barato e o SSE e UTF-8
+        # por especificacao: nao existe caso em que este `utf-8` esteja
+        # errado.
+        response.encoding = "utf-8"
         return _iter_lines(response)
 
     def _request(self, method: str, path: str, retry_on_auth: bool = True) -> dict:
@@ -139,9 +177,11 @@ class ApiClient:
         if self._token:
             return self._token
         if not (self.email and self.password):
-            raise AuthError(
-                "token vencido e nao ha email/password no config.ini para "
-                "refazer o login. O token de acesso vale 12 horas."
+            raise AuthFatalError(
+                "o token do config.ini foi recusado e nao ha email/password "
+                "ao lado para refazer o login. O token de acesso vale 12 "
+                "horas: para o agente rodar sozinho, preencha email e "
+                "password no config.ini."
             )
         self._token = self._login()
         return self._token
@@ -157,7 +197,12 @@ class ApiClient:
             raise ApiError(f"login falhou: {exc}") from exc
 
         if response.status_code in (401, 403):
-            raise AuthError("email ou senha invalidos no config.ini")
+            # Fatal: tentar de novo com a MESMA senha errada da no mesmo, e
+            # so alguem editando o config.ini resolve.
+            raise AuthFatalError(
+                "email ou senha invalidos no config.ini (a API recusou o "
+                f"login de {self.email})"
+            )
         if response.status_code >= 400:
             raise ApiError(f"login respondeu {response.status_code}")
 
@@ -170,6 +215,20 @@ class ApiClient:
 
         logger.info("login refeito como %s", self.email)
         return token
+
+
+def _hide_ticket(value) -> str:
+    """Troca o valor do `ticket=` por reticencias.
+
+    O ticket entra na URL do stream porque a rota so aceita credencial ali
+    (o EventSource do navegador nao manda cabecalho). Ele vale 30 segundos,
+    mas o log e um arquivo que o lojista manda por WhatsApp quando alguma
+    coisa nao imprime — e credencial nenhuma tem que estar la dentro.
+    """
+    return _TICKET_RE.sub(r"\1...", str(value))
+
+
+_TICKET_RE = re.compile(r"(ticket=)[^&\s'\"]+")
 
 
 def _iter_lines(response) -> Iterator[str]:
@@ -185,6 +244,6 @@ def _iter_lines(response) -> Iterator[str]:
             # decode esta ligado; o parser espera string.
             yield line if line is not None else ""
     except requests.RequestException as exc:
-        raise ApiError(f"stream interrompido: {exc}") from exc
+        raise ApiError(f"stream interrompido: {_hide_ticket(exc)}") from exc
     finally:
         response.close()

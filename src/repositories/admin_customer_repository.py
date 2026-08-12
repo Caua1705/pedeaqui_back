@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from src.models.order_model import Order
 from src.repositories.order_repository import NON_BILLABLE_ORDER_STATUSES
+from src.utils.normalization import normalize_text
 
 
 def _build_customer_search_condition(search: str):
@@ -35,8 +36,13 @@ def _build_customer_search_condition(search: str):
 
     `%` e `_` sao escapados pela mesma razao das outras buscas: sem isso um
     "%" sozinho lista a base inteira.
+
+    E o `normalize_text` poe o termo em NFC, porque o ILIKE do nome compara
+    bytes e "Antônio" tem duas formas Unicode identicas na tela. O ramo do
+    telefone nao se importa (so digitos), mas normalizar antes do `isdigit`
+    mantem um caminho so.
     """
-    cleaned = search.strip()
+    cleaned = normalize_text(search)
     escaped = cleaned.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     if cleaned.isdigit():
         return Order.customer_phone_snapshot.like(f"{escaped}%", escape="\\")

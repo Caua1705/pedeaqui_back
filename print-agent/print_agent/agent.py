@@ -36,7 +36,7 @@ import random
 import time
 from dataclasses import dataclass
 
-from print_agent.api_client import ApiClient, ApiError, AuthError
+from print_agent.api_client import ApiClient, ApiError, AuthError, AuthFatalError
 from print_agent.config import Config
 from print_agent.escpos import build_payload
 from print_agent.printers import Printer, PrinterError
@@ -87,22 +87,37 @@ class PrintAgent:
         """
         self._running = False
 
-    def run(self) -> None:
-        """Laco principal. So retorna quando `stop()` e chamado."""
+    def run(self) -> bool:
+        """Laco principal.
+
+        Devolve `True` quando parou normalmente (`stop()`) e `False` quando
+        parou por credencial que nao tem conserto sozinha — e o `__main__`
+        usa isso para escolher o codigo de saida.
+        """
         delay = self.config.reconnect_min_seconds
 
         while self._running:
             started_at = time.monotonic()
             try:
                 self._consume_stream()
+            except AuthFatalError as exc:
+                # Nao adianta insistir: alguem precisa editar o config.ini.
+                # Ficar tentando para sempre deixaria um processo vivo que
+                # nunca imprime, e ninguem percebe isso ate o cliente
+                # reclamar.
+                logger.error("PARANDO: %s", exc)
+                self._running = False
+                return False
             except AuthError as exc:
-                # Credencial errada nao melhora tentando de novo depressa.
-                logger.error("autenticacao recusada: %s", exc)
-                delay = self.config.reconnect_max_seconds
+                # Token de 12h vencido com email/password ao lado: o proximo
+                # ciclo refaz o login sozinho. E o caminho normal de um
+                # agente que roda por semanas.
+                logger.info("credencial expirada (%s); refazendo o login", exc)
+                delay = self.config.reconnect_min_seconds
             except ApiError as exc:
-                logger.warning("stream caiu: %s", exc)
+                logger.warning("conexao com o servidor caiu: %s", exc)
             except Exception:  # pragma: no cover - rede e Windows sao criativos
-                logger.exception("erro inesperado no stream")
+                logger.exception("erro inesperado na conexao com o servidor")
 
             if not self._running:
                 break
@@ -119,7 +134,8 @@ class PrintAgent:
             # depois de uma queda da API.
             wait += random.uniform(0, wait * 0.25)
             logger.info(
-                "reconectando em %.1fs (conexao durou %.0fs, %d pedidos impressos)",
+                "reconectando em %.0f segundos (a conexao durou %.0fs; "
+                "%d pedidos impressos ate agora)",
                 wait,
                 lasted,
                 self.stats.printed_orders,
@@ -127,9 +143,15 @@ class PrintAgent:
             if self._sleep(wait):
                 delay = min(delay * 2, self.config.reconnect_max_seconds)
 
+        return True
+
     def _consume_stream(self) -> None:
-        logger.info("abrindo stream (last_event_id=%s)", self.last_event_id or "-")
+        if self.last_event_id:
+            logger.info("conectando ao servidor (retomando de onde parou)")
+        else:
+            logger.info("conectando ao servidor")
         lines = self.client.open_stream(self.last_event_id)
+        logger.info("conectado. Aguardando pedidos.")
 
         for event in parse_events(lines):
             if not self._running:
@@ -178,6 +200,7 @@ class PrintAgent:
         resto do pedido some.
         """
         label = f"#{order_number}" if order_number else order_id
+        logger.info("pedido %s recebido, buscando as vias para imprimir", label)
         try:
             jobs = self.client.print_jobs(order_id)
         except ApiError as exc:
@@ -185,7 +208,13 @@ class PrintAgent:
             return
 
         if not jobs:
-            logger.warning("pedido %s nao gerou via nenhuma", label)
+            # Acontece de verdade: pedido online ainda nao pago nao gera via
+            # de producao, e a API devolve a lista vazia de proposito.
+            logger.warning(
+                "pedido %s nao gerou via nenhuma (pagamento ainda nao "
+                "confirmado?). Nada foi impresso.",
+                label,
+            )
             return
 
         printed = 0
@@ -196,7 +225,7 @@ class PrintAgent:
         if printed == len(jobs):
             self.state.mark(order_id)
             self.stats.printed_orders += 1
-            logger.info("pedido %s impresso (%d vias)", label, printed)
+            logger.info("pedido %s impresso por completo (%d vias)", label, printed)
         else:
             # Sem `mark`: o pedido continua elegivel. Se o servidor repetir o
             # evento (o que acontece na reconexao), ele tenta de novo.
@@ -243,24 +272,34 @@ class PrintAgent:
             try:
                 self.printer.send(printer_name, payload, job_name)
                 self.stats.printed_jobs += 1
+                logger.info(
+                    "pedido %s: via '%s' impressa em '%s'", label, sector, printer_name
+                )
                 return True
             except PrinterError as exc:
                 logger.warning(
-                    "tentativa %d/%d de imprimir '%s' em '%s' falhou: %s",
+                    "pedido %s: tentativa %d de %d de imprimir '%s' em '%s' "
+                    "falhou (%s). Tentando de novo em %.0fs.",
+                    label,
                     attempt,
                     self.config.print_attempts,
                     sector,
                     printer_name,
                     exc,
+                    self.config.print_retry_seconds,
                 )
                 if attempt < self.config.print_attempts:
                     self._sleep(self.config.print_retry_seconds)
 
         logger.error(
-            "desisti da via '%s' do pedido %s em '%s'. Papel, energia ou cabo?",
-            sector,
+            "pedido %s: a via '%s' NAO foi impressa em '%s' apos %d "
+            "tentativas. Confira papel, energia e cabo da impressora. O "
+            "pedido continua na fila e sera tentado de novo na proxima "
+            "reconexao.",
             label,
+            sector,
             printer_name,
+            self.config.print_attempts,
         )
         self.stats.failed_jobs += 1
         return False

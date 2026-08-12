@@ -12,17 +12,32 @@ certo. Estes testes protegem:
    serve; a via que nao sai, nao.
 """
 
+import unicodedata
 import unittest
 
 from print_agent.escpos import (
     INITIALIZE,
     PARTIAL_CUT,
+    SELECT_CODEPAGE,
     SELECT_SIZE,
     SIZE_LARGE,
     SIZE_NORMAL,
     build_payload,
     encode_text,
+    expected_codepage,
 )
+
+
+# Itens reais do cardapio do Júnior da Picanha. Estao aqui com o acento de
+# verdade de proposito: o teste que exercita acento com "Joao" nao testa nada.
+CARDAPIO = [
+    "Picanha à Moda",
+    "Filé à Parmegiana",
+    "Sortidão",
+    "Açaí 500ml",
+    "Coração de Frango",
+    "Maminha ao Molho Madeíra",
+]
 
 
 class PayloadTests(unittest.TestCase):
@@ -100,6 +115,96 @@ class EncodingTests(unittest.TestCase):
 
     def test_plain_text_is_untouched(self):
         self.assertEqual(encode_text("PEDIDO #1234", "cp850"), b"PEDIDO #1234")
+
+
+class RealMenuTests(unittest.TestCase):
+    """O cardapio como ele e, nao um "Joao" de mentira.
+
+    A comanda vai para uma termica que NAO entende UTF-8: ela le byte a byte
+    na tabela seleciona por `ESC t n`. Um "à" mandado em UTF-8 sao dois
+    bytes, e a impressora imprimiria os dois — "Ã " no lugar de "à". Os
+    testes abaixo travam que o texto sai na codepage, e nao em UTF-8.
+    """
+
+    def test_every_item_keeps_its_accent_in_cp850(self):
+        for item in CARDAPIO:
+            with self.subTest(item=item):
+                self.assertEqual(encode_text(item, "cp850"), item.encode("cp850"))
+
+    def test_the_accent_is_one_byte_not_utf8(self):
+        # O teste que pega o defeito na veia: em UTF-8 "à" e b"\xc3\xa0"; na
+        # CP850 e b"\x85". Se algum dia isto voltar a mandar UTF-8 cru, e
+        # aqui que aparece.
+        encoded = encode_text("Picanha à Moda", "cp850")
+
+        self.assertEqual(encoded, b"Picanha \x85 Moda")
+        self.assertNotIn("à".encode("utf-8"), encoded)
+
+    def test_the_payload_carries_the_menu_in_the_printer_codepage(self):
+        content = "\n".join(f"1x {item}" for item in CARDAPIO)
+
+        payload = build_payload(content, codepage=2, encoding="cp850")
+
+        for item in CARDAPIO:
+            with self.subTest(item=item):
+                self.assertIn(item.encode("cp850"), payload)
+                self.assertNotIn(item.encode("utf-8"), payload)
+
+    def test_the_codepage_is_selected_by_an_escpos_command(self):
+        # Sem o `ESC t 2` a impressora le os bytes na tabela que estiver
+        # ligada de fabrica, e o mesmo byte 0x85 vira outra letra.
+        payload = build_payload("Sortidão", codepage=2, encoding="cp850")
+
+        self.assertIn(SELECT_CODEPAGE + bytes([2]), payload)
+        self.assertLess(
+            payload.index(SELECT_CODEPAGE), payload.index("Sortidão".encode("cp850"))
+        )
+
+    def test_decomposed_accents_survive(self):
+        # Teclado de iPhone/macOS manda "é" como "e" + acento combinante. Na
+        # tela do painel e identico ao composto; para a CP850 o combinante
+        # nao existe, e sem o NFC o cardapio inteiro imprimia sem acento.
+        for item in CARDAPIO:
+            with self.subTest(item=item):
+                decomposed = unicodedata.normalize("NFD", item)
+
+                self.assertNotEqual(decomposed, unicodedata.normalize("NFC", item))
+                self.assertEqual(encode_text(decomposed, "cp850"), item.encode("cp850"))
+
+    def test_one_impossible_character_does_not_deaccent_the_whole_ticket(self):
+        # Lojista poe emoji no nome do item, e o painel aceita. Antes, esse
+        # emoji rebaixava a LINHA INTEIRA: "Sortidao ? File".
+        encoded = encode_text("Sortidão 🍖 Filé", "cp850")
+
+        self.assertEqual(encoded, "Sortidão ? Filé".encode("cp850"))
+
+    def test_a_codepage_the_menu_does_not_fit_degrades_per_character(self):
+        # CP437 nao tem "ã" nem "à", mas tem "é". So o que nao cabe cai.
+        self.assertEqual(encode_text("Sortidão", "cp437"), b"Sortidao")
+        self.assertEqual(encode_text("Filé", "cp437"), "Filé".encode("cp437"))
+
+
+class CodepagePairTests(unittest.TestCase):
+    """O par `codepage` + `encoding` do config.ini.
+
+    Trocar so um dos dois imprime acento errado sem estourar nada — o defeito
+    mais caro de diagnosticar por telefone.
+    """
+
+    def test_the_default_pair_agrees(self):
+        from print_agent.config import DEFAULT_CODEPAGE, DEFAULT_ENCODING
+
+        self.assertEqual(expected_codepage(DEFAULT_ENCODING), DEFAULT_CODEPAGE)
+
+    def test_known_encodings_map_to_their_escpos_number(self):
+        self.assertEqual(expected_codepage("cp850"), 2)
+        self.assertEqual(expected_codepage("CP-850"), 2)
+        self.assertEqual(expected_codepage("cp437"), 0)
+        self.assertEqual(expected_codepage("latin1"), 16)
+
+    def test_an_unknown_encoding_is_not_treated_as_wrong(self):
+        # Impressora de fabricante exotico numera as tabelas do jeito dela.
+        self.assertIsNone(expected_codepage("cp932"))
 
 
 if __name__ == "__main__":

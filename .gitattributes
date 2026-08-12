@@ -5,3 +5,7 @@
 *.sh text eol=lf
 Dockerfile text eol=lf
 docker-compose.yml text eol=lf
+
+# Arquivos de lote do Windows precisam de CRLF: com LF, o interpretador de
+# comandos erra em `goto`/labels e a instalacao falha na maquina do lojista.
+*.bat text eol=crlf

@@ -20,3 +20,6 @@ build/
 .idea/
 .vscode/
 *.log
+
+# Artefatos do PyInstaller (print-agent). O .spec e regerado pelo build.bat.
+*.spec

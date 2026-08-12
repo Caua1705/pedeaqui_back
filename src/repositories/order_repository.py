@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 from src.models.order_item_model import OrderItem
 from src.models.order_item_option_model import OrderItemOption
 from src.models.order_model import Order
+from src.utils.normalization import normalize_text
 from src.models.order_status_history_model import OrderStatusHistory
 from src.models.branch_model import Branch
 from src.models.restaurant_model import Restaurant
@@ -89,8 +90,12 @@ def _build_search_condition(search: str):
 
     `%` e `_` sao escapados: sem isso um cliente chamado "Ana_" nao seria
     encontrado e um "%" sozinho listaria a base toda.
+
+    O `normalize_text` poe o termo em NFC antes do ILIKE, que compara bytes:
+    "Antônio" composto e decomposto sao iguais na tela e diferentes no
+    banco. `customer_name_snapshot` e gravado normalizado pelo mesmo motivo.
     """
-    digits = search.strip()
+    digits = normalize_text(search)
     if digits.isdigit():
         return Order.order_number == int(digits)
 

@@ -43,6 +43,39 @@ FONT_SIZES = {
     "large": SIZE_LARGE,
 }
 
+# `codepage` e `encoding` sao DUAS configuracoes que precisam concordar: a
+# primeira diz a impressora qual tabela usar, a segunda diz ao Python em quais
+# bytes escrever. Trocar so uma e o jeito classico de a comanda sair com
+# "Picanha Ó Moda" — os bytes certos lidos na tabela errada. Nada estoura, e a
+# unica pista e a bobina.
+#
+# Pares do padrao ESC/POS (`ESC t n`). Serve para AVISAR, nao para decidir:
+# impressora de fabricante exotico usa numeracao propria, e o lojista que
+# precisou fugir da tabela nao pode ser impedido de imprimir.
+STANDARD_CODEPAGES = {
+    "cp437": 0,
+    "cp850": 2,
+    "cp860": 3,
+    "cp863": 4,
+    "cp865": 5,
+    "cp1252": 16,
+    "cp866": 17,
+    "cp852": 18,
+    "cp858": 19,
+}
+
+
+def expected_codepage(encoding: str) -> int | None:
+    """O `n` do `ESC t n` que combina com este encoding, se for um conhecido.
+
+    `None` quer dizer "nao sei", nao "esta errado" — ver `STANDARD_CODEPAGES`.
+    """
+    normalized = encoding.strip().casefold().replace("-", "").replace("_", "")
+    # "latin1"/"iso88591" sao o mesmo alfabeto do CP1252 para o que cabe numa
+    # comanda em portugues.
+    aliases = {"latin1": "cp1252", "iso88591": "cp1252", "windows1252": "cp1252"}
+    return STANDARD_CODEPAGES.get(aliases.get(normalized, normalized))
+
 
 def encode_text(text: str, encoding: str) -> bytes:
     """Texto na codepage da impressora, sem nunca falhar.
@@ -56,7 +89,19 @@ def encode_text(text: str, encoding: str) -> bytes:
        assusta mais quem esta no balcao.
 
     E so entao o que sobrar vira "?".
+
+    **A normalizacao NFC nao e enfeite.** "Filé" pode chegar da API em duas
+    formas Unicode diferentes: composta (`é`, um code point, que a CP850
+    tem) ou decomposta (`e` + acento combinante, dois code points, que a
+    CP850 nao tem). As duas sao o mesmo texto na tela do painel, e teclado
+    de iPhone/macOS produz a segunda. Sem o NFC, o cardapio inteiro do
+    Júnior da Picanha cairia na queda de qualidade e imprimiria sem UM
+    acento — com a codepage certa, a impressora certa e nada no log.
     """
+    # NFC junta letra + acento combinante no caractere unico que a codepage
+    # conhece. Texto ja composto passa intacto.
+    text = unicodedata.normalize("NFC", text)
+
     try:
         return text.encode(encoding)
     except UnicodeEncodeError:
@@ -64,11 +109,42 @@ def encode_text(text: str, encoding: str) -> bytes:
     except LookupError:
         # Codepage que o Python nem conhece (erro de digitacao no
         # config.ini): melhor imprimir ASCII do que nao imprimir.
-        return _strip_accents(text).encode("ascii", errors="replace")
+        return _encode_degrading(text, "ascii")
 
-    # O que sobrar depois de tirar o acento (emoji, simbolo de moeda
-    # estrangeira) vira "?" — a via sai, com um caractere feio.
-    return _strip_accents(text).encode(encoding, errors="replace")
+    return _encode_degrading(text, encoding)
+
+
+def _encode_degrading(text: str, encoding: str) -> bytes:
+    """Codifica CARACTERE A CARACTERE, rebaixando so o que nao couber.
+
+    Feito no texto inteiro de uma vez, um unico caractere impossivel
+    rebaixaria a comanda toda: um emoji no nome de um item (o lojista poe,
+    o painel aceita) fazia "Sortidão 🍖 Filé" sair como "Sortidao ? File" —
+    o emoji vira "?" de qualquer jeito, mas os acentos das OUTRAS palavras
+    tambem morriam, e a CP850 tinha todos eles.
+
+    So roda quando o texto inteiro ja falhou: comanda sem surpresa nao paga
+    este laco.
+    """
+    encoded = bytearray()
+    for char in text:
+        try:
+            encoded += char.encode(encoding)
+            continue
+        except UnicodeEncodeError:
+            pass
+
+        # Sem acento o caractere costuma caber ("ã" -> "a"). Um acento
+        # combinante solto vira string vazia aqui, que e o resultado certo:
+        # a letra que ele acentua ja foi escrita.
+        stripped = _strip_accents(char)
+        try:
+            encoded += stripped.encode(encoding)
+        except UnicodeEncodeError:
+            # Emoji, simbolo de moeda estrangeira: a via sai, com um
+            # caractere feio.
+            encoded += b"?"
+    return bytes(encoded)
 
 
 def _strip_accents(text: str) -> str:

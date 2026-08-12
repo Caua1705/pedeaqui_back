@@ -37,6 +37,11 @@ consulta. Vale para categoria, produto, grupo, opção e setor de impressão.
 idempotência também, e-mail do pagador sai como `[email]`. Não passe a logar cru
 para depurar.
 
+**Schema muda por revisão do Alembic, nunca à mão no Supabase.** Coluna, índice,
+constraint, sequence, default — todos. Ver a armadilha 33: foi o schema criado
+por fora que fez a baseline nascer no-op, e é o que faria
+`alembic/schema_baseline.sql` envelhecer sem ninguém perceber.
+
 **Comentário explica o *porquê*, nunca o *quê*.** O código deste repositório é
 comentado com o motivo da decisão estranha. Mantenha esse padrão; comentário que
 narra a linha abaixo é ruído.
@@ -924,3 +929,61 @@ alguém colar um token novo na máquina do balcão. O que roda com
 
 Regra que fica: **segredo novo por público novo.** Reaproveitar chave "porque o
 `purpose` separa" é confundir quem-assinou com para-que-serve.
+
+---
+
+## 33. Schema só muda por revisão do Alembic — nunca à mão no Supabase
+
+**Regra:** toda alteração de schema entra por `alembic revision`, é aplicada por
+`alembic upgrade head` e chega em produção pelo `docker-entrypoint.sh`. Abrir o
+editor de tabelas do Supabase e acrescentar uma coluna "só para destravar" está
+proibido, mesmo quando a migração equivalente parece burocracia para um `ALTER
+TABLE` de uma linha.
+
+**O caso concreto que fecha essa porta.** O schema deste projeto nasceu à mão no
+painel do Supabase e foi remendado pelos 13 `.sql` de `migrations/`, aplicados
+um a um por fora. Quando o Alembic entrou, não havia como versionar o que já
+existia: a revisão de baseline `20260726_0001` teve que nascer **no-op**, um
+`pass` com docstring, servindo só de ponto de partida para as seguintes.
+
+O preço apareceu inteiro no dia em que alguém quis um banco de teste:
+
+```
+alembic upgrade head          # num banco VAZIO
+→ relation "orders" does not exist   (morre na revisão 0002)
+```
+
+**Não existia, em lugar nenhum do repositório, o DDL que constrói este banco.**
+Nem no ORM (que não mapeia sequences, defaults nem os índices feitos à mão), nem
+nos `.sql` (que são `ALTER TABLE` sobre tabelas que ninguém versionou). O
+repositório inteiro descrevia mudanças sobre um schema que só existia dentro do
+Supabase.
+
+A saída foi `alembic/schema_baseline.sql`, um `pg_dump --schema-only` de
+produção congelado na revisão `20260810_0012`, que a fixture aplica antes de
+`alembic stamp` + `upgrade head`.
+
+**E é justamente esse arquivo que a regra protege.** Ele é uma foto. Uma coluna
+acrescentada à mão em produção não aparece nele, não aparece em revisão nenhuma,
+e o resultado não é um erro: é a suíte `db` passando contra um schema que **não
+é** o de produção. O teste continua verde, a query continua certa no CI, e quebra
+só no servidor — que é a pior ordem possível para descobrir.
+
+O mesmo vale para índice criado à mão, que já custou caro uma vez: o
+`idx_order_items_order_id` da armadilha 4 existia só em produção, e o
+`IF NOT EXISTS` não o detectou porque casa por NOME.
+
+**Na prática:**
+
+- coluna, índice, constraint, sequence, default: `alembic revision`, sempre;
+- leia o arquivo gerado antes de aplicar e apague as linhas de `DROP` — o
+  autogenerate ainda propõe remover o que o ORM não mapeia (armadilha 24);
+- se um dia for inevitável mexer por fora (janela de emergência, `CREATE INDEX
+  CONCURRENTLY`, que não roda em transação), o trabalho **não terminou** no
+  `ALTER`: escreva a revisão correspondente e feche com `alembic stamp`, para o
+  banco e o histórico voltarem a concordar no mesmo minuto;
+- `scripts/audit_indexes.py` existe para achar o que escapou. Rodá-lo é barato.
+
+**Quando regerar o `schema_baseline.sql`: idealmente nunca.** Toda revisão nova
+se aplica por cima dele — o `stamp` fixa a foto em `0012` e o `upgrade` faz o
+resto. Precisar regerá-lo é o sintoma de que esta regra foi quebrada.

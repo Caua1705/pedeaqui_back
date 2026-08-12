@@ -68,20 +68,34 @@ def is_valid_email(email: str) -> bool:
     return bool(_EMAIL_RE.fullmatch(normalize_email(email)))
 
 
+def _check_digit(digits: str) -> int:
+    """O digito verificador de um trecho de CPF, pelo modulo 11.
+
+    Os dois digitos do CPF saem da MESMA conta, mudando so o tamanho do
+    trecho: o primeiro sai dos 9 primeiros digitos, o segundo dos 10
+    primeiros (ja com o primeiro verificador dentro). Escrita duas vezes, a
+    formula tinha dois lugares para errar um peso e nenhum aviso de que os
+    dois deveriam concordar.
+
+    O peso desce a partir de `len + 1`, e o resto 10 vira 0 — e a regra da
+    Receita, nao um caso de borda nosso.
+    """
+    weight = len(digits) + 1
+    total = sum(int(digit) * (weight - index) for index, digit in enumerate(digits))
+    check = (total * 10) % 11
+    return 0 if check == 10 else check
+
+
 def is_valid_cpf(cpf: str) -> bool:
     digits = normalize_digits(cpf)
-    if len(digits) != 11 or len(set(digits)) == 1:
+    if len(digits) != 11:
         return False
 
-    first_sum = sum(int(digits[index]) * (10 - index) for index in range(9))
-    first_digit = (first_sum * 10) % 11
-    if first_digit == 10:
-        first_digit = 0
-    if first_digit != int(digits[9]):
+    # 111.111.111-11 e os outros nove repetidos PASSAM na conta dos digitos
+    # verificadores. Por isso sao barrados antes dela, e nao por ela.
+    if len(set(digits)) == 1:
         return False
 
-    second_sum = sum(int(digits[index]) * (11 - index) for index in range(10))
-    second_digit = (second_sum * 10) % 11
-    if second_digit == 10:
-        second_digit = 0
-    return second_digit == int(digits[10])
+    if _check_digit(digits[:9]) != int(digits[9]):
+        return False
+    return _check_digit(digits[:10]) == int(digits[10])

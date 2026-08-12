@@ -80,12 +80,52 @@ def build_service(branch_id=None):
     )
 
 
-def fetch_with(service, repository, cursor):
-    """Roda um poll com o repositorio trocado por um fake."""
+class FakeCommandRepository:
+    """Comandos do painel para o agente, guardando o `since` recebido."""
+
+    def __init__(self, commands=()):
+        self.commands = list(commands)
+        self.since_calls = []
+
+    def list_commands_since(self, branch_id, since, limit):
+        self.since_calls.append((branch_id, since))
+        return self.commands
+
+
+class FakeSectorRepository:
+    def __init__(self, sectors=()):
+        self.sectors = list(sectors)
+
+    def get(self, sector_id, restaurant_id):
+        return next((s for s in self.sectors if s.id == sector_id), None)
+
+
+def make_command(created_at, printer_name=None, sector_id=None, branch_id=None):
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        branch_id=branch_id or uuid.uuid4(),
+        command_type="print_test",
+        printer_name=printer_name,
+        printing_sector_id=sector_id,
+        created_at=created_at,
+    )
+
+
+def fetch_with(service, repository, cursor, commands=None, sectors=()):
+    """Roda um poll com os repositorios trocados por fakes."""
     session = FakeSession()
+    command_repository = FakeCommandRepository(commands or [])
     with patch.object(stream_module, "SessionLocal", lambda: session):
         with patch.object(stream_module, "OrderRepository", lambda db: repository):
-            events = service._fetch_events(cursor)
+            with patch.object(
+                stream_module, "PrintAgentRepository", lambda db: command_repository
+            ):
+                with patch.object(
+                    stream_module,
+                    "PrintingSectorRepository",
+                    lambda db: FakeSectorRepository(sectors),
+                ):
+                    events = service._fetch_events(cursor)
     return events, session
 
 
@@ -355,6 +395,123 @@ class StreamTicketTests(unittest.TestCase):
         # Por isso o lojista e recarregado do banco e nao lido do que esta
         # assinado: quem foi desativado no meio do turno para de receber.
         self.assertEqual(raised.exception.status_code, 403)
+
+
+class PrintAgentCommandTests(unittest.TestCase):
+    """A ordem do painel para o agente, entregue pelo MESMO stream.
+
+    Ela nao ganhou canal proprio de propósito: uma fila em memoria morreria
+    com mais de um worker e no deploy do meio do almoco (armadilha 20). O
+    stream ja tem cursor no banco, replay e reconexao.
+    """
+
+    def test_a_command_becomes_an_event(self):
+        branch_id = uuid.uuid4()
+        service = build_service(branch_id=branch_id)
+        agora = datetime.now(timezone.utc)
+
+        events, _ = fetch_with(
+            service,
+            FakeStreamRepository(),
+            agora,
+            commands=[make_command(agora, printer_name="IMP-COZINHA", branch_id=branch_id)],
+        )
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].type, "print_agent.command")
+        self.assertEqual(events[0].command.printer_name, "IMP-COZINHA")
+
+    def test_the_ticket_comes_ready_from_the_api(self):
+        """O agente nao desenha nada: uma via de teste montada nele sairia
+        diferente em cada loja conforme a versao instalada."""
+        branch_id = uuid.uuid4()
+        service = build_service(branch_id=branch_id)
+        agora = datetime.now(timezone.utc)
+
+        events, _ = fetch_with(
+            service,
+            FakeStreamRepository(),
+            agora,
+            commands=[make_command(agora, branch_id=branch_id)],
+        )
+
+        self.assertIn("TESTE DE IMPRESSAO", events[0].command.content)
+        self.assertTrue(events[0].command.columns > 0)
+
+    def test_the_sector_name_travels_with_the_command(self):
+        """O agente imprime "TESTE — Cozinha" na bobina; quem esta no balcao
+        precisa reconhecer qual botao do painel produziu aquela via."""
+        branch_id = uuid.uuid4()
+        sector = SimpleNamespace(id=uuid.uuid4(), name="Cozinha")
+        service = build_service(branch_id=branch_id)
+        agora = datetime.now(timezone.utc)
+
+        events, _ = fetch_with(
+            service,
+            FakeStreamRepository(),
+            agora,
+            commands=[make_command(agora, sector_id=sector.id, branch_id=branch_id)],
+            sectors=[sector],
+        )
+
+        self.assertEqual(events[0].command.printing_sector_name, "Cozinha")
+        self.assertIn("Cozinha", events[0].command.content)
+
+    def test_a_scope_without_a_branch_receives_no_command(self):
+        """O painel nao tem o que fazer com um comando de impressao — e
+        mandar as ordens de TODAS as lojas para um agente sem filial faria a
+        via de teste de uma unidade sair na outra."""
+        service = build_service(branch_id=None)
+        agora = datetime.now(timezone.utc)
+
+        events, _ = fetch_with(
+            service,
+            FakeStreamRepository(),
+            agora,
+            commands=[make_command(agora)],
+        )
+
+        self.assertEqual(events, [])
+
+    def test_the_event_key_is_the_command_id(self):
+        """Dois testes seguidos na mesma impressora sao duas ordens
+        diferentes, e as duas bobinas tem que sair."""
+        branch_id = uuid.uuid4()
+        service = build_service(branch_id=branch_id)
+        agora = datetime.now(timezone.utc)
+        primeiro = make_command(agora, branch_id=branch_id)
+        segundo = make_command(agora, branch_id=branch_id)
+
+        events, _ = fetch_with(
+            service, FakeStreamRepository(), agora, commands=[primeiro, segundo]
+        )
+
+        self.assertEqual(
+            [event.event_key for event in events],
+            [f"print-agent-command:{primeiro.id}", f"print-agent-command:{segundo.id}"],
+        )
+
+    def test_the_command_poll_uses_the_same_overlap_window(self):
+        """A janela de sobreposicao vale para o comando pelo mesmo motivo que
+        vale para o pedido: `created_at` e o inicio da transacao, e sem ela um
+        comando gravado devagar cairia num intervalo ja varrido."""
+        branch_id = uuid.uuid4()
+        service = build_service(branch_id=branch_id)
+        cursor = datetime.now(timezone.utc)
+        command_repository = FakeCommandRepository([])
+        session = FakeSession()
+
+        with patch.object(stream_module, "SessionLocal", lambda: session):
+            with patch.object(
+                stream_module, "OrderRepository", lambda db: FakeStreamRepository()
+            ):
+                with patch.object(
+                    stream_module, "PrintAgentRepository", lambda db: command_repository
+                ):
+                    service._fetch_events(cursor)
+
+        _, since = command_repository.since_calls[0]
+        self.assertEqual(since, cursor - timedelta(seconds=OVERLAP_SECONDS))
 
 
 if __name__ == "__main__":

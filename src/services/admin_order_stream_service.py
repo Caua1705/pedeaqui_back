@@ -60,8 +60,12 @@ from starlette.concurrency import run_in_threadpool
 from src.api.dependencies.admin_scope import AdminScope
 from src.db.session import SessionLocal
 from src.repositories.order_repository import OrderRepository
-from src.schemas.admin_order_schema import AdminOrderStreamEvent
+from src.repositories.print_agent_repository import PrintAgentRepository
+from src.repositories.printing_sector_repository import PrintingSectorRepository
+from src.schemas.admin_order_schema import AdminOrderStreamEvent, PrintAgentCommandEvent
+from src.schemas.admin_printing_schema import FONT_LARGE
 from src.services.admin_order_service import AdminOrderService
+from src.services.print_layout import PRODUCTION_WIDTH, build_test_ticket
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -181,6 +185,7 @@ class AdminOrderStreamService:
                 since=since,
                 limit=MAX_EVENTS_PER_POLL,
             )
+            commands = self._fetch_commands(db, since)
         finally:
             db.close()
 
@@ -206,11 +211,68 @@ class AdminOrderStreamService:
             )
             for history, order in changed
         )
-        # Ordena o conjunto ja unido: os dois SELECTs vem ordenados cada um
-        # por si, mas o painel precisa ver a ordem em que os fatos
-        # aconteceram, e o cursor so pode avancar em ordem crescente.
+        events.extend(
+            AdminOrderStreamEvent(
+                type="print_agent.command",
+                # O id do comando e a identidade do fato: dois testes de
+                # impressao seguidos na mesma impressora sao duas ordens
+                # diferentes e as duas bobinas tem que sair.
+                event_key=f"print-agent-command:{command.id}",
+                occurred_at=command.created_at,
+                command=PrintAgentCommandEvent(
+                    command_id=command.id,
+                    command_type=command.command_type,
+                    branch_id=command.branch_id,
+                    printer_name=command.printer_name,
+                    printing_sector_id=command.printing_sector_id,
+                    printing_sector_name=sector_name,
+                    content=build_test_ticket(
+                        sector_name, command.printer_name, command.created_at
+                    ),
+                    columns=PRODUCTION_WIDTH,
+                    # Fonte grande, igual a via de producao: a via de teste
+                    # existe para conferir a bobina da praca, e em fonte
+                    # normal ela nao exercitaria a mesma coisa.
+                    font_size=FONT_LARGE,
+                ),
+            )
+            for command, sector_name in commands
+        )
+        # Ordena o conjunto ja unido: os SELECTs vem ordenados cada um por
+        # si, mas o painel precisa ver a ordem em que os fatos aconteceram, e
+        # o cursor so pode avancar em ordem crescente.
         events.sort(key=lambda event: event.occurred_at)
         return events
+
+    def _fetch_commands(self, db, since: datetime) -> list[tuple]:
+        """Ordens do painel para o agente daquela filial.
+
+        Vazio para quem enxerga o restaurante inteiro (`branch_id` nulo no
+        escopo), e isso e proposital: o painel nao tem o que fazer com um
+        comando de impressao, e mandar as ordens de TODAS as lojas para um
+        agente sem filial faria a via de teste de uma unidade sair na outra —
+        exatamente o defeito que a revisao 0015 corrigiu no usuario do
+        Junior.
+        """
+        if self.scope.branch_id is None:
+            return []
+
+        commands = PrintAgentRepository(db).list_commands_since(
+            branch_id=self.scope.branch_id,
+            since=since,
+            limit=MAX_EVENTS_PER_POLL,
+        )
+        if not commands:
+            return []
+
+        # O nome do setor sai daqui e nao do agente: ele imprime "TESTE —
+        # Cozinha" na bobina, e quem esta no balcao precisa reconhecer qual
+        # botao do painel produziu aquela via.
+        sectors = PrintingSectorRepository(db)
+        return [
+            (command, _sector_name(sectors, command, self.scope.restaurant_id))
+            for command in commands
+        ]
 
     def _resolve_initial_cursor(self, last_event_id: str | None) -> tuple[datetime, bool]:
         """De onde comecar: da reconexao do cliente ou de agora.
@@ -265,6 +327,17 @@ class AdminOrderStreamService:
             f"event: {event.type}\n"
             f"data: {event.model_dump_json()}\n\n"
         )
+
+
+def _sector_name(
+    sectors: PrintingSectorRepository,
+    command,
+    restaurant_id,
+) -> str | None:
+    if command.printing_sector_id is None:
+        return None
+    sector = sectors.get(command.printing_sector_id, restaurant_id)
+    return sector.name if sector else None
 
 
 def _utcnow() -> datetime:

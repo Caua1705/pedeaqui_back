@@ -125,10 +125,38 @@ class AdminStreamTicketResponse(BaseModel):
     expires_in_seconds: int
 
 
+class PrintAgentCommandEvent(BaseModel):
+    """Uma ordem do painel para o agente, do jeito que ele a recebe.
+
+    `printer_name` nulo NAO e erro: significa "use a impressora padrao", que
+    e o caminho da loja de uma impressora so. O agente resolve isso com a
+    mesma regra que ja usa para a via do cliente.
+
+    `content` vem pronto pelo mesmo motivo das vias de pedido: o agente e
+    burro de proposito, e uma via de teste desenhada nele sairia diferente
+    em cada loja conforme a versao instalada.
+    """
+
+    command_id: UUID
+    command_type: str
+    branch_id: UUID
+    printer_name: str | None = None
+    printing_sector_id: UUID | None = None
+    printing_sector_name: str | None = None
+    content: str
+    columns: int
+    font_size: str
+
+
 AdminOrderStreamEventType = Literal[
     "order.created",
     "order.status_changed",
     "sync_required",
+    # Ordem do painel para o agente de impressao. Entra NESTE stream, e nao
+    # num canal proprio, porque o cursor no banco ja resolve os dois
+    # problemas que uma fila em memoria teria: varios workers e deploy no
+    # meio do movimento (armadilha 20). O painel ignora este tipo.
+    "print_agent.command",
 ]
 
 
@@ -150,3 +178,9 @@ class AdminOrderStreamEvent(BaseModel):
     occurred_at: datetime
     order: AdminOrderListItem | None = None
     note: str | None = None
+    # Preenchido so em `print_agent.command`. Fica aqui, e nao num schema
+    # separado, porque o `data:` de um SSE e um JSON so por evento: um tipo
+    # de payload por tipo de evento obrigaria o agente e o painel a
+    # escolherem o parser pelo campo `event`, e o agente ja ignora o que nao
+    # reconhece.
+    command: PrintAgentCommandEvent | None = None

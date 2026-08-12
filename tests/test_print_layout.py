@@ -37,6 +37,7 @@ from src.services.print_layout import (
     RECEIPT_WIDTH,
     build_customer_receipt,
     build_production_ticket,
+    build_test_ticket,
     format_datetime,
     format_money,
     format_phone,
@@ -299,6 +300,52 @@ class ProductionTicketTests(unittest.TestCase):
         order = detail_of([make_item(observation="ao ponto")])
 
         self.assertIn("ao ponto", build_production_ticket(order, "Chapa", order.items))
+
+
+class TestTicketTests(unittest.TestCase):
+    """A via que o botao "testar impressao" do painel produz.
+
+    Ela existe para responder tres perguntas de uma vez, e cada teste aqui
+    guarda uma delas.
+    """
+
+    def test_it_says_which_printer_and_which_sector(self):
+        # Numa loja com tres pracas, uma bobina anonima nao diz qual botao a
+        # produziu — e a pessoa em pe na impressora e quem confere o teste.
+        content = build_test_ticket("Cozinha", "EPSON TM-T20", CREATED_AT)
+
+        self.assertIn("Cozinha", content)
+        self.assertIn("EPSON TM-T20", content)
+
+    def test_it_exercises_the_accents(self):
+        """A linha com acento e o unico jeito de o teste valer alguma coisa
+        contra o par codepage/encoding trocado (armadilha 28): uma via sem
+        acento passa com a configuracao errada."""
+        content = build_test_ticket(None, None, CREATED_AT)
+
+        self.assertIn("ÇÃÕÉÜ", content)
+        self.assertIn("ção", content)
+
+    def test_it_carries_the_shop_clock(self):
+        content = build_test_ticket(None, None, CREATED_AT)
+
+        self.assertIn("09/08/2026 14:32", content)
+
+    def test_without_a_sector_or_printer_it_still_prints(self):
+        """O teste disparado numa maquina recem-instalada, antes de existir
+        setor nenhum, precisa sair do mesmo jeito."""
+        content = build_test_ticket(None, None, CREATED_AT)
+
+        self.assertIn("TESTE DE IMPRESSAO", content)
+
+    def test_no_line_is_wider_than_the_production_width(self):
+        """A via de teste sai em fonte dupla, onde cabe metade das colunas.
+        Uma linha mais larga dobra sozinha na impressora e corta palavra no
+        meio."""
+        content = build_test_ticket("Praca Quente do Salao", "IMPRESSORA DE NOME ENORME", CREATED_AT)
+
+        for line in content.splitlines():
+            self.assertLessEqual(len(line), PRODUCTION_WIDTH, line)
 
 
 class FormattingTests(unittest.TestCase):

@@ -271,6 +271,46 @@ def build_production_ticket(
     return "\n".join(lines)
 
 
+def build_test_ticket(
+    sector_name: str | None,
+    printer_name: str | None,
+    moment: datetime,
+    width: int = PRODUCTION_WIDTH,
+) -> str:
+    """A via de teste que o botao do painel manda imprimir.
+
+    Mora aqui, e nao no agente, pela mesma razao das outras duas: quem
+    instala uma loja nova precisa que a via de teste tenha a mesma cara em
+    toda maquina, e corrigir o texto tem que ser um deploy.
+
+    O que ela precisa responder, e por isso cada linha existe:
+
+    - **saiu na impressora certa?** por isso o nome da impressora e o do
+      setor vao impressos. Numa loja com tres pracas, uma bobina anonima nao
+      diz qual botao a produziu;
+    - **os acentos estao certos?** por isso a linha com "ÇÃÕÉÜ". E o par
+      `codepage`/`encoding` da armadilha 28, e ele so aparece em texto com
+      acento — uma via de teste sem acento passa com a configuracao errada;
+    - **o corte funciona?** o `feed` e o corte quem manda e o agente, mas o
+      fim da bobina precisa ser reconhecivel.
+    """
+    lines: list[str] = [rule(width, "=")]
+    lines += wrap("TESTE DE IMPRESSAO", width)
+    lines.append(rule(width, "="))
+    lines += wrap(format_datetime(moment), width)
+    if sector_name:
+        lines += wrap(f"Setor: {sector_name}", width)
+    if printer_name:
+        lines += wrap(f"Impressora: {printer_name}", width)
+    lines.append(rule(width))
+    # Sem rotulo em ASCII aqui, ao contrario do resto do modulo: esta linha
+    # existe justamente para EXERCITAR o acento. Se ela sair errada, o par
+    # codepage/encoding do config.ini esta trocado.
+    lines += wrap("Acentos: ÇÃÕÉÜ ção não é", width)
+    lines.append(rule(width, "="))
+    return "\n".join(lines)
+
+
 def _address_block(order: OrderDetailResponse, width: int, label_width: int) -> list[str]:
     """Endereco da entrega, uma informacao por linha.
 

@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from src.schemas.cashback_schema import CashbackTransactionsResponse
 from src.schemas.common_schema import BaseResponse
 from src.schemas.order_schema import OrderItemResponse
 from src.utils.normalization import (
@@ -216,3 +217,32 @@ class CustomerOrderHistoryItem(BaseModel):
     total: float
     created_at: datetime | None = None
     items: list[OrderItemResponse]
+
+
+class CustomerDataExportResponse(BaseModel):
+    """Tudo que a plataforma guarda sobre quem pediu, num pacote so.
+
+    Existe para o direito de acesso e portabilidade (LGPD, Art. 18, II e V).
+    As tres listas ja saiam por rotas proprias (`/me`, `/me/orders`,
+    `/me/addresses`) — o que faltava era o pacote, e por isso esta resposta e
+    montagem do que ja existe, e nao consulta nova.
+
+    O escopo e sempre o dono do token. Nao ha parametro de cliente aqui, nem
+    deve haver: uma rota de exportacao que aceitasse id viraria a maneira mais
+    conveniente de baixar a base inteira.
+
+    O que NAO entra, de proposito:
+
+    - `password_hash`, que nao e dado do titular e sim credencial;
+    - o pedido de convidado feito com o mesmo telefone. Ele nao esta ligado a
+      conta nenhuma (e o que a frente 5 registrou como buraco 2.6), entao nao
+      ha como saber que e da mesma pessoa sem passar a casar por telefone —
+      e casar por telefone transformaria esta rota num jeito de ler o pedido
+      de quem por acaso repetiu um numero.
+    """
+
+    exported_at: datetime
+    profile: CurrentCustomerResponse
+    addresses: list[CustomerAddressResponse]
+    orders: list[CustomerOrderHistoryItem]
+    cashback: CashbackTransactionsResponse

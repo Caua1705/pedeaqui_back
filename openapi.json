@@ -5108,6 +5108,45 @@
         "title": "CustomerAddressResponse",
         "type": "object"
       },
+      "CustomerDataExportResponse": {
+        "description": "Tudo que a plataforma guarda sobre quem pediu, num pacote so.\n\nExiste para o direito de acesso e portabilidade (LGPD, Art. 18, II e V).\nAs tres listas ja saiam por rotas proprias (`/me`, `/me/orders`,\n`/me/addresses`) — o que faltava era o pacote, e por isso esta resposta e\nmontagem do que ja existe, e nao consulta nova.\n\nO escopo e sempre o dono do token. Nao ha parametro de cliente aqui, nem\ndeve haver: uma rota de exportacao que aceitasse id viraria a maneira mais\nconveniente de baixar a base inteira.\n\nO que NAO entra, de proposito:\n\n- `password_hash`, que nao e dado do titular e sim credencial;\n- o pedido de convidado feito com o mesmo telefone. Ele nao esta ligado a\n  conta nenhuma (e o que a frente 5 registrou como buraco 2.6), entao nao\n  ha como saber que e da mesma pessoa sem passar a casar por telefone —\n  e casar por telefone transformaria esta rota num jeito de ler o pedido\n  de quem por acaso repetiu um numero.",
+        "properties": {
+          "addresses": {
+            "items": {
+              "$ref": "#/components/schemas/CustomerAddressResponse"
+            },
+            "title": "Addresses",
+            "type": "array"
+          },
+          "cashback": {
+            "$ref": "#/components/schemas/CashbackTransactionsResponse"
+          },
+          "exported_at": {
+            "format": "date-time",
+            "title": "Exported At",
+            "type": "string"
+          },
+          "orders": {
+            "items": {
+              "$ref": "#/components/schemas/CustomerOrderHistoryItem"
+            },
+            "title": "Orders",
+            "type": "array"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/CurrentCustomerResponse"
+          }
+        },
+        "required": [
+          "exported_at",
+          "profile",
+          "addresses",
+          "orders",
+          "cashback"
+        ],
+        "title": "CustomerDataExportResponse",
+        "type": "object"
+      },
       "CustomerInput": {
         "properties": {
           "name": {
@@ -13232,6 +13271,36 @@
           }
         ],
         "summary": "List Cashback Transactions",
+        "tags": [
+          "customers"
+        ]
+      }
+    },
+    "/customers/me/export": {
+      "get": {
+        "description": "Tudo que a plataforma guarda sobre quem pediu, num pacote so.\n\nDireito de acesso e portabilidade (LGPD, Art. 18, II e V). O escopo e\nsempre o dono do token, e nao ha parametro de cliente aqui — nem deve\nhaver: uma rota de exportacao que aceitasse id viraria a maneira mais\nconveniente de baixar a base inteira.",
+        "operationId": "export_me_customers_me_export_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerDataExportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Nao autenticado"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Export Me",
         "tags": [
           "customers"
         ]

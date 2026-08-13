@@ -13,6 +13,7 @@ from src.schemas.customer_schema import (
     ChangeCustomerPasswordRequest,
     CreateCustomerAddressRequest,
     CurrentCustomerResponse,
+    CustomerDataExportResponse,
     CustomerAddressResponse,
     CustomerOrderHistoryItem,
     ImportCustomerAddressesRequest,
@@ -36,6 +37,25 @@ def get_me(
     db: Session = Depends(get_db),
 ) -> CurrentCustomerResponse:
     return CustomerService(db).get_me(current_customer)
+
+
+@router.get(
+    "/me/export",
+    response_model=CustomerDataExportResponse,
+    responses={status.HTTP_401_UNAUTHORIZED: {"description": "Nao autenticado"}},
+)
+def export_me(
+    current_customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+) -> CustomerDataExportResponse:
+    """Tudo que a plataforma guarda sobre quem pediu, num pacote so.
+
+    Direito de acesso e portabilidade (LGPD, Art. 18, II e V). O escopo e
+    sempre o dono do token, e nao ha parametro de cliente aqui — nem deve
+    haver: uma rota de exportacao que aceitasse id viraria a maneira mais
+    conveniente de baixar a base inteira.
+    """
+    return CustomerService(db).export_me(current_customer)
 
 
 @router.get(

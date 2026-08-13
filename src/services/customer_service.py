@@ -15,16 +15,26 @@ from src.schemas.auth_schema import MessageResponse
 from src.schemas.customer_schema import (
     ChangeCustomerPasswordRequest,
     CreateCustomerAddressRequest,
+    CurrentCustomerResponse,
+    CustomerAddressResponse,
+    CustomerDataExportResponse,
+    CustomerOrderHistoryItem,
     IgnoredImportedAddress,
     ImportCustomerAddressesRequest,
     ImportCustomerAddressesResponse,
     UpdateCurrentCustomerRequest,
     UpdateCustomerAddressRequest,
 )
-from src.schemas.customer_schema import CurrentCustomerResponse, CustomerOrderHistoryItem
 from src.schemas.order_schema import OrderItemResponse
+from src.services.cashback_service import CashbackService
 from src.utils.money import money_to_float, quantize_money
 from src.utils.security import PasswordTooLongError, hash_password, utcnow, verify_password
+
+
+# Teto de linhas de cashback no pacote de exportacao. Alto e fixo em vez de
+# paginado: exportacao pela metade nao serve para o que ela existe, e o
+# cliente com mais transacoes hoje tem duas casas.
+MAX_EXPORT_CASHBACK_ROWS = 1000
 
 
 class CustomerService:
@@ -42,6 +52,32 @@ class CustomerService:
             birth_date=customer.birth_date,
             email_verified=customer.email_verified_at is not None,
             marketing_opt_in=customer.marketing_opt_in,
+        )
+
+    def export_me(self, customer: Customer) -> CustomerDataExportResponse:
+        """Tudo que a plataforma guarda sobre este cliente, num pacote so.
+
+        Direito de acesso e portabilidade (LGPD, Art. 18, II e V). E montagem
+        do que as rotas de perfil, pedidos, enderecos e cashback ja devolvem
+        separadas — de proposito: exportacao que monta a propria consulta vira
+        um segundo lugar onde o escopo do cliente pode ser esquecido, e o
+        escopo aqui e a unica coisa que separa "meus dados" de "a base".
+
+        O teto do cashback e alto e fixo em vez de paginado porque exportacao
+        pela metade nao serve para o que ela existe. Cliente que passe disso
+        e um caso a tratar quando existir; hoje o maior tem duas casas.
+        """
+        return CustomerDataExportResponse(
+            exported_at=utcnow(),
+            profile=self.get_me(customer),
+            addresses=[
+                CustomerAddressResponse.model_validate(address)
+                for address in self.list_addresses(customer)
+            ],
+            orders=self.list_orders(customer),
+            cashback=CashbackService(self.db).list_transactions(
+                customer, limit=MAX_EXPORT_CASHBACK_ROWS, offset=0
+            ),
         )
 
     def update_me(

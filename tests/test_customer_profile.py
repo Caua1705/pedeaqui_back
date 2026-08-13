@@ -23,8 +23,11 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
+from src.schemas.cashback_schema import CashbackTransactionsResponse
 from src.schemas.customer_schema import (
     ChangeCustomerPasswordRequest,
+    CurrentCustomerResponse,
+    CustomerDataExportResponse,
     UpdateCurrentCustomerRequest,
 )
 from src.services.customer_service import CustomerService
@@ -131,6 +134,67 @@ class TestGetMe:
         foi. O timestamp fica no banco."""
         assert make_service().get_me(make_customer()).email_verified is True
         assert make_service().get_me(make_customer(email_verified_at=None)).email_verified is False
+
+
+# ---------------------------------------------------------------------------
+# export_me
+# ---------------------------------------------------------------------------
+
+
+class FakeCashbackService:
+    """Dublê do CashbackService, guardando com que limite foi chamado."""
+
+    def __init__(self, db=None):
+        FakeCashbackService.chamado_com = None
+
+    def list_transactions(self, customer, limit, offset):
+        FakeCashbackService.chamado_com = (customer, limit, offset)
+        return CashbackTransactionsResponse(balance=0.0, transactions=[])
+
+
+class TestExportMe:
+    def _service(self, monkeypatch, **kwargs):
+        import src.services.customer_service as modulo
+
+        monkeypatch.setattr(modulo, "CashbackService", FakeCashbackService)
+        return make_service(**kwargs)
+
+    def test_it_gathers_the_four_blocks(self, monkeypatch):
+        """Direito de acesso e portabilidade (Art. 18, II e V). O pacote e
+        montagem do que ja saia em quatro rotas separadas."""
+        service = self._service(monkeypatch)
+        service.list_addresses = lambda customer: []
+        service.list_orders = lambda customer: []
+
+        export = service.export_me(make_customer())
+
+        assert export.profile.email == "joana@exemplo.com"
+        assert export.addresses == []
+        assert export.orders == []
+        assert export.cashback.transactions == []
+        assert export.exported_at is not None
+
+    def test_it_exports_only_the_holder_of_the_token(self, monkeypatch):
+        """O escopo e a unica coisa que separa "meus dados" de "a base". Todo
+        bloco tem que ser buscado com o cliente que veio do token — e nao ha
+        parametro de cliente na rota, de proposito."""
+        customer = make_customer()
+        pedidos_para = []
+
+        service = self._service(monkeypatch)
+        service.list_addresses = lambda c: pedidos_para.append(("addresses", c.id)) or []
+        service.list_orders = lambda c: pedidos_para.append(("orders", c.id)) or []
+
+        service.export_me(customer)
+
+        assert pedidos_para == [("addresses", customer.id), ("orders", customer.id)]
+        assert FakeCashbackService.chamado_com[0] is customer
+
+    def test_the_password_hash_never_leaves(self):
+        """Credencial nao e dado do titular, e exportar hash de senha e
+        entregar o material de um ataque offline."""
+        assert "password_hash" not in CustomerDataExportResponse.model_fields
+        assert "password_hash" not in CurrentCustomerResponse.model_fields
 
 
 # ---------------------------------------------------------------------------

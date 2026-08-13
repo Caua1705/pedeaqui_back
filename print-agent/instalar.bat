@@ -36,8 +36,11 @@ if not exist "%PROGRAMA%\%EXE%" (
     echo.
     echo As duas causas, nesta ordem:
     echo.
-    echo   1. O antivirus apagou o arquivo. Faca o item 1 do INSTALACAO.md
-    echo      (liberar a pasta no antivirus) e rode este instalador de novo.
+    rem Nada de parenteses no texto de dentro de um bloco if: o cmd le o ")"
+    rem como fim do bloco e morre com "e foi inesperado neste momento",
+    rem antes mesmo de o if ser avaliado.
+    echo   1. O antivirus apagou o arquivo. Faca o item 1 do INSTALACAO.md,
+    echo      que libera a pasta no antivirus, e rode este instalador de novo.
     echo   2. A pasta foi copiada pela metade. Copie do pendrive a pasta
     echo      INTEIRA e rode o instalar.bat de dentro dela.
     echo.

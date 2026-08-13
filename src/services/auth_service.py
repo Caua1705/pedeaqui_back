@@ -65,6 +65,17 @@ FORGOT_PASSWORD_MESSAGE = "Enviamos um código de recuperação para o seu e-mai
 FORGOT_PASSWORD_MIN_SECONDS = 0.6
 
 
+def _conflict_message(conflicts: list[str]) -> str:
+    """"Email ja cadastrado" ou "Email e Telefone ja cadastrados".
+
+    A concordancia existe porque esta mensagem vai para a tela do cliente. Um
+    "ja cadastrado(s)" resolveria o plural e entregaria a costura junto.
+    """
+    if len(conflicts) == 1:
+        return f"{conflicts[0]} ja cadastrado"
+    return f"{' e '.join(conflicts)} ja cadastrados"
+
+
 def codes_retention_cutoff(now: datetime) -> datetime:
     """Antes deste instante, a linha do codigo nao serve mais para nada.
 
@@ -158,9 +169,12 @@ class AuthService:
         if not payload.privacy_accepted:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Aceite de privacidade obrigatorio")
 
-        conflict = self._registration_conflict(email=email, phone=phone)
-        if conflict:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"{conflict} ja cadastrado")
+        conflicts = self._registration_conflicts(email=email, phone=phone)
+        if conflicts:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=_conflict_message(conflicts),
+            )
 
         try:
             customer = self.customer_repository.create(
@@ -392,12 +406,23 @@ class AuthService:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Conta inativa")
         return customer
 
-    def _registration_conflict(self, email: str, phone: str) -> str | None:
+    def _registration_conflicts(self, email: str, phone: str) -> list[str]:
+        """TODOS os campos ja cadastrados, e nao so o primeiro.
+
+        Antes esta funcao devolvia o primeiro conflito e parava. Quem colidia
+        no e-mail E no telefone — o caso mais comum de todos, porque e a
+        pessoa que ja tem conta e esqueceu — corrigia o e-mail, tentava de
+        novo, e so entao descobria o telefone. Duas viagens para descobrir
+        dois problemas que o servidor ja sabia na primeira.
+
+        A lista mantem a ordem dos campos, entao a mensagem sai estavel.
+        """
+        conflitos = []
         if self.customer_repository.get_by_email(email):
-            return "Email"
+            conflitos.append("Email")
         if self.customer_repository.get_by_phone(phone):
-            return "Telefone"
-        return None
+            conflitos.append("Telefone")
+        return conflitos
 
     def _create_email_verification_code(self, customer: Customer, resend_count: int = 0) -> None:
         code = generate_6_digit_code()

@@ -262,16 +262,27 @@ class TestRegister:
         assert exc.value.status_code == 409
         assert exc.value.detail == detail
 
-    def test_the_conflict_order_is_email_then_phone(self):
-        """ESQUISITO, e registrado como esta.
+    def test_colliding_on_both_names_both(self):
+        """Antes so o PRIMEIRO conflito era devolvido.
 
-        `_registration_conflict` devolve o PRIMEIRO conflito que encontrar, na
-        ordem e-mail, telefone. Um cadastro que colide nos dois so ouve falar
-        do e-mail: o cliente corrige, tenta de novo e ouve do telefone — duas
-        viagens para descobrir dois problemas.
+        Quem colide no e-mail E no telefone e o caso mais comum de todos —
+        e a pessoa que ja tem conta e esqueceu. Ela corrigia o e-mail, tentava
+        de novo, e so entao descobria o telefone: duas viagens para descobrir
+        dois problemas que o servidor ja sabia na primeira.
         """
         repository = FakeCustomerRepository(customer=make_customer())
         repository.conflict_on = {"email", "phone"}
+
+        with pytest.raises(HTTPException) as exc:
+            make_service(repository=repository).register(make_register_payload())
+
+        assert exc.value.detail == "Email e Telefone ja cadastrados"
+
+    def test_a_single_conflict_keeps_the_singular(self):
+        """A concordancia importa porque a mensagem vai para a tela: um
+        "ja cadastrado(s)" resolveria o plural e entregaria a costura."""
+        repository = FakeCustomerRepository(customer=make_customer())
+        repository.conflict_on = {"email"}
 
         with pytest.raises(HTTPException) as exc:
             make_service(repository=repository).register(make_register_payload())

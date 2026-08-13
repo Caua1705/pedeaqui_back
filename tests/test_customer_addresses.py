@@ -40,6 +40,7 @@ class FakeSession:
 class FakeCustomerRepository:
     def __init__(self, addresses=None) -> None:
         self.addresses = list(addresses or [])
+        self.unset_calls = 0
 
     def lock_customer(self, customer_id):
         return SimpleNamespace(id=customer_id)
@@ -62,6 +63,9 @@ class FakeCustomerRepository:
         )
 
     def unset_default_addresses(self, customer_id):
+        # Contado para o teste do import repetido: promover um endereco que
+        # JA e o padrao seria um UPDATE inutil em toda sincronizacao da app.
+        self.unset_calls += 1
         for address in self.list_addresses(customer_id):
             address.is_default = False
 
@@ -195,6 +199,142 @@ class CustomerAddressServiceTests(unittest.TestCase):
         self.assertEqual(len(result.created), 0)
         self.assertEqual(len(result.existing), 1)
         self.assertEqual(len(self.repository.addresses), 1)
+
+    # -- as tres ramificacoes do import que nao tinham rede -----------------
+    #
+    # CARACTERIZACAO: descrevem o que o codigo faz HOJE, antes de ele ser
+    # simplificado. Sao elas que dizem se a simplificacao mudou
+    # comportamento — sem isto, o refactor seria fe.
+
+    @staticmethod
+    def endereco_importado(**values):
+        defaults = {
+            "street": "Travessa Joao Felipe",
+            "number": "111",
+            "neighborhood": "Mousa Brasil",
+            "city": "Fortaleza",
+            "state": "CE",
+        }
+        defaults.update(values)
+        return ImportCustomerAddressRequest(**defaults)
+
+    def test_the_same_address_twice_in_one_request_is_ignored_once(self):
+        """`duplicate_in_request`: a app manda a lista inteira do aparelho, e
+        o mesmo endereco pode aparecer duas vezes nela — salvo uma vez com
+        `client_reference` e outra sem, por exemplo. A segunda ocorrencia nao
+        vira endereco novo nem erro: vira uma linha em `ignored`."""
+        payload = ImportCustomerAddressesRequest(
+            addresses=[self.endereco_importado(), self.endereco_importado()]
+        )
+
+        result = self.service.import_addresses(self.customer, payload)
+
+        self.assertEqual(len(result.created), 1)
+        self.assertEqual(len(result.ignored), 1)
+        self.assertEqual(result.ignored[0].reason, "duplicate_in_request")
+        self.assertEqual(len(self.repository.addresses), 1)
+
+    def test_the_duplicate_is_detected_by_client_reference_not_by_content(self):
+        """Dois enderecos DIFERENTES com o mesmo `client_reference` — o
+        aparelho reaproveitou o id local. O segundo e ignorado pela chave, sem
+        olhar o conteudo."""
+        payload = ImportCustomerAddressesRequest(
+            addresses=[
+                self.endereco_importado(client_reference="local-1"),
+                self.endereco_importado(client_reference="local-1", street="Outra Rua"),
+            ]
+        )
+
+        result = self.service.import_addresses(self.customer, payload)
+
+        self.assertEqual(len(result.created), 1)
+        self.assertEqual(result.ignored[0].client_reference, "local-1")
+
+    def test_importing_an_existing_address_as_default_promotes_it(self):
+        """O `matched` que vira padrao: o endereco JA existe e chega marcado
+        como padrao no import. Ele nao e recriado — o que existe e promovido,
+        e o padrao anterior perde o posto."""
+        antigo = self.service.create_address(self.customer, self.payload())
+        self.assertTrue(antigo.is_default)
+
+        self.service.import_addresses(
+            self.customer,
+            ImportCustomerAddressesRequest(addresses=[self.endereco_importado()]),
+        )
+        importado = self.repository.addresses[-1]
+        self.assertFalse(importado.is_default)
+
+        result = self.service.import_addresses(
+            self.customer,
+            ImportCustomerAddressesRequest(
+                addresses=[self.endereco_importado(is_default=True)]
+            ),
+        )
+
+        self.assertEqual(len(result.created), 0)
+        self.assertEqual(len(result.existing), 1)
+        self.assertTrue(importado.is_default)
+        self.assertFalse(antigo.is_default)
+
+    def test_an_existing_address_already_default_is_not_touched(self):
+        """O outro lado da mesma ramificacao: `is_default and not
+        matched.is_default`. Se ele JA e o padrao, nada acontece — e o que
+        evita um `unset_default_addresses` inutil a cada import repetido."""
+        self.service.import_addresses(
+            self.customer,
+            ImportCustomerAddressesRequest(
+                addresses=[self.endereco_importado(is_default=True)]
+            ),
+        )
+        importado = self.repository.addresses[0]
+        chamadas_antes = self.repository.unset_calls
+
+        self.service.import_addresses(
+            self.customer,
+            ImportCustomerAddressesRequest(
+                addresses=[self.endereco_importado(is_default=True)]
+            ),
+        )
+
+        self.assertTrue(importado.is_default)
+        self.assertEqual(self.repository.unset_calls, chamadas_antes)
+
+    def test_when_nobody_is_default_the_first_address_is_promoted(self):
+        """O fallback de "ninguem e padrao".
+
+        O cliente nunca fica sem endereco padrao: se ao fim do import nenhum
+        estiver marcado, o primeiro assume. Sem isso, o checkout abriria sem
+        endereco selecionado para quem apagou o padrao antes de importar.
+        """
+        primeiro = self.service.create_address(self.customer, self.payload())
+        primeiro.is_default = False
+
+        self.service.import_addresses(
+            self.customer,
+            ImportCustomerAddressesRequest(addresses=[self.endereco_importado()]),
+        )
+
+        self.assertTrue(primeiro.is_default)
+        self.assertEqual(
+            sum(address.is_default for address in self.repository.addresses), 1
+        )
+
+    def test_an_import_into_an_empty_account_makes_the_first_one_default(self):
+        """`is_default = imported.is_default or not saved_addresses`: numa
+        conta sem endereco nenhum, o primeiro do import vira padrao mesmo sem
+        pedir."""
+        result = self.service.import_addresses(
+            self.customer,
+            ImportCustomerAddressesRequest(
+                addresses=[
+                    self.endereco_importado(),
+                    self.endereco_importado(street="Rua Segunda"),
+                ]
+            ),
+        )
+
+        self.assertTrue(result.created[0].is_default)
+        self.assertFalse(result.created[1].is_default)
 
     def test_customer_id_is_rejected_from_address_payload(self):
         with self.assertRaises(ValidationError):

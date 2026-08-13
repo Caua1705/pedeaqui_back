@@ -2,7 +2,7 @@ import uuid
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from src.models.customer_model import Customer, CustomerAddress, EmailVerificationCode, PasswordResetCode
@@ -46,6 +46,22 @@ class CustomerRepository:
             setattr(customer, field, value)
         self.db.flush()
         return customer
+
+    def delete_codes_created_before(self, cutoff: datetime) -> int:
+        """Apaga os codigos velhos das duas tabelas. Devolve quantos sairam.
+
+        Corta por `created_at`, e nao por `expires_at`: a linha continua
+        servindo ao teto de reenvios e ao token de reset DEPOIS de o codigo
+        vencer. Quem sabe ate quando e `auth_service.codes_retention_cutoff`,
+        e e de la que o `cutoff` tem que vir — o repositorio so consulta.
+        """
+        apagados = 0
+        for modelo in (EmailVerificationCode, PasswordResetCode):
+            resultado = self.db.execute(
+                delete(modelo).where(modelo.created_at < cutoff)
+            )
+            apagados += resultado.rowcount or 0
+        return apagados
 
     def create_email_code(self, **values) -> EmailVerificationCode:
         code = EmailVerificationCode(**values)

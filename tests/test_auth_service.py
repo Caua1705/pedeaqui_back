@@ -35,11 +35,14 @@ from src.schemas.auth_schema import (
     VerifyResetCodeRequest,
 )
 from src.services.auth_service import (
+    CODE_TTL_MINUTES,
     FORGOT_PASSWORD_MESSAGE,
     MAX_CODE_ATTEMPTS,
     MAX_RESENDS,
     RESEND_COOLDOWN_SECONDS,
+    RESEND_WINDOW_MINUTES,
     AuthService,
+    codes_retention_cutoff,
 )
 from src.utils.security import (
     generate_reset_token,
@@ -754,3 +757,48 @@ class TestGetCustomerFromTokenOrError:
         service = make_service(repository=FakeCustomerRepository(customer=customer))
 
         assert service.get_customer_from_token_or_error(token) is customer
+
+
+class TestCodesRetentionCutoff:
+    """Ate quando a linha de um codigo de verificacao ainda importa.
+
+    As duas tabelas guardavam o e-mail de todo mundo que ja pediu um codigo,
+    para sempre — dado pessoal sem prazo, que foi o que a frente 5 apontou.
+    Mas apagar no VENCIMENTO do codigo quebraria duas coisas, e e isso que
+    estes testes seguram.
+    """
+
+    def test_it_keeps_the_row_the_resend_cap_still_needs(self):
+        """O teto de reenvios olha 15 minutos para tras e o codigo vence em
+        10. Apagar no vencimento apagaria a prova do terceiro reenvio, e quem
+        tivesse batido no teto pediria de novo — o controle viraria enfeite."""
+        agora = datetime.now(timezone.utc)
+        criado_ha_12_min = agora - timedelta(minutes=12)
+
+        assert CODE_TTL_MINUTES < 12 < RESEND_WINDOW_MINUTES
+        assert criado_ha_12_min > codes_retention_cutoff(agora)
+
+    def test_it_keeps_the_row_an_in_flight_reset_still_needs(self):
+        """O token de reset nasce quando o codigo e CONFERIDO e vale mais 15
+        minutos. Um codigo conferido no minuto 9 gera token valido ate o 24,
+        com o expires_at da linha ja no passado. Apagar por expires_at
+        derrubaria uma troca de senha em andamento."""
+        agora = datetime.now(timezone.utc)
+        criado_ha_24_min = agora - timedelta(minutes=24)
+
+        assert criado_ha_24_min > codes_retention_cutoff(agora)
+
+    def test_it_does_delete_what_nothing_needs_anymore(self):
+        agora = datetime.now(timezone.utc)
+        criado_ha_2_horas = agora - timedelta(hours=2)
+
+        assert criado_ha_2_horas < codes_retention_cutoff(agora)
+
+    def test_the_cutoff_follows_the_widest_window(self):
+        """E conta, e nao constante, de proposito: quem aumentar a janela de
+        reenvio ou o TTL do token de reset nao precisa lembrar de vir aqui."""
+        agora = datetime.now(timezone.utc)
+        corte = codes_retention_cutoff(agora)
+
+        assert (agora - corte).total_seconds() / 60 > RESEND_WINDOW_MINUTES
+        assert (agora - corte).total_seconds() / 60 > CODE_TTL_MINUTES

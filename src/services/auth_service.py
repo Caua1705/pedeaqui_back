@@ -49,6 +49,11 @@ from src.utils.security import (
 logger = logging.getLogger("uvicorn.error")
 
 MAX_CODE_ATTEMPTS = 5
+# Folga sobre a maior janela que ainda depende da linha do codigo. Existe
+# para o relogio do cron nao precisar ser exato, e nao por causa de nenhuma
+# regra: 10 minutos e barato e tira a discussao.
+CODES_RETENTION_MARGIN_MINUTES = 10
+
 MAX_RESENDS = 3
 RESEND_COOLDOWN_SECONDS = 60
 CODE_TTL_MINUTES = 10
@@ -58,6 +63,34 @@ RESEND_EMAIL_CODE_MESSAGE = "Se este e-mail estiver cadastrado, enviaremos um co
 FORGOT_PASSWORD_MESSAGE = "Enviamos um código de recuperação para o seu e-mail."
 # Piso de latencia para que o tempo de resposta nao denuncie se o e-mail existe.
 FORGOT_PASSWORD_MIN_SECONDS = 0.6
+
+
+def codes_retention_cutoff(now: datetime) -> datetime:
+    """Antes deste instante, a linha do codigo nao serve mais para nada.
+
+    NAO e o vencimento do codigo, e a diferenca nao e teorica: DUAS coisas
+    continuam dependendo da linha depois de o codigo vencer.
+
+    1. **O teto de reenvios olha 15 minutos para tras, e o codigo vence em
+       10.** Apagar no vencimento apagaria a prova do terceiro reenvio na
+       faixa de 10 a 15 minutos, e quem tivesse batido no teto pediria de
+       novo — o controle de abuso viraria enfeite.
+    2. **O token de reset nasce quando o codigo e CONFERIDO**, e vale
+       `PASSWORD_RESET_TOKEN_MINUTES` a partir dali. Um codigo conferido no
+       minuto 9 gera um token valido ate o minuto 24, com o `expires_at` da
+       linha ja no passado. Apagar pelo `expires_at` derrubaria uma troca de
+       senha em andamento — e o cliente veria "link invalido" sem ter feito
+       nada errado.
+
+    Por isso o corte sai da MAIOR das duas janelas, e nao do TTL. Se alguem
+    aumentar `RESEND_WINDOW_MINUTES` ou o TTL do token, a retencao acompanha
+    sozinha: e a razao de isto ser conta e nao constante.
+    """
+    janelas = (
+        RESEND_WINDOW_MINUTES,
+        CODE_TTL_MINUTES + settings.PASSWORD_RESET_TOKEN_MINUTES,
+    )
+    return now - timedelta(minutes=max(janelas) + CODES_RETENTION_MARGIN_MINUTES)
 
 
 def _hash_new_password(password: str) -> str:

@@ -31,6 +31,33 @@ from src.utils.money import money_to_float, quantize_money
 from src.utils.security import PasswordTooLongError, hash_password, utcnow, verify_password
 
 
+def _import_key(imported, fingerprint: str) -> tuple[str, str]:
+    """Como o MESMO endereco e reconhecido dentro de uma requisicao.
+
+    O `client_reference` vence quando existe: e o id que o aparelho deu ao
+    endereco, e ele identifica a linha mesmo que o cliente tenha corrigido a
+    rua entre uma sincronizacao e outra. Sem ele, sobra o conteudo.
+
+    A chave e uma TUPLA com o nome da origem, e nao o valor solto, para um
+    `client_reference` que por acaso seja igual a um fingerprint nao colidir
+    com ele.
+    """
+    if imported.client_reference:
+        return ("client_reference", imported.client_reference)
+    return ("fingerprint", fingerprint)
+
+
+def _saved_match(imported, fingerprint: str, by_client_reference: dict, by_fingerprint: dict):
+    """O endereco ja gravado que corresponde a este, ou None.
+
+    Mesma preferencia do `_import_key`, e pelo mesmo motivo — mas olhando o
+    que ja esta no banco, e nao o que veio antes nesta requisicao.
+    """
+    if imported.client_reference:
+        return by_client_reference.get(imported.client_reference)
+    return by_fingerprint.get(fingerprint)
+
+
 # Teto de linhas de cashback no pacote de exportacao. Alto e fixo em vez de
 # paginado: exportacao pela metade nao serve para o que ela existe, e o
 # cliente com mais transacoes hoje tem duas casas.
@@ -359,82 +386,12 @@ class CustomerService:
         customer: Customer,
         payload: ImportCustomerAddressesRequest,
     ) -> ImportCustomerAddressesResponse:
-        created: list[CustomerAddress] = []
-        existing: list[CustomerAddress] = []
-        ignored: list[IgnoredImportedAddress] = []
-
+        # O `try` aqui e so a traducao da falha; a importacao mora abaixo. O
+        # rollback vale para QUALQUER excecao, e nao so para a de integridade:
+        # o laco escreve varias linhas, e sair no meio sem desfazer deixaria a
+        # sessao suja para o proximo uso dela.
         try:
-            self.customer_repository.lock_customer(customer.id)
-            saved_addresses = self.customer_repository.list_addresses(customer.id)
-            by_client_reference = {
-                address.client_reference: address
-                for address in saved_addresses
-                if address.client_reference
-            }
-            by_fingerprint = {
-                self._address_fingerprint(address): address
-                for address in saved_addresses
-            }
-            request_keys: set[tuple[str, str]] = set()
-
-            for imported in payload.addresses:
-                fingerprint = self._address_fingerprint(imported)
-                request_key = (
-                    ("client_reference", imported.client_reference)
-                    if imported.client_reference
-                    else ("fingerprint", fingerprint)
-                )
-                if request_key in request_keys:
-                    ignored.append(
-                        IgnoredImportedAddress(
-                            client_reference=imported.client_reference,
-                            reason="duplicate_in_request",
-                        )
-                    )
-                    continue
-                request_keys.add(request_key)
-
-                matched = (
-                    by_client_reference.get(imported.client_reference)
-                    if imported.client_reference
-                    else by_fingerprint.get(fingerprint)
-                )
-                if matched is not None:
-                    if imported.is_default and not matched.is_default:
-                        self.customer_repository.unset_default_addresses(customer.id)
-                        matched.is_default = True
-                        self.db.add(matched)
-                    existing.append(matched)
-                    continue
-
-                is_default = imported.is_default or not saved_addresses
-                if is_default:
-                    self.customer_repository.unset_default_addresses(customer.id)
-                address = self.customer_repository.create_address(
-                    customer_id=customer.id,
-                    **imported.model_dump(exclude={"is_default"}),
-                    is_default=is_default,
-                )
-                saved_addresses.append(address)
-                if address.client_reference:
-                    by_client_reference[address.client_reference] = address
-                by_fingerprint[fingerprint] = address
-                created.append(address)
-
-            if saved_addresses and not any(address.is_default for address in saved_addresses):
-                saved_addresses[0].is_default = True
-                self.db.add(saved_addresses[0])
-
-            self.db.commit()
-            for address in created:
-                self.db.refresh(address)
-            for address in existing:
-                self.db.refresh(address)
-            return ImportCustomerAddressesResponse(
-                created=created,
-                existing=existing,
-                ignored=ignored,
-            )
+            return self._import_addresses(customer, payload)
         except IntegrityError as exc:
             self.db.rollback()
             raise HTTPException(
@@ -444,6 +401,125 @@ class CustomerService:
         except Exception:
             self.db.rollback()
             raise
+
+    def _import_addresses(
+        self,
+        customer: Customer,
+        payload: ImportCustomerAddressesRequest,
+    ) -> ImportCustomerAddressesResponse:
+        """A importacao em si. Quem traduz a falha e quem chama.
+
+        Cada endereco do corpo cai em um de tres destinos, e o laco abaixo
+        se le nessa ordem: ja veio antes NESTA requisicao (ignorado), ja
+        existe na conta (reaproveitado), ou e novo (criado).
+        """
+        self.customer_repository.lock_customer(customer.id)
+        saved_addresses = self.customer_repository.list_addresses(customer.id)
+        by_client_reference = {
+            address.client_reference: address
+            for address in saved_addresses
+            if address.client_reference
+        }
+        by_fingerprint = {
+            self._address_fingerprint(address): address for address in saved_addresses
+        }
+
+        created: list[CustomerAddress] = []
+        existing: list[CustomerAddress] = []
+        ignored: list[IgnoredImportedAddress] = []
+        request_keys: set[tuple[str, str]] = set()
+
+        for imported in payload.addresses:
+            fingerprint = self._address_fingerprint(imported)
+            request_key = _import_key(imported, fingerprint)
+
+            if request_key in request_keys:
+                ignored.append(
+                    IgnoredImportedAddress(
+                        client_reference=imported.client_reference,
+                        reason="duplicate_in_request",
+                    )
+                )
+                continue
+            request_keys.add(request_key)
+
+            matched = _saved_match(imported, fingerprint, by_client_reference, by_fingerprint)
+            if matched is not None:
+                self._promote_if_asked(customer, imported, matched)
+                existing.append(matched)
+                continue
+
+            address = self._create_imported_address(customer, imported, saved_addresses)
+            saved_addresses.append(address)
+            if address.client_reference:
+                by_client_reference[address.client_reference] = address
+            by_fingerprint[fingerprint] = address
+            created.append(address)
+
+        self._ensure_someone_is_default(saved_addresses)
+
+        self.db.commit()
+        for address in created + existing:
+            self.db.refresh(address)
+        return ImportCustomerAddressesResponse(
+            created=created,
+            existing=existing,
+            ignored=ignored,
+        )
+
+    def _promote_if_asked(
+        self,
+        customer: Customer,
+        imported,
+        matched: CustomerAddress,
+    ) -> None:
+        """O endereco que ja existe vira o padrao, se o import pediu.
+
+        O `not matched.is_default` nao e economia de linha: sem ele, cada
+        sincronizacao da app repetiria o `unset_default_addresses` para
+        promover quem ja e o padrao.
+        """
+        if not imported.is_default:
+            return
+        if matched.is_default:
+            return
+
+        self.customer_repository.unset_default_addresses(customer.id)
+        matched.is_default = True
+        self.db.add(matched)
+
+    def _create_imported_address(
+        self,
+        customer: Customer,
+        imported,
+        saved_addresses: list[CustomerAddress],
+    ) -> CustomerAddress:
+        # Conta vazia: o primeiro endereco vira padrao sem ninguem pedir,
+        # senao o checkout abriria sem endereco selecionado.
+        is_default = imported.is_default or not saved_addresses
+        if is_default:
+            self.customer_repository.unset_default_addresses(customer.id)
+
+        return self.customer_repository.create_address(
+            customer_id=customer.id,
+            **imported.model_dump(exclude={"is_default"}),
+            is_default=is_default,
+        )
+
+    def _ensure_someone_is_default(self, saved_addresses: list[CustomerAddress]) -> None:
+        """O cliente nunca fica sem endereco padrao.
+
+        Alcancavel por quem apagou o padrao antes de importar: sem esta
+        promocao, o checkout abriria sem endereco selecionado e a pessoa
+        teria que escolher de novo a cada pedido.
+        """
+        if not saved_addresses:
+            return
+        if any(address.is_default for address in saved_addresses):
+            return
+
+        saved_addresses[0].is_default = True
+        self.db.add(saved_addresses[0])
 
     def _get_owned_address(self, customer: Customer, address_id: UUID) -> CustomerAddress:
         address = self.customer_repository.get_address(customer.id, address_id)

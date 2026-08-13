@@ -5,6 +5,8 @@ import unicodedata
 _DIGITS_RE = re.compile(r"\D+")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _NON_SLUG_RE = re.compile(r"[^a-z0-9]+")
+# Como CPF se escreve: digitos, ponto, hifen e espaco. Nada mais.
+_CPF_PUNCTUATION_RE = re.compile(r"[\d.\-\s]+")
 
 
 def normalize_email(email: str) -> str:
@@ -87,6 +89,25 @@ def _check_digit(digits: str) -> int:
 
 
 def is_valid_cpf(cpf: str) -> bool:
+    """True so para um CPF de verdade, escrito como CPF.
+
+    ORFA desde a frente 5: o CPF saiu do cadastro (revisao 0019) e nada em
+    `src/` chama esta funcao hoje. Fica corrigida, e nao apagada, porque se
+    o CPF voltar — a decisao amarrada a nota fiscal — ele volta com a
+    validacao certa em vez desta.
+
+    O defeito que ela tinha: `normalize_digits` joga fora TODO caractere que
+    nao e digito antes da conta, entao "a5b2c9d9e8f2g2h4i7j2k5" virava
+    "52998224725" e PASSAVA. Um campo de CPF aceitando texto arbitrario nao
+    e teoria: e o que grava lixo na coluna e faz a conferencia manual
+    depois nao bater com nada.
+
+    Por isso a pontuacao aceita e explicita — ponto, hifen e espaco, que e
+    como CPF se escreve — em vez de "qualquer coisa, eu tiro os digitos".
+    """
+    if not cpf or not _CPF_PUNCTUATION_RE.fullmatch(cpf):
+        return False
+
     digits = normalize_digits(cpf)
     if len(digits) != 11:
         return False

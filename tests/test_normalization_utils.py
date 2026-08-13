@@ -192,21 +192,41 @@ class TestIsValidCpfRejects:
         assert is_valid_cpf("abcdefghijk") is False
 
 
-class TestIsValidCpfStripsEverythingThatIsNotADigit:
-    def test_letters_in_the_middle_are_ignored(self):
-        """ESQUISITO, e registrado como esta.
+class TestIsValidCpfRejectsAnythingThatIsNotWrittenAsACpf:
+    """Era aqui que a validacao aceitava lixo.
 
-        `normalize_digits` joga fora TODO caractere que nao e digito antes da
-        conferencia — inclusive letras no meio do numero. Entao
-        "529982247-25abc" e "a5b2c9d9e8f2g2h4i7j2k5" sao aceitos como o CPF
-        52998224725.
+    `normalize_digits` joga fora TODO caractere que nao e digito ANTES da
+    conta, entao qualquer texto com onze digitos escondidos no meio passava
+    como CPF. Um campo de CPF que aceita texto arbitrario grava lixo na
+    coluna, e a conferencia manual depois nao bate com nada.
 
-        Para um campo colado de planilha isso e conveniencia; para um campo
-        digitado e uma validacao que aceita lixo. Fica registrado sem correcao
-        porque mudar isso muda o que a API aceita hoje, e essa e outra decisao.
-        """
-        assert is_valid_cpf("529982247-25abc") is True
-        assert is_valid_cpf("a5b2c9d9e8f2g2h4i7j2k5") is True
+    Agora a pontuacao aceita e explicita: digito, ponto, hifen e espaco.
+    """
+
+    @pytest.mark.parametrize(
+        "entrada",
+        [
+            "a5b2c9d9e8f2g2h4i7j2k5",  # o caso do relatorio
+            "529982247-25abc",
+            "CPF: 529.982.247-25",
+            "529982247/25",
+            "<529.982.247-25>",
+        ],
+    )
+    def test_garbage_around_the_digits_is_refused(self, entrada):
+        assert is_valid_cpf(entrada) is False
+
+    def test_the_conventional_punctuation_still_passes(self):
+        """Ponto, hifen e espaco continuam valendo: e como CPF se escreve, e
+        recusa-los quebraria quem cola do documento."""
+        for entrada in ("529.982.247-25", "  529.982.247-25  ", "529 982 247 25"):
+            assert is_valid_cpf(entrada) is True, entrada
+
+    def test_none_is_false_and_not_an_exception(self):
+        """Continua devolvendo False, como antes: o retorno cedo por `not cpf`
+        cobre None e vazio, e nao o `fullmatch`, que estouraria."""
+        assert is_valid_cpf(None) is False
+        assert is_valid_cpf("") is False
 
 
 # ---------------------------------------------------------------------------

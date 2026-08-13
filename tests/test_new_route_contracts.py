@@ -5,6 +5,7 @@ import uuid
 from pydantic import ValidationError
 
 from main import app
+from src.schemas.admin_printing_schema import PrintAgentCommandType
 from src.schemas.customer_schema import ImportCustomerAddressesRequest
 from src.schemas.delivery_schema import DeliveryEstimateRequest
 from src.schemas.payment_schema import PaymentErrorCode
@@ -292,6 +293,29 @@ class PrintAgentRouteContractTests(unittest.TestCase):
 
         response = self.schema["components"]["schemas"]["PrintTestResponse"]
         self.assertIn("agent_is_online", response["required"])
+
+    def test_the_command_types_are_published_as_an_enum(self):
+        """A LISTA de comandos tem que sair no documento.
+
+        `PrintAgentCommandType` existe como `str, Enum` exatamente para isto
+        (armadilha 16). Enquanto `command_type` foi publicado como `str`
+        solto, o enum nao era referenciado por schema nenhum e nao chegava a
+        gerador de cliente nenhum — o agente teria que descobrir os valores
+        possiveis lendo o backend.
+        """
+        published = self.schema["components"]["schemas"]["PrintAgentCommandType"]["enum"]
+
+        self.assertEqual(
+            sorted(published), sorted(item.value for item in PrintAgentCommandType)
+        )
+        self.assertIn("print_test", published)
+
+    def test_the_enum_is_reachable_from_the_stream_event(self):
+        # Enum solto em components que nenhum schema referencia nao chega a
+        # gerador de cliente nenhum.
+        event = self.schema["components"]["schemas"]["PrintAgentCommandEvent"]
+
+        self.assertIn("PrintAgentCommandType", json.dumps(event["properties"]["command_type"]))
 
 
 class PrinterNameContractTests(unittest.TestCase):

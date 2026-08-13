@@ -513,6 +513,53 @@ class PrintAgentCommandTests(unittest.TestCase):
         _, since = command_repository.since_calls[0]
         self.assertEqual(since, cursor - timedelta(seconds=OVERLAP_SECONDS))
 
+    def test_a_command_of_an_unknown_type_does_not_take_the_stream_down(self):
+        """O poll que entrega comando e o MESMO que entrega pedido.
+
+        `command_type` e tipado com o enum para a lista sair no
+        /openapi.json, e o preco disso e que uma linha com tipo desconhecido
+        — gravada por uma versao mais nova e revertida, ou a mao no banco —
+        levantaria ValidationError dentro do poll. Se ela subisse, a cozinha
+        pararia de imprimir por causa de um comando que ninguem consegue
+        executar de qualquer jeito.
+        """
+        branch_id = uuid.uuid4()
+        service = build_service(branch_id=branch_id)
+        agora = datetime.now(timezone.utc)
+        estranho = make_command(agora, branch_id=branch_id)
+        estranho.command_type = "abrir_gaveta"
+
+        events, _ = fetch_with(
+            service,
+            FakeStreamRepository(),
+            agora,
+            commands=[estranho, make_command(agora, branch_id=branch_id)],
+        )
+
+        # O desconhecido some; o bom continua entregue.
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].command.command_type, "print_test")
+
+    def test_an_order_still_arrives_when_a_command_row_is_unusable(self):
+        """O caso que importa de verdade: o pedido nao pode ser refem da
+        linha ruim da outra tabela."""
+        branch_id = uuid.uuid4()
+        service = build_service(branch_id=branch_id)
+        agora = datetime.now(timezone.utc)
+        estranho = make_command(agora, branch_id=branch_id)
+        estranho.command_type = "abrir_gaveta"
+
+        events, _ = fetch_with(
+            service,
+            FakeStreamRepository(
+                created=[make_order(uuid.uuid4(), uuid.uuid4(), agora)]
+            ),
+            agora,
+            commands=[estranho],
+        )
+
+        self.assertEqual([event.type for event in events], ["order.created"])
+
 
 if __name__ == "__main__":
     unittest.main()

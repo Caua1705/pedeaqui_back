@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
+from src.schemas.admin_printing_schema import PrintAgentCommandType
+
 
 # Teto do motivo do cancelamento. Cabe uma frase ("cliente desistiu",
 # "acabou a costela"), que e o que o suporte precisa ler depois — nao um
@@ -138,7 +140,13 @@ class PrintAgentCommandEvent(BaseModel):
     """
 
     command_id: UUID
-    command_type: str
+    # Tipado com o enum, e nao com `str`, para a LISTA de comandos sair no
+    # /openapi.json: um enum que nenhum schema publicado referencia nao chega
+    # a gerador de cliente nenhum, e o agente teria que descobrir os valores
+    # possiveis lendo o backend (armadilha 16).
+    #
+    # O valor na rede nao muda — `str, Enum` serializa como "print_test".
+    command_type: PrintAgentCommandType
     branch_id: UUID
     printer_name: str | None = None
     printing_sector_id: UUID | None = None

@@ -63,7 +63,7 @@ from src.repositories.order_repository import OrderRepository
 from src.repositories.print_agent_repository import PrintAgentRepository
 from src.repositories.printing_sector_repository import PrintingSectorRepository
 from src.schemas.admin_order_schema import AdminOrderStreamEvent, PrintAgentCommandEvent
-from src.schemas.admin_printing_schema import FONT_LARGE
+from src.schemas.admin_printing_schema import FONT_LARGE, PrintAgentCommandType
 from src.services.admin_order_service import AdminOrderService
 from src.services.print_layout import PRODUCTION_WIDTH, build_test_ticket
 
@@ -97,6 +97,11 @@ MAX_REPLAY_SECONDS = 3600
 # massa) virar uma resposta gigante de uma vez so; o que sobrar vem no poll
 # seguinte, porque o cursor so avanca ate o ultimo emitido.
 MAX_EVENTS_PER_POLL = 100
+
+# Os tipos de comando que ESTA versao sabe publicar. Ver `_is_known_command`
+# para o que acontece com o que nao esta aqui, e por que ele nao pode
+# simplesmente estourar.
+_KNOWN_COMMAND_TYPES = frozenset(item.value for item in PrintAgentCommandType)
 
 # Quantas chaves de evento a conexao lembra para nao repetir dentro dela
 # mesma. Limitado porque um stream de 15 minutos com pico de pedidos nao
@@ -262,6 +267,7 @@ class AdminOrderStreamService:
             since=since,
             limit=MAX_EVENTS_PER_POLL,
         )
+        commands = [command for command in commands if _is_known_command(command)]
         if not commands:
             return []
 
@@ -327,6 +333,31 @@ class AdminOrderStreamService:
             f"event: {event.type}\n"
             f"data: {event.model_dump_json()}\n\n"
         )
+
+
+def _is_known_command(command) -> bool:
+    """Descarta o comando cujo tipo esta API nao conhece, em vez de estourar.
+
+    `PrintAgentCommandEvent.command_type` e tipado com o enum, para a lista
+    sair no /openapi.json. O efeito colateral e que uma linha com tipo
+    desconhecido — gravada por uma versao mais nova e depois revertida, ou a
+    mao no banco — levantaria ValidationError DENTRO do poll.
+
+    E o mesmo poll que entrega os PEDIDOS. Uma linha ruim em
+    `print_agent_commands` derrubaria o stream inteiro e a cozinha pararia de
+    imprimir por causa de um comando que ninguem consegue executar mesmo.
+    Mesma escolha da armadilha 13: degrada e loga, nao some nem quebra.
+    """
+    if command.command_type in _KNOWN_COMMAND_TYPES:
+        return True
+
+    logger.error(
+        "[Impressao] comando de tipo desconhecido ignorado id=%s tipo=%s. "
+        "O agente desta versao nao sabe executa-lo.",
+        command.id,
+        command.command_type,
+    )
+    return False
 
 
 def _sector_name(

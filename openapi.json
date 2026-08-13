@@ -8657,6 +8657,17 @@
             "title": "Email",
             "type": "string"
           },
+          "marketing_opt_in": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Marketing Opt In"
+          },
           "name": {
             "minLength": 1,
             "title": "Name",

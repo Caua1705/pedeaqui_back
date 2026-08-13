@@ -64,14 +64,20 @@ class CustomerService:
                 detail="Telefone ja esta em uso",
             )
 
+        alteracoes = {
+            "name": payload.name,
+            "email": payload.email,
+            "phone": payload.phone,
+            "birth_date": payload.birth_date,
+        }
+        # Ausente e "nao mexi no consentimento"; `false` e "revoguei". Sem
+        # esta distincao, quem editasse so o telefone revogaria o proprio
+        # opt-in sem ter pedido.
+        if payload.marketing_opt_in is not None:
+            alteracoes["marketing_opt_in"] = payload.marketing_opt_in
+
         try:
-            self.customer_repository.update(
-                customer,
-                name=payload.name,
-                email=payload.email,
-                phone=payload.phone,
-                birth_date=payload.birth_date,
-            )
+            self.customer_repository.update(customer, **alteracoes)
             self.db.commit()
             self.db.refresh(customer)
         except IntegrityError as exc:

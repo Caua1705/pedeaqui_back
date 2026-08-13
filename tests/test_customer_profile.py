@@ -162,6 +162,46 @@ class TestUpdateMe:
         assert response.name == "Joana S. Souza"
         assert "commit" in db.events
 
+    def test_the_marketing_consent_can_be_revoked(self):
+        """Era o unico consentimento sem volta: coletado no cadastro, e o
+        `extra="forbid"` do schema impedia qualquer alteracao depois. O
+        cliente marcava a caixa uma vez e nao tinha, em lugar nenhum do
+        produto, como desmarcar."""
+        customer = make_customer()
+        customer.marketing_opt_in = True
+        service = make_service()
+
+        response = service.update_me(
+            customer, make_update_payload(marketing_opt_in=False)
+        )
+
+        assert response.marketing_opt_in is False
+
+    def test_the_consent_can_be_given_again(self):
+        customer = make_customer()
+        customer.marketing_opt_in = False
+
+        response = make_service().update_me(
+            customer, make_update_payload(marketing_opt_in=True)
+        )
+
+        assert response.marketing_opt_in is True
+
+    def test_a_payload_without_the_field_does_not_touch_the_consent(self):
+        """Ausente e "nao mexi", `false` e "revoguei". Sem a distincao, quem
+        editasse so o telefone revogaria o proprio opt-in sem ter pedido — e
+        e exatamente o que o painel e o app instalados mandam hoje, que nao
+        conhecem o campo."""
+        repository = FakeCustomerRepository()
+        customer = make_customer()
+        customer.marketing_opt_in = True
+
+        service = make_service(customer_repository=repository)
+        service.update_me(customer, make_update_payload(phone="85988887777"))
+
+        assert "marketing_opt_in" not in repository.updated_with
+        assert customer.marketing_opt_in is True
+
     def test_an_email_owned_by_someone_else_is_409(self):
         outro = make_customer()
         service = make_service(customer_repository=FakeCustomerRepository(by_email=outro))

@@ -149,6 +149,18 @@ class UpdateCurrentCustomerRequest(BaseModel):
     email: str
     phone: str
     birth_date: date
+    # Opcional, e nao obrigatorio como os quatro acima, por duas razoes:
+    #
+    # 1. campo obrigatorio novo em request que o painel e o app ja mandam faz
+    #    toda versao instalada passar a receber 422 ate ser atualizada
+    #    (armadilha 7: campo com default e de graca, obrigatorio nao);
+    # 2. ausente e "nao mexi no consentimento", que e diferente de `false`
+    #    ("revoguei"). Sem a distincao, um cliente que editasse o telefone
+    #    revogaria o proprio opt-in sem pedir.
+    #
+    # Era o unico jeito de revogar: o consentimento era coletado no cadastro
+    # e o `extra="forbid"` acima impedia qualquer alteracao depois.
+    marketing_opt_in: bool | None = None
 
     @field_validator("name")
     @classmethod

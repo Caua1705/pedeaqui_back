@@ -1003,3 +1003,57 @@ O mesmo vale para índice criado à mão, que já custou caro uma vez: o
 **Quando regerar o `schema_baseline.sql`: idealmente nunca.** Toda revisão nova
 se aplica por cima dele — o `stamp` fixa a foto em `0012` e o `upgrade` faz o
 resto. Precisar regerá-lo é o sintoma de que esta regra foi quebrada.
+
+---
+
+## 34. `money_to_float` na resposta — e as duas respostas que estão fora dessa regra
+
+**A regra continua valendo e não mudou:** `Decimal` no cálculo, `float` só na
+serialização da resposta, via `money_to_float`. É o que está no topo deste
+arquivo e é o que a maioria dos schemas faz.
+
+**Mas hoje ela não vale em toda a API,** e saber onde ela não vale evita duas
+horas de confusão. `CreateOrderResponse` e `OrderDetailResponse`
+(`order_schema.py`) declaram assim:
+
+| Campo | Tipo | O que sai no JSON |
+|---|---|---|
+| `subtotal`, `delivery_fee`, `service_fee`, `total` | `float` | número: `52.9` |
+| `coupon_discount_amount`, `cashback_redeemed_amount`, `discount_total` | `Decimal` | **string**: `"2.50"` |
+
+Duas consequências que já apareceram:
+
+- **`total + discount_total` levanta `TypeError`.** Ninguém soma esses dois
+  hoje; quem escrever o primeiro relatório sobre esses schemas vai escrever
+  exatamente essa linha e descobrir na hora.
+- **A mesma resposta entrega dinheiro em dois formatos**, e o front precisa
+  saber de cor quais campos converter.
+
+### Por que não foi corrigido
+
+Não é esquecimento. **As duas direções mudam o formato de fio**, e o app do
+cliente consome essas respostas:
+
+- **tudo `float`** → os três descontos deixam de ser string e perdem as casas
+  fixas (`"2.50"` vira `2.5`, `"10.00"` vira `10.0`);
+- **tudo `Decimal`** → os quatro campos que hoje são NÚMERO viram string.
+
+E não existe terceira via: **JSON não tem número com casa decimal fixa.**
+`json.dumps({"total": 52.90})` produz `{"total": 52.9}`. Duas casas só existem
+como string. Serializar `Decimal` como número é escolher perder as casas.
+
+Corrigir **uma resposta só é pior que não corrigir**: o mesmo campo passa a ter
+tipo diferente em rotas diferentes. Foi o que aconteceu uma vez — o
+`CustomerOrderHistoryItem` foi convertido para tudo `float` e revertido em
+seguida (`bffca0e`), porque deixava `discount_total` como número em
+`/customers/me/orders` e como string em `/orders/{token}`.
+
+### O que fica pendente
+
+**Uma decisão única, sobre a API inteira, tomada junto com o app do cliente:**
+ou todo dinheiro sai como número, ou todo dinheiro sai como string com duas
+casas. Meia API de cada jeito é pior que qualquer uma das duas.
+
+Enquanto essa decisão não é tomada, **não converta um schema isolado** — nem
+para "arrumar de passagem" enquanto mexe em outra coisa. É a regra que este
+item existe para registrar.

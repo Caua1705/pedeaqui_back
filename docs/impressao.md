@@ -280,18 +280,18 @@ Nem o instalador nem o agente precisam de administrador: tudo mora no perfil do
 usuário, e o agente não precisa de privilégio para falar com a impressora dele.
 Reinstalar por cima **não sobrescreve** um `config.ini` existente.
 
-### A armadilha do PyInstaller: `__file__` aponta para uma pasta que some
+### A armadilha do PyInstaller: `__file__` não é a pasta do lojista
 
-Congelado em `--onefile`, o executável se descompacta numa pasta temporária
-(`sys._MEIPASS`) e roda de lá. `__file__` aponta para dentro dela, e o Windows a
-**apaga quando o processo termina**.
+Congelado, `__file__` aponta para dentro do bundle — hoje a subpasta
+`_internal/` ao lado do executável (`--onedir`), e antes uma pasta temporária
+(`sys._MEIPASS`) que o Windows **apagava quando o processo terminava**.
 
 Se qualquer caminho em disco saísse de `__file__`:
 
 - o `config.ini` procurado nunca seria o que o instalador copiou;
-- o log evaporaria junto com a pasta;
-- `pedidos-impressos.json` sumiria a cada fechamento, e o agente **reimprimiria a
-  fila inteira do dia** na próxima abertura.
+- o log seria gravado onde ninguém vai procurar;
+- `pedidos-impressos.json` idem — e no `--onefile` sumia a cada fechamento,
+  fazendo o agente **reimprimir a fila inteira do dia** na próxima abertura.
 
 Os três só aparecem depois de empacotar — rodando `python -m print_agent` tudo
 funciona. Por isso todo caminho sai de `print_agent/paths.py`:
@@ -305,11 +305,12 @@ else:
 
 Ao lado do executável ficam `config.ini`, `rapidex-impressao.log` (1 MB × 5
 arquivos) e `pedidos-impressos.json`. Sem subpasta, de propósito: o lojista é
-instruído por telefone a abrir a pasta e mandar o arquivo `.log`.
+instruído por telefone a abrir a pasta e mandar o arquivo `.log`. A única
+subpasta é a `_internal/` do PyInstaller, que o `INSTALACAO.md` manda não tocar.
 
 ### O console fica visível
 
-`--onefile` sem `--noconsole`. No dia da instalação alguém precisa ver na tela
+`--onedir` sem `--noconsole`. No dia da instalação alguém precisa ver na tela
 que conectou e que a comanda saiu; janela escondida vira depuração às cegas.
 Virar ícone de bandeja é outra tarefa — exige uma bandeja de verdade, não só
 trocar o flag.
@@ -318,10 +319,24 @@ trocar o flag.
 
 Executável do PyInstaller sem assinatura digital costuma ser barrado na primeira
 execução ("O Windows protegeu o seu computador") e, em alguns antivírus, movido
-para quarentena. Não há contorno técnico legítimo — assinar o binário custa
-dinheiro e é a única solução real. O procedimento de liberação (Mais informações
-→ Executar assim mesmo; e como adicionar exclusão de pasta) está no item 6 do
-`INSTALACAO.md`, para ninguém travar no balcão.
+para quarentena. **Aconteceu de verdade:** o Defender apagou o `.exe` na frente
+do lojista e o `instalar.bat` morreu com "não encontrei o RapidexImpressao.exe".
+
+Três coisas saíram disso, e nenhuma delas resolve sozinha:
+
+- **O build é `--onedir`, não `--onefile`.** O de arquivo único se auto-extrai
+  numa pasta temporária a cada abertura, que é justamente a heurística que os
+  antivírus marcam. Trocar reduz muito o falso positivo; não elimina.
+- **A exclusão de pasta é o item 1 do `INSTALACAO.md`**, antes de copiar o
+  programa. Como conserto ela chega tarde: o arquivo já foi apagado, e quem está
+  no balcão já viu o antivírus removendo o programa que acabou de instalar.
+- **O binário é submetido à Microsoft como falso positivo** a cada versão nova
+  (formulário do Microsoft Security Intelligence, gratuito, resposta em alguns
+  dias). É o que corrige para *todos* os restaurantes de uma vez, inclusive os já
+  instalados, porque a correção desce na atualização de definições.
+
+Assinar o binário com certificado de code signing continua sendo a única solução
+definitiva, e custa dinheiro por ano.
 
 `stop()` é atendido no fim do evento em andamento, e o `sleep` é fatiado em
 pedaços de 1s: um Ctrl+C que cortasse um `WritePrinter` deixaria meia comanda na

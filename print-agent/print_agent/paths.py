@@ -2,18 +2,20 @@
 
 **Este modulo existe por causa de um unico defeito, e ele e silencioso.**
 
-Quando o agente e empacotado com PyInstaller em arquivo unico, o executavel
-se descompacta numa pasta temporaria (`sys._MEIPASS`, algo como
-`C:\\Users\\...\\AppData\\Local\\Temp\\_MEI123456\\`) e roda de la. Nessa
-situacao `__file__` aponta para dentro dessa pasta — que o Windows APAGA
-quando o processo termina.
+Empacotado com PyInstaller, `__file__` NAO aponta para a pasta onde o
+lojista tem os arquivos dele. No `--onedir` de hoje (ver build.bat) ele
+aponta para dentro da `_internal`, ao lado do executavel; no `--onefile`
+que o projeto usava antes, apontava para uma pasta temporaria
+(`sys._MEIPASS`, algo como `C:\\Users\\...\\Temp\\_MEI123456\\`) que o
+Windows APAGA quando o processo termina.
 
 O resultado, se algum caminho sair de `__file__`:
 
 - o `config.ini` procurado nunca e o que o instalador copiou;
-- o log e gravado na pasta temporaria e evapora junto com ela;
-- `printed-orders.json` some a cada fechamento, e o agente reimprime a fila
-  inteira do dia na proxima vez que abrir.
+- o log e gravado onde ninguem vai procurar (e, no `--onefile`, evaporava
+  junto com a pasta temporaria);
+- `pedidos-impressos.json` idem — e no `--onefile` sumia a cada fechamento,
+  fazendo o agente reimprimir a fila inteira do dia ao abrir de novo.
 
 Os tres so aparecem DEPOIS de empacotar. Rodando `python -m print_agent` na
 maquina de quem desenvolve, tudo funciona.

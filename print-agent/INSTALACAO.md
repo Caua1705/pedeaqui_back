@@ -12,7 +12,58 @@ O que você precisa ter em mãos antes de começar:
 
 ---
 
-## 1. Instalar
+## 1. Liberar a pasta no antivírus — ANTES de copiar o programa
+
+⚠️ **Este item vem primeiro e não pode ser pulado.**
+
+O Windows Defender costuma apagar o programa na hora em que ele é copiado,
+porque é um arquivo novo que ele nunca viu e que não tem assinatura digital
+paga. **O programa não tem vírus.** Mas se você copiar primeiro e liberar
+depois, o arquivo já foi apagado e o instalador falha dizendo que não
+encontrou o `RapidexImpressao.exe`.
+
+Liberando a pasta antes, isso não chega a acontecer.
+
+### Passo A — criar a pasta que vai ser liberada
+
+1. Tecla Windows + R, digite o texto abaixo e dê Enter:
+
+   ```
+   %LOCALAPPDATA%
+   ```
+
+2. Na janela que abrir, clique com o botão direito num espaço vazio →
+   **Novo** → **Pasta**.
+3. Dê à pasta exatamente este nome, com o espaço e sem acento:
+
+   ```
+   Rapidex Impressao
+   ```
+
+É nessa pasta que o instalador vai pôr o programa. Ela precisa existir agora
+só para você conseguir apontar o antivírus para ela.
+
+### Passo B — adicionar a exclusão
+
+1. Tecla Windows, digite `Segurança do Windows` e abra.
+2. **Proteção contra vírus e ameaças**.
+3. Em *Configurações de proteção contra vírus e ameaças*, clique em
+   **Gerenciar configurações**.
+4. Role até **Exclusões** → **Adicionar ou remover exclusões**.
+5. **Adicionar uma exclusão** → **Pasta**.
+6. Escolha a pasta que você criou no passo A:
+
+   ```
+   %LOCALAPPDATA%\Rapidex Impressao
+   ```
+
+Se o antivírus da loja for outro (Avast, AVG, McAfee, Kaspersky), o caminho é
+o mesmo: procure por *Exclusões*, *Exceções* ou *Lista branca* e adicione essa
+pasta. Se a loja tiver **dois** antivírus, faça nos dois.
+
+---
+
+## 2. Instalar
 
 1. Espete o pendrive.
 2. Abra a pasta do pendrive.
@@ -22,13 +73,25 @@ O que você precisa ter em mãos antes de começar:
 O instalador copia o programa para dentro do computador, faz ele abrir
 sozinho toda vez que o Windows ligar, e abre o programa.
 
-> **Se aparecer uma tela azul do Windows dizendo "O Windows protegeu o seu
-> computador"**, isso é normal e está explicado no item 6 desta página. Não
-> pule esse item.
+### Se aparecer a tela azul "O Windows protegeu o seu computador"
+
+É normal, e é diferente do antivírus: aqui ele só está pedindo confirmação,
+não apagando nada.
+
+1. Clique em **Mais informações** (o link pequeno, no meio da tela).
+2. Aparece um botão **Executar assim mesmo**. Clique nele.
+
+Acontece uma vez só.
+
+### Se o instalador disser que não encontrou o `RapidexImpressao.exe`
+
+O antivírus apagou o arquivo antes de você chegar aqui. Volte ao **item 1**,
+confirme que a exclusão está mesmo na lista, copie de novo a pasta do
+pendrive e rode o `instalar.bat` outra vez.
 
 ---
 
-## 2. Preencher a configuração
+## 3. Preencher a configuração
 
 Na primeira vez, o programa abre e diz que precisa de configuração. É o
 esperado.
@@ -63,7 +126,7 @@ espaços e tudo:
 
 ---
 
-## 3. Abrir o programa
+## 4. Abrir o programa
 
 Dê dois cliques em:
 
@@ -73,6 +136,9 @@ Dê dois cliques em:
 
 Vai abrir uma janela preta com texto. **Essa janela tem que ficar aberta** —
 é ela que imprime as comandas. Pode minimizar; não pode fechar.
+
+> Nessa pasta existe uma subpasta chamada `_internal`. Ela é parte do
+> programa: se alguém apagar, ele para de abrir. Não mexa nela.
 
 Quando estiver tudo certo, você vai ver na janela algo como:
 
@@ -88,7 +154,7 @@ A linha **`conectado. Aguardando pedidos.`** é a que confirma que funcionou.
 
 ---
 
-## 4. Testar antes de ir embora
+## 5. Testar antes de ir embora
 
 Faça um pedido de teste e aceite no painel. Na janela do programa deve
 aparecer:
@@ -103,7 +169,7 @@ E o papel sai na impressora.
 
 ---
 
-## 5. Depois de reiniciar o computador
+## 6. Depois de reiniciar o computador
 
 O programa abre sozinho. Não precisa fazer nada.
 
@@ -112,53 +178,16 @@ sozinha depois que a área de trabalho carregar. Pode demorar alguns segundos.
 
 ---
 
-## 6. O Windows bloqueou o programa (falso positivo)
-
-Programas novos que não têm assinatura digital paga costumam ser barrados na
-primeira execução. **O programa não tem vírus** — é só o Windows sendo
-cauteloso com um arquivo que ele nunca viu antes.
-
-### Tela azul "O Windows protegeu o seu computador"
-
-1. Clique em **Mais informações** (o link pequeno, no meio da tela).
-2. Aparece um botão **Executar assim mesmo**. Clique nele.
-
-Isso acontece uma vez só.
-
-### O antivírus apagou ou colocou o arquivo em quarentena
-
-Se o `RapidexImpressao.exe` sumiu da pasta depois de copiar:
-
-1. Tecla Windows, digite `Segurança do Windows` e abra.
-2. **Proteção contra vírus e ameaças**.
-3. Em *Configurações de proteção contra vírus e ameaças*, clique em
-   **Gerenciar configurações**.
-4. Role até **Exclusões** → **Adicionar ou remover exclusões**.
-5. **Adicionar uma exclusão** → **Pasta**.
-6. Escolha a pasta:
-
-   ```
-   %LOCALAPPDATA%\Rapidex Impressao
-   ```
-
-7. Rode o `instalar.bat` de novo.
-
-Se o antivírus for outro (Avast, AVG, McAfee, Kaspersky), o caminho é o
-mesmo: procure por *Exclusões*, *Exceções* ou *Lista branca* e adicione essa
-pasta.
-
----
-
 ## 7. Não está imprimindo — o que fazer
 
 Faça nesta ordem. Pare quando resolver.
 
 1. **A janela preta está aberta?** Se não, dê dois cliques no
-   `RapidexImpressao.exe` (item 3).
+   `RapidexImpressao.exe` (item 4).
 
 2. **A janela mostra `conectado. Aguardando pedidos.`?**
    - Se mostra `PARANDO: ...credencial...` → o e-mail ou a senha do
-     `config.ini` estão errados. Corrija (item 2) e abra de novo.
+     `config.ini` estão errados. Corrija (item 3) e abra de novo.
    - Se mostra `reconectando em N segundos` repetidamente → a internet está
      fora, ou o servidor está fora. Teste abrir um site qualquer no
      navegador.
@@ -167,7 +196,7 @@ Faça nesta ordem. Pare quando resolver.
    Se o programa mostrar `a via 'X' NAO foi impressa`, é isso.
 
 4. **O nome da impressora no `config.ini` está exatamente igual ao do
-   Windows?** Um espaço a mais já quebra. Confira pelo item 2.
+   Windows?** Um espaço a mais já quebra. Confira pelo item 3.
 
 5. **Ainda não resolveu:** mande o arquivo de registro para quem cuida do
    sistema.

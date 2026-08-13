@@ -17,6 +17,7 @@ rem  impressora que alguem ja configurou.
 rem ---------------------------------------------------------------------
 
 set "ORIGEM=%~dp0"
+set "PROGRAMA=%ORIGEM%programa"
 set "DESTINO=%LOCALAPPDATA%\Rapidex Impressao"
 set "STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 set "ATALHO=%STARTUP%\Rapidex Impressao.lnk"
@@ -28,13 +29,17 @@ echo   INSTALADOR DO RAPIDEX IMPRESSAO
 echo ======================================================================
 echo.
 
-if not exist "%ORIGEM%%EXE%" (
-    echo ERRO: nao encontrei o arquivo %EXE% nesta pasta.
+if not exist "%PROGRAMA%\%EXE%" (
+    echo ERRO: nao encontrei o arquivo %EXE%.
     echo.
-    echo Esta pasta e: %ORIGEM%
+    echo Ele deveria estar em: %PROGRAMA%
     echo.
-    echo Copie a pasta inteira do pendrive e rode o instalar.bat de dentro
-    echo dela.
+    echo As duas causas, nesta ordem:
+    echo.
+    echo   1. O antivirus apagou o arquivo. Faca o item 1 do INSTALACAO.md
+    echo      (liberar a pasta no antivirus) e rode este instalador de novo.
+    echo   2. A pasta foi copiada pela metade. Copie do pendrive a pasta
+    echo      INTEIRA e rode o instalar.bat de dentro dela.
     echo.
     pause
     exit /b 1
@@ -49,9 +54,17 @@ if errorlevel 1 (
 )
 
 echo [2/4] Copiando o programa...
-rem Se o programa ja estiver rodando, o copy falha com o arquivo em uso.
+rem Se o programa ja estiver rodando, a copia falha com o arquivo em uso.
 taskkill /f /im "%EXE%" >nul 2>&1
-copy /y "%ORIGEM%%EXE%" "%DESTINO%\%EXE%" >nul
+
+rem A _internal antiga sai antes: o xcopy sobrescreve o que tem nome igual,
+rem mas nao apaga o que sumiu entre uma versao e outra, e DLL orfa de versao
+rem velha ao lado da nova e defeito que so aparece na maquina do lojista.
+rem So a _internal -- o config.ini e o log estao na raiz do DESTINO e
+rem precisam sobreviver a uma reinstalacao.
+if exist "%DESTINO%\_internal" rmdir /s /q "%DESTINO%\_internal"
+
+xcopy /e /i /y /q "%PROGRAMA%" "%DESTINO%" >nul
 if errorlevel 1 (
     echo ERRO: nao foi possivel copiar o programa para "%DESTINO%".
     pause
@@ -107,6 +120,9 @@ echo   novo pelo atalho na Inicializacao.
 echo.
 echo   Quando alguem disser que nao esta imprimindo, o arquivo que ajuda
 echo   e o rapidex-impressao.log da pasta acima.
+echo.
+echo   Na mesma pasta ha uma subpasta _internal. Ela e parte do programa:
+echo   se for apagada, ele para de abrir.
 echo.
 pause
 endlocal

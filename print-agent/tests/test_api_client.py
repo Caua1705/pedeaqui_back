@@ -26,7 +26,7 @@ import unittest
 
 import requests
 
-from print_agent.api_client import ApiClient
+from print_agent.api_client import ApiClient, ApiError, AuthError
 
 
 COMANDA = "1x Picanha à Moda\n1x Filé à Parmegiana\n1x Sortidão"
@@ -191,6 +191,28 @@ class AgentReportingTests(unittest.TestCase):
                 ]
             },
         )
+
+    def test_a_route_that_does_not_exist_is_an_ApiError_not_a_crash(self):
+        """O caso concreto: agente novo instalado contra backend que ainda
+        nao subiu as rotas da frente 4.
+
+        O agente e instalado a mao na maquina do balcao, e o backend sobe por
+        deploy — as duas coisas nao andam juntas, e a ordem em que andam nao
+        e escolhida por ninguem. Um 404 aqui tem que ser um erro que quem
+        chama consegue engolir; se virasse AuthError, o agente concluiria que
+        a credencial esta errada e PARARIA (AuthFatalError encerra o
+        processo).
+        """
+        session = FakeSession(
+            json_response=make_response(b'{"detail":"Not Found"}', "application/json", 404)
+        )
+        client = ApiClient("https://api.exemplo.com", token="tok", session=session)
+
+        with self.assertRaises(ApiError) as raised:
+            client.heartbeat("1.0.0")
+
+        self.assertNotIsInstance(raised.exception, AuthError)
+        self.assertIn("404", str(raised.exception))
 
     def test_an_empty_list_is_still_a_valid_report(self):
         """Maquina sem impressora instalada e um estado que o painel precisa

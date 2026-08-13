@@ -541,6 +541,59 @@ class HeartbeatTests(AgentTestCase):
                          ["id: 1", "", "data: {}"])
 
 
+class OldBackendTests(AgentTestCase):
+    """O agente da frente 4 contra um backend que ainda NAO tem as rotas dela.
+
+    Nao e hipotese: o agente e instalado a mao na maquina do balcao e o
+    backend sobe por deploy. As duas coisas nao andam juntas, e a ordem em que
+    andam nao e escolhida por ninguem — instalar o agente novo numa loja antes
+    do deploy e o caso normal, nao a excecao.
+
+    A unica coisa que precisa continuar valendo e esta: **a comanda sai**. O
+    heartbeat e a lista de impressoras sao informacao para o painel, e o painel
+    velho nao tem onde mostra-las de qualquer jeito.
+    """
+
+    def test_the_order_still_prints_when_the_new_routes_answer_404(self):
+        order_id = str(uuid.uuid4())
+        client = FakeClient(
+            {order_id: [make_job()]}, heartbeat_error=ApiError("POST /heartbeat respondeu 404")
+        )
+        printer = FakePrinter()
+        agent = self.build(client, printer, printers={"cozinha": "IMP-COZINHA"})
+
+        list(agent._with_heartbeat([": ping"]))
+        agent._handle_event(make_event(order_id))
+
+        self.assertEqual(printer.sent[0][0], "IMP-COZINHA")
+
+    def test_a_failed_printer_report_does_not_interrupt_anything(self):
+        client = FakeClient()
+        client.report_printers = lambda printers: (_ for _ in ()).throw(
+            ApiError("POST /printers respondeu 404")
+        )
+        agent = self.build(client, FakePrinter())
+
+        agent._report_printers()  # nao pode levantar
+
+    def test_a_job_without_the_printer_name_key_falls_back_to_the_ini(self):
+        """O backend antigo nao manda a chave — nem nula, AUSENTE. E por isso
+        que a leitura e `.get()`: com indexacao, toda via de um backend
+        anterior a frente 4 viraria KeyError e a cozinha pararia."""
+        order_id = str(uuid.uuid4())
+        job = make_job()
+        del job["printer_name"]
+
+        printer = FakePrinter()
+        agent = self.build(
+            FakeClient({order_id: [job]}), printer, printers={"cozinha": "IMP-COZINHA"}
+        )
+
+        agent._handle_event(make_event(order_id))
+
+        self.assertEqual(printer.sent[0][0], "IMP-COZINHA")
+
+
 class StopTests(AgentTestCase):
     def test_stop_ends_the_loop(self):
         agent = self.build(FakeClient(), FakePrinter())

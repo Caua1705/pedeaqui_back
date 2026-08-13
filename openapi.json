@@ -5176,9 +5176,9 @@
             "type": "string"
           },
           "cashback_redeemed_amount": {
-            "default": 0.0,
+            "default": "0.00",
             "title": "Cashback Redeemed Amount",
-            "type": "number"
+            "type": "string"
           },
           "coupon_code": {
             "anyOf": [
@@ -5192,9 +5192,9 @@
             "title": "Coupon Code"
           },
           "coupon_discount_amount": {
-            "default": 0.0,
+            "default": "0.00",
             "title": "Coupon Discount Amount",
-            "type": "number"
+            "type": "string"
           },
           "created_at": {
             "anyOf": [
@@ -5213,9 +5213,9 @@
             "type": "number"
           },
           "discount_total": {
-            "default": 0.0,
+            "default": "0.00",
             "title": "Discount Total",
-            "type": "number"
+            "type": "string"
           },
           "id": {
             "format": "uuid",

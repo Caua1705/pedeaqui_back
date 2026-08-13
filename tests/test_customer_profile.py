@@ -695,43 +695,37 @@ class TestListOrders:
         assert pedido.restaurant_name == "Pizzaria do Ze"
         assert pedido.branch_name == "Aldeota"
 
-    def test_every_money_field_comes_out_as_float(self):
-        """Era metade float e metade Decimal na MESMA resposta.
+    def test_money_comes_out_as_float_and_discounts_stay_decimal(self):
+        """ESQUISITO, e registrado como esta.
 
-        `total + discount_total` levantava TypeError — nao ha essa soma hoje,
-        mas quem escrever o primeiro relatorio sobre este schema escreve
-        exatamente essa linha.
+        O mesmo item de historico mistura os dois tipos: `subtotal`,
+        `delivery_fee`, `service_fee` e `total` passam por `money_to_float`,
+        enquanto `coupon_discount_amount`, `cashback_redeemed_amount` e
+        `discount_total` saem como `Decimal` via `quantize_money`.
+
+        Nao e bug de valor — o schema declara os tipos assim e a serializacao
+        resolve. Mas e uma inconsistencia dentro da MESMA resposta, e quem
+        somar os campos em Python vai encontrar float com Decimal, que o
+        Python recusa.
+
+        NAO corrigir aqui foi decisao tomada, e nao esquecimento. Este mesmo
+        par existe em `CreateOrderResponse` e `OrderDetailResponse`, e as duas
+        saidas mudam o formato de fio: tudo float tira as casas fixas dos tres
+        descontos, tudo Decimal transforma quatro campos que hoje sao NUMERO
+        em string. Consertar uma resposta so deixaria o mesmo campo com tipos
+        diferentes em rotas diferentes — pior que a inconsistencia atual.
+
+        Vira uma decisao unica sobre a API inteira, junto com o app do
+        cliente. Ver a armadilha 34 da skill.
         """
         service = make_service(order_repository=FakeOrderRepository([make_order_row()]))
 
         pedido = service.list_orders(make_customer())[0]
 
-        for campo in (
-            "subtotal",
-            "delivery_fee",
-            "service_fee",
-            "coupon_discount_amount",
-            "cashback_redeemed_amount",
-            "discount_total",
-            "total",
-        ):
-            assert isinstance(getattr(pedido, campo), float), campo
-
-        # A soma que antes levantava TypeError.
-        assert isinstance(pedido.total + pedido.discount_total, float)
-
-    def test_the_json_carries_every_amount_as_a_number(self):
-        """O que o front via: Decimal do Pydantic sai como STRING ("2.50") e
-        float sai como numero (13.0). A mesma resposta entregava dinheiro nos
-        dois formatos, e o front tinha que saber de cor quais converter."""
-        import json
-
-        service = make_service(order_repository=FakeOrderRepository([make_order_row()]))
-
-        pedido = json.loads(service.list_orders(make_customer())[0].model_dump_json())
-
-        for campo in ("subtotal", "coupon_discount_amount", "discount_total", "total"):
-            assert isinstance(pedido[campo], (int, float)), (campo, pedido[campo])
+        assert isinstance(pedido.total, float)
+        assert isinstance(pedido.discount_total, Decimal)
+        with pytest.raises(TypeError):
+            pedido.total + pedido.discount_total
 
     def test_the_items_of_the_order_come_along(self):
         row = make_order_row(itens=[make_order_item("Pizza"), make_order_item("Coca")])

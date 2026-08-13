@@ -253,12 +253,9 @@ class CustomerService:
             delivery_fee=money_to_float(order.delivery_fee),
             service_fee=money_to_float(order.service_fee),
             coupon_code=order.coupon_code_snapshot,
-            # `money_to_float` e nao `quantize_money`: a resposta e o unico
-            # lugar onde dinheiro vira float, e os quatro campos vizinhos ja
-            # faziam assim.
-            coupon_discount_amount=money_to_float(order.coupon_discount_amount),
-            cashback_redeemed_amount=money_to_float(order.cashback_redeemed_amount),
-            discount_total=money_to_float(order.discount_total),
+            coupon_discount_amount=quantize_money(order.coupon_discount_amount),
+            cashback_redeemed_amount=quantize_money(order.cashback_redeemed_amount),
+            discount_total=quantize_money(order.discount_total),
             total=money_to_float(order.total),
             created_at=order.created_at,
             items=[cls._order_item_response(item) for item in order.items],

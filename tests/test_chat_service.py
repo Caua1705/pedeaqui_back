@@ -338,33 +338,79 @@ class TestMessageDigest:
         assert mensagem not in _message_digest(mensagem)
 
 
+class FakeFeedbackDb:
+    def __init__(self, falha=None):
+        self.events = []
+        self.falha = falha
+
+    def commit(self):
+        if self.falha is not None:
+            self.events.append("commit-falhou")
+            raise self.falha
+        self.events.append("commit")
+
+    def rollback(self):
+        self.events.append("rollback")
+
+
+def fake_feedback_repository(monkeypatch, gravados, falha=None):
+    class FakeFeedbackRepository:
+        def __init__(self, db):
+            self.db = db
+
+        def create(self, request):
+            if falha is not None:
+                raise falha
+            gravados.append(request)
+
+    monkeypatch.setattr(chat_module, "AIFeedbackRepository", FakeFeedbackRepository)
+
+
 class TestCreateFeedback:
-    def test_it_hands_the_request_to_the_repository_and_answers_success(self, monkeypatch):
-        """ESQUISITO, e registrado como esta.
-
-        `create_feedback` grava e devolve `success=True` sempre — a resposta
-        nao depende do que aconteceu. E ela tambem NAO commita: o repositorio
-        e chamado e a decisao de commitar fica com quem abriu a sessao. Pela
-        convencao de camadas deste repo ("quem commita e o service, sempre"),
-        e o service que esta faltando com a parte dele.
-        """
+    def test_the_success_is_said_only_after_the_commit(self, monkeypatch):
+        """Antes, `success=True` era devolvido sem depender de nada: quem
+        commitava era o REPOSITORIO, contra a regra de camadas, e o service
+        afirmava sucesso sobre uma transacao que ele nao controlava."""
         gravados = []
+        db = FakeFeedbackDb()
+        fake_feedback_repository(monkeypatch, gravados)
 
-        class FakeFeedbackRepository:
-            def __init__(self, db):
-                self.db = db
-
-            def create(self, request):
-                gravados.append(request)
-
-        monkeypatch.setattr(chat_module, "AIFeedbackRepository", FakeFeedbackRepository)
         service = make_service()
-
+        service.db = db
         pedido = SimpleNamespace(session_id="s1", rating=5)
+
         response = service.create_feedback(pedido)
 
         assert gravados == [pedido]
+        assert db.events == ["commit"]
         assert response.success is True
+
+    def test_a_failure_rolls_back_and_propagates(self, monkeypatch):
+        """Nao vira `success=False`: o cliente nao tem o que fazer com um voto
+        recusado, e engolir a excecao esconderia do log a unica pista de que o
+        feedback parou de ser gravado."""
+        db = FakeFeedbackDb()
+        fake_feedback_repository(monkeypatch, [], falha=RuntimeError("banco fora"))
+
+        service = make_service()
+        service.db = db
+
+        with pytest.raises(RuntimeError):
+            service.create_feedback(SimpleNamespace(session_id="s1", rating=5))
+
+        assert db.events == ["rollback"]
+
+    def test_a_failure_on_the_commit_also_rolls_back(self, monkeypatch):
+        db = FakeFeedbackDb(falha=RuntimeError("commit falhou"))
+        fake_feedback_repository(monkeypatch, [])
+
+        service = make_service()
+        service.db = db
+
+        with pytest.raises(RuntimeError):
+            service.create_feedback(SimpleNamespace(session_id="s1", rating=5))
+
+        assert db.events == ["commit-falhou", "rollback"]
 
 
 # ---------------------------------------------------------------------------

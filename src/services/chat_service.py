@@ -45,7 +45,24 @@ class ChatService:
         self.restaurant_repository = RestaurantRepository(db)
 
     def create_feedback(self, request: AIFeedbackRequest) -> AIFeedbackResponse:
-        AIFeedbackRepository(self.db).create(request)
+        """Registra o voto do cliente sobre uma resposta do Rapi.
+
+        O `success=True` so e dito DEPOIS do commit. Antes ele era devolvido
+        sem depender de nada: quem commitava era o repositorio (contra a
+        regra de camadas), o service nao controlava a transacao, e a resposta
+        afirmava sucesso sobre uma escrita que ele nao tinha como conferir.
+
+        Falha aqui sobe, e nao vira `success=False`: o cliente nao tem o que
+        fazer com um voto recusado, e engolir a excecao esconderia do log a
+        unica pista de que o feedback parou de ser gravado.
+        """
+        try:
+            AIFeedbackRepository(self.db).create(request)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+
         return AIFeedbackResponse(success=True)
 
     def chat(

@@ -26,7 +26,7 @@ from src.schemas.auth_schema import (
     VerifyResetCodeResponse,
 )
 from src.services.email_service import EmailService
-from src.utils.normalization import is_valid_cpf, is_valid_email, normalize_digits, normalize_email
+from src.utils.normalization import is_valid_email, normalize_digits, normalize_email
 from src.utils.security import (
     PasswordTooLongError,
     TokenExpiredError,
@@ -118,17 +118,14 @@ class AuthService:
     def register(self, payload: RegisterCustomerRequest) -> RegisterCustomerResponse:
         email = normalize_email(payload.email)
         phone = normalize_digits(payload.phone)
-        cpf = normalize_digits(payload.cpf)
 
         if not is_valid_email(email):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email invalido")
-        if not is_valid_cpf(cpf):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CPF invalido")
         password_hash = _hash_new_password(payload.password)
         if not payload.privacy_accepted:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Aceite de privacidade obrigatorio")
 
-        conflict = self._registration_conflict(email=email, cpf=cpf, phone=phone)
+        conflict = self._registration_conflict(email=email, phone=phone)
         if conflict:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"{conflict} ja cadastrado")
 
@@ -137,7 +134,6 @@ class AuthService:
                 name=payload.name.strip(),
                 email=email,
                 phone=phone,
-                cpf=cpf,
                 password_hash=password_hash,
                 birth_date=payload.birth_date,
                 email_verified_at=None,
@@ -363,11 +359,9 @@ class AuthService:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Conta inativa")
         return customer
 
-    def _registration_conflict(self, email: str, cpf: str, phone: str) -> str | None:
+    def _registration_conflict(self, email: str, phone: str) -> str | None:
         if self.customer_repository.get_by_email(email):
             return "Email"
-        if self.customer_repository.get_by_cpf(cpf):
-            return "CPF"
         if self.customer_repository.get_by_phone(phone):
             return "Telefone"
         return None

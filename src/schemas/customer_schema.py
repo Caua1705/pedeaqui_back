@@ -136,7 +136,10 @@ class CurrentCustomerResponse(BaseResponse):
     name: str
     email: str
     phone: str
-    cpf: str
+    # `cpf` saiu daqui na frente 5 (LGPD). Era o unico lugar da API que
+    # devolvia o documento, e ele nao era usado para mais nada — a coluna foi
+    # anulada pela revisao 0019. Publicar campo que hoje seria sempre nulo so
+    # convidaria a tela a mostrar espaco vazio.
     birth_date: date
     email_verified: bool
     marketing_opt_in: bool

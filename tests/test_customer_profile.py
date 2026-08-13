@@ -92,7 +92,6 @@ def make_customer(password=SENHA_ATUAL, **overrides):
         "name": "Joana Souza",
         "email": "joana@exemplo.com",
         "phone": "85999998888",
-        "cpf": "52998224725",
         "birth_date": date(1990, 5, 20),
         "email_verified_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
         "marketing_opt_in": True,
@@ -126,7 +125,6 @@ class TestGetMe:
 
         assert response.name == "Joana Souza"
         assert response.email == "joana@exemplo.com"
-        assert response.cpf == "52998224725"
 
     def test_email_verified_is_derived_from_the_timestamp(self):
         """A resposta publica nao expoe QUANDO o e-mail foi verificado, so se

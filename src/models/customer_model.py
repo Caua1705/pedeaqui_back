@@ -17,7 +17,11 @@ class Customer(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     email: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     phone: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
-    cpf: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    # Nao e mais coletado nem lido: a revisao 0019 anulou os existentes e
+    # NADA escreve aqui. A coluna sobrevive so para dar uma revisao de
+    # margem antes do DROP, caso apareca um uso que o levantamento da LGPD
+    # nao viu. Ver `docs/lgpd-proposta.md`, secao 2.3.
+    cpf: Mapped[str | None] = mapped_column(Text, unique=True)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     # Marco de revogacao: JWT emitido antes deste instante nao vale mais.
     # Ver AuthService.get_customer_from_token.

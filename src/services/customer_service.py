@@ -39,7 +39,6 @@ class CustomerService:
             name=customer.name,
             email=customer.email,
             phone=customer.phone,
-            cpf=customer.cpf,
             birth_date=customer.birth_date,
             email_verified=customer.email_verified_at is not None,
             marketing_opt_in=customer.marketing_opt_in,

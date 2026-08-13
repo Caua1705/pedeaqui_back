@@ -22,19 +22,17 @@ pytestmark = pytest.mark.db
 
 
 class TestAsBuscasPorIdentificador:
-    def test_encontra_por_telefone_email_e_cpf(self, db):
+    def test_encontra_por_telefone_e_email(self, db):
         cliente = criar_cliente(
             db,
             email="joana@exemplo.com",
             phone="85988887777",
-            cpf="12345678901",
         )
 
         repositorio = CustomerRepository(db)
 
         assert repositorio.get_by_email("joana@exemplo.com").id == cliente.id
         assert repositorio.get_by_phone("85988887777").id == cliente.id
-        assert repositorio.get_by_cpf("12345678901").id == cliente.id
 
     def test_a_comparacao_e_exata_e_nao_normaliza_nada(self, db):
         """Documenta a divisão de trabalho: normalizar é do service

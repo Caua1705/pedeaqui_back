@@ -4907,10 +4907,6 @@
             "title": "Birth Date",
             "type": "string"
           },
-          "cpf": {
-            "title": "Cpf",
-            "type": "string"
-          },
           "email": {
             "title": "Email",
             "type": "string"
@@ -4942,7 +4938,6 @@
           "name",
           "email",
           "phone",
-          "cpf",
           "birth_date",
           "email_verified",
           "marketing_opt_in"
@@ -7804,11 +7799,6 @@
             "title": "Birth Date",
             "type": "string"
           },
-          "cpf": {
-            "minLength": 11,
-            "title": "Cpf",
-            "type": "string"
-          },
           "email": {
             "title": "Email",
             "type": "string"
@@ -7842,7 +7832,6 @@
           "email",
           "phone",
           "birth_date",
-          "cpf",
           "password",
           "privacy_accepted"
         ],

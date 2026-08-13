@@ -28,10 +28,6 @@ class CustomerRepository:
         stmt = select(Customer).where(Customer.email == email)
         return self.db.scalar(stmt)
 
-    def get_by_cpf(self, cpf: str) -> Customer | None:
-        stmt = select(Customer).where(Customer.cpf == cpf)
-        return self.db.scalar(stmt)
-
     def get_by_email_or_phone(self, email: str | None, phone: str | None) -> Customer | None:
         if email:
             return self.get_by_email(email)

@@ -50,7 +50,6 @@ from src.utils.security import (
 )
 
 
-CPF_VALIDO = "52998224725"
 SENHA = "senha-forte-123"
 CODIGO = "123456"
 
@@ -109,9 +108,6 @@ class FakeCustomerRepository:
     def get_by_email(self, email):
         return self.customer if "email" in self.conflict_on or self.customer else None
 
-    def get_by_cpf(self, cpf):
-        return self.customer if "cpf" in self.conflict_on else None
-
     def get_by_phone(self, phone):
         return self.customer if "phone" in self.conflict_on else None
 
@@ -157,7 +153,6 @@ def make_customer(**overrides):
         "name": "Joana Souza",
         "email": "joana@exemplo.com",
         "phone": "85999998888",
-        "cpf": CPF_VALIDO,
         "birth_date": date(1990, 5, 20),
         "email_verified_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
         "password_hash": SENHA_HASH,
@@ -197,7 +192,6 @@ def make_register_payload(**overrides):
         "email": "joana@exemplo.com",
         "phone": "(85) 99999-8888",
         "birth_date": date(1990, 5, 20),
-        "cpf": "529.982.247-25",
         "password": SENHA,
         "privacy_accepted": True,
     }
@@ -212,7 +206,7 @@ def make_register_payload(**overrides):
 
 class TestRegister:
     def test_it_normalizes_before_saving(self):
-        """E-mail, telefone e CPF sao normalizados ANTES de gravar. Sem isso a
+        """E-mail e telefone sao normalizados ANTES de gravar. Sem isso a
         busca por telefone nao acha o cliente que digitou com parenteses
         (armadilha 27)."""
         repository = FakeCustomerRepository()
@@ -222,7 +216,6 @@ class TestRegister:
 
         assert repository.created.email == "joana@exemplo.com"
         assert repository.created.phone == "85999998888"
-        assert repository.created.cpf == CPF_VALIDO
 
     def test_it_sends_a_verification_code_and_leaves_the_email_unverified(self):
         repository = FakeCustomerRepository()
@@ -238,7 +231,6 @@ class TestRegister:
         ("overrides", "detail"),
         [
             ({"email": "nao-e-email"}, "Email invalido"),
-            ({"cpf": "111.111.111-11"}, "CPF invalido"),
             ({"password": "curta12"}, "Senha fraca"),
             ({"password": "x" * 73}, "Senha muito longa"),
             ({"privacy_accepted": False}, "Aceite de privacidade obrigatorio"),
@@ -253,7 +245,7 @@ class TestRegister:
 
     @pytest.mark.parametrize(
         ("campo", "detail"),
-        [("email", "Email ja cadastrado"), ("cpf", "CPF ja cadastrado"), ("phone", "Telefone ja cadastrado")],
+        [("email", "Email ja cadastrado"), ("phone", "Telefone ja cadastrado")],
     )
     def test_a_duplicate_is_409_naming_the_field(self, campo, detail):
         repository = FakeCustomerRepository(customer=make_customer())
@@ -267,16 +259,16 @@ class TestRegister:
         assert exc.value.status_code == 409
         assert exc.value.detail == detail
 
-    def test_the_conflict_order_is_email_then_cpf_then_phone(self):
+    def test_the_conflict_order_is_email_then_phone(self):
         """ESQUISITO, e registrado como esta.
 
         `_registration_conflict` devolve o PRIMEIRO conflito que encontrar, na
-        ordem e-mail, CPF, telefone. Um cadastro que colide nos tres so ouve
-        falar do e-mail: o cliente corrige, tenta de novo e ouve do CPF, e
-        assim por diante — tres viagens para descobrir tres problemas.
+        ordem e-mail, telefone. Um cadastro que colide nos dois so ouve falar
+        do e-mail: o cliente corrige, tenta de novo e ouve do telefone — duas
+        viagens para descobrir dois problemas.
         """
         repository = FakeCustomerRepository(customer=make_customer())
-        repository.conflict_on = {"email", "cpf", "phone"}
+        repository.conflict_on = {"email", "phone"}
 
         with pytest.raises(HTTPException) as exc:
             make_service(repository=repository).register(make_register_payload())

@@ -11,7 +11,6 @@ class RegisterCustomerRequest(BaseModel):
     email: str
     phone: str = Field(min_length=8)
     birth_date: date
-    cpf: str = Field(min_length=11)
     password: str
     marketing_opt_in: bool = False
     privacy_accepted: bool
@@ -21,7 +20,7 @@ class RegisterCustomerRequest(BaseModel):
     def normalize_email_value(cls, value: str) -> str:
         return normalize_email(value)
 
-    @field_validator("phone", "cpf")
+    @field_validator("phone")
     @classmethod
     def normalize_digits_value(cls, value: str) -> str:
         return normalize_digits(value)

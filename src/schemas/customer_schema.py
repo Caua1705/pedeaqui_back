@@ -207,13 +207,27 @@ class CustomerOrderHistoryItem(BaseModel):
     branch_name: str
     status: str
     order_type: str
+    # Todo dinheiro daqui e `float`, e a uniformidade e o ponto.
+    #
+    # Antes, os quatro primeiros eram float e os tres descontos eram Decimal,
+    # na MESMA resposta. Duas consequencias:
+    #
+    # - `total + discount_total` levanta TypeError. Nao ha soma dessas duas
+    #   hoje, mas quem escrever o primeiro relatorio sobre este schema vai
+    #   escrever exatamente essa linha;
+    # - no JSON, Decimal do Pydantic sai como STRING ("2.50") e float sai como
+    #   numero (13.0). A mesma resposta entregava dinheiro nos dois formatos, e
+    #   o front tinha que saber de cor quais campos converter.
+    #
+    # A direcao segue a regra do projeto: Decimal no calculo, float so na
+    # serializacao da resposta (`money_to_float`).
     subtotal: float
     delivery_fee: float
     service_fee: float
     coupon_code: str | None = None
-    coupon_discount_amount: Decimal = Decimal("0.00")
-    cashback_redeemed_amount: Decimal = Decimal("0.00")
-    discount_total: Decimal = Decimal("0.00")
+    coupon_discount_amount: float = 0.0
+    cashback_redeemed_amount: float = 0.0
+    discount_total: float = 0.0
     total: float
     created_at: datetime | None = None
     items: list[OrderItemResponse]

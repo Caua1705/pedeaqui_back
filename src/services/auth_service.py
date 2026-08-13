@@ -355,10 +355,14 @@ class AuthService:
         return VerifyResetCodeResponse(reset_token=reset_token)
 
     def reset_password(self, payload: ResetPasswordRequest) -> MessageResponse:
-        if payload.new_password != payload.confirm_password:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confirmacao de senha nao confere")
-        password_hash = _hash_new_password(payload.new_password)
-
+        # O TOKEN primeiro, e a senha depois. A ordem inversa fazia quem
+        # chegava com um token vencido e uma confirmacao errada ouvir so
+        # "confirmacao de senha nao confere": a pessoa arrumava a senha,
+        # tentava de novo e SO ENTAO descobria que o link tinha expirado.
+        #
+        # De quebra, o bcrypt de `_hash_new_password` (~0,3s de proposito) so
+        # roda depois de o token valer. Antes, qualquer requisicao com um
+        # token inventado ja pagava esse custo no servidor.
         code_row = self.customer_repository.get_password_reset_by_token_hash(hash_reset_token(payload.reset_token))
         if not self._valid_reset_token(code_row, payload.reset_token):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token invalido ou expirado")
@@ -366,6 +370,10 @@ class AuthService:
         customer = self.customer_repository.get_by_id(code_row.customer_id)
         if not customer:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token invalido ou expirado")
+
+        if payload.new_password != payload.confirm_password:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confirmacao de senha nao confere")
+        password_hash = _hash_new_password(payload.new_password)
 
         customer.password_hash = password_hash
         # Derruba as sessoes antigas: quem esta com um token emitido antes

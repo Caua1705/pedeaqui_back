@@ -623,23 +623,56 @@ class TestResetPassword:
             ("x" * 73, "x" * 73, "Senha muito longa"),
         ],
     )
-    def test_the_password_is_checked_before_the_token(self, new, confirm, detail):
-        """ESQUISITO, e registrado como esta.
+    def test_an_invalid_token_is_reported_before_any_password_complaint(
+        self, new, confirm, detail
+    ):
+        """As tres validacoes de senha rodavam ANTES de conferir o token.
 
-        As tres validacoes de senha rodam ANTES de conferir o reset_token.
-        Quem manda um token invalido com senhas que nao conferem ouve
-        "confirmacao nao confere" — uma dica sobre o formulario para quem nem
-        tem token valido.
+        Quem chegava com um link vencido e uma confirmacao errada ouvia so
+        "confirmacao de senha nao confere": arrumava a senha, tentava de novo
+        e SO ENTAO descobria que o link tinha expirado — duas viagens, e a
+        segunda com a sensacao de que o site esta quebrado.
 
-        Nao vaza cadastro e nao permite trocar senha nenhuma, mas e a ordem
-        contraria a de todo o resto do modulo, onde a credencial e conferida
-        primeiro. Nao e corrigido aqui.
+        Agora o token vem primeiro, como no resto do modulo, onde a credencial
+        e sempre conferida antes do conteudo.
         """
         service = make_service(repository=FakeCustomerRepository(reset_code=None))
 
         with pytest.raises(HTTPException) as exc:
             service.reset_password(
                 ResetPasswordRequest(reset_token="token-que-nao-existe", new_password=new, confirm_password=confirm)
+            )
+
+        assert exc.value.detail == "Token invalido ou expirado"
+        assert exc.value.detail != detail
+
+    @pytest.mark.parametrize(
+        ("new", "confirm", "detail"),
+        [
+            ("nova-senha-123", "outra-coisa", "Confirmacao de senha nao confere"),
+            ("curta12", "curta12", "Senha fraca"),
+            ("x" * 73, "x" * 73, "Senha muito longa"),
+        ],
+    )
+    def test_with_a_valid_token_the_password_complaint_is_the_useful_one(
+        self, new, confirm, detail
+    ):
+        """Com o token valendo, as tres queixas de senha voltam a ser o que a
+        pessoa precisa ouvir."""
+        customer = make_customer()
+        code_row = make_code_row()
+        code_row.customer_id = customer.id
+        token = generate_reset_token()
+        code_row.reset_token_hash = hash_reset_token(token)
+        code_row.reset_token_expires_at = utcnow() + timedelta(minutes=10)
+
+        service = make_service(
+            repository=FakeCustomerRepository(customer=customer, reset_code=code_row)
+        )
+
+        with pytest.raises(HTTPException) as exc:
+            service.reset_password(
+                ResetPasswordRequest(reset_token=token, new_password=new, confirm_password=confirm)
             )
 
         assert exc.value.detail == detail

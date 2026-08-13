@@ -128,20 +128,40 @@ class TestValidateSelectedProductIds:
     def test_nothing_selected_is_an_empty_list(self):
         assert ChatService._validate_selected_product_ids([{"id": str(uuid.uuid4())}], []) == []
 
-    def test_a_malformed_id_raises_value_error(self):
-        """ESQUISITO, e registrado como esta.
+    def test_a_malformed_id_is_discarded_like_an_invented_one(self):
+        """Era 500, e o teste registrava isso.
 
-        Se o modelo devolver `selected_product_ids` com algo que nao e UUID, o
-        `uuid.UUID(str(...))` estoura ValueError e a excecao sobe pelo
-        `except Exception: raise` do `chat()` — ou seja, vira 500.
+        A funcao existe para NAO confiar no que o modelo devolve, e confiava
+        num caso: que o texto dele e um uuid bem formado. Id inventado mas bem
+        formado era descartado em silencio; id malformado ("produto-1", "o
+        primeiro") estourava ValueError, subia pelo `except Exception: raise`
+        do `chat()` e virava 500 na cara do cliente.
 
-        A funcao existe justamente para nao confiar no que o modelo devolve, e
-        neste caso ela confia: o id inventado e descartado, o id MALFORMADO
-        derruba a resposta inteira. O caminho coerente seria descartar os dois.
-        Nao e corrigido aqui.
+        Os dois sao a mesma coisa — o modelo devolveu algo que nao aponta para
+        produto nenhum — e agora tem o mesmo destino.
         """
+        real = uuid.uuid4()
+
+        validos = ChatService._validate_selected_product_ids(
+            [{"id": str(real)}], ["nao-e-uuid", str(real)]
+        )
+
+        assert validos == [real]
+
+    def test_a_whole_answer_of_garbage_is_an_empty_list_not_a_crash(self):
+        """O pior caso: o modelo ignora o formato inteiro. A resposta vira
+        texto sem carrossel, que e degradacao — nao erro."""
+        assert ChatService._validate_selected_product_ids(
+            [{"id": str(uuid.uuid4())}], ["produto-1", None, 42, ""]
+        ) == []
+
+    def test_a_malformed_id_from_OUR_search_still_raises(self):
+        """A conversao dos ids da BUSCA continua estrita de proposito: eles
+        saem do nosso banco, e um id malformado vindo dali seria defeito
+        nosso. Engoli-lo esconderia o defeito em vez de tratar entrada
+        hostil."""
         with pytest.raises(ValueError):
-            ChatService._validate_selected_product_ids([{"id": str(uuid.uuid4())}], ["nao-e-uuid"])
+            ChatService._validate_selected_product_ids([{"id": "nao-e-uuid"}], [])
 
 
 # ---------------------------------------------------------------------------

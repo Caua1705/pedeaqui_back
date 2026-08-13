@@ -183,13 +183,16 @@ class ChatService:
         """
         started_at = perf_counter()
 
-        # O modelo devolve JSON, entao id chega como texto. Os dois lados sao
-        # convertidos antes de comparar.
+        # Os ids da BUSCA saem do nosso banco, entao aqui a conversao continua
+        # estrita de proposito: id malformado vindo daqui seria defeito nosso,
+        # e engoli-lo esconderia o defeito em vez de tratar entrada hostil.
         retrieved = {uuid.UUID(str(product["id"])) for product in retrieved_products}
 
         valid: list[uuid.UUID] = []
         for raw_id in selected_product_ids:
-            product_id = uuid.UUID(str(raw_id))
+            product_id = _as_product_id(raw_id)
+            if product_id is None:
+                continue
             if product_id not in retrieved:
                 continue
             if product_id in valid:
@@ -274,6 +277,30 @@ class ChatService:
             return "text"
 
         return llm_response.response_type
+
+
+def _as_product_id(raw_id) -> uuid.UUID | None:
+    """O id escolhido pelo modelo, ou None se nao for um uuid.
+
+    `_validate_selected_product_ids` existe para NAO confiar no modelo — e
+    confiava num caso: que o texto que ele devolve e um uuid bem formado. Id
+    inventado mas bem formado era descartado em silencio; id malformado
+    ("produto-1", "o primeiro") levantava ValueError no meio da requisicao e
+    o cliente recebia 500.
+
+    Os dois sao a mesma coisa — o modelo devolveu algo que nao aponta para
+    produto nenhum — e por isso passam a ter o mesmo destino. O log fica
+    porque a frequencia disso diz se o prompt precisa de conserto: nao e
+    erro do cliente, e o modelo desobedecendo o formato pedido.
+    """
+    try:
+        return uuid.UUID(str(raw_id))
+    except (ValueError, AttributeError, TypeError):
+        logger.warning(
+            "[AI /chat] o modelo devolveu um id que nao e uuid: %r. Descartado.",
+            raw_id,
+        )
+        return None
 
 
 def _get_session_conversation(session_id: str) -> list[SessionMessage]:

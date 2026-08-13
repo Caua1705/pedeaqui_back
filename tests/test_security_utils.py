@@ -20,6 +20,7 @@ import pytest
 from src.core.config import settings
 from src.utils.security import (
     PasswordTooLongError,
+    AuthSecretMissingError,
     TokenExpiredError,
     TokenInvalidError,
     _b64decode,
@@ -309,23 +310,32 @@ class TestAuthSecrets:
         monkeypatch.setattr(settings, "CUSTOMER_AUTH_SECRET", "segredo-de-cliente")
         assert admin_auth_secret() == "segredo-de-admin"
 
-    def test_no_secret_configured_raises_token_invalid(self, monkeypatch):
-        """ESQUISITO, e registrado como esta.
+    def test_a_missing_secret_is_not_the_same_error_as_a_forged_token(self, monkeypatch):
+        """Antes as duas coisas eram `TokenInvalidError`, e sao de naturezas
+        opostas: uma e o cliente mandando lixo (401 correto), a outra e a API
+        rodando mal configurada.
 
-        Segredo AUSENTE na configuracao do servidor levanta
-        `TokenInvalidError` — o mesmo erro de um token falsificado. Sao coisas
-        de naturezas opostas: uma e o cliente mandando lixo (401 correto), a
-        outra e a API subindo mal configurada (que deveria gritar no boot).
-
-        Com os dois no mesmo erro, uma variavel de ambiente esquecida no deploy
-        aparece como "todo mundo com token invalido" em vez de como falha de
-        configuracao.
+        Com os dois no mesmo erro, uma variavel esquecida no deploy aparecia
+        como "todo mundo com token invalido" — sintoma indistinguivel de um
+        ataque, e ninguem vai conferir a configuracao olhando para isso.
         """
         monkeypatch.setattr(settings, "ADMIN_AUTH_SECRET", None)
         monkeypatch.setattr(settings, "CUSTOMER_AUTH_SECRET", None)
         monkeypatch.setattr(settings, "CUSTOMER_JWT_SECRET", None)
-        with pytest.raises(TokenInvalidError):
+
+        with pytest.raises(AuthSecretMissingError):
             _customer_auth_secret()
+
+    def test_the_dependency_does_not_turn_it_into_a_401(self, monkeypatch):
+        """A separacao so vale se quem responde 401 NAO pegar esta excecao.
+
+        `AuthSecretMissingError` nao herda de `TokenInvalidError` exatamente
+        por isso: ela atravessa o `except (TokenExpiredError,
+        TokenInvalidError)` das dependencias de auth e sobe como 500, que e o
+        que ela e — falha do servidor, nao do requisitante.
+        """
+        assert not issubclass(AuthSecretMissingError, TokenInvalidError)
+        assert not issubclass(AuthSecretMissingError, TokenExpiredError)
 
 
 # ---------------------------------------------------------------------------

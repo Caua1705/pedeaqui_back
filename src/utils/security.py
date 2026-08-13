@@ -24,6 +24,25 @@ class TokenInvalidError(Exception):
     pass
 
 
+class AuthSecretMissingError(RuntimeError):
+    """O segredo de assinatura nao esta configurado neste servidor.
+
+    NAO e subclasse de `TokenInvalidError`, e essa e a correcao inteira.
+
+    Antes as duas coisas eram o mesmo erro: segredo ausente na configuracao e
+    token falsificado por um atacante levantavam `TokenInvalidError`. Como
+    todo mundo que pega essa excecao responde 401, um servidor que subisse
+    com `CUSTOMER_AUTH_SECRET` vazia recusava TODO cliente com "token
+    invalido" — e a mensagem apontava para o cliente, que nao tinha nada de
+    errado.
+
+    O sintoma e indistinguivel de um ataque, entao ninguem vai olhar a
+    configuracao: e o defeito mais caro de diagnosticar de toda esta lista.
+    Separada, ela sobe como 500, que e o que ela e — falha do servidor, nao
+    do requisitante.
+    """
+
+
 class PasswordTooLongError(ValueError):
     pass
 
@@ -200,7 +219,10 @@ def decode_signed_token(token: str, purpose: str, secret: str | None = None) -> 
 def _customer_auth_secret() -> str:
     secret = settings.CUSTOMER_AUTH_SECRET or settings.CUSTOMER_JWT_SECRET
     if not secret:
-        raise TokenInvalidError("Customer auth secret is not configured")
+        raise AuthSecretMissingError(
+            "CUSTOMER_AUTH_SECRET nao esta configurada. Nenhum cliente "
+            "consegue autenticar ate isso ser corrigido no servidor."
+        )
     return secret
 
 

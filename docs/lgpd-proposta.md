@@ -9,10 +9,20 @@
 > | 3 — CPF | não há plano de nota fiscal; o CPF sai do cadastro e os gravados são anulados | **feita** (revisão `20260812_0019`) |
 > | 2.6 — convidado | canal fora do produto: e-mail de contato na política | decidido, depende da política |
 >
-> **O item 1.3 continua aberto e não é código:** verificar se o cron do
-> `scripts/cleanup_idempotency_keys.py` existe em produção. Daqui não dá para
-> saber. Se ele não estiver agendado, nada do que a Fase 1 fez nas tabelas de
-> retenção acontece — inclusive a limpeza nova dos códigos de verificação.
+> **O item 1.3 está resolvido no repositório.** A limpeza deixou de depender
+> de cron na máquina: virou o serviço `limpeza` do `docker-compose.yml`, um
+> container próprio que roda `scripts/cleanup_idempotency_keys.py` em laço de
+> 24h (e retenta em 5 min quando falha). Isso é melhor que cron por três
+> razões — sobe junto com o resto, não depende de crontab de servidor que
+> ninguém versiona, e o `entrypoint: []` garante que só a API roda
+> `alembic upgrade head`, sem dois containers migrando o mesmo banco.
+>
+> Como a retenção dos códigos de verificação entrou nesse mesmo script, ela
+> passa a acontecer sozinha assim que o serviço subir.
+>
+> **O que sobra é operacional, não de código:** conferir que o serviço está
+> de pé no servidor. Enquanto ele não subir, nenhuma retenção acontece —
+> nem a antiga (chaves e estimativas), nem a nova.
 >
 > O resto do documento é o levantamento original, mantido como estava.
 
@@ -38,15 +48,16 @@ Verificado no código, não presumido.
 | `customers` | nome, e-mail, telefone, **CPF**, data de nascimento, hash de senha, `marketing_opt_in`, `privacy_accepted_at` | para sempre |
 | `customer_addresses` | rua, número, bairro, complemento, referência, CEP, **latitude/longitude** | até o cliente apagar |
 | `orders` | `customer_name_snapshot`, `customer_phone_snapshot`, endereço da entrega | para sempre |
-| `delivery_estimates` | `customer_id`, latitude/longitude | apagado por cron após o TTL |
-| `idempotency_keys` | corpo inteiro da resposta, **incluindo `tracking_token` em claro** | 24h, apagado por cron |
+| `delivery_estimates` | `customer_id`, latitude/longitude | apagado pelo container `limpeza` após o TTL |
+| `idempotency_keys` | corpo inteiro da resposta, **incluindo `tracking_token` em claro** | 24h, apagado pelo container `limpeza` |
 | `email_verification_codes`, `password_reset_codes` | e-mail | para sempre |
 | `cashback_transactions`, `coupon_redemptions` | `customer_id` | para sempre |
 
 Os dois `cleanup` rodam pelo mesmo script (`scripts/cleanup_idempotency_keys.py`),
-que **depende de um cron existir na máquina**. Não consegui verificar daqui se
-ele está agendado em produção — se não estiver, as duas tabelas crescem para
-sempre e o item 4.6 muda de prioridade.
+que hoje roda pelo serviço `limpeza` do `docker-compose.yml` — um container
+próprio, em laço de 24h. Antes dependia de cron na máquina; a mudança é das
+correções de segurança de 11/08/2026. Se o serviço não estiver de pé no
+servidor, as duas tabelas crescem para sempre.
 
 **Para onde o dado sai:**
 
@@ -151,8 +162,9 @@ schema e produto.
    `UpdateCurrentCustomerRequest`. Fecha o 2.2.
 2. **`GET /customers/me/export`.** Monta e-mail, telefone, endereços, pedidos e
    cashback num JSON só, do próprio token. Fecha o 2.4.
-3. **Verificar o cron dos dois cleanups em produção.** Se não existir, é o item
-   mais barato com maior efeito do documento.
+3. **Conferir que o serviço `limpeza` está de pé em produção.** Não é código:
+   o container já existe no `docker-compose.yml`. Enquanto ele não subir,
+   nenhuma retenção acontece — nem a antiga nem a nova.
 4. **Estender o cleanup a `email_verification_codes` e `password_reset_codes`.**
    Confirmei que nada os apaga: as duas tabelas guardam o e-mail de todo mundo
    que já pediu um código, para sempre, muito depois de o código ter vencido e

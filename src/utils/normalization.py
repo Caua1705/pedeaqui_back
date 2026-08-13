@@ -31,11 +31,29 @@ _NON_SLUG_RE = re.compile(r"[^a-z0-9]+")
 _CPF_PUNCTUATION_RE = re.compile(r"[\d.\-\s]+")
 
 
-def normalize_email(email: str) -> str:
-    return email.strip().lower()
+def normalize_email(email: str | None) -> str:
+    """E-mail pronto para comparar: sem espaco nas pontas, em minusculas.
+
+    Aceita None e devolve "" — nao por gosto, mas porque a alternativa era
+    pior. As duas funcoes deste par tinham a MESMA assinatura declarada
+    (`value: str`) e respostas opostas para o mesmo None:
+    `normalize_digits(None)` devolvia "" e `normalize_email(None)` levantava
+    AttributeError. Quem escrevia um validador olhando para uma delas
+    acertava ou errava conforme a que tivesse aberto primeiro.
+
+    A uniformizacao foi para o lado tolerante porque alargar contrato nao
+    quebra chamador nenhum, enquanto tornar `normalize_digits` estrito
+    viraria 500 em qualquer caminho que hoje passa None e recebe "".
+
+    Quem precisa distinguir "ausente" de "vazio" confere ANTES de chamar —
+    e o que `CustomerAddressBase.normalize_zipcode` faz, para preservar o
+    None em vez de virar "".
+    """
+    return (email or "").strip().lower()
 
 
-def normalize_digits(value: str) -> str:
+def normalize_digits(value: str | None) -> str:
+    """So os digitos. Aceita None e devolve "", como `normalize_email`."""
     return _DIGITS_RE.sub("", value or "")
 
 

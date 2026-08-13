@@ -34,20 +34,24 @@ class TestNormalizeEmail:
     def test_it_leaves_an_already_normalized_address_alone(self):
         assert normalize_email("joao@exemplo.com") == "joao@exemplo.com"
 
-    def test_none_raises_attribute_error(self):
-        """ESQUISITO, e registrado como esta.
+    def test_none_is_empty_string_like_normalize_digits(self):
+        """As duas moram no mesmo modulo, tinham a mesma assinatura declarada
+        (`value: str`) e respostas OPOSTAS para o mesmo None: `digits`
+        devolvia "" e `email` levantava AttributeError.
 
-        `normalize_digits` trata `None` como string vazia (`value or ""`) e
-        `normalize_email` estoura. As duas moram no mesmo modulo, tem a mesma
-        assinatura `(value: str)` e discordam sobre o mesmo caso.
-
-        Nenhuma das duas deveria receber `None` — o type hint diz `str` —, mas
-        uma delas perdoa e a outra nao, e quem chama nao tem como saber qual
-        sem abrir o arquivo. Nao e corrigido aqui: escolher qual das duas muda
-        e decisao separada.
+        Quem escrevia um validador olhando para uma delas acertava ou errava
+        conforme a que tivesse aberto primeiro. Agora as duas perdoam, porque
+        alargar contrato nao quebra chamador nenhum enquanto tornar `digits`
+        estrito viraria 500 em quem hoje passa None e recebe "".
         """
-        with pytest.raises(AttributeError):
-            normalize_email(None)
+        assert normalize_email(None) == ""
+        assert normalize_digits(None) == ""
+
+    def test_an_empty_email_is_not_valid(self):
+        """A tolerancia nao afrouxa a validacao: None vira "", e "" nao passa
+        no `is_valid_email`. Quem passar None por engano recebe False, e nao
+        um e-mail vazio aceito."""
+        assert is_valid_email(None) is False
 
 
 class TestNormalizeDigits:

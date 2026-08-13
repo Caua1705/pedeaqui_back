@@ -63,15 +63,40 @@ class FakeDb:
 
 
 class FakeCustomerRepository:
-    def __init__(self, by_email=None, by_phone=None):
+    """Dublê do repositorio de cliente.
+
+    Os parametros `*_apos_a_corrida` existem para o teste do `except
+    IntegrityError`: a conferencia de cima le o banco ANTES do commit e a
+    releitura de dentro do except le DEPOIS. Um dublê que devolvesse o mesmo
+    nas duas pararia na conferencia de cima, e o teste do except passaria sem
+    nunca entrar nele.
+    """
+
+    def __init__(
+        self,
+        by_email=None,
+        by_phone=None,
+        by_email_apos_a_corrida=None,
+        by_phone_apos_a_corrida=None,
+    ):
         self.by_email = by_email
         self.by_phone = by_phone
+        self.by_email_apos_a_corrida = by_email_apos_a_corrida
+        self.by_phone_apos_a_corrida = by_phone_apos_a_corrida
         self.updated_with = None
+        self.leituras_de_email = 0
+        self.leituras_de_telefone = 0
 
     def get_by_email(self, email):
+        self.leituras_de_email += 1
+        if self.leituras_de_email > 1 and self.by_email_apos_a_corrida is not None:
+            return self.by_email_apos_a_corrida
         return self.by_email
 
     def get_by_phone(self, phone):
+        self.leituras_de_telefone += 1
+        if self.leituras_de_telefone > 1 and self.by_phone_apos_a_corrida is not None:
+            return self.by_phone_apos_a_corrida
         return self.by_phone
 
     def update(self, customer, **values):
@@ -296,16 +321,15 @@ class TestUpdateMe:
     def test_a_race_on_commit_becomes_409_with_the_guilty_field(self):
         """A corrida que as duas conferencias acima nao pegam: alguem gravou o
         mesmo e-mail entre a leitura e o commit. O `except IntegrityError`
-        RELE o banco para dizer qual campo colidiu."""
-        ladrao = make_customer()
-        repository = FakeCustomerRepository()
+        RELE o banco para dizer qual campo colidiu.
+
+        O dublê tem que responder DIFERENTE nas duas leituras — livre na
+        conferencia de cima, ocupado na releitura de dentro do except. Um fake
+        que devolvesse o dono desde o inicio pararia na conferencia de cima e
+        o teste passaria sem nunca entrar no `except`.
+        """
+        repository = FakeCustomerRepository(by_email_apos_a_corrida=make_customer())
         service = make_service(db=FakeDb(falha=integrity_error()), customer_repository=repository)
-
-        # Na releitura de dentro do except, o e-mail agora tem outro dono.
-        def get_by_email_depois_da_corrida(email):
-            return ladrao
-
-        repository.get_by_email = get_by_email_depois_da_corrida
 
         with pytest.raises(HTTPException) as exc:
             service.update_me(make_customer(), make_update_payload())
@@ -313,22 +337,40 @@ class TestUpdateMe:
         assert exc.value.status_code == 409
         assert exc.value.detail == "E-mail ja esta em uso"
 
-    def test_an_integrity_error_with_no_email_conflict_blames_the_phone(self):
-        """ESQUISITO, e registrado como esta.
+    def test_an_integrity_error_from_neither_field_is_not_blamed_on_the_phone(self):
+        """O `else` do tratamento era "entao foi o telefone" — por eliminacao,
+        sem conferir. Qualquer IntegrityError que nao fosse de e-mail (uma FK,
+        um CHECK, uma constraint nova) respondia "Telefone ja esta em uso".
 
-        O `else` do tratamento e "entao foi o telefone" — por eliminacao, sem
-        conferir. Qualquer IntegrityError que nao seja de e-mail (uma FK, um
-        CHECK, uma constraint futura) responde "Telefone ja esta em uso".
-
-        O cliente le uma mensagem sobre um campo que ele talvez nem tenha
-        tocado. Nao e corrigido aqui.
+        O cliente ia corrigir um campo que estava certo, e o erro de verdade
+        nunca aparecia como erro em lugar nenhum. Agora o IntegrityError sobe:
+        vira 500 com a causa no log, que e o que faz o defeito ser visto.
         """
-        service = make_service(db=FakeDb(falha=integrity_error()))
+        # Nenhum dos dois campos tem dono: o conflito veio de outra coisa.
+        service = make_service(
+            db=FakeDb(falha=integrity_error()),
+            customer_repository=FakeCustomerRepository(),
+        )
+
+        with pytest.raises(IntegrityError):
+            service.update_me(make_customer(), make_update_payload())
+
+    def test_a_race_on_the_phone_is_named_after_checking_it(self):
+        """O caminho legitimo continua, e agora por CONFERENCIA e nao por
+        eliminacao: o telefone so leva a culpa quando ele realmente tem outro
+        dono na releitura."""
+        repository = FakeCustomerRepository(by_phone_apos_a_corrida=make_customer())
+        service = make_service(
+            db=FakeDb(falha=integrity_error()), customer_repository=repository
+        )
 
         with pytest.raises(HTTPException) as exc:
             service.update_me(make_customer(), make_update_payload())
 
+        assert exc.value.status_code == 409
         assert exc.value.detail == "Telefone ja esta em uso"
+        # A prova de que passou pelo except: a segunda leitura aconteceu.
+        assert repository.leituras_de_telefone == 2
 
     def test_any_other_failure_rolls_back_and_propagates(self):
         db = FakeDb(falha=RuntimeError("banco caiu"))

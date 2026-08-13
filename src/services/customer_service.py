@@ -117,11 +117,15 @@ class CustomerService:
             self.db.refresh(customer)
         except IntegrityError as exc:
             self.db.rollback()
-            email_owner = self.customer_repository.get_by_email(payload.email)
-            if email_owner and email_owner.id != customer.id:
-                detail = "E-mail ja esta em uso"
-            else:
-                detail = "Telefone ja esta em uso"
+            detail = self._conflict_detail(customer, payload)
+            # Nenhum dos dois campos unicos e o culpado: o IntegrityError veio
+            # de outra coisa (FK, check, uma constraint nova). Antes, este
+            # caminho respondia "Telefone ja esta em uso" POR ELIMINACAO — o
+            # cliente ia trocar um telefone que estava certo, o erro de
+            # verdade nunca aparecia no log como erro, e ninguem descobria a
+            # causa. Deixar subir e o que faz o defeito ser visto.
+            if detail is None:
+                raise
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=detail,
@@ -131,6 +135,28 @@ class CustomerService:
             raise
 
         return self.get_me(customer)
+
+    def _conflict_detail(
+        self,
+        customer: Customer,
+        payload: UpdateCurrentCustomerRequest,
+    ) -> str | None:
+        """Qual campo unico causou o conflito, ou None se nao foi nenhum.
+
+        Confere os DOIS, e nao so o e-mail: `customers` tem `email` e `phone`
+        unicos, e concluir "entao foi o telefone" porque nao foi o e-mail e
+        chutar. Qualquer outra violacao de integridade vestia a camisa do
+        telefone e mandava o cliente corrigir um dado que estava certo.
+        """
+        email_owner = self.customer_repository.get_by_email(payload.email)
+        if email_owner and email_owner.id != customer.id:
+            return "E-mail ja esta em uso"
+
+        phone_owner = self.customer_repository.get_by_phone(payload.phone)
+        if phone_owner and phone_owner.id != customer.id:
+            return "Telefone ja esta em uso"
+
+        return None
 
     def change_password(
         self,

@@ -6,6 +6,9 @@ config.ini
 state/
 logs/
 *.log
+# Fica na raiz do agente, ao lado do .exe, e nao dentro de state/ (paths.py:
+# o lojista e instruido por telefone a abrir a pasta), entao state/ nao pega.
+pedidos-impressos.json
 
 __pycache__/
 *.py[cod]

@@ -79,7 +79,9 @@ class TestIsValidEmail:
         [
             "joao@exemplo.com",
             "  JOAO@Exemplo.COM ",  # normaliza antes de conferir
-            "a@b.c",
+            # Era "a@b.c" e passou a ser recusado: TLD de uma letra nao
+            # existe, e o regex agora exige duas ou mais.
+            "a@b.co",
             "joao.silva+tag@exemplo.com.br",
         ],
     )
@@ -107,28 +109,41 @@ class TestIsValidEmail:
             "a@b.-",  # TLD que e um hifen
             "a@-.-",  # dominio inteiro de hifens
             "a@b.c.",  # termina em ponto
-            ".@b.c",  # parte local e um ponto
+            ".@b.c",  # parte local comeca com ponto
+            "a.@b.co",  # parte local termina com ponto
+            "a..b@c.co",  # ponto duplo na parte local
+            "a@.com",  # rotulo vazio
+            "a@b-.com",  # rotulo terminando em hifen
+            "a@b.1",  # TLD numerico
         ],
     )
-    def test_it_accepts_malformed_domains(self, email):
-        """ESQUISITO, e registrado como esta.
+    def test_malformed_addresses_are_refused(self, email):
+        """O regex antigo exigia so "um arroba e um ponto depois dele", e os
+        cinco primeiros casos desta lista passavam.
 
-        O regex e `^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$`: ele exige um @, um ponto
-        DEPOIS dele com pelo menos um caractere de cada lado, e nenhum espaco —
-        e mais nada. Dominio de hifens, ponto duplo e endereco terminado em
-        ponto passam todos.
-
-        Nao e bug de seguranca: o e-mail so vale depois que o codigo de
-        verificacao chega. Mas quem le `is_valid_email` espera mais rigor do
-        que a funcao entrega, e por isso o caso fica escrito.
+        Nao era bug de seguranca — o e-mail so vale depois que o codigo de
+        verificacao chega. Era pior de outro jeito: endereco invalido aceito
+        no cadastro nao da erro nenhum na hora. Ele vira o codigo que nunca
+        chega, e o cliente fica sem conseguir entrar sem saber por que.
         """
+        assert is_valid_email(email) is False
+
+    @pytest.mark.parametrize(
+        "email",
+        [
+            "joana+ifood@exemplo.com",  # etiqueta: recusar seria recusar cliente
+            "joana.souza@sub.exemplo.com.br",
+            "nome-com-hifen@dominio-com-hifen.com.br",
+            "J.Souza@Exemplo.COM",
+        ],
+    )
+    def test_the_legitimate_shapes_still_pass(self, email):
         assert is_valid_email(email) is True
 
-    def test_it_still_needs_something_before_the_dot(self):
-        """O limite do frouxo: "a@.c" e recusado porque o `[^@\\s]+` antes do
-        ponto exige pelo menos um caractere. Registrado junto com os aceitos
-        acima para a fronteira ficar visivel."""
-        assert is_valid_email("a@.c") is False
+    def test_an_absurdly_long_address_is_refused(self):
+        """Teto do RFC 5321. Sem ele o campo aceita uma string de megabytes,
+        que atravessa validacao, banco e o corpo do e-mail de verificacao."""
+        assert is_valid_email("a@" + "x" * 300 + ".com") is False
 
 
 # ---------------------------------------------------------------------------

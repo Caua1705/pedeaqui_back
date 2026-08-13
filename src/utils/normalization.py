@@ -3,7 +3,29 @@ import unicodedata
 
 
 _DIGITS_RE = re.compile(r"\D+")
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# O e-mail, em duas metades legiveis.
+#
+# O regex antigo era `[^@\s]+@[^@\s]+\.[^@\s]+`: exigia so "um arroba e um
+# ponto depois dele". Passavam "a@b..c", "a@-.-", ".@b.c" e "a@b.c." — e um
+# e-mail invalido aceito no cadastro nao da erro nenhum na hora; ele vira o
+# codigo de verificacao que nunca chega, e o cliente que nao consegue entrar
+# sem saber por que.
+#
+# A parte local aceita ponto ENTRE pedacos, nunca na ponta nem dobrado. Os
+# outros sinais sao os que o RFC 5322 permite sem aspas — `+` inclusive, que
+# muita gente usa para etiquetar (`joana+ifood@`), e recusar seria recusar
+# cliente legitimo.
+_EMAIL_LOCAL = r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*"
+# Cada rotulo do dominio comeca e termina em alfanumerico (o hifen so vive no
+# meio, o que mata "-.-"), e o ultimo pedaco e alfabetico com 2+ letras — o
+# que mata o ponto final de "a@b.c." e o ".." de "a@b..c".
+_EMAIL_DOMAIN = r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}"
+_EMAIL_RE = re.compile(rf"{_EMAIL_LOCAL}@{_EMAIL_DOMAIN}")
+
+# Teto do RFC 5321. Nao e capricho: sem ele o campo aceita uma string de
+# megabytes, que atravessa validacao, banco e o corpo do e-mail de
+# verificacao.
+MAX_EMAIL_LENGTH = 254
 _NON_SLUG_RE = re.compile(r"[^a-z0-9]+")
 # Como CPF se escreve: digitos, ponto, hifen e espaco. Nada mais.
 _CPF_PUNCTUATION_RE = re.compile(r"[\d.\-\s]+")
@@ -67,7 +89,10 @@ def slugify(value: str) -> str:
 
 
 def is_valid_email(email: str) -> bool:
-    return bool(_EMAIL_RE.fullmatch(normalize_email(email)))
+    normalized = normalize_email(email)
+    if len(normalized) > MAX_EMAIL_LENGTH:
+        return False
+    return bool(_EMAIL_RE.fullmatch(normalized))
 
 
 def _check_digit(digits: str) -> int:

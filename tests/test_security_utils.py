@@ -19,8 +19,8 @@ import pytest
 
 from src.core.config import settings
 from src.utils.security import (
-    PasswordTooLongError,
     AuthSecretMissingError,
+    PasswordTooLongError,
     TokenExpiredError,
     TokenInvalidError,
     _b64decode,
@@ -30,15 +30,12 @@ from src.utils.security import (
     create_signed_token,
     decode_signed_token,
     generate_6_digit_code,
-    generate_numeric_code,
     generate_reset_token,
     generate_tracking_token,
-    hash_code,
     hash_password,
     hash_reset_token,
     hash_tracking_token,
     hash_verification_code,
-    verify_code,
     verify_password,
     verify_reset_token,
     verify_tracking_token,
@@ -146,37 +143,18 @@ class TestHashPasswordLength:
 
 
 # ---------------------------------------------------------------------------
-# Os wrappers: dois nomes publicos para a mesma funcao
+# O codigo de verificacao: gerar, hashear, conferir
 # ---------------------------------------------------------------------------
 
 
-class TestCodeWrappers:
-    def test_hash_code_is_hash_verification_code(self):
-        assert hash_code("123456") == hash_verification_code("123456")
+class TestVerificationCode:
+    def test_the_round_trip_works(self):
+        assert verify_verification_code("123456", hash_verification_code("123456")) is True
+        assert verify_verification_code("654321", hash_verification_code("123456")) is False
 
-    def test_verify_code_is_verify_verification_code(self):
-        code_hash = hash_verification_code("123456")
-        assert verify_code("123456", code_hash) == verify_verification_code("123456", code_hash)
+    def test_a_generated_code_has_six_digits(self):
+        code = generate_6_digit_code()
 
-    def test_the_round_trip_works_through_either_name(self):
-        assert verify_code("123456", hash_code("123456")) is True
-        assert verify_code("654321", hash_code("123456")) is False
-
-    def test_generate_numeric_code_is_generate_6_digit_code(self):
-        """ESQUISITO, e registrado como esta.
-
-        Sao TRES pares de nomes publicos para a mesma coisa neste modulo:
-        `hash_code`/`hash_verification_code`, `verify_code`/
-        `verify_verification_code` e `generate_numeric_code`/
-        `generate_6_digit_code`. O segundo de cada par nao acrescenta nada — e
-        uma chamada direta ao primeiro.
-
-        Quem le uma chamada a `hash_code` nao tem como saber que ela e a mesma
-        do `hash_verification_code` sem abrir o arquivo, e o autocomplete
-        oferece as duas. Fica registrado sem correcao: apagar nome publico e
-        decisao separada, e precisa varrer quem chama.
-        """
-        code = generate_numeric_code()
         assert len(code) == 6
         assert code.isdigit()
 

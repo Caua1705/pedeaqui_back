@@ -113,10 +113,6 @@ def generate_6_digit_code() -> str:
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
-def generate_numeric_code() -> str:
-    return generate_6_digit_code()
-
-
 def hash_verification_code(code: str) -> str:
     return _hmac_hex(code, settings.EMAIL_CODE_SECRET)
 
@@ -166,14 +162,6 @@ def hash_reset_token(token: str) -> str:
 
 def verify_reset_token(token: str, token_hash: str) -> bool:
     return hmac.compare_digest(hash_reset_token(token), token_hash)
-
-
-def hash_code(code: str) -> str:
-    return hash_verification_code(code)
-
-
-def verify_code(code: str, code_hash: str) -> bool:
-    return verify_verification_code(code, code_hash)
 
 
 def create_signed_token(

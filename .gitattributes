@@ -9,3 +9,9 @@ docker-compose.yml text eol=lf
 # Arquivos de lote do Windows precisam de CRLF: com LF, o interpretador de
 # comandos erra em `goto`/labels e a instalacao falha na maquina do lojista.
 *.bat text eol=crlf
+
+# O openapi.json e gerado por script e conferido byte a byte pelo CI
+# (`scripts/export_openapi.py --check`). Sem esta linha, o checkout no
+# Windows o devolveria com CRLF, o script o compararia com a saida em LF, e
+# o check acusaria diferenca em TODA linha sem nenhuma mudanca de contrato.
+openapi.json text eol=lf

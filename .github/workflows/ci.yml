@@ -54,6 +54,17 @@ jobs:
       # em segundos. A marcada `db` é o job abaixo.
       - run: pytest -q -m "not db"
 
+      # O painel gera o cliente dele a partir do openapi.json COMMITADO, e
+      # nao mais da API em producao — o documento nao e servido lá, de
+      # propósito. Isso troca uma dependência de rede por uma de disciplina,
+      # e é este passo que cobra a disciplina: mexeu em rota, schema ou
+      # response_model sem regravar o arquivo, o CI para aqui.
+      #
+      # Roda depois dos testes porque a mensagem de um teste quebrado
+      # explica melhor o que aconteceu do que um diff de 300 KB.
+      - name: Conferir se o openapi.json acompanha o codigo
+        run: python scripts/export_openapi.py --check
+
   banco:
     name: Testes contra o Postgres
     runs-on: ubuntu-latest

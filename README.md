@@ -119,5 +119,6 @@ limites de corpo, TTLs).
 | [docs/autenticacao-e-escopo.md](docs/autenticacao-e-escopo.md) | tokens e escopo por restaurante/filial |
 | [docs/impressao.md](docs/impressao.md) | setores, comandas, print-agent |
 | [docs/operacao.md](docs/operacao.md) | deploy, migrações, logs, diagnóstico |
+| [docs/onboarding-de-restaurante.md](docs/onboarding-de-restaurante.md) | **pôr um restaurante novo no ar** — a ordem real, o que só dá para fazer no banco, e os cinco passos que falham em silêncio |
 
 Armadilhas de quem escreve código: `.claude/skills/rapidex-backend/SKILL.md`.

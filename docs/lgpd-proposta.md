@@ -5,7 +5,7 @@
 > | Fase | Decisão | Estado |
 > |---|---|---|
 > | 1 | executar | **feita**, menos o item 3 (ver abaixo) |
-> | 2 — exclusão de conta | anonimizar **liberando** e-mail e telefone para recadastro; queimar para sempre é incômodo real e não é exigência da lei | **registrada, não implementada** — com a base atual não é urgente |
+> | 2 — exclusão de conta | anonimizar **liberando** e-mail e telefone para recadastro; queimar para sempre é incômodo real e não é exigência da lei | **desenhada, não implementada** — ver [`lgpd-fase2-exclusao-de-conta.md`](lgpd-fase2-exclusao-de-conta.md) |
 > | 3 — CPF | não há plano de nota fiscal; o CPF sai do cadastro e os gravados são anulados | **feita** (revisão `20260812_0019`) |
 > | 2.6 — convidado | canal fora do produto: e-mail de contato na política | decidido, depende da política |
 >
@@ -175,6 +175,14 @@ schema e produto.
 Nada disso muda contrato existente nem schema. Custo: baixo. Risco: baixo.
 
 ### Fase 2 — exclusão de conta (precisa de decisão antes)
+
+> **O desenho detalhado está em
+> [`lgpd-fase2-exclusao-de-conta.md`](lgpd-fase2-exclusao-de-conta.md).**
+> Ele corrige três premissas desta seção que não se sustentaram quando os
+> modelos vizinhos foram abertos: existe FK apontando para
+> `customer_addresses`, o DELETE do cliente é **impossível** (não uma
+> escolha — `coupon_redemptions.customer_id` é `NOT NULL`), e um DELETE
+> levaria o extrato de cashback junto por `CASCADE`.
 
 Proponho **anonimização, não DELETE**, e vale discutir:
 

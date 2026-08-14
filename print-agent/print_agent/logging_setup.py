@@ -77,9 +77,19 @@ def harden_console() -> None:
     Um `UnicodeEncodeError` ali nao vira mensagem de erro legivel: vira
     traceback de Python numa janela preta, que e exatamente o que o
     tratamento de config existe para evitar.
+
+    Desde o build `--noconsole` ela tambem cobre o caso oposto: **nao existe
+    console nenhum**, e `sys.stdout` e `sys.stderr` sao `None`. Ai o primeiro
+    `print` levanta `AttributeError: 'NoneType' object has no attribute
+    'write'` e o programa morre antes de existir log, sem janela e sem nada
+    na tela — o pior desfecho possivel, porque nao sobra rastro de que ele
+    chegou a abrir.
     """
     for name in ("stdout", "stderr"):
         stream = getattr(sys, name, None)
+        if stream is None:
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
+            continue
         try:
             # So `errors`: a codepage do console fica como esta, senao o que
             # hoje aparece certo passaria a aparecer errado.

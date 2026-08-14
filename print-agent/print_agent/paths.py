@@ -32,8 +32,13 @@ EMBUTIDO no executavel (somente leitura), nunca para gravar nem para achar
 configuracao do usuario.
 """
 
+import logging
+import os
 import sys
 from pathlib import Path
+
+
+logger = logging.getLogger(__name__)
 
 
 def is_frozen() -> bool:
@@ -74,3 +79,25 @@ def default_log_path() -> Path:
 
 def default_state_path() -> Path:
     return base_dir() / STATE_NAME
+
+
+def open_folder(folder: Path) -> None:
+    """Abre a pasta no Explorer do Windows.
+
+    E o que os dois primeiros itens do menu da bandeja fazem, e e a razao de
+    eles existirem: sem console, "me manda o rapidex-impressao.log" e "abre o
+    config.ini no Bloco de Notas" viravam instrucoes de digitar um caminho
+    com `%LOCALAPPDATA%` no meio, por telefone.
+
+    Abre a PASTA e nao o arquivo: o Explorer sempre sabe abrir uma pasta,
+    enquanto `.log` costuma nao ter programa associado nessas maquinas — e ai
+    o Windows responde com o dialogo de "como voce quer abrir este arquivo?",
+    que e pior que nao ter feito nada.
+    """
+    try:
+        os.startfile(folder)
+    except Exception as exc:
+        # Pasta apagada a mao, unidade de rede fora do ar, ou nao-Windows.
+        # Nunca pode derrubar o agente: isto e conveniencia de menu, e a
+        # impressao nao depende disso.
+        logger.warning("nao foi possivel abrir a pasta %s: %s", folder, exc)

@@ -13,11 +13,27 @@ rem  RapidexImpressao.exe". O --onedir nao se auto-extrai e reduz muito esse
 rem  falso positivo. O custo e a pasta _internal ao lado do .exe, que o
 rem  instalar.bat copia junto -- ninguem digita esse caminho a mao.
 rem
-rem  --console (padrao, nao passado explicitamente): a janela preta CONTINUA
-rem  visivel de proposito. No dia da instalacao alguem precisa ver na tela
-rem  que conectou e que a comanda saiu. Janela escondida vira depuracao as
-rem  cegas. Se um dia virar icone de bandeja, e --noconsole + uma bandeja de
-rem  verdade, nao so o flag.
+rem  --noconsole: sem janela preta. O programa vive como icone na bandeja,
+rem  ao lado do relogio (print_agent/tray.py). A janela foi embora porque
+rem  ficou aberta no balcao de um restaurante de verdade: parece terminal de
+rem  desenvolvedor, ocupa a barra de tarefas e qualquer um a fecha sem
+rem  querer -- e fechar a janela era parar de imprimir.
+rem
+rem  O que a janela fazia e que precisou de substituto:
+rem    - "conectou?"        -> a cor do icone e o balao da primeira conexao
+rem    - "a comanda saiu?"  -> o som de pedido novo
+rem    - "por que parou?"   -> caixa de aviso do Windows (print_agent/alerts.py)
+rem  Sem esses tres, --noconsole seria so esconder o diagnostico.
+rem
+rem  ATENCAO ANTIVIRUS: executavel sem janela lembra malware, e o Defender ja
+rem  apagou o --onefile deste projeto uma vez. Depois de gerar, COPIE a pasta
+rem  dist\pendrive para outro lugar e confira se o .exe sobreviveu -- e o
+rem  teste que reproduz o que acontece no pendrive do lojista.
+rem
+rem  --hidden-import pystray._win32: o pystray escolhe o backend em tempo de
+rem  execucao, entao o PyInstaller nao ve esse import vasculhando o codigo. Sem
+rem  a linha, o .exe gera sem erro nenhum e morre ao abrir na maquina do
+rem  lojista com "no backend available".
 rem ---------------------------------------------------------------------
 
 cd /d "%~dp0"
@@ -27,7 +43,9 @@ if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 
 echo Gerando o executavel...
-py -m PyInstaller --onedir --name RapidexImpressao print_agent/__main__.py
+py -m PyInstaller --onedir --noconsole --name RapidexImpressao ^
+   --hidden-import pystray._win32 ^
+   print_agent/__main__.py
 if errorlevel 1 (
     echo.
     echo ERRO: a geracao falhou. PyInstaller esta instalado?

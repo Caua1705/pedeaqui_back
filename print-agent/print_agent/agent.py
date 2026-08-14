@@ -108,12 +108,49 @@ class Stats:
     commands: int = 0
 
 
+class AgentListener:
+    """O que o agente conta para fora do laco. Hoje: o icone da bandeja.
+
+    Todos os metodos nao fazem nada de proposito. Esta classe E o
+    comportamento padrao — sem bandeja (teste, `--no-tray`, maquina que nao
+    e Windows) o agente roda igual e nao precisa de nenhum `if listener`
+    espalhado pelo laco.
+
+    O agente NAO importa `tray.py`, e isso e regra e nao acaso: `pystray` so
+    existe no Windows com area de trabalho, e o laco de impressao precisa
+    continuar importavel e testavel em qualquer maquina.
+    """
+
+    def on_connected(self) -> None:
+        """O stream abriu. A partir daqui pedido aceito vira comanda."""
+
+    def on_disconnected(self, reason: str) -> None:
+        """O stream caiu. O agente vai tentar de novo sozinho."""
+
+    def on_fatal(self, reason: str) -> None:
+        """O agente parou e nao volta sozinho: alguem tem que agir."""
+
+    def on_order_printed(self, label: str) -> None:
+        """Uma comanda inteira saiu na bobina."""
+
+    def on_printer_problem(self, printer_name: str, detail: str) -> None:
+        """Uma via NAO saiu. `printer_name` vazio = nem ha impressora escolhida."""
+
+
 class PrintAgent:
-    def __init__(self, config: Config, client: ApiClient, printer: Printer, state: PrintedOrders):
+    def __init__(
+        self,
+        config: Config,
+        client: ApiClient,
+        printer: Printer,
+        state: PrintedOrders,
+        listener: AgentListener | None = None,
+    ):
         self.config = config
         self.client = client
         self.printer = printer
         self.state = state
+        self.listener = listener or AgentListener()
         self.stats = Stats()
         self.last_event_id: str | None = None
         self._running = True
@@ -152,17 +189,21 @@ class PrintAgent:
                 # reclamar.
                 logger.error("PARANDO: %s", exc)
                 self._running = False
+                self.listener.on_fatal(str(exc))
                 return False
             except AuthError as exc:
                 # Token de 12h vencido com email/password ao lado: o proximo
                 # ciclo refaz o login sozinho. E o caminho normal de um
                 # agente que roda por semanas.
                 logger.info("credencial expirada (%s); refazendo o login", exc)
+                self.listener.on_disconnected("renovando a credencial")
                 delay = self.config.reconnect_min_seconds
             except ApiError as exc:
                 logger.warning("conexao com o servidor caiu: %s", exc)
+                self.listener.on_disconnected(str(exc))
             except Exception:  # pragma: no cover - rede e Windows sao criativos
                 logger.exception("erro inesperado na conexao com o servidor")
+                self.listener.on_disconnected("erro inesperado")
 
             if not self._running:
                 break
@@ -197,6 +238,11 @@ class PrintAgent:
             logger.info("conectando ao servidor")
         lines = self.client.open_stream(self.last_event_id)
         logger.info("conectado. Aguardando pedidos.")
+        # O fechamento normal do servidor (a cada 15 minutos) NAO avisa
+        # desconexao: ele volta em menos de um segundo, e um icone piscando de
+        # verde para amarelo quatro vezes por hora ensinaria o lojista a
+        # ignorar a cor justamente quando ela ficasse amarela de verdade.
+        self.listener.on_connected()
         self._report_printers()
 
         for event in parse_events(self._with_heartbeat(lines)):
@@ -323,6 +369,12 @@ class PrintAgent:
                 "config.ini dizem para onde mandar o setor '%s'.",
                 sector,
             )
+            self.listener.on_printer_problem(
+                "",
+                f"O teste de impressao do setor '{sector}' nao saiu: nao ha "
+                f"impressora escolhida para ele, nem no painel nem no "
+                f"config.ini.",
+            )
             return
 
         # Marcado ANTES de imprimir, ao contrario do pedido. A assimetria e
@@ -351,6 +403,11 @@ class PrintAgent:
                 "e cabo.",
                 printer_name,
                 exc,
+            )
+            self.listener.on_printer_problem(
+                printer_name,
+                f"O teste de impressao nao saiu em '{printer_name}': {exc}\n\n"
+                f"Confira papel, energia e cabo.",
             )
 
     def _printer_for(self, chosen_in_panel: str | None, sector_name: str) -> str | None:
@@ -401,6 +458,7 @@ class PrintAgent:
             self.state.mark(order_id)
             self.stats.printed_orders += 1
             logger.info("pedido %s impresso por completo (%d vias)", label, printed)
+            self.listener.on_order_printed(label)
         else:
             # Sem `mark`: o pedido continua elegivel. Se o servidor repetir o
             # evento (o que acontece na reconexao), ele tenta de novo.
@@ -432,6 +490,12 @@ class PrintAgent:
                 label,
             )
             self.stats.failed_jobs += 1
+            self.listener.on_printer_problem(
+                "",
+                f"O setor '{sector}' nao tem impressora escolhida, nem no "
+                f"painel nem no config.ini. A comanda do pedido {label} NAO "
+                f"foi impressa.",
+            )
             return False
 
         payload = build_payload(
@@ -478,6 +542,14 @@ class PrintAgent:
             self.config.print_attempts,
         )
         self.stats.failed_jobs += 1
+        self.listener.on_printer_problem(
+            printer_name,
+            f"A impressora '{printer_name}' nao aceitou a via '{sector}' do "
+            f"pedido {label}.\n\n"
+            f"Confira papel, energia e cabo. Se a impressora foi trocada ou "
+            f"renomeada, o nome dela precisa ser corrigido no painel ou no "
+            f"config.ini.",
+        )
         return False
 
     def _sleep(self, seconds: float) -> bool:

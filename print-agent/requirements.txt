@@ -11,3 +11,13 @@ requests>=2.31
 # em Linux/macOS o pip pula esta linha, e o agente ainda roda com --dry-run
 # para quem esta desenvolvendo.
 pywin32>=306; sys_platform == "win32"
+
+# Icone na bandeja, ao lado do relogio. Substituiu a janela preta do console
+# (ver build.bat). O Pillow vem junto porque o pystray recebe a imagem do
+# icone como objeto PIL — nao ha como usar um sem o outro.
+#
+# So no Windows pelo mesmo motivo do pywin32: no Linux o pystray exige um
+# servidor grafico, e quem desenvolve fora do Windows roda com --no-tray. O
+# `__main__` cai sozinho nesse modo se o import falhar.
+pystray>=0.19; sys_platform == "win32"
+pillow>=10.0; sys_platform == "win32"

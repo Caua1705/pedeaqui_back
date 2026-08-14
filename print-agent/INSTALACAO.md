@@ -134,38 +134,48 @@ Dê dois cliques em:
 %LOCALAPPDATA%\Rapidex Impressao\RapidexImpressao.exe
 ```
 
-Vai abrir uma janela preta com texto. **Essa janela tem que ficar aberta** —
-é ela que imprime as comandas. Pode minimizar; não pode fechar.
+**O programa não abre janela nenhuma.** Ele fica como um **círculo colorido
+na bandeja**, ao lado do relógio, no canto inferior direito da tela.
 
 > Nessa pasta existe uma subpasta chamada `_internal`. Ela é parte do
 > programa: se alguém apagar, ele para de abrir. Não mexa nela.
 
-Quando estiver tudo certo, você vai ver na janela algo como:
+### Achar o ícone (faça isso uma vez)
 
-```
-Rapidex Impressao 1.0.0
-Servidor: https://api.pederapidex.com
-Demais setores imprimem em 'EPSON TM-T20' (impressora padrao)
-conectando ao servidor
-conectado. Aguardando pedidos.
-```
+O Windows **esconde ícones novos** por padrão. Se não estiver à vista:
 
-A linha **`conectado. Aguardando pedidos.`** é a que confirma que funcionou.
+1. Clique na **setinha `^`** logo à esquerda do relógio.
+2. O círculo do Rapidex está lá dentro.
+3. **Arraste o círculo para fora**, para junto do relógio. Ele fica fixo ali
+   para sempre e todo mundo passa a ver o estado sem clicar em nada.
+
+### O que confirma que funcionou
+
+Alguns segundos depois de abrir, aparece um **balão** dizendo
+*"Conectado. As comandas vão sair sozinhas."*, e o círculo fica **verde**.
+
+A cor é o estado, e ela é visível do outro lado do balcão:
+
+| Cor | O que significa | O que fazer |
+|---|---|---|
+| 🟢 **Verde** | Conectado. Pedido aceito vira comanda. | Nada. |
+| 🟡 **Amarelo** | Sem conexão; tentando sozinho. | Se ficar amarelo mais de 2 minutos, confira a internet. |
+| 🔴 **Vermelho** | Parado. Não volta sozinho. | Uma caixa de aviso já explicou o motivo. Item 7. |
+
+Passar o mouse por cima do ícone mostra o mesmo em texto.
 
 ---
 
 ## 5. Testar antes de ir embora
 
-Faça um pedido de teste e aceite no painel. Na janela do programa deve
-aparecer:
+Faça um pedido de teste e aceite no painel.
 
-```
-pedido #5471 recebido, buscando as vias para imprimir
-pedido #5471: via 'Via do cliente' impressa em 'EPSON TM-T20'
-pedido #5471 impresso por completo (2 vias)
-```
+- O papel sai na impressora.
+- O computador **apita três vezes** quando a comanda termina de sair.
 
-E o papel sai na impressora.
+Esses dois juntos são a prova de que a instalação está pronta. (Se o apito
+incomodar, dá para desligar: `sound = nao` na seção `[agent]` do
+`config.ini`.)
 
 ---
 
@@ -173,8 +183,8 @@ E o papel sai na impressora.
 
 O programa abre sozinho. Não precisa fazer nada.
 
-Para conferir: reinicie o computador e veja se a janela preta aparece
-sozinha depois que a área de trabalho carregar. Pode demorar alguns segundos.
+Para conferir: reinicie o computador, espere a área de trabalho carregar e
+veja se o círculo verde voltou para a bandeja. Pode demorar alguns segundos.
 
 ---
 
@@ -182,32 +192,39 @@ sozinha depois que a área de trabalho carregar. Pode demorar alguns segundos.
 
 Faça nesta ordem. Pare quando resolver.
 
-1. **A janela preta está aberta?** Se não, dê dois cliques no
-   `RapidexImpressao.exe` (item 4).
+1. **O círculo está na bandeja?** Clique na setinha `^` ao lado do relógio
+   para conferir. Se não estiver em lugar nenhum, o programa foi fechado: dê
+   dois cliques no `RapidexImpressao.exe` (item 4).
 
-2. **A janela mostra `conectado. Aguardando pedidos.`?**
-   - Se mostra `PARANDO: ...credencial...` → o e-mail ou a senha do
-     `config.ini` estão errados. Corrija (item 3) e abra de novo.
-   - Se mostra `reconectando em N segundos` repetidamente → a internet está
-     fora, ou o servidor está fora. Teste abrir um site qualquer no
-     navegador.
+2. **De que cor está o círculo?**
+   - 🔴 **Vermelho** → o e-mail ou a senha do `config.ini` estão errados.
+     Corrija (item 3) e abra o programa de novo.
+   - 🟡 **Amarelo** que não fica verde → a internet está fora, ou o servidor
+     está fora. Teste abrir um site qualquer no navegador.
+   - 🟢 **Verde** e mesmo assim não imprime → siga para o item 3.
 
 3. **A impressora está ligada, com papel e sem luz vermelha piscando?**
-   Se o programa mostrar `a via 'X' NAO foi impressa`, é isso.
+   Quando uma via não sai, o programa mostra uma **caixa de aviso** dizendo
+   qual impressora falhou. Ela aparece uma vez por impressora: se você
+   fechou sem ler, o motivo está no registro (mais abaixo).
 
 4. **O nome da impressora no `config.ini` está exatamente igual ao do
    Windows?** Um espaço a mais já quebra. Confira pelo item 3.
+
+> **Para fechar o programa de propósito**, clique com o botão **direito** no
+> círculo → **Sair**. Não existe outra forma, e não deveria: fechar é parar
+> de imprimir.
 
 5. **Ainda não resolveu:** mande o arquivo de registro para quem cuida do
    sistema.
 
 ### Como mandar o registro (log)
 
-1. Tecla Windows + R, digite e dê Enter:
+1. Clique com o botão **direito** no círculo da bandeja → **Abrir a pasta do
+   registro**. A pasta certa abre sozinha.
 
-   ```
-   %LOCALAPPDATA%\Rapidex Impressao
-   ```
+   (Se o programa nem estiver aberto: tecla Windows + R, digite
+   `%LOCALAPPDATA%\Rapidex Impressao` e dê Enter.)
 
 2. Ache o arquivo **`rapidex-impressao.log`**.
 3. Mande esse arquivo por WhatsApp ou e-mail.

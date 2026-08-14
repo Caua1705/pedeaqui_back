@@ -10,8 +10,15 @@ o Windows apaga quando o processo termina — config lido de la nunca seria o
 que o instalador copiou, e log e estado gravados la evaporariam. Ver o
 docstring de `paths.py`.
 
-A saida do console e em portugues e proposital: no dia da instalacao alguem
-esta olhando esta janela para confirmar que conectou e que a comanda saiu.
+A saida do console continua em portugues e continua saindo — mas **ninguem
+mais a ve**. O executavel e gerado com `--noconsole` (ver build.bat) e o
+programa vive como icone na bandeja. O `print` sobrevive para quem roda
+`python -m print_agent` a mao, e nada mais.
+
+A consequencia dessa mudanca esta em `alerts.py`: mensagem que EXIGE acao do
+lojista — configuracao incompleta, credencial recusada, impressora que nao
+aceitou a via — vira caixa do Windows, senao ela desaparece e o programa fica
+vivo sem imprimir, em silencio.
 """
 
 import argparse
@@ -20,10 +27,10 @@ import signal
 import sys
 from pathlib import Path
 
-from print_agent import __version__, paths
+from print_agent import __version__, alerts, paths
 from print_agent.agent import PrintAgent
 from print_agent.api_client import ApiClient
-from print_agent.config import ConfigError, load_config, write_template
+from print_agent.config import Config, ConfigError, load_config, write_template
 from print_agent.escpos import expected_codepage
 from print_agent.logging_setup import harden_console, setup_logging
 from print_agent.printers import LoggingPrinter, WindowsRawPrinter
@@ -52,6 +59,11 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help="nao imprime: registra no log o que seria enviado a cada impressora",
+    )
+    parser.add_argument(
+        "--no-tray",
+        action="store_true",
+        help="roda preso ao terminal, sem icone na bandeja (para depurar)",
     )
     parser.add_argument("--version", action="version", version=f"RapidexImpressao {__version__}")
     return parser.parse_args(argv)
@@ -134,11 +146,10 @@ def main(argv=None) -> int:
 
     _install_signal_handlers(agent, logger)
 
-    finished_cleanly = True
-    try:
-        finished_cleanly = agent.run()
-    except KeyboardInterrupt:
-        logger.info("Encerrado pelo teclado (Ctrl+C).")
+    if args.no_tray:
+        finished_cleanly = _run_headless(agent, logger)
+    else:
+        finished_cleanly = _run_with_tray(agent, config, logger)
 
     logger.info(
         "Encerrando. Resumo: %d pedidos impressos, %d vias, %d falhas, "
@@ -151,6 +162,9 @@ def main(argv=None) -> int:
     )
 
     if not finished_cleanly:
+        # Sem `alerts`: com bandeja, o `Tray.on_fatal` ja mostrou a caixa —
+        # e mostrou o motivo EXATO, que aqui nao esta mais a mao. Repetir
+        # daria duas caixas para o mesmo problema.
         _fail(
             "O programa parou porque o servidor recusou a credencial.",
             "Confira email, password (ou token) no config.ini.",
@@ -160,11 +174,59 @@ def main(argv=None) -> int:
     return EXIT_OK
 
 
+def _run_headless(agent: PrintAgent, logger: logging.Logger) -> bool:
+    """O laco preso ao terminal, sem bandeja. `--no-tray`.
+
+    E como o programa rodava antes do icone, e continua existindo para tres
+    situacoes: depurar no terminal vendo o log ao vivo, rodar numa maquina
+    que nao e Windows, e o teste automatizado.
+    """
+    try:
+        return agent.run()
+    except KeyboardInterrupt:
+        logger.info("Encerrado pelo teclado (Ctrl+C).")
+        return True
+
+
+def _run_with_tray(agent: PrintAgent, config: Config, logger: logging.Logger) -> bool:
+    """O laco numa thread, com o icone na bandeja segurando a principal.
+
+    Cai para o modo sem bandeja quando o `pystray` nao esta disponivel — o
+    que acontece fora do Windows e numa sessao sem area de trabalho. Um
+    agente que imprime sem icone e muito melhor que um agente que nao sobe:
+    quem esta sem icone perde a cor e o menu, quem nao sobe perde a cozinha.
+    """
+    try:
+        from print_agent.tray import Tray
+    except Exception as exc:
+        logger.warning(
+            "sem icone na bandeja (%s); rodando preso ao terminal. As "
+            "mensagens continuam em %s",
+            exc,
+            config.log_file,
+        )
+        return _run_headless(agent, logger)
+
+    tray = Tray(config=config, agent=agent)
+    # O icone precisa do agente (para o "Sair") e o agente precisa do icone
+    # (para mudar de cor). A ligacao e feita aqui, fora dos dois, para que
+    # nenhum dos dois modulos importe o outro: `agent.py` tem que continuar
+    # importavel numa maquina sem `pystray`.
+    agent.listener = tray
+
+    tray.run(agent.run)
+    return not tray.fatal
+
+
 def _handle_missing_config(config_path) -> int:
     """Primeira execucao: cria o modelo e explica, em vez de estourar.
 
     Sem isto, a primeira coisa que o lojista ve e um traceback de Python numa
     janela preta — e a instalacao morre ali.
+
+    Sem console, a caixa e a UNICA coisa que aparece. Ela tambem abre a pasta
+    do config no Explorer: um caminho com `%LOCALAPPDATA%` no meio, ditado por
+    telefone, nao chega inteiro do outro lado.
     """
     try:
         write_template(config_path)
@@ -176,21 +238,23 @@ def _handle_missing_config(config_path) -> int:
         )
         return EXIT_CONFIG
 
-    print("Esta e a primeira vez que o programa roda nesta maquina.")
-    print()
-    print("Criei o arquivo de configuracao abaixo, com os campos em branco:")
-    print()
-    print(f"    {config_path}")
-    print()
-    print("Abra esse arquivo no Bloco de Notas e preencha:")
-    print()
-    print("  email    - e-mail do usuario do painel criado para esta impressora")
-    print("  password - a senha desse usuario")
-    print("  printer  - o nome EXATO da impressora, como aparece no Windows em")
-    print("             Configuracoes > Bluetooth e dispositivos > Impressoras")
-    print()
-    print("Depois salve o arquivo, feche esta janela e abra o programa de novo.")
-    print()
+    _tell(
+        "Esta e a primeira vez que o programa roda nesta maquina.",
+        "",
+        "Criei o arquivo de configuracao abaixo, com os campos em branco:",
+        "",
+        f"    {config_path}",
+        "",
+        "Abra esse arquivo no Bloco de Notas e preencha:",
+        "",
+        "  email    - e-mail do usuario do painel criado para esta impressora",
+        "  password - a senha desse usuario",
+        "  printer  - o nome EXATO da impressora, como aparece no Windows em",
+        "             Configuracoes > Bluetooth e dispositivos > Impressoras",
+        "",
+        "Depois salve o arquivo e abra o programa de novo.",
+    )
+    paths.open_folder(config_path.parent)
     _pause()
     return EXIT_CONFIG
 
@@ -232,13 +296,33 @@ def _warn_on_codepage_mismatch(logger, config) -> None:
 
 
 def _fail(*lines: str) -> None:
-    """Mensagem de erro legivel, na tela, sem traceback."""
+    """Erro que impede o programa de subir: no console E numa caixa.
+
+    Nos dois de proposito. O console serve a quem esta rodando a mao com
+    `python -m print_agent`; a caixa e a unica coisa que existe no
+    executavel `--noconsole`, que e como o lojista roda.
+    """
     print(file=sys.stderr)
     print("=" * 68, file=sys.stderr)
     for line in lines:
         print(line, file=sys.stderr)
     print("=" * 68, file=sys.stderr)
     print(file=sys.stderr)
+    alerts.show_error("\n".join(lines))
+    _pause()
+
+
+def _tell(*lines: str) -> None:
+    """Instrucao que o lojista precisa seguir: no console E numa caixa.
+
+    Separada do `_fail` pelo icone da caixa: erro tem X vermelho, instrucao
+    tem so o texto. A pessoa que ve a tela na instalacao precisa distinguir
+    "o programa quebrou" de "falta preencher o arquivo".
+    """
+    for line in lines:
+        print(line)
+    print()
+    alerts.show_info("\n".join(lines))
     _pause()
 
 

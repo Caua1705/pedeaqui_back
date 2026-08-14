@@ -109,6 +109,21 @@ print_retry_seconds = 5
 ; `sim` registra no log o que seria impresso, sem mandar para a impressora.
 dry_run = nao
 
+; Apito quando uma comanda TERMINA de sair na bobina.
+;
+; Quem toca e este programa, e nao o painel: o alerta do painel depende de
+; alguem ter deixado a aba aberta, e o navegador suspende aba em segundo
+; plano. O agente esta sempre rodando e e ele quem imprime.
+;
+; Ponha `nao` quando o computador fica na mesma sala da impressora — ai o
+; barulho da propria impressora ja avisa e o apito so incomoda.
+sound = sim
+
+; Opcional: um arquivo .wav proprio no lugar dos tres apitos padrao. Caminho
+; relativo conta a partir da pasta deste config.ini. Se o arquivo nao
+; existir, o programa apenas registra no log e continua imprimindo.
+; sound_file = alerta.wav
+
 [state]
 ; Arquivo com os ids ja impressos. E ele que impede a reimpressao da fila
 ; do dia quando o agente reconecta ou a maquina reinicia. NAO apague.

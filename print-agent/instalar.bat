@@ -113,13 +113,23 @@ echo   Programa:      %DESTINO%\%EXE%
 echo   Configuracao:  %DESTINO%\config.ini
 echo   Registro:      %DESTINO%\rapidex-impressao.log
 echo.
-echo   O programa abriu numa janela propria. DEIXE ESSA JANELA ABERTA --
-echo   e ela que imprime as comandas. Ela volta sozinha toda vez que o
-echo   computador ligar.
+echo   O programa NAO abre janela: ele fica como um circulo colorido na
+echo   bandeja, ao lado do relogio. Se nao estiver a vista, clique na
+echo   setinha ^^ que fica a esquerda do relogio -- o Windows esconde
+echo   icones novos ali. Arraste o circulo para fora para ele ficar fixo.
 echo.
-echo   Se a janela pedir para preencher a configuracao, abra o arquivo
-echo   config.ini acima no Bloco de Notas, preencha e abra o programa de
-echo   novo pelo atalho na Inicializacao.
+echo   A cor diz o estado:  VERDE = conectado, imprimindo
+echo                        AMARELO = sem conexao, tentando de novo
+echo                        VERMELHO = parado, precisa de atencao
+echo.
+echo   Clique com o botao DIREITO no icone para abrir a pasta do registro,
+echo   abrir a pasta da configuracao ou sair.
+echo.
+echo   Ele volta sozinho toda vez que o computador ligar.
+echo.
+echo   Se aparecer uma caixa pedindo para preencher a configuracao, abra o
+echo   arquivo config.ini acima no Bloco de Notas, preencha e abra o
+echo   programa de novo pelo atalho na Inicializacao.
 echo.
 echo   Quando alguem disser que nao esta imprimindo, o arquivo que ajuda
 echo   e o rapidex-impressao.log da pasta acima.

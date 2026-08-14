@@ -107,6 +107,11 @@ class Config:
     printers: dict[str, str] = field(default_factory=dict)
     default_printer: str | None = None
 
+    # Pasta onde o config.ini foi lido. Guardada porque o menu da bandeja
+    # abre essa pasta, e ela nem sempre e a do executavel: `--config` aponta
+    # para outro lugar, e o log pode estar numa terceira pasta.
+    config_dir: Path = field(default_factory=paths.base_dir)
+
     state_file: Path = field(default_factory=paths.default_state_path)
     state_retention_days: int = DEFAULT_STATE_RETENTION_DAYS
 
@@ -128,6 +133,13 @@ class Config:
     # Dry run imprime no log em vez de na impressora. E como se confere a
     # instalacao numa maquina sem termica ligada.
     dry_run: bool = False
+
+    # Alerta sonoro quando uma comanda sai. Ligado por padrao: hoje o som
+    # depende do painel estar aberto numa aba do navegador, e o agente e o
+    # unico programa que esta sempre rodando. Desligavel porque quem tem o
+    # computador na sala junto com a impressora nao quer o bipe repetido.
+    sound: bool = True
+    sound_file: Path | None = None
 
     def printer_for(self, sector_name: str) -> str | None:
         """Impressora do setor, ou a padrao, ou None.
@@ -243,6 +255,7 @@ def load_config(path: Path) -> Config:
         password=password,
         printers=printers,
         default_printer=default_printer,
+        config_dir=root,
         state_file=_resolve(root, parser, "state", "file", paths.STATE_NAME),
         state_retention_days=_get_int(
             parser, "state", "retention_days", DEFAULT_STATE_RETENTION_DAYS
@@ -267,7 +280,27 @@ def load_config(path: Path) -> Config:
             parser, "agent", "print_retry_seconds", DEFAULT_PRINT_RETRY_SECONDS
         ),
         dry_run=_get_bool(parser, "agent", "dry_run", False),
+        sound=_get_bool(parser, "agent", "sound", True),
+        sound_file=_read_sound_file(root, parser),
     )
+
+
+def _read_sound_file(root: Path, parser: configparser.ConfigParser) -> Path | None:
+    """O .wav do alerta, quando o lojista escolheu um.
+
+    `None` = os tres apitos embutidos, que e o padrao e nao depende de
+    arquivo nenhum existir na maquina.
+
+    O caminho NAO e conferido aqui, e isso e deliberado: recusar o boot por
+    um .wav que nao existe seria trocar "o alerta nao tocou" por "a loja
+    inteira parou de imprimir". Quem descobre o arquivo quebrado e o
+    `sound.play_new_order`, que registra no log e segue.
+    """
+    raw = _get(parser, "agent", "sound_file", "")
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    return path if path.is_absolute() else (root / path)
 
 
 def _read_ini(parser: configparser.ConfigParser, path: Path) -> None:

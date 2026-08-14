@@ -235,5 +235,50 @@ class SectorMatchingTests(ConfigTestCase):
         self.assertEqual(normalize_sector("  Praça   Quente "), "praca quente")
 
 
+class SoundTests(ConfigTestCase):
+    """O alerta sonoro de comanda impressa.
+
+    Ligado por padrao de proposito: sem console e sem janela, o apito e um
+    dos dois sinais que sobraram de que o programa esta trabalhando (o outro
+    e a cor do icone). Quem instalar sem tocar em nada tem que ouvir.
+    """
+
+    def test_it_is_on_without_anyone_configuring_it(self):
+        config = load_config(self.write(MINIMAL))
+
+        self.assertTrue(config.sound)
+        self.assertIsNone(config.sound_file)
+
+    def test_it_can_be_turned_off(self):
+        config = load_config(self.write(MINIMAL + "\n[agent]\nsound = nao\n"))
+
+        self.assertFalse(config.sound)
+
+    def test_a_relative_wav_starts_at_the_config_folder(self):
+        """Nao no diretorio de trabalho: como servico, o cwd e o System32."""
+        config = load_config(self.write(MINIMAL + "\n[agent]\nsound_file = alerta.wav\n"))
+
+        self.assertEqual(config.sound_file, self.root / "alerta.wav")
+
+    def test_a_wav_that_does_not_exist_still_boots(self):
+        """Trocar "o apito nao tocou" por "a loja parou de imprimir" seria pior."""
+        config = load_config(self.write(MINIMAL + "\n[agent]\nsound_file = sumiu.wav\n"))
+
+        self.assertFalse(config.sound_file.exists())
+
+
+class ConfigDirTests(ConfigTestCase):
+    def test_it_remembers_where_the_config_was_read_from(self):
+        """O menu da bandeja abre essa pasta.
+
+        E ela nao e sempre a do executavel: `--config` aponta para outro
+        lugar, e ditar um caminho com %LOCALAPPDATA% no meio por telefone e
+        exatamente o que o item de menu existe para evitar.
+        """
+        config = load_config(self.write(MINIMAL))
+
+        self.assertEqual(config.config_dir, self.root)
+
+
 if __name__ == "__main__":
     unittest.main()

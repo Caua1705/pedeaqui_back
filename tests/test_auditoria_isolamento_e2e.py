@@ -241,6 +241,7 @@ def test_listagens_de_a_nao_mostram_nada_de_b(cliente_http, a_e_b):
         b.cliente.email,
     }
 
+    periodo = fab.periodo_de_relatorio()
     listagens = [
         "/admin/orders",
         "/admin/orders/status-counts",
@@ -250,13 +251,25 @@ def test_listagens_de_a_nao_mostram_nada_de_b(cliente_http, a_e_b):
         "/admin/coupons",
         "/admin/branches",
         "/admin/settings",
-        "/admin/reports/summary?start_date=2026-06-01&end_date=2026-08-12",
-        "/admin/reports/sales-by-day?start_date=2026-06-01&end_date=2026-08-12",
-        "/admin/reports/products?start_date=2026-06-01&end_date=2026-08-12",
-        "/admin/reports/payment-methods?start_date=2026-06-01&end_date=2026-08-12",
-        "/admin/reports/cancellations?start_date=2026-06-01&end_date=2026-08-12",
-        "/admin/reports/commission?start_date=2026-06-01&end_date=2026-08-12",
+        f"/admin/reports/summary?{periodo}",
+        f"/admin/reports/sales-by-day?{periodo}",
+        f"/admin/reports/products?{periodo}",
+        f"/admin/reports/payment-methods?{periodo}",
+        f"/admin/reports/cancellations?{periodo}",
+        f"/admin/reports/commission?{periodo}",
     ]
+
+    # Antes de provar que a listagem nao mostra o restaurante B, prove que ela
+    # mostra o A. Sem isto, uma listagem vazia satisfaz "nao contem nada de B"
+    # e o teste passa sem exercitar nada — que foi exatamente o que a janela de
+    # relatorio com data fixa provocou quando envelheceu.
+    conferencia = cliente_http.get(f"/admin/reports/summary?{periodo}", headers=a.auth)
+    assert conferencia.status_code == 200, conferencia.text[:200]
+    assert conferencia.json()["orders_count"] > 0, (
+        "o relatorio de A voltou vazio: a janela nao contem o pedido que a "
+        "fixture criou, e o teste de vazamento abaixo seria inconclusivo. "
+        f"Janela: {periodo}"
+    )
 
     vazamentos = []
     for caminho in listagens:

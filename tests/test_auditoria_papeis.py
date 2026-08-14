@@ -36,7 +36,9 @@ from tests import fabricas_db as fab
 
 pytestmark = pytest.mark.db
 
-PERIODO = "start_date=2026-06-01&end_date=2026-08-12"
+# Derivado da data de execução, nunca literal — ver `fab.periodo_de_relatorio`.
+# A versão fixa deste arquivo envelheceu e fez o relatório voltar vazio.
+PERIODO = fab.periodo_de_relatorio()
 
 
 def _admin(db: Session, restaurante, filial, role: str) -> AdminUser:

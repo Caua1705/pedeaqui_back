@@ -14,7 +14,7 @@ acrescenta nada aqui.
 """
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -29,6 +29,12 @@ from src.models.restaurant_model import Restaurant
 from src.utils.security import hash_tracking_token
 
 
+# Largura da janela de relatório usada pelos testes. Trinta dias porque o teto
+# do relatório é 92 (`MAX_REPORT_DAYS`) e porque não há teste que crie pedido
+# com mais de um dia de idade sem passar `created_at` explícito.
+DIAS_DA_JANELA_DE_RELATORIO = 30
+
+
 def _sufixo() -> str:
     """Sufixo único para os campos com UNIQUE (slug, e-mail, telefone, CPF).
 
@@ -36,6 +42,34 @@ def _sufixo() -> str:
     pode criar dois restaurantes — e aí o UNIQUE de `slug` bate.
     """
     return uuid.uuid4().hex[:12]
+
+
+def periodo_de_relatorio() -> str:
+    """Querystring de período que contém o que as fábricas acabaram de criar.
+
+    **Derivada da data de execução, nunca literal.** `criar_pedido` deixa o
+    `created_at` no `server_default` (`now()`), então um período escrito à mão
+    envelhece: no dia em que a data de hoje passa do `end_date`, o pedido cai
+    fora da janela e o relatório volta vazio.
+
+    Isso já aconteceu, e o modo de falhar foi diferente em cada arquivo:
+
+    - `test_auditoria_papeis.py` quebrou alto — ele afirma que o faturamento
+      soma as duas filiais, e a soma virou zero;
+    - `test_auditoria_isolamento_e2e.py` teria passado **em silêncio**, e é o
+      pior dos dois. Ele afirma que a listagem NÃO contém dado do outro
+      restaurante; com o relatório vazio a afirmação continua verdadeira e
+      deixa de provar qualquer coisa.
+
+    O fim é `hoje + 1` de propósito. O relatório recorta o período no fuso da
+    operação (America/Fortaleza) e o `date.today()` sai do fuso da máquina que
+    roda o teste: às 21h de Fortaleza o UTC já é o dia seguinte, e um `end_date`
+    igual a hoje deixaria de fora um pedido criado nessa janela.
+    """
+    hoje = date.today()
+    inicio = hoje - timedelta(days=DIAS_DA_JANELA_DE_RELATORIO)
+    fim = hoje + timedelta(days=1)
+    return f"start_date={inicio.isoformat()}&end_date={fim.isoformat()}"
 
 
 def criar_restaurante(db: Session, nome: str = "Restaurante de Teste") -> Restaurant:

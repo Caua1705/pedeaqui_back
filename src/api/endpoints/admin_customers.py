@@ -3,7 +3,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from src.api.dependencies.admin_scope import AdminScope, get_admin_scope
+from src.api.dependencies.admin_scope import (
+    GERENCIA,
+    AdminScope,
+    exigir_papel,
+    get_admin_scope,
+)
 from src.api.dependencies.database import get_db
 from src.schemas.admin_customer_schema import AdminCustomerListResponse
 from src.services.admin_customer_service import AdminCustomerService
@@ -15,7 +20,15 @@ from src.services.admin_customer_service import AdminCustomerService
 router = APIRouter(prefix="/admin", tags=["admin customers"])
 
 
-@router.get("/customers", response_model=AdminCustomerListResponse)
+@router.get(
+    "/customers",
+    response_model=AdminCustomerListResponse,
+    # Nome + telefone de toda a base de clientes da loja, exportavel em
+    # pouca coisa mais que um `for` sobre o `offset`. E a rota que mais
+    # pesa numa senha vazada, e o balcao nao precisa dela: quem atende ja ve
+    # o telefone do pedido que esta na tela.
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
 def list_customers(
     branch_id: UUID | None = Query(
         default=None,

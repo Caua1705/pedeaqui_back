@@ -117,9 +117,9 @@ Mora em **um lugar só**: `api/dependencies/admin_scope.py`, e chega às rotas c
 `AdminScope`.
 
 ```
-owner                   → vê e edita todas as filiais, mesmo com branch_id preenchido
-manager / attendant     → presos à filial quando branch_id está preenchido
-                          branch_id nulo = todas as filiais
+owner                        → vê e edita todas as filiais, mesmo com branch_id preenchido
+manager / attendant /        → presos à filial quando branch_id está preenchido
+print_agent                    branch_id nulo = todas as filiais
 ```
 
 `AdminScope` oferece dois métodos:
@@ -193,11 +193,47 @@ O `-it` é necessário: a senha é pedida em prompt oculto e **não** é argumen
 linha de comando de propósito — iria para o histórico do shell e para o `ps`.
 
 Mínimo de **8 caracteres** (`MIN_PASSWORD_LENGTH` em `scripts/create_admin_user.py`).
-Papéis: `owner`, `manager`, `attendant`.
+Papéis: `owner`, `manager`, `attendant`, `print_agent`.
 
 Local, com o venv ativo:
 `py scripts/create_admin_user.py --restaurant-slug ... --role owner`.
 
-**Não há gestão de usuários do painel por rota.** O `role` existe e delimita
-filial, mas nenhuma rota é restrita *por papel* — attendant escreve o mesmo que
-owner dentro do escopo dele.
+**Não há gestão de usuários do painel por rota** — criar, listar e desativar
+usuário continua sendo só por script.
+
+### Camada 3 — por papel
+
+Desde a revisão `20260814_0020`, o papel **decide autorização**. Filial é
+ONDE, papel é O QUE, e as duas moram no mesmo arquivo
+(`api/dependencies/admin_scope.py`) de propósito.
+
+A regra chega às rotas como `dependencies=[Depends(exigir_papel(...))]`, rota
+a rota. **Não há tabela central de rota → papel**: tabela envelhece separada
+das rotas, e a rota nova nasce sem linha nela — falhando aberta.
+`tests/test_papeis_das_rotas.py` é a auditoria do contrário: ele enumera toda
+rota `/admin` do app e fica vermelho quando uma delas não tem decisão
+registrada.
+
+| Conjunto | Papéis | Onde vale |
+|---|---|---|
+| `SOMENTE_DONO` | owner | dinheiro: preço, cupom, `PATCH /admin/settings`, faturamento e comissão |
+| `GERENCIA` | owner, manager | escrita de cardápio, filial, horários, setores, lista de clientes, cancelamento |
+| `PESSOAS` | owner, manager, attendant | leitura do painel, pedidos, `availability`, `store-status`, `prep-time` |
+| `AGENTE_DE_IMPRESSAO` | print_agent | heartbeat e lista de impressoras |
+| `PESSOAS_E_AGENTE` | os quatro | ticket do stream, stream, vias de um pedido |
+
+**403 e não 404**, ao contrário da regra de filial. Os dois casos parecem o
+mesmo e não são: 404 protege o que o usuário não pode *saber que existe* (a
+filial do lado); o papel é sobre um recurso que ele sabe que existe — ele vê o
+botão na própria tela.
+
+O papel lido é o do **banco** (`admin_user.role`), nunca o que viaja no token:
+`get_admin_from_token` recarrega o usuário a cada requisição, então rebaixar
+alguém vale na hora, sem esperar as 12h expirarem.
+
+**`print_agent` é papel de máquina.** É o usuário do agente de impressão, cuja
+senha fica em texto puro no `config.ini` do computador do balcão. Ele alcança
+quatro rotas e mais nenhuma. Não deve aparecer no seletor de usuários do
+painel, e o painel deve recusar o login dele — a conta não é de uma pessoa.
+Só o *login* aceita todos os papéis, porque é por ele que o agente se
+autentica.

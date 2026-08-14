@@ -16,8 +16,18 @@ class AdminUser(Base):
     `branch_id` opcional: nulo significa acesso a todas as filiais do
     restaurante. Desde a Fase 3 o campo E aplicado nas rotas /admin, em um
     lugar so (`src/api/dependencies/admin_scope.py`): "owner" enxerga o
-    restaurante inteiro mesmo com filial preenchida; "manager" e "attendant"
-    ficam presos a filial quando ela esta preenchida.
+    restaurante inteiro mesmo com filial preenchida; os demais papeis ficam
+    presos a filial quando ela esta preenchida.
+
+    `role` responde a OUTRA pergunta, e desde a revisao 20260814_0020 ela
+    tambem e aplicada: filial e ONDE, papel e O QUE. Os quatro valores estao
+    em `ADMIN_USER_ROLES` e no CHECK da tabela.
+
+    **`print_agent` e papel de MAQUINA, nao de pessoa.** E o usuario do agente
+    de impressao, cuja senha fica em texto puro no `config.ini` do computador
+    do balcao; ele alcanca as quatro rotas de que o agente precisa e mais
+    nenhuma. Nao deve aparecer no seletor de usuarios do painel, e exige
+    `branch_id` preenchido — nao existe a maquina de todas as lojas.
     """
 
     __tablename__ = "admin_users"

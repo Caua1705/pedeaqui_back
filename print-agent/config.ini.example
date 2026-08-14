@@ -31,9 +31,15 @@ base_url = https://api.pederapidex.com
 ; Credencial. Duas formas, e a escolha importa:
 ;
 ; - email + password: o agente refaz o login sozinho quando o token vence.
-;   E a forma correta para rodar como servico. O usuario pode (e deve) ser
-;   um lojista dedicado ao agente, com papel `attendant` e preso a filial
-;   desta loja — assim ele so enxerga os pedidos daqui.
+;   E a forma correta para rodar como servico. O usuario TEM QUE ser um
+;   usuario dedicado ao agente, com papel `print_agent` e preso a filial
+;   desta loja.
+;
+;   O papel importa mais que parece: esta senha esta em TEXTO PURO neste
+;   arquivo, numa maquina de balcao. Com `print_agent` ela compra as
+;   comandas desta filial e mais nada. Com `attendant` — que era a
+;   recomendacao antiga — ela comprava o preco do cardapio, a lista de
+;   clientes com telefone e o faturamento do restaurante inteiro.
 ;
 ; - token: um access token colado a mao. Vale 12 HORAS e depois o agente
 ;   para de imprimir. Serve para testar a instalacao, nao para producao.

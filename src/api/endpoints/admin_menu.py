@@ -3,7 +3,15 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
-from src.api.dependencies.admin_scope import AdminScope, get_admin_scope
+from src.api.dependencies.admin_scope import (
+    GERENCIA,
+    PESSOAS,
+    SOMENTE_DONO,
+    AdminScope,
+    ensure_pode_definir_preco,
+    exigir_papel,
+    get_admin_scope,
+)
 from src.api.dependencies.database import get_db
 from src.schemas.admin_menu_schema import (
     AdminCategoryCreate,
@@ -31,10 +39,25 @@ from src.services.admin_menu_service import AdminMenuService
 # Mesma regra das outras rotas /admin: restaurante sai do token. Nenhuma
 # rota daqui aceita restaurante, categoria ou produto de outro dono — o
 # service confere tudo contra `scope.restaurant_id`.
+#
+# Papeis, neste arquivo:
+#
+# - LER o cardapio: PESSOAS. O balcao precisa achar o produto na tela para
+#   marcar "acabou a picanha", e a busca e a mesma tela da edicao.
+# - ESCREVER no cardapio: GERENCIA.
+# - ESCREVER PRECO: SOMENTE_DONO, conferido pelo corpo — ver
+#   `ensure_pode_definir_preco`.
+# - `availability`: PESSOAS, e de proposito. E a acao que a operacao de
+#   balcao precisa fazer sozinha as 20h; tirando-a do atendente, a saida
+#   pratica vira ele usando a conta do dono, e ai nada disto vale nada.
 router = APIRouter(prefix="/admin", tags=["admin menu"])
 
 
-@router.get("/categories", response_model=list[AdminCategoryResponse])
+@router.get(
+    "/categories",
+    response_model=list[AdminCategoryResponse],
+    dependencies=[Depends(exigir_papel(PESSOAS))],
+)
 def list_categories(
     scope: AdminScope = Depends(get_admin_scope),
     db: Session = Depends(get_db),
@@ -51,6 +74,7 @@ def list_categories(
     "/categories",
     response_model=AdminCategoryResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
 )
 def create_category(
     payload: AdminCategoryCreate,
@@ -63,7 +87,11 @@ def create_category(
 # Declarada ANTES de /categories/{category_id}: o FastAPI casa as rotas na
 # ordem de registro, e "reorder" nao e um UUID valido. Invertendo as duas, a
 # reordenacao morreria com 422.
-@router.patch("/categories/reorder", response_model=list[AdminCategoryResponse])
+@router.patch(
+    "/categories/reorder",
+    response_model=list[AdminCategoryResponse],
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
 def reorder_categories(
     payload: CategoryReorderRequest,
     scope: AdminScope = Depends(get_admin_scope),
@@ -78,7 +106,11 @@ def reorder_categories(
     return AdminMenuService(db).reorder_categories(scope, payload)
 
 
-@router.patch("/categories/{category_id}", response_model=AdminCategoryResponse)
+@router.patch(
+    "/categories/{category_id}",
+    response_model=AdminCategoryResponse,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
 def update_category(
     category_id: UUID,
     payload: AdminCategoryUpdate,
@@ -94,7 +126,11 @@ def update_category(
     return AdminMenuService(db).update_category(scope, category_id, payload)
 
 
-@router.get("/products", response_model=AdminProductListResponse)
+@router.get(
+    "/products",
+    response_model=AdminProductListResponse,
+    dependencies=[Depends(exigir_papel(PESSOAS))],
+)
 def list_products(
     category_id: UUID | None = Query(default=None),
     search: str | None = Query(default=None, description="Parte do nome ou do codigo"),
@@ -118,6 +154,13 @@ def list_products(
     "/products",
     response_model=AdminProductResponse,
     status_code=status.HTTP_201_CREATED,
+    # SOMENTE_DONO e nao GERENCIA, ao contrario das outras escritas de
+    # cardapio: `price` e OBRIGATORIO em `AdminProductCreate`. Deixar o
+    # gerente criar produto e deixa-lo definir preco, que e exatamente o que
+    # `ensure_pode_definir_preco` existe para impedir — so que por uma porta
+    # onde a checagem de corpo nao teria como recusar sem recusar a rota
+    # inteira. Produto novo de gerente sai como pedido ao dono.
+    dependencies=[Depends(exigir_papel(SOMENTE_DONO))],
 )
 def create_product(
     payload: AdminProductCreate,
@@ -129,7 +172,11 @@ def create_product(
 
 # Declarada ANTES de /products/{product_id} pelo mesmo motivo da de
 # categorias: o FastAPI casa na ordem de registro e "reorder" nao e UUID.
-@router.patch("/products/reorder", response_model=list[AdminProductResponse])
+@router.patch(
+    "/products/reorder",
+    response_model=list[AdminProductResponse],
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
 def reorder_products(
     payload: ProductReorderRequest,
     scope: AdminScope = Depends(get_admin_scope),
@@ -149,7 +196,11 @@ def reorder_products(
     return AdminMenuService(db).reorder_products(scope, payload)
 
 
-@router.get("/products/{product_id}", response_model=AdminProductDetailResponse)
+@router.get(
+    "/products/{product_id}",
+    response_model=AdminProductDetailResponse,
+    dependencies=[Depends(exigir_papel(PESSOAS))],
+)
 def get_product(
     product_id: UUID,
     scope: AdminScope = Depends(get_admin_scope),
@@ -159,17 +210,32 @@ def get_product(
     return AdminMenuService(db).get_product(scope, product_id)
 
 
-@router.patch("/products/{product_id}", response_model=AdminProductResponse)
+@router.patch(
+    "/products/{product_id}",
+    response_model=AdminProductResponse,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
 def update_product(
     product_id: UUID,
     payload: AdminProductUpdate,
     scope: AdminScope = Depends(get_admin_scope),
     db: Session = Depends(get_db),
 ) -> AdminProductResponse:
+    """Edita nome, descricao, categoria, codigo e preco.
+
+    O preco e a unica parte que o gerente nao alcanca — ver
+    `ensure_pode_definir_preco`. Ele fica com o resto da tela.
+    """
+    if payload.price is not None:
+        ensure_pode_definir_preco(scope.admin_user)
     return AdminMenuService(db).update_product(scope, product_id, payload)
 
 
-@router.patch("/products/{product_id}/availability", response_model=AdminProductResponse)
+@router.patch(
+    "/products/{product_id}/availability",
+    response_model=AdminProductResponse,
+    dependencies=[Depends(exigir_papel(PESSOAS))],
+)
 def set_product_availability(
     product_id: UUID,
     payload: ProductAvailabilityRequest,
@@ -184,7 +250,11 @@ def set_product_availability(
     return AdminMenuService(db).set_product_availability(scope, product_id, payload)
 
 
-@router.post("/products/{product_id}/image", response_model=ProductImageResponse)
+@router.post(
+    "/products/{product_id}/image",
+    response_model=ProductImageResponse,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
 async def upload_product_image(
     product_id: UUID,
     file: UploadFile = File(..., description="JPEG, PNG ou WEBP"),
@@ -207,6 +277,7 @@ async def upload_product_image(
 @router.get(
     "/products/{product_id}/option-groups",
     response_model=list[AdminOptionGroupResponse],
+    dependencies=[Depends(exigir_papel(PESSOAS))],
 )
 def list_option_groups(
     product_id: UUID,
@@ -220,6 +291,7 @@ def list_option_groups(
     "/products/{product_id}/option-groups",
     response_model=AdminOptionGroupResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
 )
 def create_option_group(
     product_id: UUID,
@@ -230,7 +302,11 @@ def create_option_group(
     return AdminMenuService(db).create_option_group(scope, product_id, payload)
 
 
-@router.patch("/option-groups/{group_id}", response_model=AdminOptionGroupResponse)
+@router.patch(
+    "/option-groups/{group_id}",
+    response_model=AdminOptionGroupResponse,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
 def update_option_group(
     group_id: UUID,
     payload: AdminOptionGroupUpdate,
@@ -244,6 +320,7 @@ def update_option_group(
     "/option-groups/{group_id}/options",
     response_model=AdminOptionResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
 )
 def create_option(
     group_id: UUID,
@@ -251,14 +328,32 @@ def create_option(
     scope: AdminScope = Depends(get_admin_scope),
     db: Session = Depends(get_db),
 ) -> AdminOptionResponse:
+    """Cria uma opcao dentro do grupo.
+
+    Opcao SEM `additional_price` e a esmagadora maioria delas ("sem cebola",
+    "bem passado", "ponto da carne") e continua sendo do gerente. Mandar um
+    valor — qualquer valor, inclusive zero — e decisao de preco e exige o
+    dono: um adicional de graca custa tanto quanto um desconto.
+    """
+    # `model_fields_set` e nao `is not None`: `additional_price` tem default
+    # 0,00, entao os dois casos chegam aqui com o mesmo valor e so este
+    # conjunto sabe qual deles o painel mandou de verdade.
+    if "additional_price" in payload.model_fields_set:
+        ensure_pode_definir_preco(scope.admin_user)
     return AdminMenuService(db).create_option(scope, group_id, payload)
 
 
-@router.patch("/options/{option_id}", response_model=AdminOptionResponse)
+@router.patch(
+    "/options/{option_id}",
+    response_model=AdminOptionResponse,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
 def update_option(
     option_id: UUID,
     payload: AdminOptionUpdate,
     scope: AdminScope = Depends(get_admin_scope),
     db: Session = Depends(get_db),
 ) -> AdminOptionResponse:
+    if payload.additional_price is not None:
+        ensure_pode_definir_preco(scope.admin_user)
     return AdminMenuService(db).update_option(scope, option_id, payload)

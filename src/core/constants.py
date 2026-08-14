@@ -1,4 +1,11 @@
-ADMIN_USER_ROLES = ("owner", "manager", "attendant")
+# Espelha o CHECK de `admin_users.role` (revisao 20260814_0020). Papel que
+# entre aqui e nao no banco derruba o INSERT do script de criacao de usuario;
+# no banco e nao aqui, o script nem oferece a opcao.
+#
+# `print_agent` e papel de MAQUINA: e o usuario do agente de impressao, cuja
+# senha fica em texto puro no config.ini da maquina do balcao. Ele nao tem
+# tela no painel e nao pertence a uma pessoa.
+ADMIN_USER_ROLES = ("owner", "manager", "attendant", "print_agent")
 
 # Minimo da senha de LOJISTA — 12, contra os 8 do cliente. A diferenca e
 # proposital e vem da conta de estrago: a conta de cliente da acesso ao

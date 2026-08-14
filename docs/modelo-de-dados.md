@@ -70,7 +70,7 @@ business_     payment_   sectors ◄─────────┤              
 | `branch_business_hours` | uma linha por faixa de horário: `weekday`, `opens_at`, `closes_at`, `prep_time_min/max`, `is_closed` | **`weekday` 0 = segunda** (é o `datetime.weekday()` do Python) |
 | `branch_payment_methods` | `payment_flow` (`online`/`delivery`), `method_type`, `label`, `enabled` | É a fonte da verdade das formas de pagamento aceitas |
 | `printing_sectors` | `branch_id`, nome, `sort_order`, `is_active` | Pende de **filial**, porque impressora é objeto físico dentro de uma loja |
-| `admin_users` | `restaurant_id`, `branch_id` (nullable), `role`, e-mail UNIQUE global | `role` ∈ owner, manager, attendant |
+| `admin_users` | `restaurant_id`, `branch_id` (nullable), `role`, e-mail UNIQUE global | `role` ∈ owner, manager, attendant, print_agent |
 
 ### O cardápio
 

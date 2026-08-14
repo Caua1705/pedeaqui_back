@@ -6,7 +6,16 @@ from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
 from src.api.dependencies.admin_auth import get_current_admin
-from src.api.dependencies.admin_scope import AdminScope, build_admin_scope, get_admin_scope
+from src.api.dependencies.admin_scope import (
+    GERENCIA,
+    PESSOAS,
+    PESSOAS_E_AGENTE,
+    AdminScope,
+    build_admin_scope,
+    ensure_role,
+    exigir_papel,
+    get_admin_scope,
+)
 from src.api.dependencies.database import get_db
 from src.models.admin_user_model import AdminUser
 from src.schemas.admin_order_schema import (
@@ -31,6 +40,16 @@ from src.services.idempotency_service import normalize_idempotency_key
 # rota aqui aceita restaurante como parametro — a listagem aceitava um slug
 # na URL e foi corrigida, porque uma rota que RECEBE restaurante e uma rota
 # que pode esquecer de conferi-lo.
+#
+# Este arquivo tem as unicas tres rotas do painel que o AGENTE de impressao
+# alcanca: o ticket, o stream e as vias de um pedido. Sao o minimo para uma
+# comanda sair do servidor e chegar na bobina.
+#
+# **A listagem de pedidos NAO esta entre elas, e e o ponto da frente
+# inteira.** `GET /admin/orders` devolve nome, telefone e endereco de todo
+# cliente que pediu na loja; a senha do agente esta em texto puro no
+# `config.ini` da maquina do balcao. O agente nunca precisou dessa lista — ele
+# so reage ao evento do stream e busca as vias daquele pedido.
 router = APIRouter(prefix="/admin", tags=["admin orders"])
 
 
@@ -61,7 +80,11 @@ class EventStreamResponse(StreamingResponse):
     media_type = "text/event-stream"
 
 
-@router.get("/orders", response_model=AdminOrderListResponse)
+@router.get(
+    "/orders",
+    response_model=AdminOrderListResponse,
+    dependencies=[Depends(exigir_papel(PESSOAS))],
+)
 def list_orders(
     branch_id: UUID | None = Query(
         default=None,
@@ -94,7 +117,11 @@ def list_orders(
     )
 
 
-@router.get("/orders/status-counts", response_model=AdminOrderStatusCountsResponse)
+@router.get(
+    "/orders/status-counts",
+    response_model=AdminOrderStatusCountsResponse,
+    dependencies=[Depends(exigir_papel(PESSOAS))],
+)
 def count_orders_by_status(
     branch_id: UUID | None = Query(default=None),
     start_date: date | None = Query(default=None),
@@ -117,7 +144,11 @@ def count_orders_by_status(
     )
 
 
-@router.post("/orders/stream-ticket", response_model=AdminStreamTicketResponse)
+@router.post(
+    "/orders/stream-ticket",
+    response_model=AdminStreamTicketResponse,
+    dependencies=[Depends(exigir_papel(PESSOAS_E_AGENTE))],
+)
 def create_stream_ticket(
     admin_user: AdminUser = Depends(get_current_admin),
 ) -> AdminStreamTicketResponse:
@@ -159,6 +190,12 @@ async def stream_orders(
     como a reconexao nao perde pedido.
     """
     admin_user = AdminAuthService(db).get_admin_from_stream_ticket(ticket)
+    # `ensure_role` no corpo, e nao `dependencies=[...]` como nas outras: esta
+    # rota nao autentica por `Depends(get_current_admin)` — ela le um ticket
+    # da querystring, porque o EventSource do navegador nao manda cabecalho.
+    # A dependencia de papel exigiria o Bearer que aqui nao existe e recusaria
+    # o painel inteiro com 401.
+    ensure_role(admin_user, PESSOAS_E_AGENTE)
     stream = AdminOrderStreamService(build_admin_scope(admin_user))
     return EventStreamResponse(
         stream.iter_events(last_event_id),
@@ -171,7 +208,11 @@ async def stream_orders(
     )
 
 
-@router.get("/orders/{order_id}", response_model=OrderDetailResponse)
+@router.get(
+    "/orders/{order_id}",
+    response_model=OrderDetailResponse,
+    dependencies=[Depends(exigir_papel(PESSOAS))],
+)
 def get_order_detail(
     order_id: UUID,
     scope: AdminScope = Depends(get_admin_scope),
@@ -180,7 +221,11 @@ def get_order_detail(
     return AdminOrderService(db).get_order_detail(order_id, scope)
 
 
-@router.get("/orders/{order_id}/print-jobs", response_model=OrderPrintJobsResponse)
+@router.get(
+    "/orders/{order_id}/print-jobs",
+    response_model=OrderPrintJobsResponse,
+    dependencies=[Depends(exigir_papel(PESSOAS_E_AGENTE))],
+)
 def get_order_print_jobs(
     order_id: UUID,
     scope: AdminScope = Depends(get_admin_scope),
@@ -210,7 +255,15 @@ def get_order_print_jobs(
     return AdminPrintingService(db).build_print_jobs(order_id, scope)
 
 
-@router.patch("/orders/{order_id}/status", response_model=OrderDetailResponse)
+@router.patch(
+    "/orders/{order_id}/status",
+    response_model=OrderDetailResponse,
+    # PESSOAS: aceitar e recusar pedido E o trabalho do balcao. O agente de
+    # impressao fica de fora — ele reage a mudanca de status, nao a provoca, e
+    # uma credencial de maquina que aceita pedido aceitaria tambem o pedido
+    # que o lojista ainda estava olhando.
+    dependencies=[Depends(exigir_papel(PESSOAS))],
+)
 def update_order_status(
     order_id: UUID,
     payload: UpdateOrderStatusRequest,
@@ -234,7 +287,16 @@ def update_order_status(
     )
 
 
-@router.patch("/orders/{order_id}/cancel", response_model=OrderDetailResponse)
+@router.patch(
+    "/orders/{order_id}/cancel",
+    response_model=OrderDetailResponse,
+    # GERENCIA, e o atendente perde esta: cancelar pedido PAGO nao estorna
+    # nada (armadilha 25) e o log e o unico rastro de dinheiro de cliente
+    # parado. Quem esta no balcao e precisa nao atender um pedido tem
+    # `rejected` na maquina de estados, que e a saida certa para o pedido que
+    # nao vai ser feito.
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
 def cancel_order(
     order_id: UUID,
     payload: CancelOrderRequest,

@@ -10401,6 +10401,7 @@
     },
     "/admin/option-groups/{group_id}/options": {
       "post": {
+        "description": "Cria uma opcao dentro do grupo.\n\nOpcao SEM `additional_price` e a esmagadora maioria delas (\"sem cebola\",\n\"bem passado\", \"ponto da carne\") e continua sendo do gerente. Mandar um\nvalor — qualquer valor, inclusive zero — e decisao de preco e exige o\ndono: um adicional de graca custa tanto quanto um desconto.",
         "operationId": "create_option_admin_option_groups__group_id__options_post",
         "parameters": [
           {
@@ -11622,6 +11623,7 @@
         ]
       },
       "patch": {
+        "description": "Edita nome, descricao, categoria, codigo e preco.\n\nO preco e a unica parte que o gerente nao alcanca — ver\n`ensure_pode_definir_preco`. Ele fica com o resto da tela.",
         "operationId": "update_product_admin_products__product_id__patch",
         "parameters": [
           {

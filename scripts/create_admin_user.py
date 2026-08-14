@@ -17,6 +17,20 @@ Uso:
         --email junior@exemplo.com \\
         --role owner
 
+O usuario do AGENTE DE IMPRESSAO tem papel proprio e exige filial:
+
+    python scripts/create_admin_user.py \\
+        --restaurant-slug junior-da-picanha \\
+        --name "Impressora Centro" \\
+        --email impressora.centro@exemplo.com \\
+        --role print_agent \\
+        --branch-id <uuid-da-filial>
+
+`print_agent` alcanca so as quatro rotas de que o agente precisa. Ele existe
+porque a senha desse usuario fica em TEXTO PURO no `config.ini` da maquina do
+balcao: com `attendant`, quem lesse aquele arquivo levava junto o preco do
+cardapio, a lista de clientes com telefone e o faturamento do restaurante.
+
 Trocar a senha de quem ja existe (e derrubar os tokens dele):
 
     python scripts/create_admin_user.py --reset-password \\
@@ -111,7 +125,10 @@ def main() -> int:
     parser.add_argument(
         "--branch-id",
         default=None,
-        help="Restringe o usuario a uma filial. Omitir = todas as filiais.",
+        help=(
+            "Restringe o usuario a uma filial. Omitir = todas as filiais. "
+            "OBRIGATORIO para --role print_agent."
+        ),
     )
     args = parser.parse_args()
 
@@ -137,6 +154,19 @@ def main() -> int:
     ]
     if faltando:
         raise SystemExit(f"Para criar um lojista faltam: {', '.join(faltando)}.")
+
+    # O agente de impressao E de uma maquina, e a maquina esta numa loja. Com
+    # `branch_id` nulo o usuario significa "todas as filiais", e nao existe a
+    # maquina de todas as lojas: o heartbeat responde 400 e a tela do painel
+    # nunca mostra aquele agente como online. Barrar aqui troca um defeito que
+    # so aparece depois da viagem ate o restaurante por uma linha na tela de
+    # quem esta criando o usuario.
+    if args.role == "print_agent" and not args.branch_id:
+        raise SystemExit(
+            "--role print_agent exige --branch-id: o agente e de UMA maquina, "
+            "numa filial. Sem a filial, o heartbeat responde 400 e o painel "
+            "nunca mostra esse agente como online."
+        )
 
     branch_id = uuid.UUID(args.branch_id) if args.branch_id else None
 

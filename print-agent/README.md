@@ -104,16 +104,32 @@ O token de acesso da API vale **12 horas**. Um agente que sobe no boot com
 token fixo para de imprimir na manhã seguinte, e ninguém liga o defeito à
 expiração. Com e-mail e senha ele refaz o login sozinho.
 
-Crie um usuário dedicado ao agente, com papel `attendant` e **preso à filial
-desta loja** — assim ele só enxerga os pedidos daqui:
+Crie um usuário dedicado ao agente, com papel `print_agent` e **preso à
+filial desta loja**:
 
 ```bash
 python scripts/create_admin_user.py \
   --restaurant-slug junior-da-picanha \
   --name "Impressora Centro" \
   --email impressora.centro@exemplo.com \
-  --role attendant
+  --role print_agent \
+  --branch-id <uuid-da-filial>
 ```
+
+> **O papel não é detalhe.** Essa senha fica em texto puro no `config.ini`,
+> numa máquina de balcão à qual várias pessoas têm acesso físico. Com
+> `print_agent`, quem ler o arquivo alcança quatro rotas: o ticket do
+> stream, o stream, as vias de um pedido e o heartbeat. Nada mais do painel.
+>
+> A recomendação até a revisão `20260814_0020` era `attendant`, e ela
+> comprava junto: editar preço de produto, a lista de clientes com telefone
+> e os relatórios de faturamento e comissão do restaurante inteiro, sem
+> recorte de filial. Se você tem agentes instalados com `attendant`, troque
+> — não basta criar o papel novo.
+>
+> `--branch-id` é obrigatório aqui: o agente é de UMA máquina, numa loja.
+> Sem filial o heartbeat responde 400 e o painel nunca mostra esse agente
+> como online.
 
 ### Conferindo antes de valer
 

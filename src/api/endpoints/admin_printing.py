@@ -3,7 +3,14 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
-from src.api.dependencies.admin_scope import AdminScope, get_admin_scope
+from src.api.dependencies.admin_scope import (
+    AGENTE_DE_IMPRESSAO,
+    GERENCIA,
+    PESSOAS,
+    AdminScope,
+    exigir_papel,
+    get_admin_scope,
+)
 from src.api.dependencies.database import get_db
 from src.schemas.admin_printing_schema import (
     CategoryPrintingSectorResponse,
@@ -33,6 +40,7 @@ router = APIRouter(prefix="/admin", tags=["admin printing"])
 @router.get(
     "/branches/{branch_id}/printing-sectors",
     response_model=list[PrintingSectorResponse],
+    dependencies=[Depends(exigir_papel(PESSOAS))],
 )
 def list_printing_sectors(
     branch_id: UUID,
@@ -51,6 +59,7 @@ def list_printing_sectors(
     "/branches/{branch_id}/printing-sectors",
     response_model=PrintingSectorResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
 )
 def create_printing_sector(
     branch_id: UUID,
@@ -66,7 +75,11 @@ def create_printing_sector(
     return AdminPrintingService(db).create_sector(scope, branch_id, payload)
 
 
-@router.patch("/printing-sectors/{sector_id}", response_model=PrintingSectorResponse)
+@router.patch(
+    "/printing-sectors/{sector_id}",
+    response_model=PrintingSectorResponse,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
 def update_printing_sector(
     sector_id: UUID,
     payload: PrintingSectorUpdate,
@@ -85,6 +98,7 @@ def update_printing_sector(
 @router.patch(
     "/products/{product_id}/printing-sector",
     response_model=ProductPrintingSectorResponse,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
 )
 def set_product_printing_sector(
     product_id: UUID,
@@ -104,6 +118,7 @@ def set_product_printing_sector(
 @router.patch(
     "/categories/{category_id}/printing-sector",
     response_model=CategoryPrintingSectorResponse,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
 )
 def set_category_printing_sector(
     category_id: UUID,
@@ -131,10 +146,22 @@ def set_category_printing_sector(
 # lidas pelo PAINEL (`/admin/branches/{id}/...`). A separacao dos prefixos e
 # proposital: as do agente nao levam filial no path porque a filial dele sai
 # do token — ele nao escolhe de qual loja e a maquina.
+#
+# E a separacao agora vale tambem no PAPEL, nos dois sentidos:
+#
+# - as duas do agente sao AGENTE_DE_IMPRESSAO e mais ninguem. Nao ha pessoa
+#   com motivo para dizer "a maquina esta viva" ou para reescrever a lista de
+#   impressoras dela; um painel que pudesse fazer isso so teria como
+#   estragar o dado que a propria tela mostra.
+# - as tres do painel nao sao do agente. Ele nao consulta o proprio status.
 # ---------------------------------------------------------------------------
 
 
-@router.post("/print-agent/heartbeat", response_model=PrintAgentStatusResponse)
+@router.post(
+    "/print-agent/heartbeat",
+    response_model=PrintAgentStatusResponse,
+    dependencies=[Depends(exigir_papel(AGENTE_DE_IMPRESSAO))],
+)
 def print_agent_heartbeat(
     payload: PrintAgentHeartbeatRequest,
     scope: AdminScope = Depends(get_admin_scope),
@@ -152,7 +179,11 @@ def print_agent_heartbeat(
     return PrintAgentService(db).heartbeat(scope, payload)
 
 
-@router.post("/print-agent/printers", response_model=PrintAgentPrintersResponse)
+@router.post(
+    "/print-agent/printers",
+    response_model=PrintAgentPrintersResponse,
+    dependencies=[Depends(exigir_papel(AGENTE_DE_IMPRESSAO))],
+)
 def report_print_agent_printers(
     payload: PrintAgentPrintersRequest,
     scope: AdminScope = Depends(get_admin_scope),
@@ -171,6 +202,9 @@ def report_print_agent_printers(
 @router.get(
     "/branches/{branch_id}/print-agent",
     response_model=PrintAgentStatusResponse,
+    # PESSOAS: "o agente esta no ar?" e a primeira pergunta de quem esta no
+    # balcao com a impressora parada.
+    dependencies=[Depends(exigir_papel(PESSOAS))],
 )
 def get_print_agent_status(
     branch_id: UUID,
@@ -189,6 +223,7 @@ def get_print_agent_status(
 @router.get(
     "/branches/{branch_id}/printers",
     response_model=PrintAgentPrintersResponse,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
 )
 def list_print_agent_printers(
     branch_id: UUID,
@@ -203,6 +238,11 @@ def list_print_agent_printers(
     "/branches/{branch_id}/print-test",
     response_model=PrintTestResponse,
     status_code=status.HTTP_202_ACCEPTED,
+    # PESSOAS: e o botao de quem esta EM PE na impressora tentando descobrir
+    # por que a comanda nao saiu. Custa uma tira de bobina e responde a
+    # pergunta na hora; exigir o gerente para isso e transformar um teste de
+    # dez segundos numa ligacao telefonica.
+    dependencies=[Depends(exigir_papel(PESSOAS))],
 )
 def request_print_test(
     branch_id: UUID,

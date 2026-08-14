@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.admin_auth import get_current_admin
+from src.api.dependencies.admin_scope import GERENCIA, SOMENTE_DONO, exigir_papel
 from src.api.dependencies.database import get_db
 from src.models.admin_user_model import AdminUser
 from src.schemas.admin_report_schema import (
@@ -26,10 +27,20 @@ from src.services.admin_report_service import (
 # faturamento do periodo.
 #
 # Todas as rotas daqui usam `get_current_admin` e nao `get_admin_scope`: o
-# relatorio e do RESTAURANTE, nao da filial. Um manager preso a uma filial
+# relatorio e do RESTAURANTE, nao da filial. Um usuario preso a uma filial
 # ainda ve o faturamento do restaurante inteiro — a mesma situacao que ja
 # vale para cardapio e cupom, que tambem nao tem filial. Quando a tela pedir
 # recorte por filial, e aqui e no repositorio que entra o `branch_id`.
+#
+# **E por causa dessa frase que o papel importa tanto AQUI.** Enquanto nao ha
+# recorte de filial, "ler relatorio" e ler o restaurante inteiro, e nao a loja
+# em que a pessoa trabalha. Entao a divisao e por dinheiro:
+#
+# - dinheiro (faturamento, comissao, ticket medio, formas de pagamento):
+#   SOMENTE_DONO. Comissao e o percentual negociado por contrato (armadilha
+#   17); faturamento por dia e o desempenho do negocio.
+# - operacao (o que mais vende, o que e cancelado): GERENCIA. Quem toca a
+#   loja precisa dos dois para trabalhar, e nenhum dos dois diz quanto entrou.
 router = APIRouter(prefix="/admin/reports", tags=["admin reports"])
 
 # Repetido nas cinco rotas de Desempenho. Ficam como constante para que a
@@ -38,7 +49,11 @@ _START_DATE = Query(..., description="Primeiro dia do periodo (inclusive)")
 _END_DATE = Query(..., description="Ultimo dia do periodo (inclusive)")
 
 
-@router.get("/commission", response_model=CommissionReportResponse)
+@router.get(
+    "/commission",
+    response_model=CommissionReportResponse,
+    dependencies=[Depends(exigir_papel(SOMENTE_DONO))],
+)
 def commission_report(
     start_date: date = Query(..., description="Primeiro dia do periodo (inclusive)"),
     end_date: date = Query(..., description="Ultimo dia do periodo (inclusive)"),
@@ -58,7 +73,11 @@ def commission_report(
     )
 
 
-@router.get("/summary", response_model=SalesSummaryResponse)
+@router.get(
+    "/summary",
+    response_model=SalesSummaryResponse,
+    dependencies=[Depends(exigir_papel(SOMENTE_DONO))],
+)
 def sales_summary(
     start_date: date = _START_DATE,
     end_date: date = _END_DATE,
@@ -83,7 +102,11 @@ def sales_summary(
     )
 
 
-@router.get("/sales-by-day", response_model=SalesByDayResponse)
+@router.get(
+    "/sales-by-day",
+    response_model=SalesByDayResponse,
+    dependencies=[Depends(exigir_papel(SOMENTE_DONO))],
+)
 def sales_by_day(
     start_date: date = _START_DATE,
     end_date: date = _END_DATE,
@@ -103,7 +126,11 @@ def sales_by_day(
     )
 
 
-@router.get("/payment-methods", response_model=PaymentMethodsResponse)
+@router.get(
+    "/payment-methods",
+    response_model=PaymentMethodsResponse,
+    dependencies=[Depends(exigir_papel(SOMENTE_DONO))],
+)
 def payment_methods_report(
     start_date: date = _START_DATE,
     end_date: date = _END_DATE,
@@ -122,7 +149,11 @@ def payment_methods_report(
     )
 
 
-@router.get("/products", response_model=ProductSalesResponse)
+@router.get(
+    "/products",
+    response_model=ProductSalesResponse,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
 def product_sales_report(
     start_date: date = _START_DATE,
     end_date: date = _END_DATE,
@@ -154,7 +185,11 @@ def product_sales_report(
     )
 
 
-@router.get("/cancellations", response_model=CancellationsResponse)
+@router.get(
+    "/cancellations",
+    response_model=CancellationsResponse,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
 def cancellations_report(
     start_date: date = _START_DATE,
     end_date: date = _END_DATE,

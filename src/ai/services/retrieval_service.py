@@ -26,14 +26,17 @@ class RetrievalService:
         top_k: int = 5,
     ) -> list[dict[str, Any]]:
         """Return a compact context for the top matching products."""
-        cache_key = chat_cache.key(restaurant_id, question)
+        # Duas chaves, e nao uma: o vetor da pergunta sobrevive ao reindex, o
+        # resultado da busca nao. Ver `ChatCache.embedding_key`/`retrieval_key`.
+        embedding_cache_key = chat_cache.embedding_key(restaurant_id, question)
+        retrieval_cache_key = chat_cache.retrieval_key(restaurant_id, question)
 
         embedding_started_at = perf_counter()
-        embedding = chat_cache.get_embedding(cache_key)
+        embedding = chat_cache.get_embedding(embedding_cache_key)
         embedding_cache_hit = embedding is not None
         if embedding is None:
             embedding = self.embedding_service.generate_embedding(question)
-            chat_cache.set_embedding(cache_key, embedding)
+            chat_cache.set_embedding(embedding_cache_key, embedding)
         logger.info(
             "[AI /chat perf] embedding_ms=%.2f",
             (perf_counter() - embedding_started_at) * 1000,
@@ -44,7 +47,7 @@ class RetrievalService:
         )
 
         retrieval_started_at = perf_counter()
-        retrieved_products = chat_cache.get_retrieval(cache_key)
+        retrieved_products = chat_cache.get_retrieval(retrieval_cache_key)
         retrieval_cache_hit = retrieved_products is not None
         if retrieved_products is None:
             products = self.ai_repository.similarity_search(
@@ -55,7 +58,7 @@ class RetrievalService:
             retrieved_products = [
                 self._format_retrieved_product(product) for product in products
             ]
-            chat_cache.set_retrieval(cache_key, retrieved_products)
+            chat_cache.set_retrieval(retrieval_cache_key, retrieved_products)
         logger.info(
             "[AI /chat perf] retrieval_ms=%.2f",
             (perf_counter() - retrieval_started_at) * 1000,

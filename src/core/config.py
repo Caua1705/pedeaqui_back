@@ -50,6 +50,19 @@ class Settings(BaseSettings):
     MODEL_NAME: str = "gpt-5-mini"
     EMBEDDING_MODEL: str = "text-embedding-3-small"
 
+    # Varredura que mantem o indice do Rapi em dia (scripts/reindex_worker.py).
+    #
+    # Um minuto e o atraso maximo entre o lojista salvar e o Rapi saber. Podia
+    # ser menos, mas cada ciclo e uma consulta sobre `products` inteiro: o custo
+    # e proporcional ao TAMANHO DO CARDAPIO vezes a frequencia, e nao ao numero
+    # de mudancas. Se um dia o catalogo crescer a ponto de isso pesar, o que
+    # sobe e este numero — nao o desenho.
+    AI_REINDEX_INTERVAL_SECONDS: int = 60
+    # Teto de produtos por ciclo. Segura o estrago de uma importacao grande:
+    # 500 produtos novos viram 10 ciclos de 50, e nao 500 chamadas seguidas a
+    # OpenAI competindo com o resto.
+    AI_REINDEX_BATCH_SIZE: int = 50
+
     GOOGLE_MAPS_ROUTES_API_KEY: str = ""
     GOOGLE_MAPS_ROUTES_BASE_URL: str = "https://routes.googleapis.com"
     GOOGLE_MAPS_TIMEOUT_SECONDS: float = 5

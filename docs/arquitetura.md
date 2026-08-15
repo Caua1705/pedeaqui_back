@@ -46,7 +46,8 @@ src/
   utils/                   dinheiro (Decimal), normalização, senha/token, cripto, imagens
 alembic/versions/          migrações versionadas — a fonte da verdade do schema
 migrations/                arquivo histórico congelado dos 12 .sql aplicados a mão. NÃO rode.
-scripts/                   operação: criar lojista, credencial de pagamento, limpeza, reindex
+scripts/                   operação: criar lojista, credencial de pagamento, limpeza,
+                           e o worker que mantém o índice do Rapi em dia
 print-agent/               projeto Python SEPARADO, roda no PC da loja. Ver impressao.md
 tests/                     614 testes da API, sem banco real (fakes em memória)
 ```
@@ -280,7 +281,7 @@ para não se confundir com status operacional na mesma tabela.
 |---|---|---|
 | **Google Routes** (`integrations/google_maps_routes_client.py`) | geocodifica o endereço e calcula distância/tempo | Sem taxa calculada. Cai para `restaurant_settings.default_delivery_fee` se houver (`provider="configured_fallback"`); **sem ela, todo pedido de entrega é recusado** com `route_unavailable`. Retirada continua funcionando. A chave é validada no boot e **derruba a API** se faltar. |
 | **Mercado Pago** (`integrations/payment_gateway.py`) | cobrança pix e confirmação por webhook | Cobrança não sai: 503 `gateway_unavailable` (retentável) ou 503 `payment_unavailable` / 502 `payment_rejected` (não retentáveis). O pedido **continua de pé** em `payment_status="pending"` — não é cancelado. Nenhum pedido online consegue ser aceito enquanto durar. |
-| **OpenAI** (`ai/`) | chat do Rapi: embedding + LLM | Só o `/chat` quebra. Pedido, cardápio, painel e impressão seguem intactos. Embeddings são gerados fora do ciclo HTTP por `scripts/reindex_ai.py` — produto novo não aparece no chat até reindexar. |
+| **OpenAI** (`ai/`) | chat do Rapi: embedding + LLM | Só o `/chat` quebra. Pedido, cardápio, painel e impressão seguem intactos. Os embeddings são gerados fora do ciclo HTTP pelo container `reindex`; com a OpenAI fora, a fila de produtos atrasados cresce, o painel não sente nada e o chat serve o cardápio anterior. |
 | **Resend** (`services/email_service.py`) | código de verificação e de reset de senha | Cadastro novo e recuperação de senha param. Login de quem já tem conta verificada continua. Sem `RESEND_API_KEY` a rota responde 500. |
 | **Supabase Storage** (`integrations/supabase_storage_client.py`) | upload de imagem de produto no painel | Só o upload responde 503. Leitura das imagens já enviadas continua — o bucket é público. |
 | **Redis** (opcional) | cache de estimativa e contador de rate limit | Sem `REDIS_URL` os dois caem para memória do processo. Funciona com 1 worker; com N, o rate limit efetivo vira N × o configurado e o cache do Maps é perdido a cada deploy. Avisado no boot. |
@@ -297,6 +298,22 @@ Duas defesas que importam: ids que o LLM inventou são descartados
 (`_validate_selected_product_ids`), e os produtos são recarregados do banco pelo
 id (`_hydrate_products`) — **preço e nome que chegam ao cliente vêm do banco,
 nunca do que o LLM escreveu.**
+
+**O índice se mantém sozinho** desde o container `reindex`
+(`scripts/reindex_worker.py`): a cada minuto ele compara
+`ai_product_embeddings.updated_at` com o `GREATEST(products.updated_at,
+categories.updated_at)` e põe em dia quem estiver atrás. Não há fila nem gancho
+no painel — `products.updated_at` é mantido pelo TRIGGER
+`trg_products_updated_at`, dentro do banco, então edição por SQL manual ou
+script de importação entra na varredura do mesmo jeito. Produto novo aparece no
+chat em até um minuto; antes disto, só depois de alguém lembrar de rodar
+`reindex_ai.py` à mão.
+
+Duas propriedades do worker que não são detalhe de implementação: ele grava em
+`ai_product_embeddings.updated_at` **a versão do produto que indexou**, e não a
+hora em que indexou (senão uma edição salva durante a geração do vetor se
+perderia em silêncio); e quando o texto indexado não mudou, ele só carimba a
+linha, sem chamar a OpenAI — é o que faz "acabou o X" não custar um embedding.
 
 O histórico da sessão é um dicionário no processo (1h, 20 mensagens): com mais de
 um worker o Rapi "esquece" a conversa. Não há caminho de Redis para ele.

@@ -68,6 +68,42 @@ services:
     networks:
       - n8n_default
 
+  # Mantém o índice do Rapi em dia: produto novo ou editado no painel vira
+  # embedding em até um minuto, sem ninguém rodar nada.
+  #
+  # POR QUE UM CONTAINER PRÓPRIO. A alternativa era o `BackgroundTasks` do
+  # FastAPI, dentro da API. Ficaria mais barato de escrever e errado nos dois
+  # pontos que importam: a chamada à OpenAI passaria a acontecer dentro do
+  # processo que atende pedido (que hoje roda um worker só), e o trabalho
+  # morreria com o container — um deploy no meio de uma edição deixaria o
+  # produto fora do índice em silêncio, que é exatamente o bug que isto veio
+  # consertar.
+  #
+  # O laço fica DENTRO do Python, ao contrário do container de `limpeza` logo
+  # acima. Lá o `sh` repete uma vez por dia; aqui seria um interpretador novo
+  # por minuto, recriando o pool de conexões sessenta vezes por hora para, na
+  # maioria das vezes, não achar nada.
+  reindex:
+    build: .
+    container_name: pedeaqui-reindex
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      # Ordem de partida só, como no `limpeza`. Se o schema ainda não estiver
+      # migrado, o primeiro ciclo erra, é logado e o próximo tenta de novo.
+      - pedeaqui-api
+      - redis
+    # ENTRYPOINT VAZIO pelo mesmo motivo do `limpeza`: o `docker-entrypoint.sh`
+    # roda `alembic upgrade head`, e dois containers migrando o mesmo banco ao
+    # mesmo tempo é corrida de verdade. Só a API migra.
+    entrypoint: []
+    command: ["python", "scripts/reindex_worker.py"]
+    # Não passa pelo Traefik e não publica porta: fala com o Postgres pela
+    # DATABASE_URL e com o Redis pelo nome de serviço.
+    networks:
+      - n8n_default
+
   # Contadores de rate limit e cache de estimativa de entrega. Sem ele os dois
   # vivem no processo: o limite efetivo vira N x o configurado (um balde por
   # worker) e o cache do Google é perdido a cada deploy, em chamadas pagas.

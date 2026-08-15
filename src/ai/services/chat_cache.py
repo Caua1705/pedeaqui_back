@@ -1,3 +1,4 @@
+import logging
 import re
 import threading
 import unicodedata
@@ -6,6 +7,10 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Any, Generic, TypeVar
 
+from src.core.config import settings
+
+
+logger = logging.getLogger("uvicorn.error")
 
 T = TypeVar("T")
 _EMBEDDING_TTL_SECONDS = 60 * 60
@@ -16,6 +21,77 @@ _RETRIEVAL_TTL_SECONDS = 20 * 60
 class _CacheEntry(Generic[T]):
     value: T
     expires_at: float
+
+
+class MenuGeneration:
+    """Contador por restaurante que invalida o cache de busca quando o indice muda.
+
+    Mora no Redis, e nao em memoria, por um motivo simples: quem MUDA o indice
+    e o worker de reindex, que e outro processo, em outro container. Um
+    contador em memoria nunca veria o incremento dele, e o cache de busca
+    continuaria servindo o cardapio velho pelos 20 minutos do TTL — que e
+    exatamente o atraso que a varredura automatica existe para eliminar.
+
+    Sem `REDIS_URL` o contador fica parado em zero e nada quebra: o cache volta
+    a ser so-TTL, que e o comportamento que ja existia antes deste arquivo
+    mudar. Degradar em silencio e aceitavel aqui porque o TTL continua sendo o
+    teto do erro — no pior caso o Rapi demora 20 minutos para conhecer o
+    produto novo, em vez de nunca.
+    """
+
+    def __init__(self, redis_client=None) -> None:
+        self.redis = redis_client
+        if self.redis is not None:
+            return
+        if not settings.REDIS_URL:
+            return
+        try:
+            import redis
+
+            self.redis = redis.Redis.from_url(
+                settings.REDIS_URL,
+                decode_responses=True,
+                socket_timeout=1,
+                socket_connect_timeout=1,
+            )
+        except Exception:
+            logger.warning("[AI cache] menu_generation_redis_initialization_failed=true")
+
+    def current(self, restaurant_id: object) -> int:
+        if self.redis is None:
+            return 0
+        try:
+            value = self.redis.get(self._key(restaurant_id))
+        except Exception:
+            logger.warning("[AI cache] menu_generation_read_failed=true")
+            return 0
+        if value is None:
+            return 0
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    def bump(self, restaurant_id: object) -> None:
+        """Chamado pelo reindex depois de gravar. Falha aqui nao pode derrubar o worker.
+
+        O custo de um incremento perdido e um cache de busca servindo o
+        cardapio anterior ate o TTL — mesmo estado de quando nao ha Redis.
+        Bem menor que o de abortar a indexacao por causa do cache.
+        """
+        if self.redis is None:
+            return
+        try:
+            self.redis.incr(self._key(restaurant_id))
+        except Exception:
+            logger.warning("[AI cache] menu_generation_bump_failed=true")
+
+    @staticmethod
+    def _key(restaurant_id: object) -> str:
+        return f"ai:menu_generation:{restaurant_id}"
+
+
+menu_generation = MenuGeneration()
 
 
 class ChatCache:
@@ -40,8 +116,26 @@ class ChatCache:
         )
         return re.sub(r"\s+", " ", normalized)
 
-    def key(self, restaurant_id: object, message: str) -> str:
+    def embedding_key(self, restaurant_id: object, message: str) -> str:
+        """Chave do vetor da PERGUNTA. De proposito sem a geracao do cardapio.
+
+        O embedding de "tem pizza vegana?" e o mesmo antes e depois de o
+        lojista mexer no menu — a pergunta nao mudou. Botar a geracao nesta
+        chave jogaria fora, a cada reindex, justamente as chamadas que custam
+        dinheiro.
+        """
         return f"{restaurant_id}:{self.normalize_message(message)}"
+
+    def retrieval_key(self, restaurant_id: object, message: str) -> str:
+        """Chave dos produtos encontrados. Com a geracao, porque o resultado envelhece.
+
+        O reindex incrementa a geracao daquele restaurante e todas as entradas
+        anteriores deixam de ser alcancaveis — sem varrer, sem apagar, sem
+        precisar saber quais perguntas estavam guardadas. As antigas caem
+        sozinhas quando o TTL vence.
+        """
+        generation = menu_generation.current(restaurant_id)
+        return f"{restaurant_id}:g{generation}:{self.normalize_message(message)}"
 
     def get_embedding(self, key: str) -> list[float] | None:
         value = self._get(self._embeddings, key)

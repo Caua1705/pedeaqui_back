@@ -174,6 +174,7 @@ docker logs pedeaqui-api             | grep "\[Startup\]"
 | `[AdminStream]` | `Last-Event-ID` inválido no stream do painel |
 | `[Impressao]` | item que caiu na via "SEM SETOR" — sempre configuração errada |
 | `[AI /chat]` | chat: tempo por etapa e cache |
+| `[AI reindex]` | índice do Rapi: quantos produtos atrasados e há quanto tempo (container `reindex`) |
 | `[Contract validation]` | 422 em rota crítica |
 | `[Pagamento][mercadopago]` | latência/status de cada chamada e, no erro, código e causa |
 | `[Pagamento]` | cobrança que não saiu, webhook aplicado ou ignorado |
@@ -197,6 +198,11 @@ grep "requisicao sem Idempotency-Key"
 # conta do Google subindo
 grep "estimativa nao reaproveitada motivo="
 
+# o Rapi falando de um cardápio velho: a varredura parou ou está atrás.
+# `mais_antigo_s` é a idade da mudança mais antiga ainda não indexada — passar
+# de uns poucos minutos significa OpenAI fora, ou o container `reindex` parado.
+docker logs pedeaqui-reindex --tail 50 | grep "mais_antigo_s"
+
 # comanda saindo errada
 grep "item sem setor utilizavel"
 ```
@@ -215,8 +221,11 @@ docker exec pedeaqui-api python scripts/audit_indexes.py
 - **`cleanup_idempotency_keys.py`** apaga chaves de idempotência **e** estimativas
   de entrega vencidas. Seguro: passado o TTL nenhuma das duas protege ou vale mais
   nada. Bota no cron.
-- **`reindex_ai.py`** regenera os embeddings dos produtos. Rode depois de mexer no
-  cardápio, senão o chat continua recomendando o cardápio velho.
+- **`reindex_ai.py`** regenera os embeddings dos produtos. **O dia a dia não
+  depende mais dele:** o container `reindex` faz isso sozinho a cada minuto. Rode
+  à mão só quando quiser o trabalho todo agora — restaurante novo com o cardápio
+  recém-importado, ou troca de `EMBEDDING_MODEL`, que invalida todo vetor já
+  gravado.
 - **`audit_indexes.py`** procura colisão de nome e duplicata de definição entre
   índices.
 

@@ -198,6 +198,16 @@ grep "requisicao sem Idempotency-Key"
 # conta do Google subindo
 grep "estimativa nao reaproveitada motivo="
 
+# o prompt escorregando: o modelo cita produto e não seleciona, e o resgate
+# no código está segurando a resposta. Frequência alta = hora de mexer no
+# prompt, não no código.
+grep "citou .* produto(s) no texto e nao selecionou nenhum"
+
+# preço do texto diferente do preço do cartão. Deve ser raríssimo (exige o
+# lojista salvar um preço no segundo exato de uma pergunta). Se aparecer com
+# frequência, o preço está vindo de algum lugar que não é a linha viva.
+grep "preco divergente entre o texto e o cartao"
+
 # o Rapi falando de um cardápio velho: a varredura parou ou está atrás.
 # `mais_antigo_s` é a idade da mudança mais antiga ainda não indexada — passar
 # de uns poucos minutos significa OpenAI fora, ou o container `reindex` parado.

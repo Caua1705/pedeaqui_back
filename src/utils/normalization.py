@@ -27,6 +27,7 @@ _EMAIL_RE = re.compile(rf"{_EMAIL_LOCAL}@{_EMAIL_DOMAIN}")
 # verificacao.
 MAX_EMAIL_LENGTH = 254
 _NON_SLUG_RE = re.compile(r"[^a-z0-9]+")
+_WHITESPACE_RE = re.compile(r"\s+")
 # Como CPF se escreve: digitos, ponto, hifen e espaco. Nada mais.
 _CPF_PUNCTUATION_RE = re.compile(r"[\d.\-\s]+")
 
@@ -82,6 +83,24 @@ def normalize_text(value: str) -> str:
     formularios em NFC) e a que ocupa menos bytes.
     """
     return unicodedata.normalize("NFC", value).strip()
+
+
+def fold_for_match(value: str) -> str:
+    """Texto achatado para COMPARAR — nunca para gravar.
+
+    Minusculas, sem acento, espacos colapsados. Serve para procurar o nome de
+    um produto dentro da resposta do modelo: ele escreve "**Torta de Limão**",
+    o banco guarda "Torta de limao", e sem achatar os DOIS lados a busca por
+    substring nao acha nada.
+
+    Nao confundir com `normalize_text`, que e o que se GRAVA (NFC, acento
+    preservado). Gravar o resultado disto apagaria os acentos do cardapio.
+    """
+    decomposed = unicodedata.normalize("NFKD", value)
+    without_accents = "".join(
+        character for character in decomposed if not unicodedata.combining(character)
+    )
+    return _WHITESPACE_RE.sub(" ", without_accents.lower()).strip()
 
 
 def slugify(value: str) -> str:

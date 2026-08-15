@@ -299,6 +299,21 @@ Duas defesas que importam: ids que o LLM inventou são descartados
 id (`_hydrate_products`) — **preço e nome que chegam ao cliente vêm do banco,
 nunca do que o LLM escreveu.**
 
+**O preço que o modelo vê** é carimbado por requisição em
+`RetrievalService._with_current_prices`, da linha viva de `products`, e de
+propósito **fora** do cache de busca: preço servido de um cache de 20 minutos
+faria toda alteração divergir do cartão por até 20 minutos, na mesma resposta. A
+mesma consulta aplica `is_active`/`is_available`, então o que chega ao modelo é
+sempre um produto que a hidratação consegue transformar em cartão. Sobra a
+janela da chamada ao modelo (~1s), que `_log_price_divergence` denuncia no log
+em vez de corrigir — o cartão já está certo.
+
+**Produto citado no texto vira cartão.** Se o modelo nomeia produtos e devolve
+`selected_product_ids` vazio, `_rescue_products_named_in_text` casa os nomes do
+texto com os da busca e preenche a seleção. Só age com a seleção vazia, e só
+alcança produto que a nossa busca devolveu — é a direção oposta de
+`_validate_selected_product_ids`, que continua sendo quem barra id inventado.
+
 **O índice se mantém sozinho** desde o container `reindex`
 (`scripts/reindex_worker.py`): a cada minuto ele compara
 `ai_product_embeddings.updated_at` com o `GREATEST(products.updated_at,

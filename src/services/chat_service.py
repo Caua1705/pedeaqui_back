@@ -16,6 +16,8 @@ from src.repositories.product_repository import ProductRepository
 from src.repositories.restaurant_repository import RestaurantRepository
 from src.schemas.ai_feedback_schema import AIFeedbackRequest, AIFeedbackResponse
 from src.services.menu_service import MenuService
+from src.utils.money import format_money_br
+from src.utils.normalization import fold_for_match
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -138,7 +140,13 @@ class ChatService:
             retrieved_products=retrieved_products,
             selected_product_ids=llm_response.selected_product_ids,
         )
+        selected_product_ids = self._rescue_products_named_in_text(
+            message=llm_response.message,
+            retrieved_products=retrieved_products,
+            selected_product_ids=selected_product_ids,
+        )
         products = self._hydrate_products(restaurant_id, selected_product_ids)
+        self._log_price_divergence(retrieved_products, products)
         response = self._build_response(
             llm_response=llm_response,
             selected_product_ids=selected_product_ids,
@@ -222,6 +230,76 @@ class ChatService:
         )
         return valid
 
+    @staticmethod
+    def _rescue_products_named_in_text(
+        message: str,
+        retrieved_products: list[dict],
+        selected_product_ids: list[uuid.UUID],
+    ) -> list[uuid.UUID]:
+        """O modelo citou produtos no texto e nao selecionou nenhum: salva a resposta.
+
+        E o defeito visto em producao: texto com "**Pudim**, **Brownie** e
+        **Torta de Limao**" em negrito e `selected_product_ids` vazio. Sem
+        produto valido, `_response_type` devolve "text", e o cliente le a
+        recomendacao sem nenhum cartao para tocar.
+
+        SO age quando a selecao ficou VAZIA. Selecao nao vazia e escolha do
+        modelo, e acrescentar produto ali seria adivinhar: em "nao temos
+        **Pudim**, mas temos **Brownie**" o Pudim esta citado e nao deve virar
+        cartao.
+
+        A DIRECAO e o oposto de `_validate_selected_product_ids`, e por isso as
+        duas convivem. Aquela existe para NAO confiar no modelo: id inventado
+        nao vira cartao, e nada aqui a enfraquece — o resgate so alcanca
+        produto que a NOSSA busca devolveu e que o proprio modelo escreveu no
+        texto. Nao ha nada para inventar, e o pior caso e um cartao a mais de
+        um produto cujo nome o cliente acabou de ler.
+        """
+        if selected_product_ids:
+            return selected_product_ids
+
+        rescued = _products_named_in(message, retrieved_products)
+        if not rescued:
+            return selected_product_ids
+
+        logger.warning(
+            "[AI /chat] o modelo citou %d produto(s) no texto e nao selecionou nenhum. "
+            "Resgatados pelo nome.",
+            len(rescued),
+        )
+        return rescued
+
+    @staticmethod
+    def _log_price_divergence(retrieved_products: list[dict], products: list) -> None:
+        """Avisa quando o preco que o modelo VIU nao e o que o cartao MOSTRA.
+
+        Os dois saem da mesma tabela `products`, em leituras diferentes: a do
+        contexto acontece antes da chamada ao modelo, a do cartao depois. No
+        meio cabe cerca de um segundo, e uma alteracao de preco salva pelo
+        lojista nessa janela e a unica divergencia que sobra depois de o preco
+        ter saido do cache de busca.
+
+        Nao corrige, de proposito. O cartao ja esta certo — ele vem do banco —
+        e reescrever a frase do modelo exigiria adivinhar qual pedaco do texto
+        falava daquele preco. O que esta linha faz e tornar o caso VISIVEL:
+        sem ela, a unica testemunha da divergencia seria o cliente.
+        """
+        shown_to_model = {
+            str(product["id"]): product.get("price") for product in retrieved_products
+        }
+        for product in products:
+            on_card = format_money_br(product.price)
+            in_context = shown_to_model.get(str(product.id))
+            if in_context is None or in_context == on_card:
+                continue
+            logger.warning(
+                "[AI /chat] preco divergente entre o texto e o cartao | product_id=%s "
+                "| contexto=%s | cartao=%s",
+                product.id,
+                in_context,
+                on_card,
+            )
+
     def _hydrate_products(
         self,
         restaurant_id: uuid.UUID,
@@ -294,6 +372,45 @@ class ChatService:
             return "text"
 
         return llm_response.response_type
+
+
+def _products_named_in(message: str, retrieved_products: list[dict]) -> list[uuid.UUID]:
+    """Ids dos produtos da busca cujo nome aparece no texto, na ordem do texto.
+
+    A comparacao e achatada (`fold_for_match`): o modelo escreve
+    "**Torta de Limão**", o banco guarda "Torta de limao", e sem achatar os
+    DOIS lados nada casa. Os asteriscos do negrito nao atrapalham — o nome
+    continua sendo substring de `**nome**`.
+
+    Os nomes sao procurados do MAIS LONGO para o mais curto, e o trecho que
+    casa e apagado do texto. Sem isso, "**Coca-Cola Zero**" casaria tambem com
+    "Coca-Cola" e o cliente receberia dois cartoes por um unico nome citado.
+    """
+    text = fold_for_match(message)
+    found: list[tuple[int, uuid.UUID]] = []
+
+    for name, product_id in _names_longest_first(retrieved_products):
+        position = text.find(name)
+        if position < 0:
+            continue
+        found.append((position, product_id))
+        text = text[:position] + (" " * len(name)) + text[position + len(name):]
+
+    found.sort(key=lambda item: item[0])
+    return [product_id for _, product_id in found]
+
+
+def _names_longest_first(retrieved_products: list[dict]) -> list[tuple[str, uuid.UUID]]:
+    names: list[tuple[str, uuid.UUID]] = []
+    for product in retrieved_products:
+        product_id = _as_product_id(product.get("id"))
+        name = fold_for_match(str(product.get("name") or ""))
+        if product_id is None or not name:
+            continue
+        names.append((name, product_id))
+
+    names.sort(key=lambda item: len(item[0]), reverse=True)
+    return names
 
 
 def _as_product_id(raw_id) -> uuid.UUID | None:

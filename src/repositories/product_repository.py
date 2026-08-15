@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -51,6 +52,34 @@ class ProductRepository:
             )
         )
         return self.db.scalar(stmt)
+
+    def sellable_prices_by_id(
+        self,
+        restaurant_id: uuid.UUID,
+        product_ids: list[uuid.UUID],
+    ) -> dict[uuid.UUID, Decimal]:
+        """So o preco vigente, por id. Consulta de chave primaria, sem opcao junto.
+
+        Existe para o preco que vai ao MODELO sair da linha viva de `products`
+        a cada requisicao, e nunca do cache de busca de 20 minutos — ver
+        `RetrievalService._with_current_prices`.
+
+        Os filtros sao os MESMOS de `list_active_by_ids`, e nao por simetria:
+        e o que garante que todo produto que chega ao modelo consegue virar
+        cartao depois. Sem eles, um produto marcado como indisponivel enquanto
+        estava no cache seria recomendado no texto e sumiria na hidratacao —
+        exatamente a resposta com produto no texto e `products` vazio.
+        """
+        if not product_ids:
+            return {}
+
+        stmt = select(Product.id, Product.price).where(
+            Product.restaurant_id == restaurant_id,
+            Product.id.in_(product_ids),
+            Product.is_active.is_(True),
+            Product.is_available.is_(True),
+        )
+        return {row.id: row.price for row in self.db.execute(stmt)}
 
     def list_active_by_ids(self, restaurant_id: uuid.UUID, product_ids: list[uuid.UUID]) -> list[Product]:
         stmt = (

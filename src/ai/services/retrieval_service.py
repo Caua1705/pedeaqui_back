@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from src.ai.services.chat_cache import chat_cache
 from src.ai.services.embedding_service import EmbeddingService
 from src.repositories.ai_repository import AIRepository
+from src.repositories.product_repository import ProductRepository
+from src.utils.money import format_money_br
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -18,6 +20,7 @@ class RetrievalService:
     def __init__(self, db: Session):
         self.embedding_service = EmbeddingService()
         self.ai_repository = AIRepository(db)
+        self.product_repository = ProductRepository(db)
 
     def retrieve_products(
         self,
@@ -67,11 +70,46 @@ class RetrievalService:
             "[AI /chat cache] retrieval_cache_hit=%s",
             str(retrieval_cache_hit).lower(),
         )
+        retrieved_products = self._with_current_prices(restaurant_id, retrieved_products)
         logger.info("[AI /chat perf] context_products=%d", len(retrieved_products))
         return retrieved_products
 
+    def _with_current_prices(
+        self,
+        restaurant_id: uuid.UUID,
+        retrieved_products: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Carimba o preco vigente em cada produto, a cada requisicao.
+
+        O preco NAO entra no que vai para o cache (`_format_retrieved_product`
+        nao o inclui), e essa e a garantia principal contra o texto do Rapi
+        divergir do cartao. O cache de busca dura 20 minutos: servir preco de
+        la faria TODA alteracao de preco divergir por ate 20 minutos — o texto
+        com o valor velho e o cartao com o novo, na mesma resposta.
+
+        Aqui a leitura e da linha viva de `products`, no mesmo request em que
+        o cartao vai ser hidratado. O que sobra e a janela da propria chamada
+        ao modelo (~1s), que `ChatService._log_price_divergence` confere
+        depois.
+
+        Produto que nao volta da consulta some do contexto: ele foi desativado
+        ou ficou indisponivel depois de entrar no cache, e o modelo nao pode
+        recomendar o que a hidratacao nao vai conseguir transformar em cartao.
+        """
+        product_ids = [product["id"] for product in retrieved_products]
+        prices = self.product_repository.sellable_prices_by_id(restaurant_id, product_ids)
+
+        priced_products = []
+        for product in retrieved_products:
+            price = prices.get(product["id"])
+            if price is None:
+                continue
+            priced_products.append({**product, "price": format_money_br(price)})
+        return priced_products
+
     @staticmethod
     def _format_retrieved_product(product: dict[str, Any]) -> dict[str, Any]:
+        """O que vai para o CACHE. Sem preco de proposito — ver `_with_current_prices`."""
         metadata = product.get("metadata") or {}
         compact_product = {
             "id": product["id"],

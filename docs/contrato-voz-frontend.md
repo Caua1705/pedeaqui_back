@@ -69,7 +69,7 @@ a UI precisar dele.
 7. ao encerrar (por qualquer motivo):
       pára as faixas do microfone, fecha a conexão
    POST  /voice/session/{sessao_id}/ended     (nosso backend)
-      corpo: { "motivo": "..." }
+      corpo: { "motivo": "...", + o consumo acumulado (§4.3.1) }
 ```
 
 ### O que guardar entre uma chamada e outra
@@ -239,12 +239,26 @@ por causa dela; registre e siga.
 **Requisição**
 
 ```json
-{ "motivo": "teto de 300s atingido" }
+{
+  "motivo": "teto de 300s atingido",
+  "input_audio_tokens": 4210,
+  "input_text_tokens": 180,
+  "output_audio_tokens": 9130,
+  "output_text_tokens": 64,
+  "cached_tokens": 1024,
+  "duration_seconds": 96
+}
 ```
 
 | Campo | Tipo | Obrigatório | Restrição |
 |---|---|---|---|
 | `motivo` | string | sim | 1 a 200 caracteres, texto livre |
+| `input_audio_tokens` | inteiro | **não** | 0 a 2.000.000.000 |
+| `input_text_tokens` | inteiro | **não** | 0 a 2.000.000.000 |
+| `output_audio_tokens` | inteiro | **não** | 0 a 2.000.000.000 |
+| `output_text_tokens` | inteiro | **não** | 0 a 2.000.000.000 |
+| `cached_tokens` | inteiro | **não** | 0 a 2.000.000.000 |
+| `duration_seconds` | inteiro | **não** | 0 a 2.000.000.000 |
 
 O `motivo` é gravado e aparece no log de operação. Use algo legível e
 consistente: `"o cliente clicou em Parar"`, `"silencio por 45s"`,
@@ -265,11 +279,56 @@ consistente: `"o cliente clicou em Parar"`, `"silencio por 45s"`,
 
 | Código | Corpo | Significa |
 |---|---|---|
-| 422 | corpo padrão de validação | `sessao_id` não é UUID, ou `motivo` vazio/maior que 200 |
+| 422 | corpo padrão de validação | `sessao_id` não é UUID; `motivo` vazio ou maior que 200; algum contador negativo, fracionário ou acima de 2.000.000.000 |
 
 Mande esta chamada com `keepalive: true` no `fetch`, para ela sobreviver à aba
 sendo fechada no mesmo instante. E **não espere a resposta** antes de parar o
 microfone — parar o microfone vem primeiro.
+
+---
+
+#### 4.3.1 Os seis contadores: de onde eles saem
+
+**O backend não vê a conversa.** Ela acontece entre o navegador e a OpenAI, e
+o consumo — que é o que a fatura cobra — chega só ao navegador, no evento
+`response.done`. Sem este corpo, não existe resposta para "quanto esse
+restaurante gastou".
+
+Cada `response.done` traz um `usage`. **Some os de todos os `response.done` da
+sessão** e mande o total uma vez, no `/ended`:
+
+```js
+// a cada response.done
+const uso = evento.response.usage || {};
+const entrada = uso.input_token_details || {};
+const saida = uso.output_token_details || {};
+
+acumulado.input_audio_tokens  += entrada.audio_tokens  || 0;
+acumulado.input_text_tokens   += entrada.text_tokens   || 0;
+acumulado.output_audio_tokens += saida.audio_tokens    || 0;
+acumulado.output_text_tokens  += saida.text_tokens     || 0;
+acumulado.cached_tokens       += entrada.cached_tokens || 0;
+```
+
+`duration_seconds` é medido pelo front: da abertura da conexão de áudio até o
+encerramento, em segundos inteiros.
+
+Três coisas que valem saber:
+
+- **`cached_tokens` é subconjunto da entrada, não uma quinta parcela.** É a
+  fatia dos tokens de entrada que veio do cache e saiu mais barata. Mande-o em
+  separado como está acima; não o desconte de `input_*` nem o some ao total.
+- **Todos são opcionais, e nenhum deles muda o encerramento.** Sessão que
+  encerra sem reportar número nenhum continua encerrando normalmente — o campo
+  fica nulo e o relatório de custo conta essa sessão como "sem número". Não
+  invente zero para preencher: zero significa "reportou zero".
+- **Reportar continua valendo quando o servidor já fechou a sessão.** Se a
+  varredura de teto de duração fechou a linha antes, a resposta vem
+  `{"encerrado": false}` e **os números são gravados assim mesmo** — essa é
+  justamente a sessão mais longa, e portanto a mais cara.
+
+**Não mande texto da conversa, transcrição, nem nada além destes números.** O
+corpo aceita só o que está na tabela acima.
 
 ---
 
@@ -521,7 +580,7 @@ esperando.
 
 | Evento | Para quê |
 |---|---|
-| `response.created` / `response.done` | o controle de resposta ativa do §7.1 |
+| `response.created` / `response.done` | o controle de resposta ativa do §7.1 — e o `usage` do `response.done` é o que alimenta os contadores do §4.3.1 |
 | `input_audio_buffer.speech_started` | zerar o contador de inatividade |
 | `response.output_audio_transcript.done` | transcrição do que o assistente falou (`.transcript`) |
 | `conversation.item.input_audio_transcription.completed` | transcrição do que o cliente falou (`.transcript`) |

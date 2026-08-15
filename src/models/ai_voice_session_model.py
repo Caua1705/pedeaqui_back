@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, Text, TIMESTAMP
+from sqlalchemy import ForeignKey, Integer, Text, TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -35,3 +35,16 @@ class AIVoiceSession(Base):
     expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     ended_reason: Mapped[str | None] = mapped_column(Text)
+
+    # O consumo, reportado pelo navegador ao encerrar. Ver a revisao
+    # 20260815_0023. NULO e "nao reportado", e nao zero: a sessao que encerra
+    # sem mandar numero nenhum continua valendo.
+    #
+    # `cached_tokens` e SUBCONJUNTO da entrada, nao uma quinta parcela — o
+    # total sao os quatro primeiros, e somar o cache junto o conta duas vezes.
+    input_audio_tokens: Mapped[int | None] = mapped_column(Integer)
+    input_text_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_audio_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_text_tokens: Mapped[int | None] = mapped_column(Integer)
+    cached_tokens: Mapped[int | None] = mapped_column(Integer)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer)

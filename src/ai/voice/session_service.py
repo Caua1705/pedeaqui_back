@@ -35,6 +35,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.ai.voice.realtime_client import hangup_call, issue_client_secret
@@ -46,6 +47,39 @@ from src.repositories.voice_session_repository import VoiceSessionRepository
 logger = logging.getLogger("uvicorn.error")
 
 SEM_CALL_ID = "vencida sem call_id — servidor nao consegue desligar"
+
+# INTEGER do Postgres vai ate 2.147.483.647, e esta rota nao tem autenticacao.
+# Numero maior que o teto da coluna nao viraria 422: viraria erro do driver no
+# INSERT, ou seja, 500.
+TETO_DO_CONTADOR = 2_000_000_000
+
+
+class UsoReportado(BaseModel):
+    """O consumo de uma sessao, medido pelo NAVEGADOR e reportado no fim.
+
+    Os nomes sao os do `usage` do evento `response.done` da Realtime, para o
+    front nao ter que traduzir nada — ele soma os eventos da sessao e manda o
+    total. Ver a revisao 20260815_0023 para o que cada um significa.
+
+    **Todos opcionais, e isso e requisito.** O aviso de fim ja e best-effort
+    (a aba pode ser fechada no meio), e uma sessao que encerra sem reportar
+    numero nenhum tem que continuar encerrando.
+
+    E sao SO numeros: nada do texto da conversa, nada de transcricao.
+    """
+
+    input_audio_tokens: int | None = Field(default=None, ge=0, le=TETO_DO_CONTADOR)
+    input_text_tokens: int | None = Field(default=None, ge=0, le=TETO_DO_CONTADOR)
+    output_audio_tokens: int | None = Field(default=None, ge=0, le=TETO_DO_CONTADOR)
+    output_text_tokens: int | None = Field(default=None, ge=0, le=TETO_DO_CONTADOR)
+    cached_tokens: int | None = Field(default=None, ge=0, le=TETO_DO_CONTADOR)
+    duration_seconds: int | None = Field(default=None, ge=0, le=TETO_DO_CONTADOR)
+
+
+# Sai do proprio schema, e nao de uma segunda lista escrita a mao: cada campo
+# tem o nome exato da coluna, e uma lista paralela seria a chance de as duas
+# discordarem depois.
+CAMPOS_DE_USO = tuple(UsoReportado.model_fields)
 
 
 class VoiceSessionService:
@@ -182,14 +216,33 @@ class VoiceSessionService:
         )
         return True
 
-    def encerrar(self, sessao_id: uuid.UUID, motivo: str) -> bool:
+    def encerrar(
+        self,
+        sessao_id: uuid.UUID,
+        motivo: str,
+        uso: UsoReportado | None = None,
+    ) -> bool:
         """Fecha a linha e, se houver `call_id`, desliga na OpenAI tambem.
 
         Desliga mesmo quando o cliente diz que ja encerrou: o cliente reporta o
         que ELE fez, e a conexao pode ter sobrevivido do outro lado.
+
+        O `uso` e opcional e nao participa de nenhuma decisao: e medicao de
+        custo, e nao reportar nada nao muda o encerramento em nada.
         """
         sessao = self.repository.get(sessao_id)
-        if sessao is None or sessao.ended_at is not None:
+        if sessao is None:
+            return False
+
+        # O uso e gravado ANTES do teste de sessao ja encerrada, de proposito.
+        # Quem fecha uma sessao antes do navegador e a varredura do teto de
+        # duracao — ou seja, a sessao mais longa da base, que e a mais cara.
+        # Descartar o numero dela por causa da ordem em que as duas coisas
+        # aconteceram esvaziaria a medicao justamente no caso que ela existe
+        # para enxergar. O retorno continua `False`: a rota nao muda.
+        self._gravar_uso(sessao, uso)
+        if sessao.ended_at is not None:
+            self.db.commit()
             return False
 
         if sessao.openai_call_id:
@@ -204,6 +257,21 @@ class VoiceSessionService:
             sessao.ended_reason,
         )
         return True
+
+    def _gravar_uso(self, sessao: AIVoiceSession, uso: UsoReportado | None) -> None:
+        """Copia para a linha os contadores que vieram preenchidos. Nao commita.
+
+        Campo ausente NAO apaga o que ja estava gravado: o aviso de fim vai com
+        `keepalive` e pode chegar duas vezes, e a segunda — reenviada durante o
+        fechamento da aba — e a que tem mais chance de vir sem os numeros.
+        """
+        if uso is None:
+            return
+
+        for campo in CAMPOS_DE_USO:
+            valor = getattr(uso, campo)
+            if valor is not None:
+                setattr(sessao, campo, valor)
 
     def encerrar_vencidas(self) -> int:
         """Desliga o que passou do teto. Devolve quantas linhas foram fechadas.

@@ -31,7 +31,7 @@ from src.api.rate_limit import VOICE_SESSION_RATE_LIMIT, limiter
 from src.core.config import settings
 from src.models.customer_model import Customer
 from src.ai.voice.search_service import VoiceSearchService
-from src.ai.voice.session_service import VoiceSessionService
+from src.ai.voice.session_service import UsoReportado, VoiceSessionService
 from src.services.chat_service import ChatService
 
 
@@ -48,7 +48,14 @@ class ConexaoRequest(BaseModel):
     call_id: str = Field(min_length=1, max_length=200)
 
 
-class EncerramentoRequest(BaseModel):
+class EncerramentoRequest(UsoReportado):
+    """O motivo, que sempre existiu, mais os contadores de consumo.
+
+    Herda de `UsoReportado` para os seis campos de numero terem UMA definicao
+    so — a mesma que o service recebe. O corpo continua plano: `motivo` e os
+    seis contadores no mesmo nivel.
+    """
+
     motivo: str = Field(min_length=1, max_length=200)
 
 
@@ -134,12 +141,21 @@ def registrar_encerramento(
     payload: EncerramentoRequest,
     db: Session = Depends(get_db),
 ) -> dict:
-    """O navegador avisa que encerrou, e por que.
+    """O navegador avisa que encerrou, e por que — e quanto consumiu.
 
     O servidor desliga na OpenAI mesmo assim quando tem `call_id`: o cliente
     reporta o que ELE fez, e a conexao pode ter sobrevivido do outro lado.
+
+    Os contadores de token sao OPCIONAIS e nenhum deles muda o encerramento.
+    Eles existem porque o consumo so aparece no evento `response.done`, que
+    chega ao navegador — o backend nao ve a conversa e sem este corpo nao teria
+    como saber quanto uma sessao custou. O front soma os eventos da sessao e
+    manda o total; quem nao mandar encerra do mesmo jeito.
+
+    `payload` ja E um `UsoReportado` (o schema herda dele), entao ele vai
+    inteiro para o service sem conversao no meio.
     """
-    encerrou = VoiceSessionService(db).encerrar(sessao_id, payload.motivo)
+    encerrou = VoiceSessionService(db).encerrar(sessao_id, payload.motivo, payload)
     return {"encerrado": encerrou}
 
 

@@ -95,6 +95,23 @@ o navegador abre a sessão de áudio. **Aba esquecida não fatura mais para
 sempre:** a sessão encerra sozinha no teto de duração, na inatividade e quando
 a aba sai de vista. Ver `pagina.html` e `sessao_control_service.py`.
 
+### Quanto foi de verdade, por restaurante
+
+```
+python scripts/voice_usage_report.py --desde 2026-08-01
+```
+
+Sessões, tokens e duração média no período. Os números saem de
+`ai_voice_sessions`, e quem os coloca lá é o NAVEGADOR, no `/ended` — o
+backend não vê a conversa e o consumo só aparece no evento `response.done`
+da Realtime (§4.3.1 de `docs/contrato-voz-frontend.md`).
+
+Duas leituras que o relatório pede: **sessão que não reportou aparece com zero
+token** — a contagem de sessões é do servidor e está sempre certa, os tokens
+dependem do cliente ter avisado, e a diferença entre as duas contagens é a
+margem de erro do período. E **quem cobra é a fatura da OpenAI**; isto aqui é
+o rateio dela.
+
 ## O que barra o abuso
 
 | Barreira | Onde |

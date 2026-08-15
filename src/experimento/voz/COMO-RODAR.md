@@ -63,10 +63,30 @@ que não seja localhost.
 
 ## Custo
 
-`gpt-realtime-mini`: **US$ 10 / 1M tokens de áudio de entrada** e
-**US$ 20 / 1M de saída**. Na prática, algo entre **US$ 0,03 e US$ 0,10 por
-minuto** de conversa, dependendo de quanto cada lado fala.
+`gpt-realtime-mini`, taxas de 15/08/2026: entrada de áudio **1 token por
+100 ms** (600 tok/min) a **US$ 10 / 1M**; saída **1 token por 50 ms**
+(1200 tok/min) a **US$ 20 / 1M**; entrada em cache a **US$ 0,30 / 1M**.
+
+Isso dá **US$ 0,006 por minuto ouvido** e **US$ 0,024 por minuto falado**.
+
+Uma sessão que vai até o teto de 5 minutos custa **US$ 0,09 a US$ 0,13**,
+dependendo de quanto o atendente fala. A conta está em `src/core/config.py`,
+junto das cotas.
 
 Emitir a credencial (`POST /sessao`) não custa nada — o relógio começa quando
-o navegador abre a sessão de áudio. **Uma aba esquecida aberta continua
-faturando.** Não existe teto de duração neste experimento.
+o navegador abre a sessão de áudio. **Aba esquecida não fatura mais para
+sempre:** a sessão encerra sozinha no teto de duração, na inatividade e quando
+a aba sai de vista. Ver `pagina.html` e `sessao_control_service.py`.
+
+## O que barra o abuso
+
+| Barreira | Onde |
+|---|---|
+| login de cliente | `rota.py`, `get_current_customer` |
+| rate limit por IP (3/min, 20/h) | `rota.py`, `VOZ_SESSAO_RATE_LIMIT` |
+| cota por cliente e por restaurante | `sessao_control_service.py` |
+| teto de duração, inatividade, aba escondida | `pagina.html` |
+| desligamento pelo servidor | `sessao_service.desligar_na_openai` |
+
+A última só funciona quando o navegador reporta o `call_id` — ver o cabeçalho
+de `sessao_control_service.py` para o que isso alcança e o que não alcança.

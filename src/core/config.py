@@ -101,12 +101,29 @@ class Settings(BaseSettings):
     # N x 5 minutos, que e um numero que da para prometer. Cota em minutos
     # seria palpite com cara de precisao.
     #
-    # Cinco sessoes por cliente = 25 minutos no pior caso, uns US$ 1,50 por
-    # dia por pessoa. Mais do que qualquer duvida de cardapio honesta pede.
+    # O CUSTO DE UMA SESSAO, de onde saem os numeros abaixo.
+    #
+    # Taxas da OpenAI para audio (`gpt-realtime-mini`), consultadas em
+    # 15/08/2026: entrada 1 token por 100 ms (600 tok/min) a US$ 10 / 1M;
+    # saida 1 token por 50 ms (1200 tok/min) a US$ 20 / 1M; entrada em cache
+    # a US$ 0,30 / 1M. Ou seja US$ 0,006 por minuto ouvido e US$ 0,024 por
+    # minuto falado.
+    #
+    # Uma sessao de 5 minutos com o atendente falando ~40% do tempo:
+    #     entrada nova   5 min x 600 tok   = US$ 0,030
+    #     saida          2 min x 1200 tok  = US$ 0,048
+    #     contexto reenviado a cada turno, quase todo em cache  ~ US$ 0,008
+    #     texto (instrucoes + resultado da busca), quase todo em cache < US$ 0,002
+    #                                              -----------------------
+    #                                              cerca de US$ 0,09
+    # Com o atendente falando 70% do tempo, US$ 0,12. Use US$ 0,10 a US$ 0,13
+    # como teto de uma sessao que vai ate o fim dos 5 minutos.
+    #
+    # Cinco sessoes por cliente = teto de ~US$ 0,55 por dia por pessoa.
     VOZ_SESSOES_POR_CLIENTE_POR_DIA: int = 5
-    # A rede de seguranca: mesmo que a cota por cliente falhe ou que apareçam
-    # muitos clientes de uma vez, o gasto de um restaurante tem teto. Cem
-    # sessoes = 500 minutos no pior caso, uns US$ 30 por dia.
+    # A rede de seguranca: mesmo que a cota por cliente falhe ou que aparecam
+    # muitos clientes de uma vez, o gasto de uma loja tem teto. Cem sessoes de
+    # 5 minutos = ~US$ 11 por dia, no pior caso em que TODAS vao ate o fim.
     VOZ_SESSOES_POR_RESTAURANTE_POR_DIA: int = 100
     # Janela ROLANTE, e nao dia de calendario: um teto que zera a meia-noite
     # convida a gastar o dobro entre 23h59 e 00h01.

@@ -24,6 +24,8 @@ logger = logging.getLogger("uvicorn.error")
 
 _MAX_SESSION_MESSAGES = 20
 _SESSION_TTL = timedelta(hours=1)
+# Teto da descricao do restaurante dentro do prompt. Ver `_build_restaurant_context`.
+_MAX_CONTEXT_DESCRIPTION = 300
 
 
 class SessionMessage(TypedDict):
@@ -88,10 +90,14 @@ class ChatService:
         # Barra restaurante inexistente/inativo antes de gastar chamada de
         # embedding e de LLM com um restaurant_id qualquer. Fica fora do try
         # para o 404 nao virar stack trace no log.
-        self._ensure_active_restaurant(restaurant_id)
+        #
+        # A linha carregada daqui segue para `_answer`: e dela que sai o nome
+        # da casa que vai no prompt, e reler o restaurante la seria uma
+        # segunda consulta para o mesmo dado.
+        restaurant = self._get_active_restaurant(restaurant_id)
 
         try:
-            return self._answer(restaurant_id, session_id, message)
+            return self._answer(restaurant, session_id, message)
         except Exception:
             logger.exception(
                 "[AI /chat] Erro no pipeline | restaurant_id=%s | session_id=%s",
@@ -107,7 +113,7 @@ class ChatService:
 
     def _answer(
         self,
-        restaurant_id: uuid.UUID,
+        restaurant,
         session_id: str,
         message: str,
     ) -> ChatResponse:
@@ -127,11 +133,11 @@ class ChatService:
         logger.info("[AI /chat cache] final_response_cache_hit=false")
 
         retrieved_products = self.retrieval_service.retrieve_products(
-            restaurant_id=restaurant_id,
+            restaurant_id=restaurant.id,
             question=message,
         )
         llm_response = self._invoke_llm(
-            restaurant_id=restaurant_id,
+            restaurant_context=self._build_restaurant_context(restaurant),
             conversation=conversation,
             retrieved_products=retrieved_products,
             message=message,
@@ -145,7 +151,7 @@ class ChatService:
             retrieved_products=retrieved_products,
             selected_product_ids=selected_product_ids,
         )
-        products = self._hydrate_products(restaurant_id, selected_product_ids)
+        products = self._hydrate_products(restaurant.id, selected_product_ids)
         self._log_price_divergence(retrieved_products, products)
         response = self._build_response(
             llm_response=llm_response,
@@ -164,23 +170,56 @@ class ChatService:
         )
         return response
 
-    def _ensure_active_restaurant(self, restaurant_id: uuid.UUID) -> None:
-        if self.restaurant_repository.get_active_by_id(restaurant_id) is None:
+    def _get_active_restaurant(self, restaurant_id: uuid.UUID):
+        restaurant = self.restaurant_repository.get_active_by_id(restaurant_id)
+        if restaurant is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Restaurante não encontrado",
             )
+        return restaurant
+
+    @staticmethod
+    def _build_restaurant_context(restaurant) -> str:
+        """O que o atendente sabe sobre a casa onde ele trabalha.
+
+        Era `f"restaurant_id={uuid}"` — um dado que o modelo nao tem como usar
+        para nada. O prompt manda falar como funcionario da casa e citar o
+        restaurante pelo nome; sem o nome aqui, essa instrucao nao tinha como
+        ser cumprida, e o assistente falava de um restaurante que ele nao
+        sabia qual era.
+
+        NAO ha campo de tipo de cozinha no cadastro: `restaurants` tem name,
+        slug, description, logos e cores, e mais nada. `description` e o texto
+        livre que o lojista escreve sobre a casa, e e o mais proximo disso —
+        ja e publico, sai em `RestaurantPublicResponse`.
+
+        As duas defesas sobre a `description` existem porque ela e texto do
+        LOJISTA entrando no prompt. O corte em `_MAX_CONTEXT_DESCRIPTION`
+        impede que uma descricao longa empurre as instrucoes para longe e
+        passe a competir com elas; o colapso das quebras de linha impede que
+        ela finja ser uma secao nova do prompt. Nenhuma das duas transforma
+        isso em texto confiavel — quem escreve ali manda no atendente da
+        propria loja, e esse e o limite do estrago.
+        """
+        lines = [f"Nome do restaurante: {restaurant.name}"]
+
+        description = " ".join((restaurant.description or "").split())
+        if description:
+            lines.append(f"Sobre a casa: {description[:_MAX_CONTEXT_DESCRIPTION]}")
+
+        return "\n".join(lines)
 
     @staticmethod
     def _invoke_llm(
-        restaurant_id: uuid.UUID,
+        restaurant_context: str,
         conversation: list[SessionMessage],
         retrieved_products: list[dict],
         message: str,
     ):
         llm_started_at = perf_counter()
         llm_response = ChatLLMService().invoke(
-            restaurant_context=f"restaurant_id={restaurant_id}",
+            restaurant_context=restaurant_context,
             conversation=conversation,
             retrieved_products=retrieved_products,
             user_message=message,

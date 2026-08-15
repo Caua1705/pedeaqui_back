@@ -299,6 +299,13 @@ Duas defesas que importam: ids que o LLM inventou são descartados
 id (`_hydrate_products`) — **preço e nome que chegam ao cliente vêm do banco,
 nunca do que o LLM escreveu.**
 
+**O `restaurant_context` do prompt** sai da linha de `restaurants` que o
+`chat()` já carregou para validar: nome e, quando preenchida, a `description`.
+Era `restaurant_id=<uuid>`, e o assistente não tinha como saber onde trabalhava.
+Não existe campo de tipo de cozinha no cadastro — `description` é o mais
+próximo, e é texto do lojista, então entra cortado e com as quebras de linha
+achatadas (`_build_restaurant_context`).
+
 **O preço que o modelo vê** é carimbado por requisição em
 `RetrievalService._with_current_prices`, da linha viva de `products`, e de
 propósito **fora** do cache de busca: preço servido de um cache de 20 minutos

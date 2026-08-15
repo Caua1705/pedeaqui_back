@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.database import get_db
+from src.core.config import settings
 from src.experimento.voz.busca_service import VozBuscaService
 from src.experimento.voz.sessao_service import emitir_credencial_efemera
 from src.services.chat_service import ChatService
@@ -60,7 +61,20 @@ def criar_sessao(payload: SessaoRequest, db: Session = Depends(get_db)) -> dict:
     restaurant = chat_service._get_active_restaurant(payload.restaurant_id)
     restaurant_context = chat_service._build_restaurant_context(restaurant)
 
-    return emitir_credencial_efemera(restaurant.id, restaurant_context)
+    credencial = emitir_credencial_efemera(restaurant.id, restaurant_context)
+
+    # Os tetos viajam junto com a credencial, e nao ficam escritos no HTML: e o
+    # SERVIDOR quem decide quanto tempo a sessao pode durar. Uma pagina que
+    # escolhe o proprio teto nao e teto nenhum — mas ver o BLOCO 2 para o que
+    # este numero vale contra um cliente que nao coopera.
+    return {
+        "credencial": credencial,
+        "limites": {
+            "duracao_maxima_s": settings.VOZ_DURACAO_MAXIMA_SEGUNDOS,
+            "inatividade_s": settings.VOZ_INATIVIDADE_SEGUNDOS,
+            "aviso_antes_s": settings.VOZ_AVISO_ANTES_DE_ENCERRAR_SEGUNDOS,
+        },
+    }
 
 
 @router.post("/buscar")

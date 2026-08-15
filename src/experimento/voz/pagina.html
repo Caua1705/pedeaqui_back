@@ -80,9 +80,36 @@ let respostaAtiva = false;            // o servidor confirmou uma resposta em cu
 let pedidoDeRespostaEmVoo = false;    // mandamos response.create, sem response.created ainda
 let respostaNaFila = false;           // queremos uma assim que a atual fechar
 
+let respostaExtraNaFila = null;       // o `response.create` da fila leva estes campos
+
 // Dois conjuntos, com trabalhos diferentes:
 const buscasIniciadas = new Set();    // call_id cuja BUSCA ja comecou (nao refazer o fetch)
 const resultadosEnviados = new Set(); // call_id cujo RESULTADO ja foi para a API (nao reenviar)
+
+// ---------------------------------------------------------------------------
+// OS TRES FECHAMENTOS DE SESSAO
+//
+// O relogio da OpenAI comeca quando a conexao de audio abre e NAO para
+// sozinho. Aba aberta em silencio continua mandando audio e faturando; o
+// cliente que fecha o notebook sem clicar em Parar paga ate a bateria acabar.
+//
+//   teto          encerra em `duracao_maxima_s`, aconteca o que acontecer
+//   inatividade   sem `speech_started` por `inatividade_s`, encerra — avisando
+//                 por FALA `aviso_antes_s` antes, para nao parecer queda
+//   visibilidade  aba escondida ou janela sem foco encerra na hora
+//
+// Os tres passam por `encerrar()`, e o motivo de haver um caminho so e o
+// microfone: encerrar sem `getTracks().forEach(stop)` deixa o indicador de
+// gravacao aceso no navegador depois de a sessao ter acabado.
+//
+// Os limites vem do SERVIDOR, no corpo de /sessao. Pagina que escolhe o
+// proprio teto nao e teto.
+// ---------------------------------------------------------------------------
+let limites = { duracao_maxima_s: 300, inatividade_s: 45, aviso_antes_s: 10 };
+let sessaoEmCurso = false;
+let timerDoTeto = null;
+let timerDoAviso = null;
+let timerDaInatividade = null;
 
 async function comecar() {
   const restaurantId = document.getElementById("restaurante").value.trim();
@@ -105,8 +132,11 @@ async function comecar() {
     return;
   }
   const sessao = await sessaoResp.json();
-  const chaveEfemera = sessao.value;
-  log("[sessao] credencial recebida, expira_at=" + sessao.expires_at);
+  const chaveEfemera = sessao.credencial.value;
+  limites = sessao.limites;
+  log("[sessao] credencial recebida, expira_at=" + sessao.credencial.expires_at);
+  log("[limites] teto=" + limites.duracao_maxima_s + "s | inatividade="
+      + limites.inatividade_s + "s | aviso=" + limites.aviso_antes_s + "s antes");
 
   estado("pedindo o microfone...");
   microfone = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -137,6 +167,10 @@ async function comecar() {
     return;
   }
   await pc.setRemoteDescription({ type: "answer", sdp: await respostaSdp.text() });
+
+  sessaoEmCurso = true;
+  armarTetoDeDuracao();
+  rearmarInatividade();
   document.getElementById("parar").disabled = false;
 }
 
@@ -144,6 +178,7 @@ function zerarEstadoDaConversa() {
   respostaAtiva = false;
   pedidoDeRespostaEmVoo = false;
   respostaNaFila = false;
+  respostaExtraNaFila = null;
   buscasIniciadas.clear();
   resultadosEnviados.clear();
 }
@@ -159,14 +194,80 @@ function enviar(objeto) {
   canal.send(JSON.stringify(objeto));
 }
 
-function pedirResposta() {
+function pedirResposta(extra) {
   if (respostaAtiva || pedidoDeRespostaEmVoo) {
     respostaNaFila = true;
+    respostaExtraNaFila = extra || null;
     log("[fila] ja ha resposta ativa; peco quando ela fechar");
     return;
   }
   pedidoDeRespostaEmVoo = true;
-  enviar({ type: "response.create" });
+  enviar(Object.assign({ type: "response.create" }, extra || {}));
+}
+
+// --- os tres fechamentos ---------------------------------------------------
+
+function armarTetoDeDuracao() {
+  clearTimeout(timerDoTeto);
+  timerDoTeto = setTimeout(
+    () => encerrar("teto de " + limites.duracao_maxima_s + "s atingido"),
+    limites.duracao_maxima_s * 1000
+  );
+}
+
+function rearmarInatividade() {
+  clearTimeout(timerDoAviso);
+  clearTimeout(timerDaInatividade);
+  if (!sessaoEmCurso) { return; }
+
+  const avisoEm = Math.max(0, limites.inatividade_s - limites.aviso_antes_s) * 1000;
+  timerDoAviso = setTimeout(avisarQueVaiEncerrar, avisoEm);
+  timerDaInatividade = setTimeout(
+    () => encerrar("silencio por " + limites.inatividade_s + "s"),
+    limites.inatividade_s * 1000
+  );
+}
+
+function avisarQueVaiEncerrar() {
+  // Avisa por FALA, e nao so na tela: quem esta com o telefone no ouvido nao
+  // esta olhando o navegador, e uma sessao que corta calada parece queda de
+  // conexao. Passa por `pedirResposta` para respeitar a resposta ativa.
+  log("[inatividade] avisando que vou encerrar");
+  pedirResposta({
+    response: {
+      instructions:
+        "Diga exatamente isto, em uma frase e nada mais: " +
+        "vou encerrar por inatividade.",
+    },
+  });
+}
+
+function limparTimers() {
+  clearTimeout(timerDoTeto);
+  clearTimeout(timerDoAviso);
+  clearTimeout(timerDaInatividade);
+  timerDoTeto = null;
+  timerDoAviso = null;
+  timerDaInatividade = null;
+}
+
+function encerrar(motivo) {
+  if (!sessaoEmCurso) { return; }
+  sessaoEmCurso = false;
+  limparTimers();
+  log("[encerrado] " + motivo);
+  estado("sessao encerrada — " + motivo);
+
+  if (canal) { try { canal.close(); } catch (erro) { /* ja fechado */ } canal = null; }
+  if (pc) { pc.close(); pc = null; }
+  // A parte que NAO pode faltar: sem parar as faixas, o indicador de gravacao
+  // do navegador fica aceso depois de a sessao ter acabado, e o microfone
+  // continua capturando.
+  if (microfone) { microfone.getTracks().forEach((faixa) => faixa.stop()); microfone = null; }
+
+  zerarEstadoDaConversa();
+  document.getElementById("falar").disabled = false;
+  document.getElementById("parar").disabled = true;
 }
 
 function enviarResultado(callId, resumo) {
@@ -225,8 +326,18 @@ function tratarEvento(evento, restaurantId) {
     respostaAtiva = false;
     if (respostaNaFila) {
       respostaNaFila = false;
-      pedirResposta();
+      const extra = respostaExtraNaFila;
+      respostaExtraNaFila = null;
+      pedirResposta(extra);
     }
+    return;
+  }
+
+  // O cliente falou: o contador de silencio volta a zero, e um aviso de
+  // encerramento que ja estava marcado e cancelado junto.
+  if (evento.type === "input_audio_buffer.speech_started") {
+    log("[inatividade] cliente falou; contador zerado");
+    rearmarInatividade();
     return;
   }
 
@@ -332,15 +443,20 @@ function desenharProdutos(produtos) {
 }
 
 function parar() {
-  if (pc) { pc.close(); pc = null; }
-  if (microfone) { microfone.getTracks().forEach((t) => t.stop()); microfone = null; }
-  // Sem isto, um `respostaAtiva` que ficou true na sessao anterior faria a
-  // proxima enfileirar a primeira resposta para sempre.
-  zerarEstadoDaConversa();
-  document.getElementById("falar").disabled = false;
-  document.getElementById("parar").disabled = true;
-  estado("parado");
+  encerrar("o cliente clicou em Parar");
 }
+
+// A aba escondida ou a janela sem foco encerram na hora. O cliente que troca
+// de aba nao esta mais conversando, e a sessao continuaria mandando audio do
+// ambiente e faturando.
+//
+// Sao dois eventos porque cobrem casos diferentes: `visibilitychange` pega a
+// aba trocada ou o celular bloqueado; `blur` pega a janela que perdeu o foco
+// com a aba ainda visivel (outro programa por cima).
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { encerrar("a aba saiu de vista"); }
+});
+window.addEventListener("blur", () => encerrar("a janela perdeu o foco"));
 
 document.getElementById("falar").addEventListener("click", () => {
   comecar().catch((erro) => {

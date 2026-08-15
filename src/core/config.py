@@ -80,6 +80,20 @@ class Settings(BaseSettings):
     # de audio faturada. Ligue na sua maquina, nunca no servidor.
     EXPERIMENTO_VOZ_ENABLED: bool = False
 
+    # Tetos de sessao de voz. O relogio da OpenAI comeca quando o navegador
+    # abre a conexao de audio e nao para sozinho: aba esquecida aberta fatura
+    # em silencio ate alguem fechar.
+    #
+    # Cinco minutos e mais do que qualquer duvida de cardapio precisa e o
+    # suficiente para o custo de uma sessao ser um numero conhecido em vez de
+    # uma incognita. Ver `docs/` e o cabecalho de sessao_service.py.
+    VOZ_DURACAO_MAXIMA_SEGUNDOS: int = 300
+    # Silencio que encerra. Conta desde o ultimo `speech_started`.
+    VOZ_INATIVIDADE_SEGUNDOS: int = 45
+    # Quanto antes do corte o atendente avisa por fala. Falar antes de cortar
+    # e o que separa "encerrou" de "caiu" para quem esta do outro lado.
+    VOZ_AVISO_ANTES_DE_ENCERRAR_SEGUNDOS: int = 10
+
     # Varredura que mantem o indice do Rapi em dia (scripts/reindex_worker.py).
     #
     # Um minuto e o atraso maximo entre o lojista salvar e o Rapi saber. Podia

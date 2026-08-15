@@ -62,7 +62,10 @@ def test_a_voz_emite_credencial_e_a_ferramenta_devolve_produto(db, monkeypatch):
     #    `_build_restaurant_context`.
     sessao = cliente.post("/experimento/voz/sessao", json={"restaurant_id": str(restaurante.id)})
     assert sessao.status_code == 200
-    assert sessao.json()["value"] == "ek_de_teste"
+    assert sessao.json()["credencial"]["value"] == "ek_de_teste"
+    # Os tetos vêm do SERVIDOR junto com a credencial: página que escolhe o
+    # próprio teto não é teto.
+    assert sessao.json()["limites"]["duracao_maxima_s"] > 0
 
     # 2. A ferramenta. Passa por `retrieval_service` e `_hydrate_products`.
     busca = cliente.post(

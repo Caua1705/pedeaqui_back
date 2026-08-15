@@ -1,0 +1,115 @@
+"""UM teste de fumaça do experimento de voz. Não é suíte, e não deve virar uma.
+
+**Por que existe.** A voz consome três métodos PRIVADOS do `ChatService` —
+`_get_active_restaurant`, `_build_restaurant_context` e `_hydrate_products` —
+além do atributo `retrieval_service`. Nenhum deles tem contrato com ninguém, e
+renomear qualquer um passa na suíte inteira: o experimento só quebra em
+runtime, quando alguém abre a página e o microfone já está ligado.
+
+Este teste é o que transforma "quebra em silêncio" em "quebra no CI". Ele
+percorre o caminho inteiro uma vez — emitir credencial, chamar a ferramenta,
+receber produto — e nada mais. Código experimental não merece cobertura de
+casos de borda; merece uma corda que avise quando o chão sair.
+
+**O que é falso aqui:** a chamada à OpenAI (emissão da credencial) e a geração
+do embedding. Os dois custam dinheiro e rede, e nenhum dos dois é o que este
+teste protege. O banco é de verdade, porque o SQL da busca é justamente o que
+tem que continuar funcionando.
+"""
+
+import uuid
+from decimal import Decimal
+from types import SimpleNamespace
+
+import httpx
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from src.ai.services.embedding_service import EmbeddingService
+from src.ai.services.product_indexing import index_product
+from src.api.dependencies.database import get_db
+from src.experimento.voz import rota as rota_de_voz
+from src.experimento.voz import sessao_service
+from src.repositories.ai_repository import AIRepository
+from tests.fabricas_db import criar_categoria, criar_produto, criar_restaurante
+
+
+pytestmark = pytest.mark.db
+
+VETOR = [0.1] * 1536
+CREDENCIAL_FALSA = {
+    "value": "ek_de_teste",
+    "expires_at": 1786805373,
+    "session": {"model": "gpt-realtime-mini"},
+}
+
+
+def test_a_voz_emite_credencial_e_a_ferramenta_devolve_produto(db, monkeypatch):
+    restaurante = criar_restaurante(db, nome="Junior da Picanha")
+    categoria = criar_categoria(db, restaurante, nome="Carnes")
+    produto = criar_produto(
+        db, restaurante, categoria, nome="Picanha na Chapa", preco=Decimal("23.90")
+    )
+    _indexar(db, produto, "Carnes")
+
+    monkeypatch.setattr(EmbeddingService, "generate_embedding", lambda self, texto: list(VETOR))
+    monkeypatch.setattr(sessao_service, "httpx", _openai_falsa())
+
+    cliente = _cliente_com(db)
+
+    # 1. A credencial. Passa por `_get_active_restaurant` e
+    #    `_build_restaurant_context`.
+    sessao = cliente.post("/experimento/voz/sessao", json={"restaurant_id": str(restaurante.id)})
+    assert sessao.status_code == 200
+    assert sessao.json()["value"] == "ek_de_teste"
+
+    # 2. A ferramenta. Passa por `retrieval_service` e `_hydrate_products`.
+    busca = cliente.post(
+        "/experimento/voz/buscar",
+        json={"restaurant_id": str(restaurante.id), "consulta": "quero carne"},
+    )
+    assert busca.status_code == 200
+
+    corpo = busca.json()
+    assert [p["name"] for p in corpo["produtos"]] == ["Picanha na Chapa"]
+    # O preço do cartão vem do banco, e o resumo que vai ao modelo usa o mesmo
+    # formato do chat de texto — vírgula, não ponto.
+    assert corpo["produtos"][0]["price"] == 23.90
+    assert corpo["resumo"] == "Produtos encontrados: Picanha na Chapa - R$ 23,90"
+
+
+def _indexar(db, produto, category_name: str) -> None:
+    index_product(
+        repository=AIRepository(db),
+        embedding_service=SimpleNamespace(generate_embedding=lambda texto: list(VETOR)),
+        product=produto,
+        category_name=category_name,
+        source_updated_at=produto.updated_at,
+    )
+    db.flush()
+
+
+def _cliente_com(db) -> TestClient:
+    """App mínimo com o router da voz. Não passa pelo `main.py`.
+
+    O flag `EXPERIMENTO_VOZ_ENABLED` é lido no import do `main`, e o que este
+    teste protege é o acoplamento com o `ChatService`, não o interruptor.
+    """
+    app = FastAPI()
+    app.include_router(rota_de_voz.router)
+    app.dependency_overrides[get_db] = lambda: db
+    return TestClient(app)
+
+
+def _openai_falsa():
+    """Substitui o módulo `httpx` dentro do `sessao_service`.
+
+    `HTTPError` vai junto porque o `except` do serviço o referencia — sem ele,
+    um erro no meio viraria `AttributeError` em vez do 503 que o código
+    pretende.
+    """
+    def post(*_args, **_kwargs):
+        return SimpleNamespace(status_code=200, json=lambda: CREDENCIAL_FALSA, text="")
+
+    return SimpleNamespace(post=post, HTTPError=httpx.HTTPError)

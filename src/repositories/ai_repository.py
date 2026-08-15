@@ -9,6 +9,7 @@ quando o conteudo foi lido. E o que faz `list_stale_products` funcionar; ver
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import bindparam, select, text
@@ -29,8 +30,24 @@ class AIRepository:
         restaurant_id: uuid.UUID,
         embedding: list[float],
         top_k: int = 5,
+        max_price: Decimal | None = None,
+        min_similarity: float = 0.0,
     ) -> list[dict[str, Any]]:
-        """Return the most similar active products for one restaurant."""
+        """Return the most similar active products for one restaurant.
+
+        `max_price` e `min_similarity` entram no WHERE, ANTES do LIMIT, e essa
+        ordem e o ponto.
+
+        Filtrar depois da busca reduziria uma lista que ja veio cortada em
+        `top_k`: "algo ate R$ 50" devolveria vazio toda vez que os cinco
+        produtos mais parecidos fossem caros, mesmo com o cardapio cheio de
+        opcoes baratas. Dentro do WHERE, o LIMIT recorta os cinco mais
+        parecidos JA entre os que cabem no bolso.
+
+        O CAST duplo em `max_price` nao e enfeite: o psycopg manda o parametro
+        sem tipo, e `:max_price IS NULL` sozinho faz o Postgres recusar a
+        consulta com "could not determine data type of parameter".
+        """
         stmt = text(
             """
             SELECT
@@ -50,6 +67,11 @@ class AIRepository:
                 AND p.restaurant_id = :restaurant_id
                 AND p.is_active IS TRUE
                 AND p.is_available IS TRUE
+                AND (
+                    CAST(:max_price AS numeric) IS NULL
+                    OR p.price <= CAST(:max_price AS numeric)
+                )
+                AND 1 - (ape.embedding <=> CAST(:embedding AS vector)) >= :min_similarity
             ORDER BY ape.embedding <=> CAST(:embedding AS vector)
             LIMIT :top_k
             """
@@ -60,6 +82,8 @@ class AIRepository:
                 "restaurant_id": restaurant_id,
                 "embedding": self._format_vector(embedding),
                 "top_k": top_k,
+                "max_price": max_price,
+                "min_similarity": min_similarity,
             },
         ).mappings()
         return [dict(row) for row in rows]

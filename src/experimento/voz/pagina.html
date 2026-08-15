@@ -152,14 +152,24 @@ async function executarBusca(callId, nome, argumentosJson, restaurantId) {
   jaAtendidas.add(callId);
 
   let consulta = "";
-  try { consulta = JSON.parse(argumentosJson).consulta || ""; }
+  let precoMaximo = null;
+  try {
+    const argumentos = JSON.parse(argumentosJson);
+    consulta = argumentos.consulta || "";
+    // O modelo so preenche quando o cliente disse um teto.
+    precoMaximo = argumentos.preco_maximo ?? null;
+  }
   catch (erro) { log("!! argumentos ilegiveis: " + argumentosJson); }
 
-  log("[ferramenta] buscando: " + consulta);
+  log("[ferramenta] buscando: " + consulta + (precoMaximo ? " (ate " + precoMaximo + ")" : ""));
   const resposta = await fetch("/experimento/voz/buscar", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ restaurant_id: restaurantId, consulta: consulta })
+    body: JSON.stringify({
+      restaurant_id: restaurantId,
+      consulta: consulta,
+      preco_maximo: precoMaximo
+    })
   });
 
   let resultado = { produtos: [], resumo: "A busca falhou." };

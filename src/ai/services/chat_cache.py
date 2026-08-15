@@ -126,16 +126,26 @@ class ChatCache:
         """
         return f"{restaurant_id}:{self.normalize_message(message)}"
 
-    def retrieval_key(self, restaurant_id: object, message: str) -> str:
+    def retrieval_key(
+        self,
+        restaurant_id: object,
+        message: str,
+        max_price: object = None,
+    ) -> str:
         """Chave dos produtos encontrados. Com a geracao, porque o resultado envelhece.
 
         O reindex incrementa a geracao daquele restaurante e todas as entradas
         anteriores deixam de ser alcancaveis — sem varrer, sem apagar, sem
         precisar saber quais perguntas estavam guardadas. As antigas caem
         sozinhas quando o TTL vence.
+
+        `max_price` entra na chave porque muda o CONJUNTO devolvido: sem ele,
+        "sobremesa ate R$ 20" seria servida do cache de "sobremesa" sem teto, e
+        o cliente veria produtos acima do que pediu.
         """
         generation = menu_generation.current(restaurant_id)
-        return f"{restaurant_id}:g{generation}:{self.normalize_message(message)}"
+        teto = "" if max_price is None else f":p{max_price}"
+        return f"{restaurant_id}:g{generation}{teto}:{self.normalize_message(message)}"
 
     def get_embedding(self, key: str) -> list[float] | None:
         value = self._get(self._embeddings, key)

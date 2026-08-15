@@ -11,6 +11,7 @@ depende de mexer na lista de origens do `main.py`.
 """
 
 import uuid
+from decimal import Decimal
 from pathlib import Path
 
 from fastapi import APIRouter, Depends
@@ -36,6 +37,9 @@ class SessaoRequest(BaseModel):
 class BuscaRequest(BaseModel):
     restaurant_id: uuid.UUID
     consulta: str = Field(min_length=1, max_length=500)
+    # `gt=0` porque teto zero ou negativo esvazia a busca inteira, e o modelo
+    # e quem preenche este campo.
+    preco_maximo: Decimal | None = Field(default=None, gt=0)
 
 
 @router.get("", response_class=HTMLResponse)
@@ -69,7 +73,7 @@ def buscar(payload: BuscaRequest, db: Session = Depends(get_db)) -> dict:
     preco que o cartao nao mostra — ele nunca ve outro numero.
     """
     service = VozBuscaService(db)
-    produtos = service.buscar(payload.restaurant_id, payload.consulta)
+    produtos = service.buscar(payload.restaurant_id, payload.consulta, payload.preco_maximo)
 
     return {
         "produtos": produtos,

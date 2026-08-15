@@ -72,7 +72,19 @@ FERRAMENTA_DE_BUSCA = {
                     "Exemplos: 'sobremesa de chocolate', 'algo vegetariano', "
                     "'a picanha'."
                 ),
-            }
+            },
+            # Opcional, e FORA de `required` de proposito: obrigatorio, o
+            # modelo teria de inventar um teto toda vez que o cliente nao
+            # pedisse nenhum, e o cardapio inteiro passaria a ser filtrado por
+            # um numero que ninguem disse.
+            "preco_maximo": {
+                "type": "number",
+                "description": (
+                    "Teto de preco em reais, SO quando o cliente disser um. "
+                    "Exemplos: 'algo ate 50 reais' -> 50; 'o mais barato' -> "
+                    "nao preencher."
+                ),
+            },
         },
         "required": ["consulta"],
         "additionalProperties": False,

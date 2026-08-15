@@ -1,5 +1,6 @@
 import logging
 import uuid
+from decimal import Decimal
 from time import perf_counter
 from typing import Any
 
@@ -7,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from src.ai.services.chat_cache import chat_cache
 from src.ai.services.embedding_service import EmbeddingService
+from src.core.config import settings
 from src.repositories.ai_repository import AIRepository
 from src.repositories.product_repository import ProductRepository
 from src.utils.money import format_money_br
@@ -37,12 +39,22 @@ class RetrievalService:
         restaurant_id: uuid.UUID,
         question: str,
         top_k: int = 5,
+        max_price: Decimal | None = None,
     ) -> list[dict[str, Any]]:
-        """Return a compact context for the top matching products."""
+        """Return a compact context for the top matching products.
+
+        `max_price` e opcional e nenhum chamador atual precisa passar: sem ele
+        a busca e exatamente a de antes.
+        """
         # Duas chaves, e nao uma: o vetor da pergunta sobrevive ao reindex, o
         # resultado da busca nao. Ver `ChatCache.embedding_key`/`retrieval_key`.
+        #
+        # `max_price` entra so na chave da BUSCA. O vetor de "quero uma
+        # sobremesa" e o mesmo com ou sem teto de preco; o conjunto de
+        # produtos, nao. Sem isso, uma pergunta com teto seria servida do cache
+        # da mesma pergunta sem teto.
         embedding_cache_key = chat_cache.embedding_key(restaurant_id, question)
-        retrieval_cache_key = chat_cache.retrieval_key(restaurant_id, question)
+        retrieval_cache_key = chat_cache.retrieval_key(restaurant_id, question, max_price)
 
         embedding_started_at = perf_counter()
         embedding = chat_cache.get_embedding(embedding_cache_key)
@@ -69,6 +81,8 @@ class RetrievalService:
                 restaurant_id=restaurant_id,
                 embedding=embedding,
                 top_k=top_k,
+                max_price=max_price,
+                min_similarity=settings.AI_SEARCH_MIN_SIMILARITY,
             )
             retrieved_products = [
                 self._format_retrieved_product(product) for product in products

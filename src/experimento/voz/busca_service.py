@@ -30,6 +30,7 @@ sobem para um lugar compartilhado antes de qualquer outra coisa.
 import hashlib
 import logging
 import uuid
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
@@ -52,7 +53,12 @@ class VozBuscaService:
         # perf]` e se misturam com as do chat de texto no mesmo grep.
         self.chat_service = ChatService(db, agent="/voz")
 
-    def buscar(self, restaurant_id: uuid.UUID, consulta: str) -> list:
+    def buscar(
+        self,
+        restaurant_id: uuid.UUID,
+        consulta: str,
+        preco_maximo: Decimal | None = None,
+    ) -> list:
         """Os produtos que a busca encontrou, hidratados do banco.
 
         Devolve a lista inteira: diferente do chat de texto, nao ha selecao do
@@ -63,6 +69,7 @@ class VozBuscaService:
         encontrados = self.chat_service.retrieval_service.retrieve_products(
             restaurant_id=restaurant.id,
             question=consulta,
+            max_price=preco_maximo,
         )
         product_ids = [uuid.UUID(str(produto["id"])) for produto in encontrados]
         produtos = self.chat_service._hydrate_products(restaurant.id, product_ids)
@@ -74,9 +81,10 @@ class VozBuscaService:
         # falou.
         logger.info(
             "[Experimento voz] busca | restaurant_id=%s | consulta_digest=%s "
-            "| encontrados=%d | hidratados=%d",
+            "| preco_maximo=%s | encontrados=%d | hidratados=%d",
             restaurant_id,
             _digest(consulta),
+            preco_maximo,
             len(encontrados),
             len(produtos),
         )

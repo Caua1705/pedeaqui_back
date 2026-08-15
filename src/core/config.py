@@ -50,6 +50,28 @@ class Settings(BaseSettings):
     MODEL_NAME: str = "gpt-5-mini"
     EMBEDDING_MODEL: str = "text-embedding-3-small"
 
+    # Piso de similaridade da busca vetorial. Abaixo disto o produto nao chega
+    # ao modelo.
+    #
+    # 0,30 saiu de medicao contra o cardapio real (161 produtos, 15/08/2026), e
+    # o que a medicao mostrou foi principalmente o que este numero NAO faz.
+    #
+    # As similaridades observadas ficam todas entre 0,17 e 0,66 — pergunta boa
+    # ("picanha") da 0,66, e pergunta legitima porem vaga ("tem porcao para
+    # dividir") da 0,42. Pergunta sem resposta no cardapio ("comida japonesa")
+    # da 0,41. Os dois grupos SE SOBREPOEM: nao existe corte que separe
+    # relevante de irrelevante, e qualquer valor acima de 0,42 comeca a matar
+    # pergunta boa.
+    #
+    # O que 0,30 corta e so o absurdo — "consulta odontologica" topou em 0,19.
+    # Serve para o modelo nao receber cinco produtos aleatorios quando a
+    # pergunta nao e sobre comida. Nao serve, e nao ha numero que sirva, para
+    # dizer "nao temos comida japonesa": isso e trabalho do prompt.
+    #
+    # Cuidado ao mexer: 0,7 ou 0,8 parecem valores razoaveis e devolveriam
+    # SEMPRE zero produtos, porque o teto medido foi 0,66.
+    AI_SEARCH_MIN_SIMILARITY: float = 0.30
+
     # EXPERIMENTO de voz em tempo real (src/experimento/voz/).
     #
     # Desligado por padrao, e o padrao e a unica protecao que existe: com isto

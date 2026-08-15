@@ -56,7 +56,7 @@ def criar_sessao(payload: SessaoRequest, db: Session = Depends(get_db)) -> dict:
     restaurant = chat_service._get_active_restaurant(payload.restaurant_id)
     restaurant_context = chat_service._build_restaurant_context(restaurant)
 
-    return emitir_credencial_efemera(restaurant_context)
+    return emitir_credencial_efemera(restaurant.id, restaurant_context)
 
 
 @router.post("/buscar")

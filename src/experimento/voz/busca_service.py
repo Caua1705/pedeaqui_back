@@ -27,12 +27,14 @@ que e pior — copia nao acompanha conserto. Se isto virar produto, os dois
 sobem para um lugar compartilhado antes de qualquer outra coisa.
 """
 
+import hashlib
 import logging
 import uuid
 
 from sqlalchemy.orm import Session
 
 from src.services.chat_service import ChatService
+from src.utils.money import format_money_br
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -60,8 +62,16 @@ class VozBuscaService:
         product_ids = [uuid.UUID(str(produto["id"])) for produto in encontrados]
         produtos = self.chat_service._hydrate_products(restaurant.id, product_ids)
 
+        # `restaurant_id` na linha porque sem ele nao ha como atribuir uso de
+        # voz a um restaurante — e cada tool call e um pedaco do custo de uma
+        # sessao faturada. O digest da consulta segue a mesma regra do chat de
+        # texto: correlaciona requisicoes sem colocar no log o que a pessoa
+        # falou.
         logger.info(
-            "[Experimento voz] busca | encontrados=%d | hidratados=%d",
+            "[Experimento voz] busca | restaurant_id=%s | consulta_digest=%s "
+            "| encontrados=%d | hidratados=%d",
+            restaurant_id,
+            _digest(consulta),
             len(encontrados),
             len(produtos),
         )
@@ -75,9 +85,20 @@ class VozBuscaService:
         nem grupo de opcao — isso ja esta na tela do cliente, vindo do JSON
         completo da rota. Mandar o objeto inteiro para o modelo seria pagar
         token de audio para ele nao usar nada disso.
+
+        O preco sai de `format_money_br`, o MESMO do chat de texto. Antes era
+        um `:.2f` local, que produzia "R$ 23.90" com ponto enquanto o texto
+        dizia "R$ 23,90" com virgula — e o prompt de voz manda dizer o preco
+        "exatamente como a ferramenta devolveu" (`prompt_de_voz.py`). O modelo
+        estava sendo instruido a copiar um numero em formato que nao e o do
+        resto do sistema.
         """
         if not produtos:
             return "Nenhum produto encontrado."
 
-        linhas = [f"{produto.name} - R$ {produto.price:.2f}" for produto in produtos[:5]]
+        linhas = [f"{produto.name} - {format_money_br(produto.price)}" for produto in produtos[:5]]
         return "Produtos encontrados: " + "; ".join(linhas)
+
+
+def _digest(consulta: str) -> str:
+    return hashlib.sha256(consulta.encode("utf-8")).hexdigest()[:12]

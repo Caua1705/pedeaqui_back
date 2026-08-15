@@ -34,6 +34,7 @@ O que existe hoje como unica protecao: a rota so sobe com
 """
 
 import logging
+import uuid
 
 import httpx
 from fastapi import HTTPException, status
@@ -79,7 +80,7 @@ FERRAMENTA_DE_BUSCA = {
 }
 
 
-def emitir_credencial_efemera(restaurant_context: str) -> dict:
+def emitir_credencial_efemera(restaurant_id: uuid.UUID, restaurant_context: str) -> dict:
     """Pede a OpenAI um segredo de curta duracao para o navegador usar.
 
     A chave mestra (`OPENAI_API_KEY`) nunca sai daqui. O que vai para o
@@ -130,8 +131,13 @@ def emitir_credencial_efemera(restaurant_context: str) -> dict:
         )
 
     emitida = resposta.json()
+    # `restaurant_id` aqui e o unico ponto em que uma sessao de voz futura fica
+    # ligada a um restaurante: depois desta linha a conversa acontece entre o
+    # navegador e a OpenAI, e o backend nao ve mais nada. Esta linha e o
+    # comeco de qualquer conciliacao de custo que venha a existir.
     logger.info(
-        "[Experimento voz] credencial emitida | modelo=%s | expira_em=%s",
+        "[Experimento voz] credencial emitida | restaurant_id=%s | modelo=%s | expira_em=%s",
+        restaurant_id,
         MODELO_DE_VOZ,
         emitida.get("expires_at"),
     )

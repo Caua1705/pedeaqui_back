@@ -52,7 +52,7 @@ def criar_sessao(payload: SessaoRequest, db: Session = Depends(get_db)) -> dict:
     SEM LOGIN E SEM COTA. Ver o cabecalho de `sessao_service.py` para a lista
     do que falta antes de isto existir fora da maquina de quem esta testando.
     """
-    chat_service = ChatService(db)
+    chat_service = ChatService(db, agent="/voz")
     restaurant = chat_service._get_active_restaurant(payload.restaurant_id)
     restaurant_context = chat_service._build_restaurant_context(restaurant)
 

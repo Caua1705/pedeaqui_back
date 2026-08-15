@@ -45,7 +45,12 @@ class VozBuscaService:
         # UM ChatService, e nao um RetrievalService solto ao lado: os dois
         # reusos saem do mesmo objeto, entao nao ha como o experimento buscar
         # por um caminho e hidratar por outro.
-        self.chat_service = ChatService(db)
+        #
+        # `agent="/voz"` so muda o ROTULO das linhas de medicao que este
+        # caminho emite: sem ele, `embedding_ms`, `retrieval_ms`,
+        # `context_products` e `hydration_ms` da voz saem como `[AI /chat
+        # perf]` e se misturam com as do chat de texto no mesmo grep.
+        self.chat_service = ChatService(db, agent="/voz")
 
     def buscar(self, restaurant_id: uuid.UUID, consulta: str) -> list:
         """Os produtos que a busca encontrou, hidratados do banco.

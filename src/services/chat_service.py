@@ -42,9 +42,20 @@ _SESSION_HISTORY: dict[str, SessionState] = {}
 
 
 class ChatService:
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, agent: str = "/chat"):
+        """`agent` so existe para o LOG — ver `RetrievalService`.
+
+        O experimento de voz reusa `retrieval_service` e `_hydrate_products`
+        deste servico, entao as linhas de medicao dos dois agentes saiam com o
+        mesmo prefixo `[AI /chat perf]`. Passando "/voz", cada um mede o
+        proprio caminho sem que exista um segundo cronometro.
+
+        O default mantem o chat de texto escrevendo exatamente o que escrevia:
+        nenhum grep existente muda de resultado.
+        """
         self.db = db
-        self.retrieval_service = RetrievalService(db)
+        self.agent = agent
+        self.retrieval_service = RetrievalService(db, agent=agent)
         self.product_repository = ProductRepository(db)
         self.restaurant_repository = RestaurantRepository(db)
 
@@ -353,7 +364,8 @@ class ChatService:
             )
         }
         logger.info(
-            "[AI /chat perf] hydration_ms=%.2f",
+            "[AI %s perf] hydration_ms=%.2f",
+            self.agent,
             (perf_counter() - hydration_started_at) * 1000,
         )
         return [

@@ -15,9 +15,19 @@ logger = logging.getLogger("uvicorn.error")
 
 
 class RetrievalService:
-    """Retrieve restaurant products that are relevant to a user question."""
+    """Retrieve restaurant products that are relevant to a user question.
 
-    def __init__(self, db: Session):
+    `agent` so existe para o LOG. Esta busca serve dois agentes — o chat de
+    texto e o experimento de voz — e as linhas de medicao saiam todas com o
+    prefixo `[AI /chat perf]`, vindas dos dois. Quem grepava esse prefixo para
+    medir o chat estava medindo a soma, sem nenhuma forma de separar.
+
+    Vale como parametro e nao como duplicacao do codigo de medicao: os
+    cronometros continuam sendo um so, e o unico que muda e o rotulo.
+    """
+
+    def __init__(self, db: Session, agent: str = "/chat"):
+        self.agent = agent
         self.embedding_service = EmbeddingService()
         self.ai_repository = AIRepository(db)
         self.product_repository = ProductRepository(db)
@@ -41,11 +51,13 @@ class RetrievalService:
             embedding = self.embedding_service.generate_embedding(question)
             chat_cache.set_embedding(embedding_cache_key, embedding)
         logger.info(
-            "[AI /chat perf] embedding_ms=%.2f",
+            "[AI %s perf] embedding_ms=%.2f",
+            self.agent,
             (perf_counter() - embedding_started_at) * 1000,
         )
         logger.info(
-            "[AI /chat cache] embedding_cache_hit=%s",
+            "[AI %s cache] embedding_cache_hit=%s",
+            self.agent,
             str(embedding_cache_hit).lower(),
         )
 
@@ -63,15 +75,17 @@ class RetrievalService:
             ]
             chat_cache.set_retrieval(retrieval_cache_key, retrieved_products)
         logger.info(
-            "[AI /chat perf] retrieval_ms=%.2f",
+            "[AI %s perf] retrieval_ms=%.2f",
+            self.agent,
             (perf_counter() - retrieval_started_at) * 1000,
         )
         logger.info(
-            "[AI /chat cache] retrieval_cache_hit=%s",
+            "[AI %s cache] retrieval_cache_hit=%s",
+            self.agent,
             str(retrieval_cache_hit).lower(),
         )
         retrieved_products = self._with_current_prices(restaurant_id, retrieved_products)
-        logger.info("[AI /chat perf] context_products=%d", len(retrieved_products))
+        logger.info("[AI %s perf] context_products=%d", self.agent, len(retrieved_products))
         return retrieved_products
 
     def _with_current_prices(

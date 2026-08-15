@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from src.api.dependencies.database import get_db
 from src.core.config import settings
 from src.experimento.voz.busca_service import VozBuscaService
-from src.experimento.voz.sessao_service import emitir_credencial_efemera
+from src.experimento.voz.sessao_control_service import VozSessaoControlService
 from src.services.chat_service import ChatService
 
 
@@ -33,6 +33,14 @@ PAGINA = Path(__file__).resolve().parent / "pagina.html"
 
 class SessaoRequest(BaseModel):
     restaurant_id: uuid.UUID
+
+
+class ConexaoRequest(BaseModel):
+    call_id: str = Field(min_length=1, max_length=200)
+
+
+class EncerramentoRequest(BaseModel):
+    motivo: str = Field(min_length=1, max_length=200)
 
 
 class BuscaRequest(BaseModel):
@@ -61,13 +69,18 @@ def criar_sessao(payload: SessaoRequest, db: Session = Depends(get_db)) -> dict:
     restaurant = chat_service._get_active_restaurant(payload.restaurant_id)
     restaurant_context = chat_service._build_restaurant_context(restaurant)
 
-    credencial = emitir_credencial_efemera(restaurant.id, restaurant_context)
+    sessao, credencial = VozSessaoControlService(db).abrir(
+        restaurant_id=restaurant.id,
+        customer_id=None,
+        restaurant_context=restaurant_context,
+    )
 
     # Os tetos viajam junto com a credencial, e nao ficam escritos no HTML: e o
     # SERVIDOR quem decide quanto tempo a sessao pode durar. Uma pagina que
-    # escolhe o proprio teto nao e teto nenhum — mas ver o BLOCO 2 para o que
-    # este numero vale contra um cliente que nao coopera.
+    # escolhe o proprio teto nao e teto nenhum — o que sustenta o numero do
+    # lado de ca esta em `sessao_control_service.py`.
     return {
+        "sessao_id": str(sessao.id),
         "credencial": credencial,
         "limites": {
             "duracao_maxima_s": settings.VOZ_DURACAO_MAXIMA_SEGUNDOS,
@@ -75,6 +88,37 @@ def criar_sessao(payload: SessaoRequest, db: Session = Depends(get_db)) -> dict:
             "aviso_antes_s": settings.VOZ_AVISO_ANTES_DE_ENCERRAR_SEGUNDOS,
         },
     }
+
+
+@router.post("/sessao/{sessao_id}/conectada")
+def registrar_conexao(
+    sessao_id: uuid.UUID,
+    payload: ConexaoRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    """O navegador informa o `call_id` que leu do cabecalho `Location`.
+
+    E a unica ponte entre a linha do livro-razao e a chamada de verdade na
+    OpenAI — sem ela o servidor nao consegue desligar aquela sessao. Ver o
+    cabecalho de `sessao_control_service.py` para o que isso implica.
+    """
+    encontrou = VozSessaoControlService(db).registrar_conexao(sessao_id, payload.call_id)
+    return {"registrado": encontrou}
+
+
+@router.post("/sessao/{sessao_id}/encerrada")
+def registrar_encerramento(
+    sessao_id: uuid.UUID,
+    payload: EncerramentoRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    """O navegador avisa que encerrou, e por que.
+
+    O servidor desliga na OpenAI mesmo assim quando tem `call_id`: o cliente
+    reporta o que ELE fez, e a conexao pode ter sobrevivido do outro lado.
+    """
+    encerrou = VozSessaoControlService(db).encerrar(sessao_id, payload.motivo)
+    return {"encerrado": encerrou}
 
 
 @router.post("/buscar")

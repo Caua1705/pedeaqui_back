@@ -29,6 +29,7 @@ from fastapi.testclient import TestClient
 from src.ai.services.embedding_service import EmbeddingService
 from src.ai.services.product_indexing import index_product
 from src.api.dependencies.database import get_db
+from src.models.ai_voice_session_model import AIVoiceSession
 from src.experimento.voz import rota as rota_de_voz
 from src.experimento.voz import sessao_service
 from src.repositories.ai_repository import AIRepository
@@ -66,6 +67,9 @@ def test_a_voz_emite_credencial_e_a_ferramenta_devolve_produto(db, monkeypatch):
     # Os tetos vêm do SERVIDOR junto com a credencial: página que escolhe o
     # próprio teto não é teto.
     assert sessao.json()["limites"]["duracao_maxima_s"] > 0
+    # E a emissão virou linha no livro-razão — é dela que a cota e a
+    # conciliação de custo dependem.
+    assert db.get(AIVoiceSession, uuid.UUID(sessao.json()["sessao_id"])) is not None
 
     # 2. A ferramenta. Passa por `retrieval_service` e `_hydrate_products`.
     busca = cliente.post(

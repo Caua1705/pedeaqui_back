@@ -46,6 +46,10 @@ from src.experimento.voz.prompt_de_voz import instrucoes_para
 logger = logging.getLogger("uvicorn.error")
 
 URL_DE_EMISSAO = "https://api.openai.com/v1/realtime/client_secrets"
+# Desliga uma chamada em curso, com a chave MESTRA. Documentado em
+# developers.openai.com/api/reference — POST, sem corpo, 200 quando a OpenAI
+# comeca a encerrar. Ver `desligar_na_openai` para o que ele exige.
+URL_DE_DESLIGAMENTO = "https://api.openai.com/v1/realtime/calls/{call_id}/hangup"
 MODELO_DE_VOZ = "gpt-realtime-mini"
 VOZ = "marin"
 TIMEOUT_SEGUNDOS = 10
@@ -154,3 +158,53 @@ def emitir_credencial_efemera(restaurant_id: uuid.UUID, restaurant_context: str)
         emitida.get("expires_at"),
     )
     return emitida
+
+
+def desligar_na_openai(call_id: str) -> bool:
+    """Encerra uma chamada em curso pelo SERVIDOR. Devolve se conseguiu.
+
+    ===================================================================
+    O QUE ISTO ALCANCA, E O QUE NAO ALCANCA
+    ===================================================================
+
+    `call_id` so existe no cabecalho `Location` da resposta que a OpenAI da ao
+    NAVEGADOR quando ele cria a chamada. O servidor nao participa dessa
+    requisicao e nao ha, na documentacao, outra forma de descobrir o
+    identificador de uma chamada WebRTC que ele nao originou.
+
+    Consequencia, dita sem rodeio: **isto vale contra cliente que coopera, e
+    nao contra cliente hostil.** Quem editar o javascript para nao reportar o
+    `call_id` fica com uma sessao que o servidor nao sabe desligar. O que
+    barra esse caso nao e este arquivo — e o controle na EMISSAO: login, cota
+    e rate limit.
+
+    Falha aqui nao levanta. Quem chama esta varrendo sessoes vencidas, e uma
+    OpenAI fora do ar nao pode derrubar a emissao de outra sessao.
+    """
+    try:
+        resposta = httpx.post(
+            URL_DE_DESLIGAMENTO.format(call_id=call_id),
+            headers={"Authorization": f"Bearer {settings.OPENAI_API_KEY}"},
+            timeout=TIMEOUT_SEGUNDOS,
+        )
+    except httpx.HTTPError as erro:
+        logger.warning("[Experimento voz] desligamento falhou na rede | call_id=%s | %s", call_id, erro)
+        return False
+
+    # 404 conta como sucesso: a chamada ja tinha acabado, que e o estado que
+    # se queria. Insistir nela em toda varredura seria barulho eterno no log.
+    if resposta.status_code == 404:
+        logger.info("[Experimento voz] chamada ja estava encerrada | call_id=%s", call_id)
+        return True
+
+    if resposta.status_code >= 400:
+        logger.warning(
+            "[Experimento voz] desligamento recusado | call_id=%s | status=%d | corpo=%s",
+            call_id,
+            resposta.status_code,
+            resposta.text[:300],
+        )
+        return False
+
+    logger.info("[Experimento voz] chamada desligada pelo servidor | call_id=%s", call_id)
+    return True

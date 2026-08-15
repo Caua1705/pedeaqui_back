@@ -106,6 +106,7 @@ const resultadosEnviados = new Set(); // call_id cujo RESULTADO ja foi para a AP
 // proprio teto nao e teto.
 // ---------------------------------------------------------------------------
 let limites = { duracao_maxima_s: 300, inatividade_s: 45, aviso_antes_s: 10 };
+let sessaoId = null;                  // a linha do livro-razao, no nosso banco
 let sessaoEmCurso = false;
 let timerDoTeto = null;
 let timerDoAviso = null;
@@ -133,6 +134,7 @@ async function comecar() {
   }
   const sessao = await sessaoResp.json();
   const chaveEfemera = sessao.credencial.value;
+  sessaoId = sessao.sessao_id;
   limites = sessao.limites;
   log("[sessao] credencial recebida, expira_at=" + sessao.credencial.expires_at);
   log("[limites] teto=" + limites.duracao_maxima_s + "s | inatividade="
@@ -166,6 +168,22 @@ async function comecar() {
     log(await respostaSdp.text());
     return;
   }
+  // O `call_id` da chamada vem no cabecalho `Location`, e e a UNICA forma de
+  // o servidor conseguir desligar esta sessao depois. Reportar e o que liga a
+  // linha do livro-razao a chamada de verdade.
+  //
+  // Pode vir vazio: `Location` e cabecalho de resposta de outra origem, e o
+  // navegador so o entrega ao javascript se a OpenAI o listar em
+  // `Access-Control-Expose-Headers`. Nao da para conferir isso sem navegador,
+  // entao o caminho segue funcionando sem ele — perdendo apenas o
+  // desligamento pelo servidor, que fica registrado no log.
+  const local = respostaSdp.headers.get("Location");
+  if (local) {
+    await reportarConexao(local.split("/").filter(Boolean).pop());
+  } else {
+    log("!! sem cabecalho Location: o servidor NAO vai conseguir desligar esta sessao");
+  }
+
   await pc.setRemoteDescription({ type: "answer", sdp: await respostaSdp.text() });
 
   sessaoEmCurso = true;
@@ -242,6 +260,32 @@ function avisarQueVaiEncerrar() {
   });
 }
 
+async function reportarConexao(callId) {
+  if (!sessaoId || !callId) { return; }
+  log("[sessao] reportando call_id=" + callId);
+  try {
+    await fetch("/experimento/voz/sessao/" + sessaoId + "/conectada", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ call_id: callId }),
+    });
+  } catch (erro) {
+    log("!! nao consegui reportar o call_id: " + erro.message);
+  }
+}
+
+function reportarEncerramento(motivo) {
+  if (!sessaoId) { return; }
+  // `keepalive` para o aviso sobreviver a aba sendo fechada no mesmo instante.
+  // Sem catch a promessa rejeitada apareceria no console durante o fechamento.
+  fetch("/experimento/voz/sessao/" + sessaoId + "/encerrada", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ motivo: motivo }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
 function limparTimers() {
   clearTimeout(timerDoTeto);
   clearTimeout(timerDoAviso);
@@ -268,6 +312,11 @@ function encerrar(motivo) {
   zerarEstadoDaConversa();
   document.getElementById("falar").disabled = false;
   document.getElementById("parar").disabled = true;
+
+  // Por ultimo, e sem `await`: o servidor fecha a linha e desliga na OpenAI se
+  // tiver o call_id. Esperar a rede aqui atrasaria parar o microfone.
+  reportarEncerramento(motivo);
+  sessaoId = null;
 }
 
 function enviarResultado(callId, resumo) {

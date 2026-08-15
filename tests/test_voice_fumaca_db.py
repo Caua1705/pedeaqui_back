@@ -33,8 +33,8 @@ from src.api.dependencies.database import get_db
 from src.api.middleware.rate_limit_state import RateLimitStateMiddleware
 from src.api.rate_limit import limiter
 from src.models.ai_voice_session_model import AIVoiceSession
-from src.experimento.voz import rota as rota_de_voz
-from src.experimento.voz import sessao_service
+from src.api import voice as rota_de_voz
+from src.ai.voice import realtime_client
 from src.repositories.ai_repository import AIRepository
 from tests.fabricas_db import criar_categoria, criar_cliente, criar_produto, criar_restaurante
 
@@ -58,13 +58,13 @@ def test_a_voz_emite_credencial_e_a_ferramenta_devolve_produto(db, monkeypatch):
     _indexar(db, produto, "Carnes")
 
     monkeypatch.setattr(EmbeddingService, "generate_embedding", lambda self, texto: list(VETOR))
-    monkeypatch.setattr(sessao_service, "httpx", _openai_falsa())
+    monkeypatch.setattr(realtime_client, "httpx", _openai_falsa())
 
     cliente = _cliente_com(db, criar_cliente(db))
 
     # 1. A credencial. Passa por `_get_active_restaurant` e
     #    `_build_restaurant_context`.
-    sessao = cliente.post("/experimento/voz/sessao", json={"restaurant_id": str(restaurante.id)})
+    sessao = cliente.post("/voice/session", json={"restaurant_id": str(restaurante.id)})
     assert sessao.status_code == 200
     assert sessao.json()["credencial"]["value"] == "ek_de_teste"
     # Os tetos vêm do SERVIDOR junto com a credencial: página que escolhe o
@@ -76,7 +76,7 @@ def test_a_voz_emite_credencial_e_a_ferramenta_devolve_produto(db, monkeypatch):
 
     # 2. A ferramenta. Passa por `retrieval_service` e `_hydrate_products`.
     busca = cliente.post(
-        "/experimento/voz/buscar",
+        "/voice/search",
         json={"restaurant_id": str(restaurante.id), "consulta": "quero carne"},
     )
     assert busca.status_code == 200
@@ -103,7 +103,7 @@ def _indexar(db, produto, category_name: str) -> None:
 def _cliente_com(db, cliente_logado) -> TestClient:
     """App mínimo com o router da voz. Não passa pelo `main.py`.
 
-    O flag `EXPERIMENTO_VOZ_ENABLED` é lido no import do `main`, e o que este
+    O flag `VOICE_ENABLED` é lido no import do `main`, e o que este
     teste protege é o acoplamento com o `ChatService`, não o interruptor.
 
     O `limiter` e o `RateLimitStateMiddleware` vêm junto porque a rota de

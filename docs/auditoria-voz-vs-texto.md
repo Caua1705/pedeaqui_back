@@ -14,8 +14,8 @@ Onde não consegui provar algo pelo código, está escrito **não verificado**.
 
 | O quê | Onde |
 |---|---|
-| Rota | `src/experimento/voz/rota.py:48` (`POST /experimento/voz/sessao`) |
-| Serviço | `src/experimento/voz/sessao_service.py:82` (`emitir_credencial_efemera`) |
+| Rota | `src/ai/voice/rota.py:48` (`POST /voice/session`) |
+| Serviço | `src/ai/voice/sessao_service.py:82` (`issue_client_secret`) |
 | Endpoint da OpenAI | `sessao_service.py:47` — `https://api.openai.com/v1/realtime/client_secrets` |
 
 O corpo enviado está em `sessao_service.py:90-99`:
@@ -24,9 +24,9 @@ O corpo enviado está em `sessao_service.py:90-99`:
 |---|---|---|
 | `session.type` | `"realtime"` | `sessao_service.py:92` |
 | `session.model` | `"gpt-realtime-mini"` | `sessao_service.py:48`, usado em `:93` |
-| `session.instructions` | `instrucoes_para(restaurant_context)` | `sessao_service.py:94` → `prompt_de_voz.py:49` |
+| `session.instructions` | `instructions_for(restaurant_context)` | `sessao_service.py:94` → `prompt_de_voz.py:49` |
 | `session.audio.output.voice` | `"marin"` | `sessao_service.py:49`, usado em `:95` |
-| `session.tools` | `[FERRAMENTA_DE_BUSCA]` | `sessao_service.py:96` |
+| `session.tools` | `[SEARCH_TOOL]` | `sessao_service.py:96` |
 | `session.tool_choice` | `"auto"` | `sessao_service.py:97` |
 | **TTL** | **não é definido pelo nosso código** | não há campo de expiração em `sessao_service.py:90-99` |
 
@@ -78,8 +78,8 @@ quantidade nem qualquer outro filtro.
 | Chamada | `src/services/chat_service.py:221` |
 
 O prompt de voz é **outro arquivo, sem nenhuma relação de código** com esse:
-`src/experimento/voz/prompt_de_voz.py:22` (`INSTRUCOES_DE_VOZ`) e `:49`
-(`instrucoes_para`). Não há import cruzado nos dois sentidos.
+`src/ai/voice/prompt_de_voz.py:22` (`VOICE_INSTRUCTIONS`) e `:49`
+(`instructions_for`). Não há import cruzado nos dois sentidos.
 
 ### 1.4 O que a voz reusa do ChatService
 
@@ -101,9 +101,9 @@ construído inteiro duas vezes por interação de voz: uma em `rota.py:50`
 ### 2.1 O caminho da voz até o SQL
 
 ```
-pagina.html:161   fetch POST /experimento/voz/buscar
+pagina.html:161   fetch POST /voice/search
   → rota.py:63    buscar()
-  → busca_service.py:48   VozBuscaService.buscar()
+  → busca_service.py:48   VoiceSearchService.buscar()
   → busca_service.py:56   chat_service.retrieval_service.retrieve_products()
       → retrieval_service.py:41   EmbeddingService.generate_embedding()
           → embedding_service.py:15  OpenAIEmbeddings.embed_query()
@@ -286,8 +286,8 @@ Nenhum `fetch` as envia para lugar nenhum.
 
 | Registro | Onde | Tem `restaurant_id`? |
 |---|---|---|
-| `[Experimento voz] busca \| encontrados=%d \| hidratados=%d` | `busca_service.py:63-67` | **não** |
-| `[Experimento voz] credencial emitida \| modelo=%s \| expira_em=%s` | `sessao_service.py:133-137` | **não** |
+| `[Voz] busca \| encontrados=%d \| hidratados=%d` | `busca_service.py:63-67` | **não** |
+| `[Voz] credencial emitida \| modelo=%s \| expira_em=%s` | `sessao_service.py:133-137` | **não** |
 
 **Nenhuma linha de log da voz carrega `restaurant_id`, `session_id` ou a
 consulta.** É impossível, hoje, atribuir uma interação de voz a um
@@ -325,7 +325,7 @@ tokens de áudio, custo — acontece inteiramente fora do alcance do backend.
 | Teto de gasto por sessão | **não** | idem |
 | Cota por cliente / restaurante | **não** | nada em `rota.py` nem em `sessao_service.py` |
 
-A única barreira existente é `EXPERIMENTO_VOZ_ENABLED` (`main.py:144`,
+A única barreira existente é `VOICE_ENABLED` (`main.py:144`,
 `config.py`), com padrão `False`. Está tudo declarado no cabeçalho de
 `sessao_service.py:1-38`, que diz textualmente que isso não pode ir para
 produção.
@@ -361,7 +361,7 @@ em tempo de execução, e só quando alguém abrir a página de voz.
 | Regra "diga o preço exatamente" | `system_prompt.py:22-29` | `prompt_de_voz.py:38-40` |
 | Assuntos fora do escopo (horário, entrega, pagamento) | `system_prompt.py:40-47` | `prompt_de_voz.py:42-45` |
 | Persona / tom da casa | `system_prompt.py:2-12` | `prompt_de_voz.py:26-33` |
-| Prefixo de log | `[AI /chat]` | `[Experimento voz]` + `[AI /chat]` herdado |
+| Prefixo de log | `[AI /chat]` | `[Voz]` + `[AI /chat]` herdado |
 
 **O que NÃO está duplicado, e é bom que se saiba:** `top_k`
 (`retrieval_service.py:29`), os filtros do SQL (`ai_repository.py:48-52`), o

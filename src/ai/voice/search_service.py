@@ -1,7 +1,7 @@
-"""A ferramenta de busca do experimento de voz.
+"""A ferramenta de busca do atendimento por voz.
 
 TUDO AQUI E REUSO. Nao ha uma linha de busca vetorial nem de montagem de
-produto neste arquivo, e e proposital: se o experimento reimplementasse
+produto neste arquivo, e e proposital: se a voz reimplementasse
 qualquer um dos dois, ele estaria medindo outro sistema, e a conclusao nao
 valeria para o produto.
 
@@ -14,16 +14,16 @@ O que e reusado, e de onde:
 | 404 de restaurante | `ChatService._get_active_restaurant` | mesma barreira antes de gastar embedding |
 
 A diferenca de desenho em relacao ao chat de texto, e ela e o ponto do
-experimento: **aqui o modelo nao escolhe produto.** No texto ele devolve
+desenho: **aqui o modelo nao escolhe produto.** No texto ele devolve
 `selected_product_ids` e `_validate_selected_product_ids` descarta o que ele
 inventou. Na voz, quem manda os cartoes para a tela e a NOSSA busca — o
 modelo so recebe um resumo para falar. Nao ha id passando pelo modelo, entao
 nao ha id para ele inventar.
 
 FRAGILIDADE CONHECIDA: `_hydrate_products` e `_get_active_restaurant` sao
-privados do `ChatService`. Chamar de fora e feio e acopla o experimento a
+privados do `ChatService`. Chamar de fora e feio e acopla a voz a
 nomes que ninguem prometeu manter. A alternativa era copiar as seis linhas,
-que e pior — copia nao acompanha conserto. Se isto virar produto, os dois
+que e pior — copia nao acompanha conserto. Antes de crescer daqui, os dois
 sobem para um lugar compartilhado antes de qualquer outra coisa.
 """
 
@@ -41,10 +41,10 @@ from src.utils.money import format_money_br
 logger = logging.getLogger("uvicorn.error")
 
 
-class VozBuscaService:
+class VoiceSearchService:
     def __init__(self, db: Session):
         # UM ChatService, e nao um RetrievalService solto ao lado: os dois
-        # reusos saem do mesmo objeto, entao nao ha como o experimento buscar
+        # reusos saem do mesmo objeto, entao nao ha como a voz buscar
         # por um caminho e hidratar por outro.
         #
         # `agent="/voz"` so muda o ROTULO das linhas de medicao que este
@@ -80,7 +80,7 @@ class VozBuscaService:
         # texto: correlaciona requisicoes sem colocar no log o que a pessoa
         # falou.
         logger.info(
-            "[Experimento voz] busca | restaurant_id=%s | consulta_digest=%s "
+            "[Voz] busca | restaurant_id=%s | consulta_digest=%s "
             "| preco_maximo=%s | encontrados=%d | hidratados=%d",
             restaurant_id,
             _digest(consulta),

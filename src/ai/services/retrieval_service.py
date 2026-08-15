@@ -20,7 +20,7 @@ class RetrievalService:
     """Retrieve restaurant products that are relevant to a user question.
 
     `agent` so existe para o LOG. Esta busca serve dois agentes — o chat de
-    texto e o experimento de voz — e as linhas de medicao saiam todas com o
+    texto e o de voz — e as linhas de medicao saiam todas com o
     prefixo `[AI /chat perf]`, vindas dos dois. Quem grepava esse prefixo para
     medir o chat estava medindo a soma, sem nenhuma forma de separar.
 

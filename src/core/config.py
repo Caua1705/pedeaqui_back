@@ -72,13 +72,11 @@ class Settings(BaseSettings):
     # SEMPRE zero produtos, porque o teto medido foi 0,66.
     AI_SEARCH_MIN_SIMILARITY: float = 0.30
 
-    # EXPERIMENTO de voz em tempo real (src/experimento/voz/).
+    # Atendimento por voz em tempo real (src/ai/voice/, rotas sob /voice).
     #
-    # Desligado por padrao, e o padrao e a unica protecao que existe: com isto
-    # ligado sobe uma rota ABERTA que emite credencial da OpenAI Realtime —
-    # sem login, sem cota e sem teto de duracao. Cada credencial e uma sessao
-    # de audio faturada. Ligue na sua maquina, nunca no servidor.
-    EXPERIMENTO_VOZ_ENABLED: bool = False
+    # Desligado, as rotas nao existem — nem no /docs. Ligado, elas sobem com
+    # login de cliente, rate limit e cota; ver `src/api/voice.py`.
+    VOICE_ENABLED: bool = False
 
     # Tetos de sessao de voz. O relogio da OpenAI comeca quando o navegador
     # abre a conexao de audio e nao para sozinho: aba esquecida aberta fatura
@@ -87,12 +85,12 @@ class Settings(BaseSettings):
     # Cinco minutos e mais do que qualquer duvida de cardapio precisa e o
     # suficiente para o custo de uma sessao ser um numero conhecido em vez de
     # uma incognita. Ver `docs/` e o cabecalho de sessao_service.py.
-    VOZ_DURACAO_MAXIMA_SEGUNDOS: int = 300
+    VOICE_MAX_SESSION_SECONDS: int = 300
     # Silencio que encerra. Conta desde o ultimo `speech_started`.
-    VOZ_INATIVIDADE_SEGUNDOS: int = 45
+    VOICE_IDLE_SECONDS: int = 45
     # Quanto antes do corte o atendente avisa por fala. Falar antes de cortar
     # e o que separa "encerrou" de "caiu" para quem esta do outro lado.
-    VOZ_AVISO_ANTES_DE_ENCERRAR_SEGUNDOS: int = 10
+    VOICE_WARN_BEFORE_END_SECONDS: int = 10
 
     # Cota de voz. A unidade e SESSAO, e nao minuto, e a escolha nao e de
     # conveniencia: o backend conta emissao com CERTEZA e nao consegue medir
@@ -120,14 +118,14 @@ class Settings(BaseSettings):
     # como teto de uma sessao que vai ate o fim dos 5 minutos.
     #
     # Cinco sessoes por cliente = teto de ~US$ 0,55 por dia por pessoa.
-    VOZ_SESSOES_POR_CLIENTE_POR_DIA: int = 5
+    VOICE_SESSIONS_PER_CUSTOMER_PER_DAY: int = 5
     # A rede de seguranca: mesmo que a cota por cliente falhe ou que aparecam
     # muitos clientes de uma vez, o gasto de uma loja tem teto. Cem sessoes de
     # 5 minutos = ~US$ 11 por dia, no pior caso em que TODAS vao ate o fim.
-    VOZ_SESSOES_POR_RESTAURANTE_POR_DIA: int = 100
+    VOICE_SESSIONS_PER_RESTAURANT_PER_DAY: int = 100
     # Janela ROLANTE, e nao dia de calendario: um teto que zera a meia-noite
     # convida a gastar o dobro entre 23h59 e 00h01.
-    VOZ_JANELA_DA_COTA_HORAS: int = 24
+    VOICE_QUOTA_WINDOW_HOURS: int = 24
 
     # Varredura que mantem o indice do Rapi em dia (scripts/reindex_worker.py).
     #

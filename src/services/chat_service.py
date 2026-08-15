@@ -45,7 +45,7 @@ class ChatService:
     def __init__(self, db: Session, agent: str = "/chat"):
         """`agent` so existe para o LOG — ver `RetrievalService`.
 
-        O experimento de voz reusa `retrieval_service` e `_hydrate_products`
+        O agente de voz reusa `retrieval_service` e `_hydrate_products`
         deste servico, entao as linhas de medicao dos dois agentes saiam com o
         mesmo prefixo `[AI /chat perf]`. Passando "/voz", cada um mede o
         proprio caminho sem que exista um segundo cronometro.

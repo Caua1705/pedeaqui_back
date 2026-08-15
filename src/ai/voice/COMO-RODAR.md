@@ -7,14 +7,14 @@
 No `.env` da sua máquina:
 
 ```
-EXPERIMENTO_VOZ_ENABLED=true
+VOICE_ENABLED=true
 ```
 
 Desligado (o padrão), as três rotas não existem — nem no `/docs`. Ligado, a API
 avisa no boot:
 
 ```
-[Experimento voz] LIGADO. /experimento/voz esta aberto, sem login e sem cota...
+[Voz] LIGADO. /voice esta aberto, sem login e sem cota...
 ```
 
 ## 2. Suba a API
@@ -43,7 +43,7 @@ quando na verdade é o índice que está vazio.
 ## 4. Abra a página
 
 ```
-http://localhost:8000/experimento/voz
+http://localhost:8000/voice
 ```
 
 Cole o `restaurant_id`, clique em **Falar**, dê permissão ao microfone e
@@ -57,7 +57,7 @@ que não seja localhost.
 
 - O painel preto embaixo é o log cru de eventos da Realtime. É a parte mais
   útil da página — se algo não funcionar, a resposta está ali.
-- Os cartões vêm de `POST /experimento/voz/buscar`, com preço do banco. O que
+- Os cartões vêm de `POST /voice/search`, com preço do banco. O que
   o modelo **fala** e o que o cartão **mostra** são leituras diferentes; se
   divergirem, é isso que o experimento tinha que descobrir.
 
@@ -83,10 +83,10 @@ a aba sai de vista. Ver `pagina.html` e `sessao_control_service.py`.
 | Barreira | Onde |
 |---|---|
 | login de cliente | `rota.py`, `get_current_customer` |
-| rate limit por IP (3/min, 20/h) | `rota.py`, `VOZ_SESSAO_RATE_LIMIT` |
+| rate limit por IP (3/min, 20/h) | `rota.py`, `VOICE_SESSION_RATE_LIMIT` |
 | cota por cliente e por restaurante | `sessao_control_service.py` |
 | teto de duração, inatividade, aba escondida | `pagina.html` |
-| desligamento pelo servidor | `sessao_service.desligar_na_openai` |
+| desligamento pelo servidor | `sessao_service.hangup_call` |
 
 A última só funciona quando o navegador reporta o `call_id` — ver o cabeçalho
 de `sessao_control_service.py` para o que isso alcança e o que não alcança.

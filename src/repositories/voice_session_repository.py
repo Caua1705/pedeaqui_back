@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from src.models.ai_voice_session_model import AIVoiceSession
 
 
-class VozSessaoRepository:
+class VoiceSessionRepository:
     def __init__(self, db: Session):
         self.db = db
 

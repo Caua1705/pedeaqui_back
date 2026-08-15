@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
-<title>Experimento de voz — Rapidex</title>
+<title>Voz — bancada de teste Rapidex</title>
 <style>
   /* Feia de proposito. Isto e bancada de teste, nao tela de produto. */
   body { font-family: system-ui, sans-serif; margin: 24px; max-width: 900px; }
@@ -21,7 +21,7 @@
 </head>
 <body>
 
-<h1>Experimento de voz — Rapidex</h1>
+<h1>Voz — bancada de teste</h1>
 <p>
   <label>restaurant_id: <input id="restaurante" placeholder="cole o uuid do restaurante"></label>
 </p>
@@ -129,7 +129,7 @@ async function comecar() {
   zerarEstadoDaConversa();
 
   estado("pedindo credencial ao backend...");
-  const sessaoResp = await fetch("/experimento/voz/sessao", {
+  const sessaoResp = await fetch("/voice/session", {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
     body: JSON.stringify({ restaurant_id: restaurantId })
@@ -274,7 +274,7 @@ async function reportarConexao(callId) {
   if (!sessaoId || !callId) { return; }
   log("[sessao] reportando call_id=" + callId);
   try {
-    await fetch("/experimento/voz/sessao/" + sessaoId + "/conectada", {
+    await fetch("/voice/session/" + sessaoId + "/connected", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ call_id: callId }),
@@ -288,7 +288,7 @@ function reportarEncerramento(motivo) {
   if (!sessaoId) { return; }
   // `keepalive` para o aviso sobreviver a aba sendo fechada no mesmo instante.
   // Sem catch a promessa rejeitada apareceria no console durante o fechamento.
-  fetch("/experimento/voz/sessao/" + sessaoId + "/encerrada", {
+  fetch("/voice/session/" + sessaoId + "/ended", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ motivo: motivo }),
@@ -448,7 +448,7 @@ async function executarBusca(callId, nome, argumentosJson, restaurantId) {
   catch (erro) { log("!! argumentos ilegiveis: " + argumentosJson); }
 
   log("[ferramenta] buscando: " + consulta + (precoMaximo ? " (ate " + precoMaximo + ")" : ""));
-  const resposta = await fetch("/experimento/voz/buscar", {
+  const resposta = await fetch("/voice/search", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

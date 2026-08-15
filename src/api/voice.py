@@ -1,13 +1,19 @@
-"""As tres rotas do experimento. Nenhuma sobe sem `EXPERIMENTO_VOZ_ENABLED`.
+"""As rotas do atendimento por voz. Nenhuma sobe sem `VOICE_ENABLED`.
 
-    GET  /experimento/voz          a pagina de teste
-    POST /experimento/voz/sessao   emite a credencial efemera
-    POST /experimento/voz/buscar   a ferramenta que o modelo chama
+    GET  /voice/test                       bancada de teste
+    POST /voice/session                    emite a credencial efemera
+    POST /voice/session/{id}/connected     o navegador reporta o call_id
+    POST /voice/session/{id}/ended         o navegador reporta o fim
+    POST /voice/search                     a ferramenta que o modelo chama
 
-A pagina e servida por AQUI, e nao aberta como arquivo do disco, por um
+Fica ao lado de `src/api/chat.py` de proposito: sao os dois agentes da mesma
+casa, um por texto e outro por voz, e a simetria da rota e a primeira coisa
+que quem chega procura.
+
+A bancada e servida por AQUI, e nao aberta como arquivo do disco, por um
 motivo pratico: `file://` tem origem `null`, e o CORS desta API exige origem
-conhecida com credenciais. Servida na propria origem, o experimento nao
-depende de mexer na lista de origens do `main.py`.
+conhecida com credenciais. Servida na propria origem, ela nao depende de
+mexer na lista de origens do `main.py`.
 """
 
 import uuid
@@ -21,15 +27,15 @@ from sqlalchemy.orm import Session
 
 from src.api.dependencies.customer_auth import get_current_customer
 from src.api.dependencies.database import get_db
-from src.api.rate_limit import VOZ_SESSAO_RATE_LIMIT, limiter
+from src.api.rate_limit import VOICE_SESSION_RATE_LIMIT, limiter
 from src.core.config import settings
 from src.models.customer_model import Customer
-from src.experimento.voz.busca_service import VozBuscaService
-from src.experimento.voz.sessao_control_service import VozSessaoControlService
+from src.ai.voice.search_service import VoiceSearchService
+from src.ai.voice.session_service import VoiceSessionService
 from src.services.chat_service import ChatService
 
 
-router = APIRouter(prefix="/experimento/voz", tags=["experimento"])
+router = APIRouter(prefix="/voice", tags=["experimento"])
 
 PAGINA = Path(__file__).resolve().parent / "pagina.html"
 
@@ -54,15 +60,15 @@ class BuscaRequest(BaseModel):
     preco_maximo: Decimal | None = Field(default=None, gt=0)
 
 
-@router.get("", response_class=HTMLResponse)
+@router.get("/test", response_class=HTMLResponse)
 def pagina() -> HTMLResponse:
     """Lida do disco a cada requisicao, de proposito: da para editar o HTML e
     dar F5 sem reiniciar a API."""
     return HTMLResponse(PAGINA.read_text(encoding="utf-8"))
 
 
-@router.post("/sessao")
-@limiter.limit(VOZ_SESSAO_RATE_LIMIT)
+@router.post("/session")
+@limiter.limit(VOICE_SESSION_RATE_LIMIT)
 def criar_sessao(
     request: Request,
     payload: SessaoRequest,
@@ -78,14 +84,14 @@ def criar_sessao(
 
     As tres barreiras desta rota, da mais externa para a mais interna:
     rate limit por IP (contra quem troca de conta), cota por cliente e por
-    restaurante (em `VozSessaoControlService`), e o teto de duracao gravado na
+    restaurante (em `VoiceSessionService`), e o teto de duracao gravado na
     sessao.
     """
     chat_service = ChatService(db, agent="/voz")
     restaurant = chat_service._get_active_restaurant(payload.restaurant_id)
     restaurant_context = chat_service._build_restaurant_context(restaurant)
 
-    sessao, credencial = VozSessaoControlService(db).abrir(
+    sessao, credencial = VoiceSessionService(db).abrir(
         restaurant_id=restaurant.id,
         customer_id=cliente.id,
         restaurant_context=restaurant_context,
@@ -99,14 +105,14 @@ def criar_sessao(
         "sessao_id": str(sessao.id),
         "credencial": credencial,
         "limites": {
-            "duracao_maxima_s": settings.VOZ_DURACAO_MAXIMA_SEGUNDOS,
-            "inatividade_s": settings.VOZ_INATIVIDADE_SEGUNDOS,
-            "aviso_antes_s": settings.VOZ_AVISO_ANTES_DE_ENCERRAR_SEGUNDOS,
+            "duracao_maxima_s": settings.VOICE_MAX_SESSION_SECONDS,
+            "inatividade_s": settings.VOICE_IDLE_SECONDS,
+            "aviso_antes_s": settings.VOICE_WARN_BEFORE_END_SECONDS,
         },
     }
 
 
-@router.post("/sessao/{sessao_id}/conectada")
+@router.post("/session/{sessao_id}/connected")
 def registrar_conexao(
     sessao_id: uuid.UUID,
     payload: ConexaoRequest,
@@ -118,11 +124,11 @@ def registrar_conexao(
     OpenAI — sem ela o servidor nao consegue desligar aquela sessao. Ver o
     cabecalho de `sessao_control_service.py` para o que isso implica.
     """
-    encontrou = VozSessaoControlService(db).registrar_conexao(sessao_id, payload.call_id)
+    encontrou = VoiceSessionService(db).registrar_conexao(sessao_id, payload.call_id)
     return {"registrado": encontrou}
 
 
-@router.post("/sessao/{sessao_id}/encerrada")
+@router.post("/session/{sessao_id}/ended")
 def registrar_encerramento(
     sessao_id: uuid.UUID,
     payload: EncerramentoRequest,
@@ -133,11 +139,11 @@ def registrar_encerramento(
     O servidor desliga na OpenAI mesmo assim quando tem `call_id`: o cliente
     reporta o que ELE fez, e a conexao pode ter sobrevivido do outro lado.
     """
-    encerrou = VozSessaoControlService(db).encerrar(sessao_id, payload.motivo)
+    encerrou = VoiceSessionService(db).encerrar(sessao_id, payload.motivo)
     return {"encerrado": encerrou}
 
 
-@router.post("/buscar")
+@router.post("/search")
 def buscar(payload: BuscaRequest, db: Session = Depends(get_db)) -> dict:
     """A ferramenta. O navegador chama isto quando o modelo pede uma busca.
 
@@ -146,7 +152,7 @@ def buscar(payload: BuscaRequest, db: Session = Depends(get_db)) -> dict:
     (so nome e preco). Separar os dois e o que impede o modelo de falar um
     preco que o cartao nao mostra — ele nunca ve outro numero.
     """
-    service = VozBuscaService(db)
+    service = VoiceSearchService(db)
     produtos = service.buscar(payload.restaurant_id, payload.consulta, payload.preco_maximo)
 
     return {

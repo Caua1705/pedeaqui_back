@@ -38,8 +38,8 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.core.config import settings
-from src.experimento.voz.sessao_repository import VozSessaoRepository
-from src.experimento.voz.sessao_service import desligar_na_openai, emitir_credencial_efemera
+from src.repositories.voice_session_repository import VoiceSessionRepository
+from src.ai.voice.realtime_client import hangup_call, issue_client_secret
 from src.models.ai_voice_session_model import AIVoiceSession
 
 
@@ -48,10 +48,10 @@ logger = logging.getLogger("uvicorn.error")
 SEM_CALL_ID = "vencida sem call_id — servidor nao consegue desligar"
 
 
-class VozSessaoControlService:
+class VoiceSessionService:
     def __init__(self, db: Session):
         self.db = db
-        self.repository = VozSessaoRepository(db)
+        self.repository = VoiceSessionRepository(db)
 
     def abrir(
         self,
@@ -72,8 +72,8 @@ class VozSessaoControlService:
         self.encerrar_vencidas()
         self._conferir_cotas(restaurant_id, customer_id)
 
-        credencial = emitir_credencial_efemera(restaurant_id, restaurant_context)
-        expira_em = _agora() + timedelta(seconds=settings.VOZ_DURACAO_MAXIMA_SEGUNDOS)
+        credencial = issue_client_secret(restaurant_id, restaurant_context)
+        expira_em = _agora() + timedelta(seconds=settings.VOICE_MAX_SESSION_SECONDS)
         sessao = self.repository.registrar(
             restaurant_id=restaurant_id,
             customer_id=customer_id,
@@ -82,7 +82,7 @@ class VozSessaoControlService:
         self.db.commit()
 
         logger.info(
-            "[Experimento voz] sessao registrada | sessao_id=%s | restaurant_id=%s "
+            "[Voz] sessao registrada | sessao_id=%s | restaurant_id=%s "
             "| customer_id=%s | expira_em=%s",
             sessao.id,
             restaurant_id,
@@ -102,13 +102,13 @@ class VozSessaoControlService:
         Recusa com 429 e o motivo por extenso. O cliente nao tem o que fazer
         com "limite atingido" sem saber qual, e quem le o log tambem nao.
         """
-        desde = _agora() - timedelta(hours=settings.VOZ_JANELA_DA_COTA_HORAS)
+        desde = _agora() - timedelta(hours=settings.VOICE_QUOTA_WINDOW_HOURS)
 
         if customer_id is not None:
             do_cliente = self.repository.contar_do_cliente_desde(customer_id, desde)
-            if do_cliente >= settings.VOZ_SESSOES_POR_CLIENTE_POR_DIA:
+            if do_cliente >= settings.VOICE_SESSIONS_PER_CUSTOMER_PER_DAY:
                 logger.warning(
-                    "[Experimento voz] cota do cliente estourada | customer_id=%s | usadas=%d",
+                    "[Voz] cota do cliente estourada | customer_id=%s | usadas=%d",
                     customer_id,
                     do_cliente,
                 )
@@ -116,14 +116,14 @@ class VozSessaoControlService:
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail=(
                         f"Voce ja usou {do_cliente} conversas por voz nas ultimas "
-                        f"{settings.VOZ_JANELA_DA_COTA_HORAS} horas. Tente mais tarde."
+                        f"{settings.VOICE_QUOTA_WINDOW_HOURS} horas. Tente mais tarde."
                     ),
                 )
 
         do_restaurante = self.repository.contar_do_restaurante_desde(restaurant_id, desde)
-        if do_restaurante >= settings.VOZ_SESSOES_POR_RESTAURANTE_POR_DIA:
+        if do_restaurante >= settings.VOICE_SESSIONS_PER_RESTAURANT_PER_DAY:
             logger.warning(
-                "[Experimento voz] cota do restaurante estourada | restaurant_id=%s | usadas=%d",
+                "[Voz] cota do restaurante estourada | restaurant_id=%s | usadas=%d",
                 restaurant_id,
                 do_restaurante,
             )
@@ -146,7 +146,7 @@ class VozSessaoControlService:
         sessao.openai_call_id = call_id
         self.db.commit()
         logger.info(
-            "[Experimento voz] conexao reportada | sessao_id=%s | call_id=%s",
+            "[Voz] conexao reportada | sessao_id=%s | call_id=%s",
             sessao_id,
             call_id,
         )
@@ -163,13 +163,13 @@ class VozSessaoControlService:
             return False
 
         if sessao.openai_call_id:
-            desligar_na_openai(sessao.openai_call_id)
+            hangup_call(sessao.openai_call_id)
 
         sessao.ended_at = _agora()
         sessao.ended_reason = motivo[:200]
         self.db.commit()
         logger.info(
-            "[Experimento voz] sessao encerrada | sessao_id=%s | motivo=%s",
+            "[Voz] sessao encerrada | sessao_id=%s | motivo=%s",
             sessao_id,
             sessao.ended_reason,
         )
@@ -191,11 +191,11 @@ class VozSessaoControlService:
 
         for sessao in vencidas:
             if sessao.openai_call_id:
-                desligar_na_openai(sessao.openai_call_id)
+                hangup_call(sessao.openai_call_id)
                 sessao.ended_reason = "teto de duracao — desligada pelo servidor"
             else:
                 logger.warning(
-                    "[Experimento voz] sessao vencida sem call_id | sessao_id=%s "
+                    "[Voz] sessao vencida sem call_id | sessao_id=%s "
                     "| restaurant_id=%s",
                     sessao.id,
                     sessao.restaurant_id,
@@ -204,7 +204,7 @@ class VozSessaoControlService:
             sessao.ended_at = agora
 
         self.db.commit()
-        logger.info("[Experimento voz] varredura de vencidas | fechadas=%d", len(vencidas))
+        logger.info("[Voz] varredura de vencidas | fechadas=%d", len(vencidas))
         return len(vencidas)
 
 

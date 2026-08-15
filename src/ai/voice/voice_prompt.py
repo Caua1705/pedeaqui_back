@@ -22,7 +22,7 @@ modelo passou pela brecha. Por isso a negativa virou regra própria: dizer que
 não tem é uma conclusão de busca, e nunca um palpite.
 """
 
-INSTRUCOES_DE_VOZ = """
+VOICE_INSTRUCTIONS = """
 Voce atende no balcao do restaurante indicado abaixo. Fala com o cliente, em
 portugues do Brasil, como alguem que trabalha na casa.
 
@@ -59,7 +59,7 @@ O QUE NAO E COM VOCE
 """
 
 
-def instrucoes_para(restaurant_context: str) -> str:
+def instructions_for(restaurant_context: str) -> str:
     """As instrucoes com o contexto do restaurante colado no fim.
 
     A Realtime API recebe UM campo `instructions` na criacao da sessao — nao
@@ -70,4 +70,4 @@ def instrucoes_para(restaurant_context: str) -> str:
     mesmo do chat de texto: se um dia o cadastro ganhar tipo de cozinha, os
     dois passam a saber junto.
     """
-    return f"{INSTRUCOES_DE_VOZ}\n\nO RESTAURANTE\n{restaurant_context}\n"
+    return f"{VOICE_INSTRUCTIONS}\n\nO RESTAURANTE\n{restaurant_context}\n"

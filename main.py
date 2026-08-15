@@ -132,22 +132,16 @@ app.include_router(admin_customers.router)
 app.include_router(admin_reports.router)
 app.include_router(chat.router)
 
-# EXPERIMENTO de voz — branch experimento/voz, nao vai para producao assim.
+# Atendimento por voz. `VOICE_ENABLED` e a CHAVE MESTRA: desligada, as rotas
+# nao existem — nem no /docs — e nenhum restaurante tem voz, por mais que a
+# coluna `restaurant_settings.voice_enabled` diga o contrario.
 #
-# O `if` e a barreira: sem `EXPERIMENTO_VOZ_ENABLED=true` as rotas nao
-# existem, nem no /docs. Elas emitem credencial da OpenAI Realtime SEM login e
-# SEM cota, e cada credencial e uma sessao de audio faturada — ver o cabecalho
-# de src/experimento/voz/sessao_service.py.
+# Ligada, ela nao acende a voz para ninguem sozinha: cada restaurante ainda
+# precisa da propria habilitacao. Ver `src/ai/voice/session_service.py`.
 #
-# O import tambem fica aqui dentro, e nao no topo: desligado, o pacote do
-# experimento nem chega a ser carregado.
-if settings.EXPERIMENTO_VOZ_ENABLED:
-    import logging
+# O import fica aqui dentro, e nao no topo: desligado, o pacote de voz nem
+# chega a ser carregado.
+if settings.VOICE_ENABLED:
+    from src.api import voice as voice_router
 
-    from src.experimento.voz import rota as experimento_voz
-
-    app.include_router(experimento_voz.router)
-    logging.getLogger("uvicorn.error").warning(
-        "[Experimento voz] LIGADO. /experimento/voz esta aberto, sem login e "
-        "sem cota, emitindo credencial faturada. Nao use assim em servidor."
-    )
+    app.include_router(voice_router.router)

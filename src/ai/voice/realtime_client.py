@@ -1,36 +1,27 @@
-"""Emite a credencial efemera que o NAVEGADOR usa para falar com a OpenAI.
+"""Cliente da Realtime API da OpenAI: emite credencial efemera e desliga chamada.
 
-===========================================================================
-ISTO NAO PODE IR PARA PRODUCAO ASSIM. LEIA ANTES DE COPIAR.
-===========================================================================
+E o unico arquivo que fala com a OpenAI com a CHAVE MESTRA. Ela nunca sai
+daqui: o que vai para o navegador e um segredo de curta duracao, preso a uma
+sessao ja configurada — modelo, voz, instrucoes e ferramentas sao fixados
+neste lado e o cliente nao troca nenhum deles.
 
-A rota que chama este servico e ABERTA: sem login, sem cota, sem teto de
-duracao e sem registro de consumo. Cada credencial emitida abre uma sessao de
-audio faturada na conta da OpenAI do projeto, e nada aqui limita quantas.
+SOBRE O TTL DO SEGREDO, que e o erro classico deste desenho: ele e a janela
+para ABRIR a conexao, e NAO o teto da conversa. Uma sessao aberta continua
+faturando muito depois de o segredo expirar. Quem limita a duracao e o teto
+gravado em `ai_voice_sessions` mais os fechamentos do lado do cliente; ver
+`src/ai/voice/session_service.py`.
 
-Um `curl` em laco contra este endpoint gera credenciais indefinidamente. Nao
-existe, neste arquivo, nenhuma barreira contra isso — de proposito, porque o
-objetivo do experimento e descobrir se a coisa presta, e cota antes disso e
-trabalho jogado fora se a resposta for nao.
+O que protege a emissao, e onde cada peca mora:
 
-O que falta, e que nao e opcional para virar produto:
+    login de cliente          `src/api/voice.py`, get_current_customer
+    rate limit por IP         `src/api/voice.py`, VOICE_SESSION_RATE_LIMIT
+    cota por cliente e loja   `session_service.py`
+    voz ligada no restaurante `session_service.py`
+    chave mestra global       `VOICE_ENABLED`, em `main.py`
 
-1. **Identidade.** Cliente autenticado (`get_current_customer`). Um minuto de
-   audio anonimo e dinheiro sem ninguem a quem cobrar nem a quem bloquear.
-2. **Cota** por cliente, por restaurante e global, debitada NA EMISSAO pelo
-   custo maximo possivel da sessao. Debitar no fim nunca cobra de quem nunca
-   fecha a sessao.
-3. **Teto de duracao dentro da sessao.** O TTL do segredo abaixo e a janela
-   para ABRIR a conexao, e nao o teto da conversa: uma sessao aberta continua
-   faturando muito depois de o segredo expirar. Confundir os dois e o erro
-   classico deste desenho.
-4. **Livro-razao** das emissoes e conciliacao diaria com a fatura. Sem isso
-   nao ha como saber que uma sessao faturada foi emitida por voce.
-5. **Projeto OpenAI separado, com teto de gasto proprio.** E a unica barreira
-   que continua valendo quando o codigo acima tem bug.
-
-O que existe hoje como unica protecao: a rota so sobe com
-`EXPERIMENTO_VOZ_ENABLED=true`, e o padrao e desligado.
+O que continua faltando, e nao depende deste arquivo: **projeto OpenAI
+separado com teto de gasto proprio.** E a unica barreira que continua valendo
+quando o codigo acima tiver bug.
 """
 
 import logging
@@ -40,17 +31,17 @@ import httpx
 from fastapi import HTTPException, status
 
 from src.core.config import settings
-from src.experimento.voz.prompt_de_voz import instrucoes_para
+from src.ai.voice.voice_prompt import instructions_for
 
 
 logger = logging.getLogger("uvicorn.error")
 
-URL_DE_EMISSAO = "https://api.openai.com/v1/realtime/client_secrets"
+URL_CLIENT_SECRETS = "https://api.openai.com/v1/realtime/client_secrets"
 # Desliga uma chamada em curso, com a chave MESTRA. Documentado em
 # developers.openai.com/api/reference — POST, sem corpo, 200 quando a OpenAI
-# comeca a encerrar. Ver `desligar_na_openai` para o que ele exige.
-URL_DE_DESLIGAMENTO = "https://api.openai.com/v1/realtime/calls/{call_id}/hangup"
-MODELO_DE_VOZ = "gpt-realtime-mini"
+# comeca a encerrar. Ver `hangup_call` para o que ele exige.
+URL_HANGUP = "https://api.openai.com/v1/realtime/calls/{call_id}/hangup"
+VOICE_MODEL = "gpt-realtime-mini"
 VOZ = "marin"
 TIMEOUT_SEGUNDOS = 10
 
@@ -58,7 +49,7 @@ TIMEOUT_SEGUNDOS = 10
 # servidor, e nao no HTML: e o servidor que decide o que o modelo pode fazer.
 # Se a lista viajasse no javascript, quem abrisse o console escolheria as
 # proprias ferramentas.
-FERRAMENTA_DE_BUSCA = {
+SEARCH_TOOL = {
     "type": "function",
     "name": "buscar_no_cardapio",
     "description": (
@@ -96,7 +87,7 @@ FERRAMENTA_DE_BUSCA = {
 }
 
 
-def emitir_credencial_efemera(restaurant_id: uuid.UUID, restaurant_context: str) -> dict:
+def issue_client_secret(restaurant_id: uuid.UUID, restaurant_context: str) -> dict:
     """Pede a OpenAI um segredo de curta duracao para o navegador usar.
 
     A chave mestra (`OPENAI_API_KEY`) nunca sai daqui. O que vai para o
@@ -107,17 +98,17 @@ def emitir_credencial_efemera(restaurant_id: uuid.UUID, restaurant_context: str)
     corpo = {
         "session": {
             "type": "realtime",
-            "model": MODELO_DE_VOZ,
-            "instructions": instrucoes_para(restaurant_context),
+            "model": VOICE_MODEL,
+            "instructions": instructions_for(restaurant_context),
             "audio": {"output": {"voice": VOZ}},
-            "tools": [FERRAMENTA_DE_BUSCA],
+            "tools": [SEARCH_TOOL],
             "tool_choice": "auto",
         }
     }
 
     try:
         resposta = httpx.post(
-            URL_DE_EMISSAO,
+            URL_CLIENT_SECRETS,
             headers={
                 "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
                 "Content-Type": "application/json",
@@ -126,7 +117,7 @@ def emitir_credencial_efemera(restaurant_id: uuid.UUID, restaurant_context: str)
             timeout=TIMEOUT_SEGUNDOS,
         )
     except httpx.HTTPError as erro:
-        logger.warning("[Experimento voz] emissao falhou na rede: %s", erro)
+        logger.warning("[Voz] emissao falhou na rede: %s", erro)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Nao consegui falar com a OpenAI",
@@ -137,7 +128,7 @@ def emitir_credencial_efemera(restaurant_id: uuid.UUID, restaurant_context: str)
         # cliente: ele as vezes ecoa pedaco do que foi enviado, e o que foi
         # enviado inclui as instrucoes.
         logger.warning(
-            "[Experimento voz] emissao recusada | status=%d | corpo=%s",
+            "[Voz] emissao recusada | status=%d | corpo=%s",
             resposta.status_code,
             resposta.text[:800],
         )
@@ -152,15 +143,15 @@ def emitir_credencial_efemera(restaurant_id: uuid.UUID, restaurant_context: str)
     # navegador e a OpenAI, e o backend nao ve mais nada. Esta linha e o
     # comeco de qualquer conciliacao de custo que venha a existir.
     logger.info(
-        "[Experimento voz] credencial emitida | restaurant_id=%s | modelo=%s | expira_em=%s",
+        "[Voz] credencial emitida | restaurant_id=%s | modelo=%s | expira_em=%s",
         restaurant_id,
-        MODELO_DE_VOZ,
+        VOICE_MODEL,
         emitida.get("expires_at"),
     )
     return emitida
 
 
-def desligar_na_openai(call_id: str) -> bool:
+def hangup_call(call_id: str) -> bool:
     """Encerra uma chamada em curso pelo SERVIDOR. Devolve se conseguiu.
 
     ===================================================================
@@ -183,28 +174,28 @@ def desligar_na_openai(call_id: str) -> bool:
     """
     try:
         resposta = httpx.post(
-            URL_DE_DESLIGAMENTO.format(call_id=call_id),
+            URL_HANGUP.format(call_id=call_id),
             headers={"Authorization": f"Bearer {settings.OPENAI_API_KEY}"},
             timeout=TIMEOUT_SEGUNDOS,
         )
     except httpx.HTTPError as erro:
-        logger.warning("[Experimento voz] desligamento falhou na rede | call_id=%s | %s", call_id, erro)
+        logger.warning("[Voz] desligamento falhou na rede | call_id=%s | %s", call_id, erro)
         return False
 
     # 404 conta como sucesso: a chamada ja tinha acabado, que e o estado que
     # se queria. Insistir nela em toda varredura seria barulho eterno no log.
     if resposta.status_code == 404:
-        logger.info("[Experimento voz] chamada ja estava encerrada | call_id=%s", call_id)
+        logger.info("[Voz] chamada ja estava encerrada | call_id=%s", call_id)
         return True
 
     if resposta.status_code >= 400:
         logger.warning(
-            "[Experimento voz] desligamento recusado | call_id=%s | status=%d | corpo=%s",
+            "[Voz] desligamento recusado | call_id=%s | status=%d | corpo=%s",
             call_id,
             resposta.status_code,
             resposta.text[:300],
         )
         return False
 
-    logger.info("[Experimento voz] chamada desligada pelo servidor | call_id=%s", call_id)
+    logger.info("[Voz] chamada desligada pelo servidor | call_id=%s", call_id)
     return True

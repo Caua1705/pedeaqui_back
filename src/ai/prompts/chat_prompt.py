@@ -11,7 +11,7 @@ def build_chat_prompt() -> ChatPromptTemplate:
             (
                 "human",
                 """
-Contexto do restaurante:
+Restaurante:
 {restaurant_context}
 
 Historico da sessao:

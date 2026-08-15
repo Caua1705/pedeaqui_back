@@ -14,13 +14,16 @@ import uuid
 from decimal import Decimal
 from pathlib import Path
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from src.api.dependencies.customer_auth import get_current_customer
 from src.api.dependencies.database import get_db
+from src.api.rate_limit import VOZ_SESSAO_RATE_LIMIT, limiter
 from src.core.config import settings
+from src.models.customer_model import Customer
 from src.experimento.voz.busca_service import VozBuscaService
 from src.experimento.voz.sessao_control_service import VozSessaoControlService
 from src.services.chat_service import ChatService
@@ -59,11 +62,24 @@ def pagina() -> HTMLResponse:
 
 
 @router.post("/sessao")
-def criar_sessao(payload: SessaoRequest, db: Session = Depends(get_db)) -> dict:
+@limiter.limit(VOZ_SESSAO_RATE_LIMIT)
+def criar_sessao(
+    request: Request,
+    payload: SessaoRequest,
+    db: Session = Depends(get_db),
+    cliente: Customer = Depends(get_current_customer),
+) -> dict:
     """Credencial efemera para o navegador abrir a sessao de audio.
 
-    SEM LOGIN E SEM COTA. Ver o cabecalho de `sessao_service.py` para a lista
-    do que falta antes de isto existir fora da maquina de quem esta testando.
+    EXIGE CLIENTE AUTENTICADO. Audio anonimo e consumo sem ninguem a quem
+    cobrar, a quem limitar e a quem bloquear: sem login, um laco de `curl`
+    emite credenciais ate a fatura chegar. `get_current_customer` responde 401
+    com "Token ausente" quando nao vem Bearer.
+
+    As tres barreiras desta rota, da mais externa para a mais interna:
+    rate limit por IP (contra quem troca de conta), cota por cliente e por
+    restaurante (em `VozSessaoControlService`), e o teto de duracao gravado na
+    sessao.
     """
     chat_service = ChatService(db, agent="/voz")
     restaurant = chat_service._get_active_restaurant(payload.restaurant_id)
@@ -71,7 +87,7 @@ def criar_sessao(payload: SessaoRequest, db: Session = Depends(get_db)) -> dict:
 
     sessao, credencial = VozSessaoControlService(db).abrir(
         restaurant_id=restaurant.id,
-        customer_id=None,
+        customer_id=cliente.id,
         restaurant_context=restaurant_context,
     )
 

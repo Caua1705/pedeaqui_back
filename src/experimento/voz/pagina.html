@@ -26,6 +26,12 @@
   <label>restaurant_id: <input id="restaurante" placeholder="cole o uuid do restaurante"></label>
 </p>
 <p>
+  <!-- A emissao exige cliente autenticado: audio anonimo e consumo sem
+       ninguem a quem cobrar. Esta pagina nao tem tela de login, entao o
+       token entra a mao. -->
+  <label>token do cliente: <input id="token" placeholder="cole o access_token (Bearer)"></label>
+</p>
+<p>
   <button id="falar">Falar</button>
   <button id="parar" disabled>Parar</button>
 </p>
@@ -115,6 +121,8 @@ let timerDaInatividade = null;
 async function comecar() {
   const restaurantId = document.getElementById("restaurante").value.trim();
   if (!restaurantId) { alert("cole o restaurant_id"); return; }
+  const token = document.getElementById("token").value.trim();
+  if (!token) { alert("cole o token do cliente"); return; }
 
   document.getElementById("falar").disabled = true;
   produtosEl.innerHTML = "";
@@ -123,10 +131,12 @@ async function comecar() {
   estado("pedindo credencial ao backend...");
   const sessaoResp = await fetch("/experimento/voz/sessao", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
     body: JSON.stringify({ restaurant_id: restaurantId })
   });
   if (!sessaoResp.ok) {
+    // 401 = token ausente ou vencido. 429 = cota ou rate limit; o corpo diz
+    // qual, e e a unica forma de saber sem abrir o log do servidor.
     estado("falhou ao emitir credencial: " + sessaoResp.status);
     log(await sessaoResp.text());
     document.getElementById("falar").disabled = false;

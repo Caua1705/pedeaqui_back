@@ -34,6 +34,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.core.config import settings
@@ -58,15 +59,18 @@ class VozSessaoControlService:
         customer_id: uuid.UUID | None,
         restaurant_context: str,
     ) -> tuple[AIVoiceSession, dict]:
-        """Varre o que venceu, emite a credencial e registra a sessao nova.
+        """Varre o que venceu, confere a cota, emite a credencial e registra.
 
-        A varredura vem ANTES da emissao para o custo de uma sessao esquecida
-        parar no momento em que alguem comeca outra, e nao depois.
+        A varredura vem ANTES da cota, e nao e detalhe de ordem: sessao
+        vencida que ninguem fechou continuaria contando contra o cliente
+        depois de ja ter acabado.
 
-        A credencial e pedida antes de gravar a linha: emissao recusada pela
-        OpenAI nao pode deixar sessao fantasma no livro-razao consumindo cota.
+        A cota vem antes da emissao para nao gastar chamada a OpenAI com quem
+        vai ser recusado, e a credencial e pedida antes de gravar a linha:
+        emissao recusada nao pode deixar sessao fantasma consumindo cota.
         """
         self.encerrar_vencidas()
+        self._conferir_cotas(restaurant_id, customer_id)
 
         credencial = emitir_credencial_efemera(restaurant_id, restaurant_context)
         expira_em = _agora() + timedelta(seconds=settings.VOZ_DURACAO_MAXIMA_SEGUNDOS)
@@ -86,6 +90,47 @@ class VozSessaoControlService:
             expira_em.isoformat(),
         )
         return sessao, credencial
+
+    def _conferir_cotas(self, restaurant_id: uuid.UUID, customer_id: uuid.UUID | None) -> None:
+        """Duas cotas, e a segunda existe porque a primeira pode nao bastar.
+
+        A do CLIENTE segura o uso individual. A do RESTAURANTE e rede de
+        seguranca: se aparecerem muitos clientes de uma vez — ou se a primeira
+        cota tiver um furo que ninguem viu — o gasto de uma loja continua com
+        teto.
+
+        Recusa com 429 e o motivo por extenso. O cliente nao tem o que fazer
+        com "limite atingido" sem saber qual, e quem le o log tambem nao.
+        """
+        desde = _agora() - timedelta(hours=settings.VOZ_JANELA_DA_COTA_HORAS)
+
+        if customer_id is not None:
+            do_cliente = self.repository.contar_do_cliente_desde(customer_id, desde)
+            if do_cliente >= settings.VOZ_SESSOES_POR_CLIENTE_POR_DIA:
+                logger.warning(
+                    "[Experimento voz] cota do cliente estourada | customer_id=%s | usadas=%d",
+                    customer_id,
+                    do_cliente,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=(
+                        f"Voce ja usou {do_cliente} conversas por voz nas ultimas "
+                        f"{settings.VOZ_JANELA_DA_COTA_HORAS} horas. Tente mais tarde."
+                    ),
+                )
+
+        do_restaurante = self.repository.contar_do_restaurante_desde(restaurant_id, desde)
+        if do_restaurante >= settings.VOZ_SESSOES_POR_RESTAURANTE_POR_DIA:
+            logger.warning(
+                "[Experimento voz] cota do restaurante estourada | restaurant_id=%s | usadas=%d",
+                restaurant_id,
+                do_restaurante,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="O atendimento por voz deste restaurante atingiu o limite do dia.",
+            )
 
     def registrar_conexao(self, sessao_id: uuid.UUID, call_id: str) -> bool:
         """Guarda o `call_id` que o navegador leu do cabecalho `Location`.

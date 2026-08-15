@@ -94,6 +94,24 @@ class Settings(BaseSettings):
     # e o que separa "encerrou" de "caiu" para quem esta do outro lado.
     VOZ_AVISO_ANTES_DE_ENCERRAR_SEGUNDOS: int = 10
 
+    # Cota de voz. A unidade e SESSAO, e nao minuto, e a escolha nao e de
+    # conveniencia: o backend conta emissao com CERTEZA e nao consegue medir
+    # minuto — a conversa acontece entre o navegador e a OpenAI, e o servidor
+    # nao a ve. Com o teto de 5 minutos por sessao, N sessoes valem no maximo
+    # N x 5 minutos, que e um numero que da para prometer. Cota em minutos
+    # seria palpite com cara de precisao.
+    #
+    # Cinco sessoes por cliente = 25 minutos no pior caso, uns US$ 1,50 por
+    # dia por pessoa. Mais do que qualquer duvida de cardapio honesta pede.
+    VOZ_SESSOES_POR_CLIENTE_POR_DIA: int = 5
+    # A rede de seguranca: mesmo que a cota por cliente falhe ou que apareçam
+    # muitos clientes de uma vez, o gasto de um restaurante tem teto. Cem
+    # sessoes = 500 minutos no pior caso, uns US$ 30 por dia.
+    VOZ_SESSOES_POR_RESTAURANTE_POR_DIA: int = 100
+    # Janela ROLANTE, e nao dia de calendario: um teto que zera a meia-noite
+    # convida a gastar o dobro entre 23h59 e 00h01.
+    VOZ_JANELA_DA_COTA_HORAS: int = 24
+
     # Varredura que mantem o indice do Rapi em dia (scripts/reindex_worker.py).
     #
     # Um minuto e o atraso maximo entre o lojista salvar e o Rapi saber. Podia

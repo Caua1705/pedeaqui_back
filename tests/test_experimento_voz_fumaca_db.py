@@ -28,12 +28,15 @@ from fastapi.testclient import TestClient
 
 from src.ai.services.embedding_service import EmbeddingService
 from src.ai.services.product_indexing import index_product
+from src.api.dependencies.customer_auth import get_current_customer
 from src.api.dependencies.database import get_db
+from src.api.middleware.rate_limit_state import RateLimitStateMiddleware
+from src.api.rate_limit import limiter
 from src.models.ai_voice_session_model import AIVoiceSession
 from src.experimento.voz import rota as rota_de_voz
 from src.experimento.voz import sessao_service
 from src.repositories.ai_repository import AIRepository
-from tests.fabricas_db import criar_categoria, criar_produto, criar_restaurante
+from tests.fabricas_db import criar_categoria, criar_cliente, criar_produto, criar_restaurante
 
 
 pytestmark = pytest.mark.db
@@ -57,7 +60,7 @@ def test_a_voz_emite_credencial_e_a_ferramenta_devolve_produto(db, monkeypatch):
     monkeypatch.setattr(EmbeddingService, "generate_embedding", lambda self, texto: list(VETOR))
     monkeypatch.setattr(sessao_service, "httpx", _openai_falsa())
 
-    cliente = _cliente_com(db)
+    cliente = _cliente_com(db, criar_cliente(db))
 
     # 1. A credencial. Passa por `_get_active_restaurant` e
     #    `_build_restaurant_context`.
@@ -97,15 +100,27 @@ def _indexar(db, produto, category_name: str) -> None:
     db.flush()
 
 
-def _cliente_com(db) -> TestClient:
+def _cliente_com(db, cliente_logado) -> TestClient:
     """App mínimo com o router da voz. Não passa pelo `main.py`.
 
     O flag `EXPERIMENTO_VOZ_ENABLED` é lido no import do `main`, e o que este
     teste protege é o acoplamento com o `ChatService`, não o interruptor.
+
+    O `limiter` e o `RateLimitStateMiddleware` vêm junto porque a rota de
+    emissão é limitada: sem os dois, o wrapper do `@limiter.limit` lê
+    `request.state.view_rate_limit` e estoura `AttributeError` — o 500 que o
+    middleware existe para evitar.
+
+    `get_current_customer` é sobrescrito em vez de assinar um JWT: o que este
+    teste protege é o caminho da voz, e a autenticação de cliente já tem
+    suíte própria.
     """
     app = FastAPI()
+    app.state.limiter = limiter
+    app.add_middleware(RateLimitStateMiddleware)
     app.include_router(rota_de_voz.router)
     app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_current_customer] = lambda: cliente_logado
     return TestClient(app)
 
 

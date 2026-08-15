@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.models.ai_voice_session_model import AIVoiceSession
@@ -30,6 +30,28 @@ class VozSessaoRepository:
 
     def get(self, sessao_id: uuid.UUID) -> AIVoiceSession | None:
         return self.db.get(AIVoiceSession, sessao_id)
+
+    def contar_do_cliente_desde(self, customer_id: uuid.UUID, desde: datetime) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(AIVoiceSession)
+            .where(
+                AIVoiceSession.customer_id == customer_id,
+                AIVoiceSession.issued_at >= desde,
+            )
+        )
+        return self.db.scalar(stmt) or 0
+
+    def contar_do_restaurante_desde(self, restaurant_id: uuid.UUID, desde: datetime) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(AIVoiceSession)
+            .where(
+                AIVoiceSession.restaurant_id == restaurant_id,
+                AIVoiceSession.issued_at >= desde,
+            )
+        )
+        return self.db.scalar(stmt) or 0
 
     def listar_vencidas_em_aberto(self, agora: datetime, limite: int = 20) -> list[AIVoiceSession]:
         """Sessoes que passaram do teto e ninguem fechou.

@@ -73,6 +73,11 @@ CREATE_ORDER_RATE_LIMIT = "10/minute;60/hour"
 START_PAYMENT_RATE_LIMIT = "15/minute;60/hour"
 CHAT_RATE_LIMIT = "20/minute;200/hour"
 CHAT_FEEDBACK_RATE_LIMIT = "30/minute"
+# Emissao de credencial de voz (experimento). Bem mais apertado que o chat de
+# texto porque cada emissao pode virar minutos de audio faturado, e nao uma
+# resposta que acaba sozinha. E a segunda linha de defesa: a primeira e a cota
+# por cliente, que este limite so complementa contra quem troca de conta.
+VOZ_SESSAO_RATE_LIMIT = "3/minute;20/hour"
 
 # Cadastro. Uma pessoa cria uma conta; um IP compartilhado (wi-fi do salao,
 # CGNAT de operadora movel) pode legitimamente criar algumas. Vinte por hora

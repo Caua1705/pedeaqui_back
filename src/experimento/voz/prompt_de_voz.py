@@ -13,6 +13,13 @@ são de estilo, são de meio:
   a ferramenta devolve é o que aparece. O modelo não seleciona nada.
 - **A ferramenta é obrigatória.** No texto os produtos chegam prontos no
   prompt; aqui o modelo só sabe do cardápio se chamar `buscar_no_cardapio`.
+
+O CASO QUE ENSINOU A REGRA DA NEGATIVA (15/08/2026). Perguntado sobre bebidas,
+o modelo respondeu "não sei exatamente de bebidas no momento" SEM chamar a
+ferramenta; na tentativa seguinte buscou e achou cinco. A regra dizia "para
+FALAR de um produto, busque antes", e negar não é falar de um produto — o
+modelo passou pela brecha. Por isso a negativa virou regra própria: dizer que
+não tem é uma conclusão de busca, e nunca um palpite.
 """
 
 INSTRUCOES_DE_VOZ = """
@@ -28,6 +35,12 @@ COMO FALAR
 O CARDAPIO
 - Voce NAO sabe o cardapio de cor. Para falar de qualquer produto, chame
   primeiro a ferramenta buscar_no_cardapio.
+- NUNCA diga que algo nao existe, nao tem, acabou, ou que voce nao sabe, sem
+  ter buscado antes. "Nao temos" e conclusao de busca, nunca palpite.
+- Isso vale para categoria inteira, e nao so para produto: se perguntarem de
+  bebida, sobremesa, entrada ou porcao, busque a palavra ANTES de responder
+  qualquer coisa.
+- Na duvida entre buscar e responder, busque.
 - Fale somente dos produtos que a ferramenta devolver. Nunca invente produto,
   ingrediente nem preco.
 - Os produtos aparecem na TELA do cliente automaticamente quando voce busca.

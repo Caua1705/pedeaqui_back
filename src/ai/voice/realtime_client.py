@@ -41,8 +41,6 @@ URL_CLIENT_SECRETS = "https://api.openai.com/v1/realtime/client_secrets"
 # developers.openai.com/api/reference — POST, sem corpo, 200 quando a OpenAI
 # comeca a encerrar. Ver `hangup_call` para o que ele exige.
 URL_HANGUP = "https://api.openai.com/v1/realtime/calls/{call_id}/hangup"
-VOICE_MODEL = "gpt-realtime-mini"
-VOZ = "marin"
 TIMEOUT_SEGUNDOS = 10
 
 # A ferramenta que o modelo do navegador pode chamar. Declarada AQUI, no
@@ -98,9 +96,9 @@ def issue_client_secret(restaurant_id: uuid.UUID, restaurant_context: str) -> di
     corpo = {
         "session": {
             "type": "realtime",
-            "model": VOICE_MODEL,
+            "model": settings.VOICE_MODEL,
             "instructions": instructions_for(restaurant_context),
-            "audio": {"output": {"voice": VOZ}},
+            "audio": {"output": {"voice": settings.VOICE_NAME}},
             "tools": [SEARCH_TOOL],
             "tool_choice": "auto",
         }
@@ -145,7 +143,7 @@ def issue_client_secret(restaurant_id: uuid.UUID, restaurant_context: str) -> di
     logger.info(
         "[Voz] credencial emitida | restaurant_id=%s | modelo=%s | expira_em=%s",
         restaurant_id,
-        VOICE_MODEL,
+        settings.VOICE_MODEL,
         emitida.get("expires_at"),
     )
     return emitida

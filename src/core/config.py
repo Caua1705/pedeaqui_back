@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str
     MODEL_NAME: str = "gpt-5-mini"
     EMBEDDING_MODEL: str = "text-embedding-3-small"
+    VOICE_MODEL: str = "gpt-realtime-mini"
+    VOICE_NAME: str = "marin"
 
     # Piso de similaridade da busca vetorial. Abaixo disto o produto nao chega
     # ao modelo.

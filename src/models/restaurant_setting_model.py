@@ -33,6 +33,15 @@ class RestaurantSetting(Base):
     platform_commission_percent: Mapped[Decimal] = mapped_column(
         Numeric(5, 2), nullable=False, default=Decimal("10.00")
     )
+    # Atendimento por voz ligado NESTE restaurante. Falso em todo lugar ate
+    # alguem dizer o contrario por SQL — cada sessao de voz custa dinheiro, e
+    # ligar a base inteira de uma vez nao pode ser o padrao.
+    #
+    # Como `platform_commission_percent`, NAO aparece em nenhum schema do
+    # painel (armadilha 17): quem paga a conta da OpenAI e a plataforma, entao
+    # a decisao e nossa. Campo de tela aqui seria o lojista escolhendo quanto
+    # gastamos. A chave mestra continua sendo `VOICE_ENABLED` no ambiente.
+    voice_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 

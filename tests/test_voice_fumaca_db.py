@@ -1,15 +1,15 @@
-"""UM teste de fumaça do experimento de voz. Não é suíte, e não deve virar uma.
+"""UM teste de fumaça do atendimento por voz. Não é suíte, e não deve virar uma.
 
 **Por que existe.** A voz consome três métodos PRIVADOS do `ChatService` —
 `_get_active_restaurant`, `_build_restaurant_context` e `_hydrate_products` —
 além do atributo `retrieval_service`. Nenhum deles tem contrato com ninguém, e
-renomear qualquer um passa na suíte inteira: o experimento só quebra em
-runtime, quando alguém abre a página e o microfone já está ligado.
+renomear qualquer um passa na suíte inteira: a voz só quebra em runtime,
+quando alguém abre a página e o microfone já está ligado.
 
 Este teste é o que transforma "quebra em silêncio" em "quebra no CI". Ele
 percorre o caminho inteiro uma vez — emitir credencial, chamar a ferramenta,
-receber produto — e nada mais. Código experimental não merece cobertura de
-casos de borda; merece uma corda que avise quando o chão sair.
+receber produto — e nada mais. Cobertura de borda é trabalho de outro teste;
+este é a corda que avisa quando o chão sair.
 
 **O que é falso aqui:** a chamada à OpenAI (emissão da credencial) e a geração
 do embedding. Os dois custam dinheiro e rede, e nenhum dos dois é o que este
@@ -36,7 +36,13 @@ from src.models.ai_voice_session_model import AIVoiceSession
 from src.api import voice as rota_de_voz
 from src.ai.voice import realtime_client
 from src.repositories.ai_repository import AIRepository
-from tests.fabricas_db import criar_categoria, criar_cliente, criar_produto, criar_restaurante
+from tests.fabricas_db import (
+    criar_categoria,
+    criar_cliente,
+    criar_configuracoes,
+    criar_produto,
+    criar_restaurante,
+)
 
 
 pytestmark = pytest.mark.db
@@ -51,6 +57,9 @@ CREDENCIAL_FALSA = {
 
 def test_a_voz_emite_credencial_e_a_ferramenta_devolve_produto(db, monkeypatch):
     restaurante = criar_restaurante(db, nome="Junior da Picanha")
+    # Sem esta linha a emissão responde 403: a voz é ligada por restaurante e
+    # nasce desligada em todo lugar.
+    criar_configuracoes(db, restaurante, voice_enabled=True)
     categoria = criar_categoria(db, restaurante, nome="Carnes")
     produto = criar_produto(
         db, restaurante, categoria, nome="Picanha na Chapa", preco=Decimal("23.90")
@@ -125,7 +134,7 @@ def _cliente_com(db, cliente_logado) -> TestClient:
 
 
 def _openai_falsa():
-    """Substitui o módulo `httpx` dentro do `sessao_service`.
+    """Substitui o módulo `httpx` dentro do `realtime_client`.
 
     `HTTPError` vai junto porque o `except` do serviço o referencia — sem ele,
     um erro no meio viraria `AttributeError` em vez do 503 que o código

@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.models.ai_voice_session_model import AIVoiceSession
+from src.models.restaurant_setting_model import RestaurantSetting
 
 
 class VoiceSessionRepository:
@@ -30,6 +31,21 @@ class VoiceSessionRepository:
 
     def get(self, sessao_id: uuid.UUID) -> AIVoiceSession | None:
         return self.db.get(AIVoiceSession, sessao_id)
+
+    def voz_habilitada(self, restaurant_id: uuid.UUID) -> bool:
+        """A voz esta ligada NESTE restaurante?
+
+        Le so a coluna, e nao a linha inteira de `restaurant_settings`: e uma
+        pergunta de sim ou nao no caminho de uma requisicao paga.
+
+        Restaurante sem linha de configuracao devolve `None` e conta como
+        desligado. Ausencia de configuracao nunca pode significar "pode
+        gastar".
+        """
+        stmt = select(RestaurantSetting.voice_enabled).where(
+            RestaurantSetting.restaurant_id == restaurant_id
+        )
+        return bool(self.db.scalar(stmt))
 
     def contar_do_cliente_desde(self, customer_id: uuid.UUID, desde: datetime) -> int:
         stmt = (

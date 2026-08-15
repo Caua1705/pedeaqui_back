@@ -37,10 +37,10 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from src.core.config import settings
-from src.repositories.voice_session_repository import VoiceSessionRepository
 from src.ai.voice.realtime_client import hangup_call, issue_client_secret
+from src.core.config import settings
 from src.models.ai_voice_session_model import AIVoiceSession
+from src.repositories.voice_session_repository import VoiceSessionRepository
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -61,14 +61,16 @@ class VoiceSessionService:
     ) -> tuple[AIVoiceSession, dict]:
         """Varre o que venceu, confere a cota, emite a credencial e registra.
 
-        A varredura vem ANTES da cota, e nao e detalhe de ordem: sessao
-        vencida que ninguem fechou continuaria contando contra o cliente
-        depois de ja ter acabado.
+        A ordem das quatro perguntas e crescente em custo. A voz estar ligada
+        neste restaurante e uma coluna; a varredura e uma consulta; a cota sao
+        duas; a emissao e uma chamada de rede paga.
 
-        A cota vem antes da emissao para nao gastar chamada a OpenAI com quem
-        vai ser recusado, e a credencial e pedida antes de gravar a linha:
-        emissao recusada nao pode deixar sessao fantasma consumindo cota.
+        A varredura vem ANTES da cota, e nao e detalhe: sessao vencida que
+        ninguem fechou continuaria contando contra o cliente depois de ja ter
+        acabado. E a credencial e pedida antes de gravar a linha: emissao
+        recusada nao pode deixar sessao fantasma consumindo cota.
         """
+        self._ensure_voz_habilitada(restaurant_id)
         self.encerrar_vencidas()
         self._conferir_cotas(restaurant_id, customer_id)
 
@@ -90,6 +92,34 @@ class VoiceSessionService:
             expira_em.isoformat(),
         )
         return sessao, credencial
+
+    def _ensure_voz_habilitada(self, restaurant_id: uuid.UUID) -> None:
+        """A voz deste restaurante esta ligada?
+
+        Primeira pergunta de todas, e a mais barata: uma coluna. Quem nao tem
+        voz nao gasta consulta de cota nem chamada a OpenAI.
+
+        DUAS chaves, e as duas precisam estar ligadas. `VOICE_ENABLED` no
+        ambiente e a mestra — desligada, o router nem sobe e esta funcao nunca
+        e alcancada (`main.py`). `restaurant_settings.voice_enabled` decide
+        loja por loja, e nasce falso para todo mundo: e o que permite colocar
+        um restaurante no ar sem acender a base inteira.
+
+        403 e nao 404 de proposito: o restaurante existe e o cliente esta na
+        pagina dele. Esconder isso nao protege nada e so deixaria o front sem
+        saber o que dizer.
+        """
+        if self.repository.voz_habilitada(restaurant_id):
+            return
+
+        logger.info(
+            "[Voz] emissao recusada: voz desligada neste restaurante | restaurant_id=%s",
+            restaurant_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="O atendimento por voz nao esta disponivel neste restaurante.",
+        )
 
     def _conferir_cotas(self, restaurant_id: uuid.UUID, customer_id: uuid.UUID | None) -> None:
         """Duas cotas, e a segunda existe porque a primeira pode nao bastar.

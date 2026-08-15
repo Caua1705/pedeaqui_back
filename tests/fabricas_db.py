@@ -26,6 +26,7 @@ from src.models.order_model import Order
 from src.models.product_model import Product
 from src.models.product_option_model import ProductOption, ProductOptionGroup
 from src.models.restaurant_model import Restaurant
+from src.models.restaurant_setting_model import RestaurantSetting
 from src.utils.security import hash_tracking_token
 
 
@@ -93,6 +94,26 @@ def criar_filial(db: Session, restaurante: Restaurant, nome: str = "Matriz") -> 
     db.add(filial)
     db.flush()
     return filial
+
+
+def criar_configuracoes(
+    db: Session,
+    restaurante: Restaurant,
+    voice_enabled: bool = False,
+) -> RestaurantSetting:
+    """A linha de `restaurant_settings` do restaurante.
+
+    `voice_enabled` tem default False igual ao da coluna: quem quiser voz num
+    teste pede voz, e o teste que não pedir descreve o estado em que todo
+    restaurante nasce.
+    """
+    configuracoes = RestaurantSetting(
+        restaurant_id=restaurante.id,
+        voice_enabled=voice_enabled,
+    )
+    db.add(configuracoes)
+    db.flush()
+    return configuracoes
 
 
 def criar_categoria(db: Session, restaurante: Restaurant, nome: str = "Categoria") -> Category:

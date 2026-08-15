@@ -1,23 +1,39 @@
-# Experimento de voz — como rodar
+# Atendimento por voz — como ligar
 
-**Branch `experimento/voz`. Não está na `main` e não deve ir para o servidor.**
+**São DUAS chaves, e as duas precisam estar ligadas.** Uma no ambiente, para a
+plataforma inteira; outra no banco, restaurante por restaurante. Isso é
+proposital: a chave global sozinha acenderia a voz para toda a base no mesmo
+instante, e cada sessão custa dinheiro.
 
-## 1. Ligue o flag
-
-No `.env` da sua máquina:
+## 1. A chave mestra, no `.env`
 
 ```
 VOICE_ENABLED=true
 ```
 
-Desligado (o padrão), as três rotas não existem — nem no `/docs`. Ligado, a API
-avisa no boot:
+Desligada (o padrão), as rotas `/voice` **não existem** — nem no `/docs` — por
+mais que o banco diga que algum restaurante tem voz.
 
-```
-[Voz] LIGADO. /voice esta aberto, sem login e sem cota...
+## 2. O interruptor do restaurante, no banco
+
+```sql
+UPDATE restaurant_settings SET voice_enabled = true
+ WHERE restaurant_id = '<uuid do restaurante>';
 ```
 
-## 2. Suba a API
+Nasce `false` em todas as linhas. Restaurante sem voz — ou sem linha em
+`restaurant_settings` — recebe **403** na emissão:
+
+```json
+{"detail": "O atendimento por voz nao esta disponivel neste restaurante."}
+```
+
+**Não há campo no painel do lojista, de propósito.** Mesmo raciocínio de
+`platform_commission_percent`: quem paga a conta da OpenAI é a plataforma, então
+ligar a voz é decisão da plataforma. Um campo de tela aqui seria o lojista
+escolhendo quanto gastamos.
+
+## 3. Suba a API
 
 ```bash
 uvicorn main:app --reload
@@ -26,7 +42,7 @@ uvicorn main:app --reload
 Precisa de `OPENAI_API_KEY` e `DATABASE_URL` no `.env`, os mesmos que o chat de
 texto já usa.
 
-## 3. Pegue um `restaurant_id` que tenha cardápio indexado
+## 4. Pegue um `restaurant_id` que tenha cardápio indexado
 
 ```sql
 SELECT r.id, r.name, count(ape.id) AS produtos_indexados
@@ -37,29 +53,30 @@ GROUP BY r.id, r.name
 ORDER BY produtos_indexados DESC;
 ```
 
-Restaurante sem embedding não devolve nada, e o experimento parece quebrado
-quando na verdade é o índice que está vazio.
+Restaurante sem embedding não devolve nada, e a voz parece quebrada quando na
+verdade é o índice que está vazio.
 
-## 4. Abra a página
+## 5. Abra a bancada
 
 ```
-http://localhost:8000/voice
+http://localhost:8000/voice/test
 ```
 
-Cole o `restaurant_id`, clique em **Falar**, dê permissão ao microfone e
+Cole o `restaurant_id` e o **token do cliente** (a emissão exige login;
+`POST /auth/login` devolve o `access_token`), clique em **Falar**, dê permissão ao microfone e
 pergunte algo como *"o que tem de sobremesa?"*.
 
 `localhost` é contexto seguro, então o microfone funciona sem HTTPS. De outra
 máquina na rede **não** funciona: o navegador recusa o microfone em `http://`
 que não seja localhost.
 
-## 5. O que olhar
+## 6. O que olhar
 
 - O painel preto embaixo é o log cru de eventos da Realtime. É a parte mais
   útil da página — se algo não funcionar, a resposta está ali.
 - Os cartões vêm de `POST /voice/search`, com preço do banco. O que
   o modelo **fala** e o que o cartão **mostra** são leituras diferentes; se
-  divergirem, é isso que o experimento tinha que descobrir.
+  divergirem, é o log que denuncia (`grep "preco divergente"`).
 
 ## Custo
 

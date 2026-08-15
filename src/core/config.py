@@ -50,6 +50,14 @@ class Settings(BaseSettings):
     MODEL_NAME: str = "gpt-5-mini"
     EMBEDDING_MODEL: str = "text-embedding-3-small"
 
+    # EXPERIMENTO de voz em tempo real (src/experimento/voz/).
+    #
+    # Desligado por padrao, e o padrao e a unica protecao que existe: com isto
+    # ligado sobe uma rota ABERTA que emite credencial da OpenAI Realtime —
+    # sem login, sem cota e sem teto de duracao. Cada credencial e uma sessao
+    # de audio faturada. Ligue na sua maquina, nunca no servidor.
+    EXPERIMENTO_VOZ_ENABLED: bool = False
+
     # Varredura que mantem o indice do Rapi em dia (scripts/reindex_worker.py).
     #
     # Um minuto e o atraso maximo entre o lojista salvar e o Rapi saber. Podia

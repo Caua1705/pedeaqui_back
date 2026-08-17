@@ -90,10 +90,10 @@ Uma sessão que vai até o teto de 5 minutos custa **US$ 0,09 a US$ 0,13**,
 dependendo de quanto o atendente fala. A conta está em `src/core/config.py`,
 junto das cotas.
 
-Emitir a credencial (`POST /sessao`) não custa nada — o relógio começa quando
-o navegador abre a sessão de áudio. **Aba esquecida não fatura mais para
-sempre:** a sessão encerra sozinha no teto de duração, na inatividade e quando
-a aba sai de vista. Ver `pagina.html` e `sessao_control_service.py`.
+Emitir a credencial (`POST /voice/session`) não custa nada — o relógio começa
+quando o navegador abre a sessão de áudio. **Aba esquecida não fatura mais
+para sempre:** a sessão encerra sozinha no teto de duração, na inatividade e
+quando a aba sai de vista. Ver `page.html` e `session_service.py`.
 
 ### Quanto foi de verdade, por restaurante
 
@@ -116,11 +116,11 @@ o rateio dela.
 
 | Barreira | Onde |
 |---|---|
-| login de cliente | `rota.py`, `get_current_customer` |
-| rate limit por IP (3/min, 20/h) | `rota.py`, `VOICE_SESSION_RATE_LIMIT` |
-| cota por cliente e por restaurante | `sessao_control_service.py` |
-| teto de duração, inatividade, aba escondida | `pagina.html` |
-| desligamento pelo servidor | `sessao_service.hangup_call` |
+| login de cliente | `src/api/voice.py`, `get_current_customer` |
+| rate limit por IP (3/min, 20/h) | `src/api/voice.py`, `VOICE_SESSION_RATE_LIMIT` |
+| cota por cliente e por restaurante | `session_service.py` |
+| teto de duração, inatividade, aba escondida | `page.html` |
+| desligamento pelo servidor | `realtime_client.hangup_call` |
 
 A última só funciona quando o navegador reporta o `call_id` — ver o cabeçalho
-de `sessao_control_service.py` para o que isso alcança e o que não alcança.
+de `session_service.py` para o que isso alcança e o que não alcança.

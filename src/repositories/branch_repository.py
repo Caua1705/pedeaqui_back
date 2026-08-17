@@ -28,6 +28,27 @@ class BranchRepository:
         )
         return list(self.db.scalars(stmt).all())
 
+    def get_default_branch(self, restaurant_id: uuid.UUID) -> Branch | None:
+        """A filial a usar quando o cliente nao escolheu nenhuma.
+
+        UMA definicao para a plataforma inteira. Antes havia duas: o
+        `/restaurants/{slug}/info` pegava `list_active_by_restaurant()[0]` e a
+        estimativa de entrega exigia `is_main`, recusando com 400 o
+        restaurante que nao tivesse a flag marcada. Como a ordenacao daquela
+        listagem ja e `is_main DESC NULLS LAST, name ASC`, os dois
+        concordavam quando havia filial principal e discordavam exatamente
+        quando ela faltava — o caso em que uma rota respondia e a outra
+        falhava, para o mesmo restaurante, no mesmo minuto.
+
+        A regra que fica e a mais permissiva das duas: principal se houver,
+        senao a primeira ativa em ordem alfabetica. Devolver `None` (e nao
+        levantar) e de proposito — cada rota tem o proprio codigo de erro
+        para "restaurante sem filial", e centraliza-lo aqui mudaria contrato
+        publicado.
+        """
+        branches = self.list_active_by_restaurant(restaurant_id)
+        return branches[0] if branches else None
+
     def list_business_hours(self, branch_id: uuid.UUID) -> list[BranchBusinessHour]:
         stmt = (
             select(BranchBusinessHour)

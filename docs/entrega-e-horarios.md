@@ -1,8 +1,32 @@
 # Entrega, taxa e horário de funcionamento
 
 Cobre `services/delivery_estimate_service.py`,
-`services/branch_hours_service.py` e
+`services/branch_hours_service.py`,
+`services/branch_availability_service.py` e
 `integrations/google_maps_routes_client.py`.
+
+O contrato da rota de escolha de filial, escrito para quem implementa o front,
+está em [`contrato-filiais-frontend.md`](contrato-filiais-frontend.md).
+
+---
+
+## 0. A filial padrão, quando o cliente não escolheu
+
+`BranchRepository.get_default_branch` é a **única** definição, e ela é:
+principal se houver, senão a primeira ativa em ordem alfabética.
+
+Antes existiam duas. `GET /restaurants/{slug}/info` pegava o primeiro item de
+`list_active_by_restaurant` e a estimativa de entrega exigia `is_main`,
+recusando com **400** o restaurante que não tivesse a flag marcada. Como
+aquela listagem já ordena por `is_main DESC NULLS LAST, name ASC`, as duas
+concordavam quando havia filial principal — e discordavam exatamente quando
+ela faltava, que é o caso em que uma rota respondia e a outra falhava, para o
+mesmo restaurante, no mesmo minuto.
+
+**O que mudou na prática:** a estimativa de entrega deixou de responder 400
+para restaurante que tem filial ativa mas nenhuma marcada como principal. O
+400 continua existindo para o caso que ele sempre quis descrever — restaurante
+sem filial ativa nenhuma.
 
 ---
 
@@ -15,8 +39,8 @@ resultado.
 ```
 restaurante ativo
 restaurant_settings.accepts_delivery == false      → não atende
-filial (a informada, ou a is_main)
-   └─ sem filial principal ativa → 400
+filial (a informada, ou a padrão — BranchRepository.get_default_branch)
+   └─ sem NENHUMA filial ativa → 400
 endereço (address_id do cliente, ou inline)
    └─ address_id sem login → 401;  address_id de outro cliente → 404
 faixa de funcionamento que contém o agora          → BranchHoursService

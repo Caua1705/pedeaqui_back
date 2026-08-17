@@ -24,7 +24,11 @@ from src.repositories.branch_repository import BranchRepository
 from src.repositories.customer_repository import CustomerRepository
 from src.repositories.delivery_estimate_repository import DeliveryEstimateRepository
 from src.repositories.menu_repository import MenuRepository
-from src.schemas.delivery_schema import DeliveryEstimateRequest, DeliveryEstimateResponse
+from src.schemas.delivery_schema import (
+    DeliveryAddressInput,
+    DeliveryEstimateRequest,
+    DeliveryEstimateResponse,
+)
 from src.services.branch_hours_service import BranchHoursService
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import ZERO, money_to_float, quantize_money, to_decimal
@@ -587,6 +591,45 @@ class DeliveryEstimateService:
         self._log_final_result(result)
         return result
 
+    def resolve_destination_address(
+        self,
+        payload: DeliveryEstimateRequest,
+        current_customer: Customer | None,
+    ) -> DeliveryAddressInput:
+        """O endereco do cliente com a coordenada JA resolvida.
+
+        Existe para quem precisa estimar o MESMO endereco contra varias
+        filiais (a tela de escolha de filial). `estimate` geocodifica quando o
+        endereco chega sem coordenada; chamando-o N vezes com o endereco cru,
+        seriam N geocodes pagos do mesmo lugar. Resolvendo uma vez aqui e
+        passando o resultado adiante, aquele caminho nunca e tomado.
+
+        O texto do endereco vai junto, e nao so a coordenada, porque e ele que
+        aparece nos logs de diagnostico de `estimate` — devolver so o par de
+        numeros faria as N estimativas seguintes registrarem bairro e cidade
+        vazios.
+        """
+        address = self._resolve_address(payload, current_customer)
+        coordinates = self._resolve_coordinates(address, branch=False)
+        return DeliveryAddressInput(
+            street=self._address_text(address, "street") or "-",
+            number=self._address_text(address, "number") or "-",
+            neighborhood=self._address_text(address, "neighborhood") or "-",
+            city=self._address_text(address, "city"),
+            state=self._address_text(address, "state"),
+            zipcode=self._address_text(address, "zipcode"),
+            latitude=to_decimal(coordinates.latitude),
+            longitude=to_decimal(coordinates.longitude),
+        )
+
+    @staticmethod
+    def _address_text(address, field: str) -> str | None:
+        value = getattr(address, field, None)
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
     def _resolve_branch(self, restaurant_id, branch_id):
         if branch_id is not None:
             branch = self.branch_repository.get_active_by_id_and_restaurant(
@@ -599,17 +642,20 @@ class DeliveryEstimateService:
                     detail="Filial invalida para este restaurante",
                 )
             return branch
-        branches = self.branch_repository.list_active_by_restaurant(restaurant_id)
-        main_branch = next(
-            (branch for branch in branches if branch.is_main is True),
-            None,
-        )
-        if main_branch is None:
+
+        # `get_default_branch` e a MESMA escolha que o /restaurants/{slug}/info
+        # faz — ver o docstring dela para as duas regras que existiam antes.
+        # O que muda aqui: restaurante com filial ativa mas sem `is_main`
+        # marcado deixa de receber 400 e passa a ser atendido pela primeira
+        # filial ativa, como ja acontecia no /info. O 400 fica para o caso que
+        # ele sempre quis descrever: restaurante sem filial ativa nenhuma.
+        default_branch = self.branch_repository.get_default_branch(restaurant_id)
+        if default_branch is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Restaurante sem filial principal ativa",
             )
-        return main_branch
+        return default_branch
 
     def _resolve_address(
         self,

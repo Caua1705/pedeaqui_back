@@ -79,6 +79,22 @@ CHAT_FEEDBACK_RATE_LIMIT = "30/minute"
 # por cliente, que este limite so complementa contra quem troca de conta.
 VOICE_SESSION_RATE_LIMIT = "3/minute;20/hour"
 
+# Tela de escolha de filial. UMA requisicao pode virar ate uma rota paga do
+# Google POR FILIAL — e a unica rota publica cujo custo cresce com o cadastro
+# do restaurante, e nao com o que o cliente pediu. O filtro geometrico e o
+# cache cortam a maior parte disso (ver `branch_availability_service.py`), mas
+# nenhum dos dois protege contra quem varre enderecos de proposito: endereco
+# novo e sempre cache frio.
+#
+# Mais folgado que o pedido porque a tela e legitimamente reaberta — o cliente
+# troca de endereco, volta, compara. Vinte por minuto cobre navegacao humana
+# e fecha a porta do laco automatico.
+#
+# NOTA: `POST /restaurants/{slug}/delivery/estimate`, que chama o mesmo Google
+# para UMA filial, continua sem limite nenhum. Isto aqui nao fecha aquele
+# buraco; so evita que o buraco novo seja N vezes maior.
+BRANCH_AVAILABILITY_RATE_LIMIT = "20/minute;200/hour"
+
 # Cadastro. Uma pessoa cria uma conta; um IP compartilhado (wi-fi do salao,
 # CGNAT de operadora movel) pode legitimamente criar algumas. Vinte por hora
 # cobre isso com folga e ainda assim fecha a porta de inflar a base — e cada

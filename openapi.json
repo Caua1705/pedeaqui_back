@@ -2848,6 +2848,304 @@
         "title": "BranchAddressResponse",
         "type": "object"
       },
+      "BranchAvailabilityItem": {
+        "properties": {
+          "address": {
+            "$ref": "#/components/schemas/BranchAddressResponse"
+          },
+          "current_period": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BranchOpenPeriodResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "delivery": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BranchDeliveryResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_main": {
+            "default": false,
+            "title": "Is Main",
+            "type": "boolean"
+          },
+          "is_open_now": {
+            "title": "Is Open Now",
+            "type": "boolean"
+          },
+          "latitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latitude"
+          },
+          "longitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Longitude"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "whatsapp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Whatsapp"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "address",
+          "is_open_now"
+        ],
+        "title": "BranchAvailabilityItem",
+        "type": "object"
+      },
+      "BranchAvailabilityRequest": {
+        "additionalProperties": false,
+        "description": "Endereco OPCIONAL, e no maximo um dos dois jeitos de informa-lo.\n\nDiferente de `DeliveryEstimateRequest`, que exige exatamente um: ali o\nendereco e o proprio objeto da pergunta, aqui ele e um refinamento. Sem\nele a rota ainda responde a lista de filiais com aberta/fechada, que e o\nque a tela precisa antes de o cliente ter digitado qualquer coisa.",
+        "properties": {
+          "address": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeliveryAddressInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "address_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address Id"
+          }
+        },
+        "title": "BranchAvailabilityRequest",
+        "type": "object"
+      },
+      "BranchAvailabilityResponse": {
+        "properties": {
+          "address_provided": {
+            "title": "Address Provided",
+            "type": "boolean"
+          },
+          "branches": {
+            "items": {
+              "$ref": "#/components/schemas/BranchAvailabilityItem"
+            },
+            "title": "Branches",
+            "type": "array"
+          },
+          "default_branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Branch Id"
+          },
+          "restaurant_slug": {
+            "title": "Restaurant Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "restaurant_slug",
+          "address_provided",
+          "branches"
+        ],
+        "title": "BranchAvailabilityResponse",
+        "type": "object"
+      },
+      "BranchDeliveryResponse": {
+        "description": "A resposta de entrega para UMA filial. So existe com endereco no corpo.\n\n`delivers_to_address` e a unica pergunta que a tela precisa responder para\nhabilitar ou desabilitar a filial. `reason` diz por que nao, e vem do\nmesmo vocabulario de `POST /delivery/estimate` — os codigos sao os\nmesmos, de proposito.\n\n`distance_km` e `delivery_fee` podem vir preenchidos MESMO com\n`delivers_to_address = false`: e o caso de \"fora da area\", em que a rota\nfoi calculada e reprovada pelo raio. Vem nulos quando nem chegou a\ncalcular (filial fechada, ou descartada pela linha reta).",
+        "properties": {
+          "delivers_to_address": {
+            "title": "Delivers To Address",
+            "type": "boolean"
+          },
+          "delivery_fee": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Fee"
+          },
+          "distance_km": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distance Km"
+          },
+          "eta_max": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eta Max"
+          },
+          "eta_min": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eta Min"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "travel_time_min": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Travel Time Min"
+          }
+        },
+        "required": [
+          "delivers_to_address"
+        ],
+        "title": "BranchDeliveryResponse",
+        "type": "object"
+      },
+      "BranchOpenPeriodResponse": {
+        "description": "A faixa de horario que esta valendo AGORA. Nula com a loja fechada.\n\nVai junto para a tela poder escrever \"aberta ate 23:00\" sem pedir os\nhorarios de novo em outra rota. Faixa que vira a noite (18:00-02:00) sai\ncom `closes_at` menor que `opens_at`, e isso e o dado correto: ela\npertence ao dia em que COMECA.",
+        "properties": {
+          "closes_at": {
+            "format": "time",
+            "title": "Closes At",
+            "type": "string"
+          },
+          "opens_at": {
+            "format": "time",
+            "title": "Opens At",
+            "type": "string"
+          },
+          "weekday": {
+            "title": "Weekday",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "weekday",
+          "opens_at",
+          "closes_at"
+        ],
+        "title": "BranchOpenPeriodResponse",
+        "type": "object"
+      },
       "BranchPaymentMethodResponse": {
         "properties": {
           "brand": {
@@ -13636,6 +13934,64 @@
         "summary": "Get Restaurant Public Info",
         "tags": [
           "restaurants"
+        ]
+      }
+    },
+    "/restaurants/{restaurant_slug}/branches/availability": {
+      "post": {
+        "description": "As filiais do restaurante, com aberta/fechada e — se vier endereco —\ndistancia, taxa e se aquela filial entrega ali.\n\n**POST e nao GET** por dois motivos, e nenhum deles e criacao de recurso:\no endereco do cliente e um objeto com seis campos, que na querystring\nviraria log de proxy com o endereco residencial de quem pediu; e a\nchamada tem custo (rota paga do Google por filial), que e coisa que nao se\ndeve convidar um cache de CDN a repetir.\n\nO corpo pode vir **vazio** (`{}`): a resposta traz as filiais e o estado\naberta/fechada, com `delivery` nulo em todas. E o primeiro carregamento da\ntela, antes de o cliente informar onde mora.\n\nCom endereco (`address_id` OU `address`, nunca os dois), cada filial ganha\no bloco `delivery`. `delivery = null` significa \"nao perguntei\", nao\n\"nao entrega\" — a tela precisa distinguir os dois para nao desabilitar a\nfilial cedo demais.\n\nLogin e OPCIONAL, e so muda uma coisa: `address_id` so resolve endereco\nsalvo de quem esta autenticado. Sem token, use `address`.",
+        "operationId": "list_branch_availability_restaurants__restaurant_slug__branches_availability_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "restaurant_slug",
+            "required": true,
+            "schema": {
+              "title": "Restaurant Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BranchAvailabilityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BranchAvailabilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Branch Availability",
+        "tags": [
+          "branches"
         ]
       }
     },

@@ -63,8 +63,11 @@ class RestaurantService:
                 branch_id, restaurant.id
             )
         else:
-            branches = self.branch_repository.list_active_by_restaurant(restaurant.id)
-            branch = branches[0] if branches else None
+            # Mesma escolha da estimativa de entrega desde que
+            # `get_default_branch` passou a existir. O comportamento desta
+            # rota nao muda (a listagem ja vinha ordenada por `is_main`); o
+            # que muda e a regra ter UM lugar.
+            branch = self.branch_repository.get_default_branch(restaurant.id)
 
         if branch is None:
             raise HTTPException(

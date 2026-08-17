@@ -97,6 +97,10 @@ class DeliveryEstimateTests(unittest.TestCase):
                 self.branch if branch_id == self.branch.id else None
             ),
             list_active_by_restaurant=lambda restaurant_id: [self.branch],
+            # A filial padrao passou a sair de UM lugar (`get_default_branch`),
+            # partilhado com o /restaurants/{slug}/info. O dublê espelha a
+            # regra de la: a primeira da listagem ja ordenada por is_main.
+            get_default_branch=lambda restaurant_id: self.branch,
             list_business_hours_by_weekday=lambda branch_id, weekday: self.business_hours,
         )
         # Servico real de horario apontando para o mesmo repositorio fake: a

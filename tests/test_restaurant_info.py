@@ -27,6 +27,14 @@ class FakeBranchRepository:
     def list_active_by_restaurant(self, restaurant_id):
         return self.branches
 
+    def get_default_branch(self, restaurant_id):
+        """Espelha o repositorio de verdade: a primeira da listagem, que ja
+        vem ordenada por `is_main DESC`. Ver o docstring de
+        `BranchRepository.get_default_branch` para as duas regras que
+        existiam antes de esta existir."""
+        branches = self.list_active_by_restaurant(restaurant_id)
+        return branches[0] if branches else None
+
     def get_active_by_id_and_restaurant(self, branch_id, restaurant_id):
         self.explicit_lookup = (branch_id, restaurant_id)
         return next(

@@ -20,6 +20,7 @@ from src.api.endpoints import (
     admin_reports,
     admin_settings,
     auth,
+    branches,
     coupons,
     customers,
     delivery,
@@ -115,6 +116,7 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(restaurants.router)
+app.include_router(branches.router)
 app.include_router(menu.router)
 app.include_router(auth.router)
 app.include_router(customers.router)

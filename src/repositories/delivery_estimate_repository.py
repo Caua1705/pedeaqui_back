@@ -1,4 +1,5 @@
 import hmac
+import uuid
 from datetime import datetime
 
 from sqlalchemy import delete, select
@@ -46,6 +47,18 @@ class DeliveryEstimateRepository:
         if not hmac.compare_digest(estimate.token, token):
             return None
         return estimate
+
+    def delete_by_customer(self, customer_id: uuid.UUID) -> int:
+        """Apaga as estimativas da pessoa. Devolve quantas sairam.
+
+        Cada linha guarda a coordenada de onde a entrega ia chegar — a casa
+        dela. E cache de rota com 15 minutos de vida, nao historico de venda:
+        nenhum relatorio o le, e o pedido guarda a propria distancia.
+        """
+        result = self.db.execute(
+            delete(DeliveryEstimate).where(DeliveryEstimate.customer_id == customer_id)
+        )
+        return result.rowcount or 0
 
     def delete_expired(self, now: datetime) -> int:
         result = self.db.execute(

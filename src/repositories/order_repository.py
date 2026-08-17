@@ -428,6 +428,37 @@ class OrderRepository:
         )
         return list(self.db.execute(stmt).tuples().all())
 
+    def list_orders_in_flight(
+        self,
+        customer_id: uuid.UUID,
+        terminal_statuses: tuple[str, ...],
+    ) -> list[Order]:
+        """Pedidos da pessoa que ainda nao acabaram, do mais antigo ao novo.
+
+        A lista de estados terminais entra por PARAMETRO em vez de ser lida
+        aqui: quem sabe o que e terminal e a maquina de estados, e o
+        repositorio so consulta.
+        """
+        stmt = (
+            select(Order)
+            .where(
+                Order.customer_id == customer_id,
+                Order.status.not_in(terminal_statuses),
+            )
+            .order_by(Order.created_at.asc())
+        )
+        return list(self.db.scalars(stmt).all())
+
+    def list_all_by_customer(self, customer_id: uuid.UUID) -> list[Order]:
+        """Todos os pedidos da pessoa, sem join nem ordem.
+
+        Existe separado de `list_orders_by_customer` porque este aqui alimenta
+        uma ESCRITA (a anonimizacao), e o join com restaurante e filial daquele
+        so serve para montar a tela de historico.
+        """
+        stmt = select(Order).where(Order.customer_id == customer_id)
+        return list(self.db.scalars(stmt).all())
+
     def update_status(self, order: Order, status: str) -> Order:
         order.status = status
         self.db.add(order)

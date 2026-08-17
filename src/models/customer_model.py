@@ -32,6 +32,11 @@ class Customer(Base):
     marketing_opt_in: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     privacy_accepted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Quando a pessoa exerceu o direito de exclusao (LGPD, Art. 18, VI). Nao
+    # e o mesmo que `is_active=false`, que e suspensao reversivel com os
+    # dados intactos: aqui os dados ja nao existem. Ver
+    # `CustomerAnonymizationService` e docs/lgpd-fase2-exclusao-de-conta.md.
+    anonymized_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     created_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 

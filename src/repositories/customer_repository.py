@@ -164,3 +164,31 @@ class CustomerRepository:
             CustomerAddress.is_default.is_(True),
         )
         return list(self.db.scalars(stmt).all())
+
+    def delete_addresses_of(self, customer_id: uuid.UUID) -> int:
+        """Apaga os enderecos salvos da pessoa. Devolve quantos sairam.
+
+        `orders.customer_address_id` tem `ON DELETE SET NULL`, entao o DELETE
+        NAO falha e nao leva pedido junto: ele so solta o vinculo. O endereco
+        entregue continua no pedido, no snapshot dele — e e por isso que
+        apagar esta tabela nao basta para tirar o endereco do banco.
+        """
+        resultado = self.db.execute(
+            delete(CustomerAddress).where(CustomerAddress.customer_id == customer_id)
+        )
+        return resultado.rowcount or 0
+
+    def delete_codes_of(self, customer_id: uuid.UUID) -> int:
+        """Apaga os codigos de e-mail e de recuperacao da pessoa.
+
+        As duas tabelas guardam o e-mail em TEXTO PURO, numa copia fora de
+        `customers`. Sem este passo, anonimizar o cliente deixaria o endereco
+        dele legivel em outro lugar do mesmo banco.
+        """
+        apagados = 0
+        for modelo in (EmailVerificationCode, PasswordResetCode):
+            resultado = self.db.execute(
+                delete(modelo).where(modelo.customer_id == customer_id)
+            )
+            apagados += resultado.rowcount or 0
+        return apagados

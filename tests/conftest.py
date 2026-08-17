@@ -29,6 +29,22 @@ from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session
 
 
+# Variáveis que `validate_settings` exige para o app subir. Sem elas o lifespan
+# levanta StartupConfigurationError e TODO teste que monta o TestClient morre no
+# setup — não no assert, o que esconde a causa real atrás de 30+ erros iguais.
+#
+# `setdefault` e não atribuição: quem tiver a chave de verdade no ambiente
+# continua rodando com ela. O valor falso só precisa existir; nenhum teste da
+# suíte chama o Google — o cliente de rotas é dublê nos testes de entrega.
+#
+# Aqui em cima, no nível do módulo, porque `settings` é construído no primeiro
+# `import src.*` e lê o ambiente uma única vez. Depois disso, tarde demais.
+for _variavel, _valor_falso in {
+    "GOOGLE_MAPS_ROUTES_API_KEY": "chave-de-teste-nao-usada",
+}.items():
+    os.environ.setdefault(_variavel, _valor_falso)
+
+
 RAIZ_DO_REPOSITORIO = Path(__file__).resolve().parent.parent
 SCHEMA_BASELINE = RAIZ_DO_REPOSITORIO / "alembic" / "schema_baseline.sql"
 REVISAO_DO_SCHEMA_BASELINE = "20260810_0012"

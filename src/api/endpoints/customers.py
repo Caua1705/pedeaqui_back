@@ -1,11 +1,12 @@
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.customer_auth import get_current_customer
 from src.api.dependencies.database import get_db
+from src.api.rate_limit import DELETE_ACCOUNT_RATE_LIMIT, limiter
 from src.models.customer_model import Customer
 from src.schemas.auth_schema import MessageResponse
 from src.schemas.cashback_schema import CashbackBalanceResponse, CashbackTransactionsResponse
@@ -16,12 +17,15 @@ from src.schemas.customer_schema import (
     CustomerDataExportResponse,
     CustomerAddressResponse,
     CustomerOrderHistoryItem,
+    DeleteCustomerAccountRequest,
     ImportCustomerAddressesRequest,
     ImportCustomerAddressesResponse,
+    OrdersInFlightResponse,
     UpdateCurrentCustomerRequest,
     UpdateCustomerAddressRequest,
 )
 from src.schemas.order_schema import OrderDetailResponse
+from src.services.customer_anonymization_service import CustomerAnonymizationService
 from src.services.customer_service import CustomerService
 from src.services.cashback_service import CashbackService
 from src.services.order_service import OrderService
@@ -56,6 +60,41 @@ def export_me(
     conveniente de baixar a base inteira.
     """
     return CustomerService(db).export_me(current_customer)
+
+
+@router.delete(
+    "/me",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"description": "Nao autenticado, ou senha incorreta"},
+        status.HTTP_409_CONFLICT: {
+            "description": "Ha pedido em andamento; a exclusao e recusada por enquanto",
+            "model": OrdersInFlightResponse,
+        },
+    },
+)
+@limiter.limit(DELETE_ACCOUNT_RATE_LIMIT)
+def delete_me(
+    request: Request,
+    payload: DeleteCustomerAccountRequest,
+    current_customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Exclusao da conta (LGPD, Art. 18, VI). NAO TEM DESFAZER.
+
+    E o par natural de `GET /me/export`, que fica logo acima: **vejo o que
+    voces tem** e **apaguem**.
+
+    A conta e ANONIMIZADA, nao apagada — o pedido continua existindo para o
+    restaurante, sem nada da pessoa dentro. O e-mail e o telefone sao
+    liberados para recadastro, e o token desta propria chamada morre junto.
+    Os campos exatos estao em `CustomerAnonymizationService`.
+
+    O corpo leva a senha atual: `DELETE` com corpo e incomum mas legal, e a
+    alternativa a colocaria na querystring, ou seja, no log do proxy.
+    """
+    CustomerAnonymizationService(db).anonymize(current_customer, payload.password)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get(

@@ -100,6 +100,11 @@ VERIFY_RESET_CODE_RATE_LIMIT = "10/minute;60/hour"
 # minutos de vida, entao o limite aqui e contencao de ruido, nao a defesa
 # principal.
 RESET_PASSWORD_RATE_LIMIT = "10/minute;60/hour"
+# Exclusao de conta. A rota exige token E senha, entao nao ha o que enumerar
+# aqui — o limite existe contra o outro lado: quem tem um token roubado
+# martelando senhas contra uma operacao IRREVERSIVEL. Bem mais apertado que a
+# troca de senha porque, ao contrario dela, um acerto nao tem desfazer.
+DELETE_ACCOUNT_RATE_LIMIT = "5/minute;20/hour"
 
 
 # Balde unico usado quando o cabecalho confiavel nao chega. Nao e um IP de

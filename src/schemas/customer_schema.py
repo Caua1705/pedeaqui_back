@@ -200,6 +200,40 @@ class ChangeCustomerPasswordRequest(BaseModel):
     confirm_password: str
 
 
+class DeleteCustomerAccountRequest(BaseModel):
+    """A senha atual, e nada mais.
+
+    Corpo em `DELETE` e incomum mas legal. A alternativa — senha na
+    querystring — a colocaria no log de todo proxy no caminho.
+    """
+
+    password: str
+
+
+class OrdersInFlightDetail(BaseModel):
+    """O corpo do 409 quando ha pedido a caminho.
+
+    Os numeros de pedido vao junto porque a recusa e TEMPORARIA: sem eles o
+    app so consegue dizer "tente mais tarde", e a pessoa nao tem como saber o
+    que esta segurando a exclusao dela.
+    """
+
+    message: str
+    orders_in_flight: list[int]
+
+
+class OrdersInFlightResponse(BaseModel):
+    """O ENVELOPE, que e o que a rota devolve de verdade.
+
+    `HTTPException` embrulha tudo em `detail`. Anunciar `OrdersInFlightDetail`
+    na raiz publicaria no OpenAPI um formato que a rota nunca entrega, e o
+    front escreveria o parser contra ele — foi o que aconteceu com o 502 do
+    pagamento (armadilha 16).
+    """
+
+    detail: OrdersInFlightDetail
+
+
 class CustomerOrderHistoryItem(BaseModel):
     id: UUID
     order_number: int

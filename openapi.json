@@ -5274,6 +5274,20 @@
         "title": "CustomerOrderHistoryItem",
         "type": "object"
       },
+      "DeleteCustomerAccountRequest": {
+        "description": "A senha atual, e nada mais.\n\nCorpo em `DELETE` e incomum mas legal. A alternativa — senha na\nquerystring — a colocaria no log de todo proxy no caminho.",
+        "properties": {
+          "password": {
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "password"
+        ],
+        "title": "DeleteCustomerAccountRequest",
+        "type": "object"
+      },
       "DeliveryAddressInput": {
         "additionalProperties": false,
         "properties": {
@@ -6670,6 +6684,41 @@
           "revenue_total"
         ],
         "title": "OrderTypeSplitItem",
+        "type": "object"
+      },
+      "OrdersInFlightDetail": {
+        "description": "O corpo do 409 quando ha pedido a caminho.\n\nOs numeros de pedido vao junto porque a recusa e TEMPORARIA: sem eles o\napp so consegue dizer \"tente mais tarde\", e a pessoa nao tem como saber o\nque esta segurando a exclusao dela.",
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "orders_in_flight": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Orders In Flight",
+            "type": "array"
+          }
+        },
+        "required": [
+          "message",
+          "orders_in_flight"
+        ],
+        "title": "OrdersInFlightDetail",
+        "type": "object"
+      },
+      "OrdersInFlightResponse": {
+        "description": "O ENVELOPE, que e o que a rota devolve de verdade.\n\n`HTTPException` embrulha tudo em `detail`. Anunciar `OrdersInFlightDetail`\nna raiz publicaria no OpenAPI um formato que a rota nunca entrega, e o\nfront escreveria o parser contra ele — foi o que aconteceu com o 502 do\npagamento (armadilha 16).",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/OrdersInFlightDetail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "OrdersInFlightResponse",
         "type": "object"
       },
       "PaymentErrorCode": {
@@ -12845,6 +12894,57 @@
       }
     },
     "/customers/me": {
+      "delete": {
+        "description": "Exclusao da conta (LGPD, Art. 18, VI). NAO TEM DESFAZER.\n\nE o par natural de `GET /me/export`, que fica logo acima: **vejo o que\nvoces tem** e **apaguem**.\n\nA conta e ANONIMIZADA, nao apagada — o pedido continua existindo para o\nrestaurante, sem nada da pessoa dentro. O e-mail e o telefone sao\nliberados para recadastro, e o token desta propria chamada morre junto.\nOs campos exatos estao em `CustomerAnonymizationService`.\n\nO corpo leva a senha atual: `DELETE` com corpo e incomum mas legal, e a\nalternativa a colocaria na querystring, ou seja, no log do proxy.",
+        "operationId": "delete_me_customers_me_delete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteCustomerAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Nao autenticado, ou senha incorreta"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrdersInFlightResponse"
+                }
+              }
+            },
+            "description": "Ha pedido em andamento; a exclusao e recusada por enquanto"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Me",
+        "tags": [
+          "customers"
+        ]
+      },
       "get": {
         "operationId": "get_me_customers_me_get",
         "responses": {

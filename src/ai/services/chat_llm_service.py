@@ -14,9 +14,14 @@ class ChatLLMService:
     """LCEL chat service for Rapi structured responses."""
 
     def __init__(self) -> None:
+        # O modelo sai do ambiente, no mesmo padrao de `EMBEDDING_MODEL` e
+        # `VOICE_MODEL`: trocar de modelo — para testar um novo, ou para fugir
+        # de uma indisponibilidade da OpenAI — nao pode exigir deploy. O
+        # default de `MODEL_NAME` em `config.py` e o mesmo valor que estava
+        # fixo aqui, entao nada muda para quem nao define a variavel.
         self.llm = ChatOpenAI(
             api_key=settings.OPENAI_API_KEY,
-            model="gpt-5-mini",
+            model=settings.MODEL_NAME,
             reasoning_effort="minimal",
             verbosity="low",
             max_completion_tokens=300,

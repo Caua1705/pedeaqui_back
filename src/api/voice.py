@@ -30,6 +30,7 @@ from src.api.dependencies.database import get_db
 from src.api.rate_limit import VOICE_SESSION_RATE_LIMIT, limiter
 from src.core.config import settings
 from src.models.customer_model import Customer
+from src.ai import voice as pacote_de_voz
 from src.ai.voice.search_service import VoiceSearchService
 from src.ai.voice.session_service import UsoReportado, VoiceSessionService
 from src.services.chat_service import ChatService
@@ -37,7 +38,11 @@ from src.services.chat_service import ChatService
 
 router = APIRouter(prefix="/voice", tags=["experimento"])
 
-PAGINA = Path(__file__).resolve().parent / "pagina.html"
+# A bancada mora com o resto do pacote de voz (`src/ai/voice/`), e nao ao lado
+# desta rota: o HTML e da bancada, nao da API. O caminho sai do proprio pacote
+# em vez de subir diretorios contados a mao — mover ESTE arquivo nao pode
+# quebrar a pagina de novo.
+PAGINA = Path(pacote_de_voz.__file__).resolve().parent / "page.html"
 
 
 class SessaoRequest(BaseModel):

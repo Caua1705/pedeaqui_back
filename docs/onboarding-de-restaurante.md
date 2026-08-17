@@ -554,19 +554,28 @@ Deveria ser: tela de marca com upload de logo e capa (a rota de upload de
 imagem de produto já resolveu o problema difícil — detectar o tipo pelos
 bytes) e seletor de cor.
 
-### 6. Um checklist de "este restaurante está pronto?"
+### 6. Um checklist de "este restaurante está pronto?" — meio feito
 
-Hoje: este documento, lido por uma pessoa, na ordem certa.
+**O comando existe:**
 
-Deveria ser: uma tela — ou um comando `scripts/check_restaurant.py <slug>` —
-que responda em uma tela cheia: tem filial com coordenada? tem horário nos
-sete dias? tem taxa por km? tem forma de pagamento? tem produto sem setor de
-impressão? tem credencial de pagamento com segredo de webhook? a comissão foi
-negociada ou está no padrão? o agente de impressão bateu heartbeat?
+```bash
+docker exec pedeaqui-api python scripts/check_restaurant.py junior-da-picanha
+docker exec pedeaqui-api python scripts/check_restaurant.py --todos
+```
 
-**É o item de maior retorno da lista inteira**, e o mais barato: são oito
-consultas contra dados que já existem, e ele fecharia de uma vez os cinco
-silenciosos do topo deste documento. Nenhuma tela nova, nenhuma migração.
+Ele cobre **os cinco silenciosos do topo deste documento** — horários (3.1),
+taxa por km (3.2), setor de impressão (5.2), segredo do webhook (6.4) e
+comissão (7) — e sai com código 1 quando algum deles está em ERRO, para
+servir de porta num roteiro de instalação. Só leitura: nenhum `UPDATE`,
+nenhuma migração.
+
+Ele **não** cobre o resto do que esta seção pedia: coordenada da filial,
+presença de forma de pagamento e heartbeat do agente de impressão. Os três
+falham alto — o cliente ou o lojista vê o erro na hora —, e por isso ficaram
+de fora da primeira versão. Entram quando alguém sentir falta.
+
+Continua faltando a **tela**. O comando exige shell no container, então quem
+instala ainda precisa ser você.
 
 ---
 

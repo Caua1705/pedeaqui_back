@@ -226,6 +226,7 @@ docker exec pedeaqui-api python scripts/cleanup_idempotency_keys.py --dry-run
 docker exec pedeaqui-api python scripts/cleanup_idempotency_keys.py
 docker exec pedeaqui-api python scripts/reindex_ai.py
 docker exec pedeaqui-api python scripts/audit_indexes.py
+docker exec pedeaqui-api python scripts/check_restaurant.py junior-da-picanha
 ```
 
 - **`cleanup_idempotency_keys.py`** apaga chaves de idempotência **e** estimativas
@@ -238,6 +239,11 @@ docker exec pedeaqui-api python scripts/audit_indexes.py
   gravado.
 - **`audit_indexes.py`** procura colisão de nome e duplicata de definição entre
   índices.
+- **`check_restaurant.py <slug>`** responde "este restaurante está pronto?" —
+  confere os cinco passos do onboarding que quebram em silêncio e sai com 1 se
+  algum estiver em ERRO. Só leitura. Rode antes de considerar um restaurante no
+  ar, e de novo depois de qualquer mexida em horário, cardápio ou pagamento:
+  [`onboarding-de-restaurante.md`](onboarding-de-restaurante.md).
 - **`bench_busca_vetorial.py`** mede a busca do Rapi com e sem índice ANN. Não
   roda em produção — monta um banco descartável no Postgres de teste. É o que
   sustenta a decisão de **não** ter índice `ivfflat`/`hnsw` hoje, e o que diz

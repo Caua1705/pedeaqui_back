@@ -238,6 +238,10 @@ docker exec pedeaqui-api python scripts/audit_indexes.py
   gravado.
 - **`audit_indexes.py`** procura colisão de nome e duplicata de definição entre
   índices.
+- **`bench_busca_vetorial.py`** mede a busca do Rapi com e sem índice ANN. Não
+  roda em produção — monta um banco descartável no Postgres de teste. É o que
+  sustenta a decisão de **não** ter índice `ivfflat`/`hnsw` hoje, e o que diz
+  quando ela deixa de valer: [`busca-vetorial-e-indice-ann.md`](busca-vetorial-e-indice-ann.md).
 
 ---
 

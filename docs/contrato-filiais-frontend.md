@@ -3,9 +3,15 @@
 Documento para quem vai implementar o front. Tudo o que é preciso saber está
 aqui; não é necessário acesso ao código do backend.
 
-**Estado em 17/08/2026.** Base da API: a mesma do resto do app do cliente
+**Estado em 18/08/2026.** Base da API: a mesma do resto do app do cliente
 (`https://api.pederapidex.com` em produção, `http://localhost:8000` em
 desenvolvimento).
+
+> **Mudou em 18/08/2026 (revisão `20260818_0025`).** O "fechar agora" passou a
+> ser de cada filial, e `is_open_now` agora combina a agenda da semana com essa
+> pausa. Entrou o campo `closed_reason`, e `current_period` passou a poder vir
+> preenchido com `is_open_now: false`. As três mudanças estão marcadas no texto;
+> o documento completo do passo é [`operacao-por-filial.md`](operacao-por-filial.md).
 
 ---
 
@@ -133,6 +139,7 @@ Exige `Authorization: Bearer <token do cliente>`. Sem token: **401**.
       "longitude": -38.52,
       "is_main": true,
       "is_open_now": true,
+      "closed_reason": null,
       "current_period": { "weekday": 0, "opens_at": "11:00:00", "closes_at": "23:00:00" },
       "delivery": {
         "delivers_to_address": true,
@@ -170,8 +177,9 @@ Exige `Authorization: Bearer <token do cliente>`. Sem token: **401**.
 | `phone`, `whatsapp` | string \| null | contato da loja |
 | `latitude`, `longitude` | float \| null | para pin no mapa. Nulos quando o lojista não cadastrou |
 | `is_main` | bool | filial principal |
-| `is_open_now` | bool | **aberta agora**, calculado no servidor, no fuso `America/Fortaleza` |
-| `current_period` | objeto \| null | a faixa que está valendo. `null` com a loja fechada |
+| `is_open_now` | bool | **aberta agora**, calculado no servidor, no fuso `America/Fortaleza`. Combina a agenda da semana **e** o "fechar agora" daquela filial |
+| `closed_reason` | string \| null | por que não está atendendo. Ver §4.5 |
+| `current_period` | objeto \| null | a faixa da AGENDA que está valendo. Ver §4.3 — pode vir preenchido com `is_open_now: false` |
 | `delivery` | objeto \| null | ver §4.4. **`null` significa "não perguntei"** |
 
 ### 4.3 `current_period`
@@ -190,6 +198,27 @@ pode não ser o dia de hoje.
 Serve para escrever "aberta até 23:00" sem outra chamada. **Não use para
 recalcular `is_open_now`** — esse já veio pronto, e refazer a conta no app é
 justamente o defeito que esta rota existe para eliminar.
+
+**Desde 18/08/2026 este campo pode vir PREENCHIDO com `is_open_now: false`**, e
+isso não é bug: a agenda está em ordem e quem fechou a loja foi o balcão. São
+duas coisas — a agenda é cadastro, a pausa é o dia de hoje. `current_period`
+fala da agenda; quem decide se a filial atende é `is_open_now`, sempre.
+
+### 4.5 `closed_reason`
+
+| Valor | O que aconteceu | O que o front escreve |
+|---|---|---|
+| `null` | a filial está atendendo | nada |
+| `outside_business_hours` | fora do horário cadastrado | "abre às 18:00", usando `current_period` de `/info` |
+| `branch_paused` | o balcão apertou "fechar agora" | "fechada no momento" — **não** prometa horário |
+
+A diferença não é cosmética: `outside_business_hours` passa sozinho quando o
+relógio virar, `branch_paused` só passa quando alguém reabrir a loja.
+
+Com as duas coisas valendo ao mesmo tempo (fora do horário **e** pausada), vem
+`outside_business_hours` — porque `current_period` já sai nulo nesse caso, e
+dizer "pausada" faria a tela afirmar que a agenda está em ordem enquanto o
+campo dela vem vazio.
 
 ### 4.4 `delivery`
 
@@ -242,8 +271,8 @@ que sem entregar. O vocabulário é o mesmo de `POST /delivery/estimate`.
 |---|---|---|
 | `null` | entrega normalmente | habilita a filial |
 | `outside_delivery_area` | endereço fora do raio daquela filial | mostra "fora da área", sugere retirada |
-| `branch_closed` | a filial está fechada agora | `is_open_now` já é `false`; mostre o horário de `current_period` das outras |
-| `delivery_disabled` | o restaurante não aceita entrega | esconda a seção de entrega inteira |
+| `branch_closed` | a filial está fechada agora — pelo horário **ou** pelo "fechar agora" | `is_open_now` já é `false`; `closed_reason` diz qual dos dois |
+| `delivery_disabled` | **esta filial** não aceita entrega | esconda a seção de entrega **daquela filial**; as outras da lista podem estar entregando |
 | `prep_time_unavailable` | falta tempo de preparo cadastrado no horário atual | trate como indisponível; é configuração faltando no painel |
 | `delivery_fee_config_unavailable` | a filial não tem taxa cadastrada e não há contingência | trate como indisponível |
 | `route_not_found` | o Google não achou rota até o endereço | peça para revisar o endereço |
@@ -272,8 +301,11 @@ perguntei" (`address_provided: false`) de "perguntei e não deu"
    com `address` ou `address_id`. Cada filial ganha taxa, distância e
    veredito.
 3. **Cliente escolhe a filial** → guarde o `id` dela.
-4. **Cardápio** → `GET /restaurants/{slug}/menu` (hoje o cardápio ainda é do
-   restaurante, não da filial — ver §8).
+4. **Cardápio** → `GET /restaurants/{slug}/menu?branch_id=<a filial escolhida>`.
+   Os PRODUTOS ainda são do restaurante (ver §8), mas o bloco `settings` —
+   valor mínimo, taxa de serviço, aceita entrega/retirada, `is_open` — é da
+   filial que o `branch_id` pedir. **Chamar sem o parâmetro depois de o cliente
+   ter escolhido mostra o mínimo e a taxa de outra loja.**
 5. **Fechar o pedido** → `POST /restaurants/{slug}/delivery/estimate` com o
    `branch_id` escolhido, para obter o `estimate_token`, e depois
    `POST /orders`.
@@ -307,9 +339,9 @@ no campo de endereço — chame quando o endereço estiver completo.
 
 ## 8. O que esta rota NÃO faz
 
-- **Não filtra o cardápio por filial.** Hoje o cardápio é do restaurante:
-  `GET /restaurants/{slug}/menu` devolve os mesmos produtos qualquer que seja
-  a filial escolhida. Cardápio por filial é trabalho separado.
+- **Não filtra o cardápio por filial.** `GET /restaurants/{slug}/menu` devolve
+  os mesmos PRODUTOS qualquer que seja a filial escolhida — o `branch_id` de lá
+  resolve só o bloco `settings`. Cardápio por filial é trabalho separado.
 - **Não diz a que horas a filial fechada abre de novo.** `current_period` é
   nulo com a loja fechada. Para montar "abre às 18:00" use
   `GET /restaurants/{slug}/info?branch_id=...`, que devolve a semana inteira.
@@ -334,3 +366,8 @@ no campo de endereço — chame quando o endereço estiver completo.
   poderia escolher.
 - **A taxa é número, não string.** `11.3` e não `"11.30"`. Formate na
   exibição; não compare como texto.
+- **`current_period` preenchido não significa aberta.** Desde 18/08/2026 a loja
+  pode estar pausada dentro do horário. Quem responde é `is_open_now`.
+- **`delivery_disabled` é da filial.** Esconder a seção de entrega da tela
+  inteira ao ver esse código esconde as outras lojas, que podem estar
+  entregando normalmente.

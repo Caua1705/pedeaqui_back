@@ -4,6 +4,12 @@ Tudo aqui existia no banco e nao era lido na criacao do pedido: a loja podia
 estar fechada, com retirada desligada ou receber uma forma de pagamento que
 nao aceita, e o pedido entrava assim mesmo. Quem bloqueava era o frontend —
 ou seja, ninguem.
+
+Desde a revisao 20260818_0025 as tres chaves (`is_open`, `accepts_delivery`,
+`accepts_pickup`) sao da FILIAL, e por isso elas moram no objeto `branch`
+destes dubles e nao mais no de `restaurant_settings`. Um teste que as
+colocasse de volta em settings passaria a nao provar nada: o service nem
+olharia para elas.
 """
 
 import unittest
@@ -59,7 +65,20 @@ def build_service(
     branch_is_open=True,
     enabled_payment_methods=(("cash", "delivery"),),
 ):
-    branch = SimpleNamespace(id=uuid.uuid4())
+    branch = SimpleNamespace(
+        id=uuid.uuid4(),
+        is_open=is_open,
+        accepts_delivery=accepts_delivery,
+        accepts_pickup=accepts_pickup,
+        # Nulos: esta filial nao sobrescreve nada e herda os padroes do
+        # restaurante, que e o estado em que toda filial nasce.
+        min_order_value=None,
+        service_fee_enabled=None,
+        service_fee_amount=None,
+        estimated_delivery_time_min=None,
+        estimated_delivery_time_max=None,
+        default_delivery_fee=None,
+    )
     product_id = uuid.uuid4()
     product = SimpleNamespace(
         id=product_id,
@@ -89,9 +108,9 @@ def build_service(
             min_order_value=Decimal("0"),
             service_fee_enabled=False,
             service_fee_amount=Decimal("0"),
-            is_open=is_open,
-            accepts_delivery=accepts_delivery,
-            accepts_pickup=accepts_pickup,
+            estimated_delivery_time_min=None,
+            estimated_delivery_time_max=None,
+            default_delivery_fee=None,
             platform_commission_percent=Decimal("10.00"),
         )
     )
@@ -123,7 +142,7 @@ def build_payload(branch, product_id, *, order_type="pickup", payment_method="ca
 
 
 class StoreAvailabilityTests(unittest.TestCase):
-    def test_closed_store_does_not_accept_order(self):
+    def test_closed_branch_does_not_accept_order(self):
         service, branch, product_id = build_service(is_open=False)
 
         with self.assertRaises(HTTPException) as raised:
@@ -155,15 +174,48 @@ class StoreAvailabilityTests(unittest.TestCase):
 
         self.assertEqual(len(service.order_repository.orders), 1)
 
-    def test_branch_closed_now_refuses_even_with_the_store_open(self):
-        # `is_open` e a chave geral do restaurante; o horario da filial e
-        # outra coisa. Pedido as 3h da manha nao passa nem com is_open=true.
+    def test_branch_closed_now_refuses_even_with_the_switch_on(self):
+        # Duas coisas diferentes na MESMA filial: `is_open` e a pausa manual,
+        # o horario e o cadastro da semana. Pedido as 3h da manha nao passa
+        # nem com a chave ligada.
         service, branch, product_id = build_service(branch_is_open=False)
 
         with self.assertRaises(HTTPException) as raised:
             service.create_order("junior", build_payload(branch, product_id))
 
         self.assertEqual(raised.exception.status_code, 400)
+
+    def test_the_pause_of_one_branch_does_not_travel_to_another(self):
+        """O motivo desta migracao inteira, num teste.
+
+        Antes as tres chaves eram de `restaurant_settings` e o mesmo objeto
+        respondia por todas as filiais: pausar uma pausava a rede. Aqui as
+        duas filiais dividem o mesmo restaurante e o mesmo `settings`, e so a
+        pausada recusa.
+        """
+        service, pausada, product_id = build_service(is_open=False)
+        aberta = SimpleNamespace(
+            id=uuid.uuid4(),
+            is_open=True,
+            accepts_delivery=True,
+            accepts_pickup=True,
+            min_order_value=None,
+            service_fee_enabled=None,
+            service_fee_amount=None,
+            estimated_delivery_time_min=None,
+            estimated_delivery_time_max=None,
+            default_delivery_fee=None,
+        )
+        filiais = {pausada.id: pausada, aberta.id: aberta}
+        service.branch_repository.get_active_by_id_and_restaurant = (
+            lambda branch_id, restaurant_id: filiais[branch_id]
+        )
+
+        with self.assertRaises(HTTPException):
+            service.create_order("junior", build_payload(pausada, product_id))
+
+        service.create_order("junior", build_payload(aberta, product_id))
+        self.assertEqual(len(service.order_repository.orders), 1)
 
 
 class PaymentMethodTests(unittest.TestCase):

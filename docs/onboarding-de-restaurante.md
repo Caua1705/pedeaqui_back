@@ -181,9 +181,9 @@ delivery_max_distance_km  além disto, fora da área
 
 **`delivery_base_fee` e `delivery_fee_per_km` são obrigatórios na prática.**
 Com qualquer um dos dois nulo, o cálculo devolve "sem taxa" e o pedido cai no
-`default_delivery_fee` do restaurante — que **só vale se for maior que zero**,
-e nasce zero. O resultado é toda entrega recusada como "fora da área", num
-endereço a 500 metros.
+`default_delivery_fee` — o da filial se ela tiver, senão o padrão do
+restaurante — que **só vale se for maior que zero**, e nasce zero. O resultado
+é toda entrega recusada como "fora da área", num endereço a 500 metros.
 
 Quem quer entrega grátis põe `delivery_base_fee = 0` **e**
 `delivery_fee_per_km = 0`. Deixar nulo não é grátis, é quebrado.
@@ -208,9 +208,13 @@ cliente vê o erro na hora.
 Pago ainda não configurado é o cenário do silencioso nº 1: o cliente paga e o
 pedido não anda.
 
-### 3.4 Taxas do restaurante
+### 3.4 Taxas: o padrão da marca, e a filial que diverge
 
-Painel → Configurações.
+São **dois lugares** desde a revisão `20260818_0025`, e a diferença é o que
+poupa trabalho na quinta loja. Detalhe completo em
+[`operacao-por-filial.md`](operacao-por-filial.md).
+
+**O padrão do restaurante.** Painel → Configurações.
 `PATCH /admin/settings` — **somente o dono** desde a revisão `20260814_0020`.
 
 ```
@@ -218,8 +222,25 @@ min_order_value              pedido mínimo
 service_fee_enabled/amount   taxa de serviço (padrão: R$ 0,99 ligada)
 estimated_delivery_time_*    prazo exibido quando não há faixa de horário
 default_delivery_fee         contingência: usada quando o Google cai
-accepts_delivery/pickup      liga e desliga cada modalidade
 ```
+
+Nenhum pedido lê esses valores direto: a filial os herda nos campos que deixou
+nulos. Configure aqui uma vez e as cinco lojas nascem certas.
+
+**A sobrescrita da filial.** `PATCH /admin/branches/{branch_id}/settings`,
+também **somente o dono**. Os mesmos cinco campos, valendo só naquela loja.
+Mandar `null` explícito devolve o campo a herdar.
+
+**A operação do dia é outra coisa, e não tem padrão.** `is_open` (o "fechar
+agora"), `accepts_delivery` e `accepts_pickup` são de cada filial e nada mais:
+
+```
+PATCH /admin/branches/{branch_id}/store-status   {"is_open": false}      PESSOAS
+PATCH /admin/branches/{branch_id}/order-types    {"accepts_pickup": false}  GERENCIA
+```
+
+Até essa revisão eles eram do restaurante, e fechar a loja do Centro fechava a
+da Aldeota junto.
 
 **`default_delivery_fee` não é a taxa do dia a dia.** É o valor usado quando a
 regra por km não pode ser aplicada — Google fora do ar, ou filial sem base/por

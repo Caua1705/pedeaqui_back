@@ -1,11 +1,14 @@
 import logging
 from collections.abc import Sequence
+from uuid import UUID
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.models.product_model import Product
 from src.models.product_option_model import ProductOption, ProductOptionGroup
+from src.models.branch_model import Branch
+from src.repositories.branch_repository import BranchRepository
 from src.repositories.menu_repository import MenuRepository
 from src.repositories.product_repository import ProductRepository
 from src.schemas.banner_schema import BannerResponse
@@ -13,6 +16,7 @@ from src.schemas.coupon_schema import PublicCouponResponse
 from src.schemas.menu_schema import RestaurantMenuResponse
 from src.schemas.product_schema import ProductOptionGroupResponse, ProductOptionResponse, ProductResponse
 from src.schemas.restaurant_schema import BranchResponse, CategoryResponse, RestaurantSettingsResponse
+from src.services.branch_operation import BranchOperation, resolve_branch_operation
 from src.services.menu_rules import blocking_required_group
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import money_to_float
@@ -25,16 +29,37 @@ logger = logging.getLogger("uvicorn.error")
 class MenuService:
     def __init__(self, db: Session):
         self.menu_repository = MenuRepository(db)
+        self.branch_repository = BranchRepository(db)
         self.product_repository = ProductRepository(db)
         self.restaurant_service = RestaurantService(db)
 
-    def get_restaurant_menu(self, restaurant_slug: str) -> RestaurantMenuResponse:
+    def get_restaurant_menu(
+        self,
+        restaurant_slug: str,
+        branch_id: UUID | None = None,
+    ) -> RestaurantMenuResponse:
+        """O cardapio do restaurante, com a operacao DA FILIAL escolhida.
+
+        Os produtos ainda sao do restaurante — cardapio por filial e trabalho
+        separado. O que ja e por filial e o bloco `settings`: valor minimo,
+        taxa de servico, aceita entrega/retirada e o "fechar agora" saem da
+        filial que o `branch_id` pedir.
+
+        Sem `branch_id` vale a filial padrao, a mesma de
+        `POST /delivery/estimate` e de `GET /restaurants/{slug}/info` sem
+        filial. Nao ha caminho que devolva o bloco "do restaurante": ele
+        deixou de existir, e inventar um faria o cliente ver um valor minimo
+        que nenhuma loja cobra.
+        """
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
         settings = self.menu_repository.get_settings(restaurant.id)
+        branch = self._resolve_settings_branch(restaurant.id, branch_id)
+        operation = resolve_branch_operation(branch, settings) if branch else None
 
         return RestaurantMenuResponse(
             restaurant=self.restaurant_service.to_public_response(restaurant),
-            settings=self._settings_response(settings) if settings else None,
+            settings_branch_id=branch.id if branch else None,
+            settings=self._settings_response(operation, settings) if operation else None,
             branches=[BranchResponse.model_validate(branch) for branch in self.menu_repository.get_active_branches(restaurant.id)],
             banners=[self._banner_response(banner) for banner in self.menu_repository.get_banners_by_type(restaurant.id, "hero")],
             highlight_banners=[
@@ -77,19 +102,55 @@ class MenuService:
 
         return self.product_response(product)
 
+    def _resolve_settings_branch(
+        self,
+        restaurant_id: UUID,
+        branch_id: UUID | None,
+    ) -> Branch | None:
+        """A filial de que o bloco `settings` vai falar.
+
+        404 para filial que nao e deste restaurante, e nao a filial padrao
+        calada: o app que mandou o id errado precisa descobrir isso, senao
+        ele mostra o valor minimo de outra loja achando que acertou.
+
+        `None` (e nao 404) quando o restaurante nao tem filial ativa: o
+        cardapio continua sendo respondido, so sem o bloco de operacao — nao
+        ha loja para ele descrever.
+        """
+        if branch_id is None:
+            return self.branch_repository.get_default_branch(restaurant_id)
+
+        branch = self.branch_repository.get_active_by_id_and_restaurant(
+            branch_id, restaurant_id
+        )
+        if branch is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Filial não encontrada para este restaurante",
+            )
+        return branch
+
     @staticmethod
-    def _settings_response(settings) -> RestaurantSettingsResponse:
+    def _settings_response(
+        operation: BranchOperation,
+        settings,
+    ) -> RestaurantSettingsResponse:
+        """O bloco de operacao, ja resolvido para a filial.
+
+        `payment_methods` e o unico campo que ainda sai da linha do
+        restaurante — ver a docstring de RestaurantSettingsResponse.
+        """
         return RestaurantSettingsResponse(
-            min_order_value=money_to_float(settings.min_order_value),
-            estimated_delivery_time_min=settings.estimated_delivery_time_min,
-            estimated_delivery_time_max=settings.estimated_delivery_time_max,
-            default_delivery_fee=money_to_float(settings.default_delivery_fee),
-            service_fee_enabled=settings.service_fee_enabled,
-            service_fee_amount=money_to_float(settings.service_fee_amount),
-            accepts_delivery=settings.accepts_delivery,
-            accepts_pickup=settings.accepts_pickup,
-            payment_methods=settings.payment_methods,
-            is_open=settings.is_open,
+            min_order_value=money_to_float(operation.min_order_value),
+            estimated_delivery_time_min=operation.estimated_delivery_time_min,
+            estimated_delivery_time_max=operation.estimated_delivery_time_max,
+            default_delivery_fee=money_to_float(operation.default_delivery_fee),
+            service_fee_enabled=operation.service_fee_enabled,
+            service_fee_amount=money_to_float(operation.service_fee_amount),
+            accepts_delivery=operation.accepts_delivery,
+            accepts_pickup=operation.accepts_pickup,
+            payment_methods=settings.payment_methods if settings else None,
+            is_open=operation.is_open,
         )
 
     @staticmethod

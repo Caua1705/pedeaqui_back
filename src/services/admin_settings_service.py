@@ -1,12 +1,18 @@
 """Regras da configuracao no painel (BLOCO C da Fase 3).
 
-Duas coisas mudam de dono aqui, e a diferenca importa:
+Tres niveis, e a diferenca entre eles e o que este arquivo organiza:
 
-- **Restaurante**: `is_open`, valor minimo, taxa de servico, aceita
-  entrega/retirada. Vale para todas as filiais.
-- **Filial**: endereco, contato, regras de entrega, horario e formas de
-  pagamento. E aqui que o escopo por filial morde — um manager preso a uma
-  filial nao enxerga nem escreve a configuracao das outras.
+- **Restaurante, e so padrao**: valor minimo, taxa de servico, prazo
+  estimado, taxa de contingencia. Nenhum pedido le estes valores direto — a
+  filial os herda nos campos que deixou nulos.
+- **Filial, estado do dia**: `is_open` (o "fechar agora"), `accepts_delivery`
+  e `accepts_pickup`. Nao herdam nada e nao tem padrao: sao o que alguem no
+  balcao aperta durante o expediente, e ate a revisao 20260818_0025 eles
+  fechavam a rede inteira de uma vez.
+- **Filial, o resto**: endereco, contato, regras de entrega, horario, formas
+  de pagamento e as sobrescritas comerciais. E aqui que o escopo por filial
+  morde — um manager preso a uma filial nao enxerga nem escreve a
+  configuracao das outras.
 
 `platform_commission_percent` nao e lido nem escrito por nada deste
 arquivo: e dado da plataforma, negociado por contrato (ver
@@ -37,6 +43,11 @@ from src.schemas.admin_settings_schema import (
     MAX_PERIODS_PER_WEEKDAY,
     MAX_PREP_TIME_MINUTES,
     AdminBranchDeliveryRules,
+    AdminBranchOperationEffective,
+    AdminBranchOperationOverrides,
+    AdminBranchOperationResponse,
+    AdminBranchOrderTypesRequest,
+    AdminBranchSettingsUpdate,
     AdminBranchResponse,
     AdminBranchUpdate,
     AdminPaymentMethodCreate,
@@ -51,6 +62,7 @@ from src.schemas.admin_settings_schema import (
     StoreStatusRequest,
 )
 from src.services.branch_hours_service import BranchHoursService
+from src.services.branch_operation import BranchOperation, resolve_branch_operation
 from src.utils.money import money_to_float, quantize_money
 
 
@@ -95,19 +107,95 @@ class AdminSettingsService:
     def set_store_status(
         self,
         scope: AdminScope,
+        branch_id: uuid.UUID,
         payload: StoreStatusRequest,
-    ) -> AdminRestaurantSettingsResponse:
-        """Abre ou fecha a loja (BLOCO C1).
+    ) -> AdminBranchOperationResponse:
+        """Abre ou fecha ESTA filial (BLOCO C1).
 
-        Fechar aqui bloqueia pedido de verdade: `OrderService` le
-        `is_open` antes de aceitar qualquer pedido. Nao mexe em horario —
-        e a pausa manual do dia (faltou gas, fila grande), nao o cadastro
-        de funcionamento.
+        Fechar aqui bloqueia pedido de verdade: `OrderService` le `is_open`
+        da filial antes de aceitar qualquer pedido, e a tela de escolha de
+        filial devolve `is_open_now = false` com `closed_reason =
+        branch_paused`. Nao mexe em horario — e a pausa manual do dia
+        (faltou gas, fila grande), nao o cadastro de funcionamento.
+
+        Ate a revisao 20260818_0025 esta rota era do restaurante e fechava
+        todas as filiais juntas. Nao havia como fechar so a do Centro.
         """
-        settings_row = self._get_or_create_settings(scope.restaurant_id)
-        settings_row.is_open = payload.is_open
+        branch = self._get_branch(scope, branch_id)
+        branch.is_open = payload.is_open
         self._commit()
-        return self._settings_response(settings_row)
+        return self._branch_operation_response(branch)
+
+    def set_branch_order_types(
+        self,
+        scope: AdminScope,
+        branch_id: uuid.UUID,
+        payload: AdminBranchOrderTypesRequest,
+    ) -> AdminBranchOperationResponse:
+        """Liga e desliga entrega e retirada NESTA filial.
+
+        Nao recusa desligar as duas. Uma filial que nao aceita nem entrega
+        nem retirada esta, na pratica, fechada — e fechada e um estado que o
+        lojista ja pode pedir por `store-status`. Recusar aqui obrigaria a
+        adivinhar qual das duas ele quis manter.
+        """
+        branch = self._get_branch(scope, branch_id)
+        changes = payload.model_dump(exclude_unset=True)
+        for field, value in changes.items():
+            setattr(branch, field, value)
+        self._commit()
+        return self._branch_operation_response(branch)
+
+    def list_branch_operation(
+        self,
+        scope: AdminScope,
+        requested_branch_id: uuid.UUID | None,
+    ) -> list[AdminBranchOperationResponse]:
+        """Como cada filial no escopo esta operando agora.
+
+        Uma chamada monta a tela inteira: o dono com cinco lojas ve as cinco
+        chaves de abrir/fechar lado a lado, o que e justamente a conferencia
+        que nao existia enquanto o `is_open` era um so.
+
+        O filtro da querystring passa por `resolve_branch_filter`: ele so
+        RESTRINGE. Um gerente preso a uma filial que pedir outra recebe 404,
+        e um que nao pedir nada recebe a dele — a tela nao precisa conhecer
+        a regra de escopo.
+        """
+        branch_id = scope.resolve_branch_filter(requested_branch_id)
+        branches = self.branch_repository.list_active_by_restaurant(scope.restaurant_id)
+        if branch_id is not None:
+            branches = [branch for branch in branches if branch.id == branch_id]
+        return [self._branch_operation_response(branch) for branch in branches]
+
+    def update_branch_settings(
+        self,
+        scope: AdminScope,
+        branch_id: uuid.UUID,
+        payload: AdminBranchSettingsUpdate,
+    ) -> AdminBranchOperationResponse:
+        """As sobrescritas comerciais desta filial.
+
+        `null` explicito no corpo apaga a sobrescrita e devolve o campo a
+        herdar o padrao do restaurante. Campo ausente do corpo nao e tocado —
+        e `exclude_unset` que separa os dois, e por isso ele nao pode virar
+        `exclude_none` numa limpeza futura.
+        """
+        branch = self._get_branch(scope, branch_id)
+        changes = payload.model_dump(exclude_unset=True)
+
+        self._ensure_delivery_time_range(
+            changes.get("estimated_delivery_time_min", branch.estimated_delivery_time_min),
+            changes.get("estimated_delivery_time_max", branch.estimated_delivery_time_max),
+        )
+        for field in ("min_order_value", "default_delivery_fee", "service_fee_amount"):
+            if changes.get(field) is not None:
+                changes[field] = quantize_money(changes[field])
+
+        for field, value in changes.items():
+            setattr(branch, field, value)
+        self._commit()
+        return self._branch_operation_response(branch)
 
     def list_branches(self, scope: AdminScope) -> list[AdminBranchResponse]:
         """Filiais que este lojista enxerga.
@@ -468,9 +556,48 @@ class AdminSettingsService:
             default_delivery_fee=money_to_float(settings_row.default_delivery_fee),
             service_fee_enabled=settings_row.service_fee_enabled,
             service_fee_amount=money_to_float(settings_row.service_fee_amount),
-            accepts_delivery=settings_row.accepts_delivery,
-            accepts_pickup=settings_row.accepts_pickup,
-            is_open=settings_row.is_open,
+        )
+
+    def _branch_operation_response(self, branch: Branch) -> AdminBranchOperationResponse:
+        """Uma filial: a chave que o lojista controla, e o que vai valer.
+
+        `is_open_now` custa uma consulta de horario por filial. Vale o preco:
+        sem ele o painel mostra "aberta" para uma loja que a agenda deixou
+        fechada, e o lojista so descobre pela ausencia de pedido.
+        """
+        settings_row = self.repository.get_settings(branch.restaurant_id)
+        operation = resolve_branch_operation(branch, settings_row)
+        period = self.branch_hours_service.find_current_period(branch.id)
+        return AdminBranchOperationResponse(
+            branch_id=branch.id,
+            branch_name=branch.name,
+            is_open=operation.is_open,
+            is_open_now=period is not None and operation.is_open,
+            accepts_delivery=operation.accepts_delivery,
+            accepts_pickup=operation.accepts_pickup,
+            overrides=AdminBranchOperationOverrides(
+                min_order_value=_optional_money(branch.min_order_value),
+                estimated_delivery_time_min=branch.estimated_delivery_time_min,
+                estimated_delivery_time_max=branch.estimated_delivery_time_max,
+                default_delivery_fee=_optional_money(branch.default_delivery_fee),
+                service_fee_enabled=branch.service_fee_enabled,
+                service_fee_amount=_optional_money(branch.service_fee_amount),
+            ),
+            effective=self._effective_response(operation),
+        )
+
+    @staticmethod
+    def _effective_response(operation: BranchOperation) -> AdminBranchOperationEffective:
+        return AdminBranchOperationEffective(
+            min_order_value=money_to_float(operation.min_order_value),
+            estimated_delivery_time_min=operation.estimated_delivery_time_min,
+            estimated_delivery_time_max=operation.estimated_delivery_time_max,
+            # Nulo aqui e informacao: significa "esta filial nao tem taxa de
+            # contingencia". `money_to_float` transformaria isso em 0.00, que
+            # o painel exibiria como um valor configurado.
+            default_delivery_fee=_optional_money(operation.default_delivery_fee),
+            service_fee_enabled=operation.service_fee_enabled,
+            service_fee_amount=money_to_float(operation.service_fee_amount),
         )
 
     @staticmethod

@@ -80,7 +80,15 @@ class FakeCache:
         self.values[key] = value
 
 
-def filial(nome: str, *, latitude, longitude, is_main=False, raio="10.00"):
+def filial(
+    nome: str,
+    *,
+    latitude,
+    longitude,
+    is_main=False,
+    raio="10.00",
+    is_open=True,
+):
     return SimpleNamespace(
         id=uuid.uuid4(),
         name=nome,
@@ -107,6 +115,18 @@ def filial(nome: str, *, latitude, longitude, is_main=False, raio="10.00"):
         delivery_min_fee=None,
         delivery_max_fee=None,
         delivery_max_distance_km=Decimal(raio),
+        # A operacao e da filial desde a revisao 20260818_0025. `is_open` e a
+        # pausa manual; os nulos abaixo dizem que esta filial herda os
+        # padroes comerciais do restaurante.
+        is_open=is_open,
+        accepts_delivery=True,
+        accepts_pickup=True,
+        min_order_value=None,
+        service_fee_enabled=None,
+        service_fee_amount=None,
+        estimated_delivery_time_min=None,
+        estimated_delivery_time_max=None,
+        default_delivery_fee=None,
     )
 
 
@@ -143,11 +163,17 @@ class BranchAvailabilityTests(unittest.TestCase):
         delivery.branch_repository = branch_repository
         delivery.branch_hours_service = hours_service
         delivery.customer_repository = SimpleNamespace(get_address=lambda *_: None)
-        delivery.menu_repository = SimpleNamespace(
+        menu_repository = SimpleNamespace(
             get_settings=lambda restaurant_id: SimpleNamespace(
-                accepts_delivery=True, default_delivery_fee=None
+                min_order_value=None,
+                service_fee_enabled=None,
+                service_fee_amount=None,
+                estimated_delivery_time_min=None,
+                estimated_delivery_time_max=None,
+                default_delivery_fee=None,
             )
         )
+        delivery.menu_repository = menu_repository
         delivery.maps_client = self.maps
         delivery.cache = FakeCache()
 
@@ -156,6 +182,7 @@ class BranchAvailabilityTests(unittest.TestCase):
             get_active_restaurant=lambda slug: self.restaurant
         )
         self.service.branch_repository = branch_repository
+        self.service.menu_repository = menu_repository
         self.service.branch_hours_service = hours_service
         self.service.delivery_service = delivery
 
@@ -192,6 +219,79 @@ class BranchAvailabilityTests(unittest.TestCase):
         resposta = self.responder(BranchAvailabilityRequest())
 
         self.assertEqual([item.delivery for item in resposta.branches], [None, None])
+
+    def test_a_pausa_de_uma_filial_nao_alcanca_a_outra(self):
+        """O motivo do passo 2 inteiro.
+
+        Enquanto o "fechar agora" foi do restaurante, pausar uma loja pausava
+        a rede — e nao havia teste capaz de falhar, porque havia um valor so.
+        Aqui as duas filiais dividem o mesmo restaurante e a mesma agenda.
+        """
+        self.centro.is_open = False
+
+        resposta = self.responder(BranchAvailabilityRequest())
+        por_nome = {item.name: item for item in resposta.branches}
+
+        self.assertFalse(por_nome["Centro"].is_open_now)
+        self.assertTrue(por_nome["Matriz"].is_open_now)
+
+    def test_pausada_dentro_do_horario_diz_qual_das_duas_fechou(self):
+        """`current_period` preenchido com `is_open_now` falso NAO e bug.
+
+        A agenda esta em ordem e quem fechou foi o balcao. Sao duas coisas
+        diferentes e a tela escreve textos diferentes para cada uma: uma passa
+        sozinha quando o relogio virar, a outra so quando alguem reabrir.
+        """
+        self.centro.is_open = False
+
+        item = self._item("Centro")
+
+        self.assertFalse(item.is_open_now)
+        self.assertEqual(item.closed_reason, "branch_paused")
+        self.assertIsNotNone(item.current_period)
+
+    def test_fora_do_horario_o_motivo_e_a_agenda_mesmo_pausada(self):
+        """Fechada pelos dois lados reporta a AGENDA.
+
+        `current_period` ja sai nulo aqui; dizer "pausada" faria a tela
+        afirmar que a agenda esta em ordem enquanto o campo dela vem vazio.
+        Os dois campos contam a mesma historia ou nao contam nenhuma.
+        """
+        self.horarios[self.centro.id] = [faixa(opens_at=time(3, 0), closes_at=time(3, 1))]
+        self.centro.is_open = False
+
+        item = self._item("Centro")
+
+        self.assertFalse(item.is_open_now)
+        self.assertEqual(item.closed_reason, "outside_business_hours")
+        self.assertIsNone(item.current_period)
+
+    def test_aberta_nao_tem_motivo(self):
+        item = self._item("Matriz")
+
+        self.assertTrue(item.is_open_now)
+        self.assertIsNone(item.closed_reason)
+
+    def test_filial_pausada_tambem_nao_entrega(self):
+        """O bloco de entrega concorda com `is_open_now`.
+
+        Sem isso a tela mostraria a loja fechada e uma taxa de entrega ao
+        lado dela — e o cliente tentaria fechar o pedido.
+
+        A Matriz, e nao a Centro: a Centro ja e descartada pelo filtro
+        geometrico antes de a estimativa rodar, e o teste mediria o filtro em
+        vez da pausa.
+        """
+        self.matriz.is_open = False
+
+        item = self._item("Matriz", payload=BranchAvailabilityRequest(address=self.endereco()))
+
+        self.assertFalse(item.delivery.delivers_to_address)
+        self.assertEqual(item.delivery.reason, "branch_closed")
+
+    def _item(self, nome, payload=None):
+        resposta = self.responder(payload or BranchAvailabilityRequest())
+        return {item.name: item for item in resposta.branches}[nome]
 
     def test_aberta_agora_sai_calculado_do_backend(self):
         self.horarios[self.centro.id] = [faixa(opens_at=time(3, 0), closes_at=time(3, 1))]

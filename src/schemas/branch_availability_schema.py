@@ -14,6 +14,7 @@ o valor exato aparecer diferente.
 """
 
 from datetime import time
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
@@ -50,13 +51,27 @@ class BranchAvailabilityRequest(BaseModel):
         return self
 
 
+# Por que a filial nao esta atendendo. Nulo quando esta.
+#
+# Os dois casos sao diferentes para quem le a tela: `outside_business_hours`
+# passa sozinho quando o relogio virar, `branch_paused` so passa quando
+# alguem no balcao apertar o botao de volta. Sem esta distincao a tela nao
+# tem como escolher entre "abre as 18:00" e "fechada no momento".
+BranchClosedReason = Literal["outside_business_hours", "branch_paused"]
+
+
 class BranchOpenPeriodResponse(BaseModel):
-    """A faixa de horario que esta valendo AGORA. Nula com a loja fechada.
+    """A faixa de horario da AGENDA que contem o momento atual.
 
     Vai junto para a tela poder escrever "aberta ate 23:00" sem pedir os
     horarios de novo em outra rota. Faixa que vira a noite (18:00-02:00) sai
     com `closes_at` menor que `opens_at`, e isso e o dado correto: ela
     pertence ao dia em que COMECA.
+
+    Desde que o "fechar agora" passou a ser por filial, este campo pode vir
+    PREENCHIDO com `is_open_now = false`: a agenda diz aberta e o balcao
+    pausou. Nao e contradicao, sao duas coisas — a agenda e cadastro, a pausa
+    e o dia de hoje. Quem decide se a filial atende e `is_open_now`, sempre.
     """
 
     weekday: int
@@ -102,7 +117,11 @@ class BranchAvailabilityItem(BaseModel):
     longitude: float | None = None
     is_main: bool = False
 
+    # A UNICA resposta para "esta filial esta atendendo agora?". Combina a
+    # agenda da semana com a pausa manual da filial: a loja precisa estar
+    # dentro de uma faixa E nao estar pausada.
     is_open_now: bool
+    closed_reason: BranchClosedReason | None = None
     current_period: BranchOpenPeriodResponse | None = None
 
     # Nulo quando o corpo nao trouxe endereco. NAO e "nao entrega": e "nao

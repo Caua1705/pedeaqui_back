@@ -31,7 +31,17 @@ MAX_PREP_TIME_DELTA_MINUTES = 120
 
 
 class AdminRestaurantSettingsResponse(BaseResponse):
-    """Configuracao do restaurante inteiro, nao da filial."""
+    """Os PADROES do restaurante — o que a filial herda quando nao diverge.
+
+    Nenhum destes valores e o que um pedido usa: o pedido le a filial, e a
+    filial cai aqui so nos campos que ela deixou nulos. Quem quer o valor
+    efetivo pede `GET /admin/branches/operation`.
+
+    `is_open`, `accepts_delivery` e `accepts_pickup` SAIRAM deste schema na
+    revisao 20260818_0025. Eles nao tem padrao: sao o estado do dia de UMA
+    loja, e viraram `PATCH /admin/branches/{branch_id}/store-status` e
+    `PATCH /admin/branches/{branch_id}/order-types`.
+    """
 
     min_order_value: float
     estimated_delivery_time_min: int | None = None
@@ -39,9 +49,6 @@ class AdminRestaurantSettingsResponse(BaseResponse):
     default_delivery_fee: float
     service_fee_enabled: bool | None = True
     service_fee_amount: float
-    accepts_delivery: bool | None = True
-    accepts_pickup: bool | None = True
-    is_open: bool | None = True
 
 
 class AdminRestaurantSettingsUpdate(BaseModel):
@@ -66,8 +73,6 @@ class AdminRestaurantSettingsUpdate(BaseModel):
     default_delivery_fee: Decimal | None = Field(default=None, ge=0)
     service_fee_enabled: bool | None = None
     service_fee_amount: Decimal | None = Field(default=None, ge=0)
-    accepts_delivery: bool | None = None
-    accepts_pickup: bool | None = None
 
 
 class StoreStatusRequest(BaseModel):
@@ -76,9 +81,109 @@ class StoreStatusRequest(BaseModel):
     Rota propria, do mesmo jeito que a disponibilidade do produto: e a acao
     mais clicada do painel e nao pode arrastar junto o resto das
     configuracoes que estavam abertas na tela.
+
+    O corpo nao mudou; o ALVO mudou. Era `PATCH /admin/settings/store-status`
+    e fechava o restaurante inteiro; hoje e
+    `PATCH /admin/branches/{branch_id}/store-status` e fecha uma loja.
     """
 
     is_open: bool
+
+
+class AdminBranchOrderTypesRequest(BaseModel):
+    """Quais tipos de pedido esta filial aceita agora.
+
+    Separado de `store-status` porque sao gestos diferentes: fechar a loja e
+    "nao estamos atendendo", desligar a entrega e "estamos atendendo, so nao
+    entregamos" — o quiosque de shopping vive no segundo estado o dia
+    inteiro, e o balcao sem motoboy cai nele no meio da tarde.
+
+    Edicao parcial: mandar so `accepts_delivery` nao mexe na retirada.
+    """
+
+    accepts_delivery: bool | None = None
+    accepts_pickup: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_has_change(self):
+        if self.accepts_delivery is None and self.accepts_pickup is None:
+            raise ValueError("Informe accepts_delivery, accepts_pickup, ou os dois")
+        return self
+
+
+class AdminBranchSettingsUpdate(BaseModel):
+    """As sobrescritas comerciais DESTA filial (revisao 20260818_0025).
+
+    Tres estados por campo, e a diferenca entre os dois ultimos e o motivo de
+    esta rota existir separada do PATCH de padroes:
+
+    - **campo ausente do corpo** — nao mexe;
+    - **campo com valor** — esta filial passa a usar esse valor;
+    - **campo com `null` explicito** — esta filial VOLTA A HERDAR o padrao do
+      restaurante.
+
+    Sem o terceiro estado nao haveria como desfazer uma divergencia: a filial
+    ficaria com a copia congelada para sempre, e mudar o padrao do
+    restaurante nao chegaria nela.
+
+    A validacao de par (minimo x maximo do prazo) roda sobre a MESCLA com o
+    que ja esta no banco, pelo mesmo motivo de `AdminBranchDeliveryRules`.
+    """
+
+    min_order_value: Decimal | None = Field(default=None, ge=0)
+    estimated_delivery_time_min: int | None = Field(default=None, ge=0, le=600)
+    estimated_delivery_time_max: int | None = Field(default=None, ge=0, le=600)
+    default_delivery_fee: Decimal | None = Field(default=None, ge=0)
+    service_fee_enabled: bool | None = None
+    service_fee_amount: Decimal | None = Field(default=None, ge=0)
+
+
+class AdminBranchOperationOverrides(BaseResponse):
+    """O que esta gravado NA FILIAL. Nulo significa "herda do restaurante".
+
+    Existe ao lado de `effective` porque a tela precisa dos dois: o campo de
+    edicao mostra a sobrescrita (vazio = herdando), e o texto ao lado mostra
+    o valor que vai valer. Publicar so o efetivo faria toda filial parecer
+    divergente; so a sobrescrita, faria toda filial parecer sem configuracao.
+    """
+
+    min_order_value: float | None = None
+    estimated_delivery_time_min: int | None = None
+    estimated_delivery_time_max: int | None = None
+    default_delivery_fee: float | None = None
+    service_fee_enabled: bool | None = None
+    service_fee_amount: float | None = None
+
+
+class AdminBranchOperationEffective(BaseResponse):
+    """O que o PROXIMO PEDIDO desta filial vai usar. Filial mesclada com padrao."""
+
+    min_order_value: float
+    estimated_delivery_time_min: int | None = None
+    estimated_delivery_time_max: int | None = None
+    default_delivery_fee: float | None = None
+    service_fee_enabled: bool
+    service_fee_amount: float
+
+
+class AdminBranchOperationResponse(BaseResponse):
+    """Como uma filial esta operando agora — uma linha da tela de operacao.
+
+    `is_open` e `is_open_now` sao coisas diferentes e as duas precisam
+    aparecer: `is_open` e a chave que o lojista controla, `is_open_now`
+    combina essa chave com a agenda da semana. Uma filial com `is_open=true`
+    e `is_open_now=false` esta fora do horario cadastrado — a tela consegue
+    dizer isso em vez de deixar o lojista achando que a loja esta no ar.
+    """
+
+    branch_id: UUID
+    branch_name: str
+    is_open: bool
+    is_open_now: bool
+    accepts_delivery: bool
+    accepts_pickup: bool
+    overrides: AdminBranchOperationOverrides
+    effective: AdminBranchOperationEffective
 
 
 class AdminBranchResponse(BaseResponse):

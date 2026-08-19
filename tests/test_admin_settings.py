@@ -23,6 +23,8 @@ from fastapi import HTTPException
 
 from src.api.dependencies.admin_scope import AdminScope
 from src.schemas.admin_settings_schema import (
+    AdminBranchOrderTypesRequest,
+    AdminBranchSettingsUpdate,
     AdminBranchUpdate,
     AdminPaymentMethodCreate,
     AdminPaymentMethodUpdate,
@@ -60,9 +62,6 @@ def make_settings(**overrides):
         "default_delivery_fee": Decimal("5.00"),
         "service_fee_enabled": True,
         "service_fee_amount": Decimal("0.99"),
-        "accepts_delivery": True,
-        "accepts_pickup": True,
-        "is_open": True,
         "platform_commission_percent": Decimal("10.00"),
     }
     values.update(overrides)
@@ -93,6 +92,18 @@ def make_branch(**overrides):
         "delivery_max_distance_km": Decimal("10.00"),
         "is_main": True,
         "is_active": True,
+        # A operacao da filial (revisao 20260818_0025). As tres chaves sao
+        # NOT NULL; os seis campos comerciais nascem nulos, e nulo significa
+        # "herda o padrao do restaurante".
+        "is_open": True,
+        "accepts_delivery": True,
+        "accepts_pickup": True,
+        "min_order_value": None,
+        "service_fee_enabled": None,
+        "service_fee_amount": None,
+        "estimated_delivery_time_min": None,
+        "estimated_delivery_time_max": None,
+        "default_delivery_fee": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -264,14 +275,27 @@ class RestaurantSettingsTests(unittest.TestCase):
         self.assertIsInstance(response, AdminRestaurantSettingsResponse)
 
     def test_partial_update_touches_only_what_was_sent(self):
-        settings_row = make_settings(min_order_value=Decimal("20.00"), accepts_pickup=True)
+        settings_row = make_settings(
+            min_order_value=Decimal("20.00"), service_fee_amount=Decimal("0.99")
+        )
         repository = FakeSettingsRepository(settings=settings_row)
         build_service(repository).update_restaurant_settings(
             scope(), AdminRestaurantSettingsUpdate(min_order_value=Decimal("35.00"))
         )
 
         self.assertEqual(settings_row.min_order_value, Decimal("35.00"))
-        self.assertTrue(settings_row.accepts_pickup)
+        self.assertEqual(settings_row.service_fee_amount, Decimal("0.99"))
+
+    def test_the_day_switches_left_the_restaurant_contract(self):
+        """`is_open`, `accepts_delivery` e `accepts_pickup` nao tem padrao.
+
+        Eles sao o estado do dia de UMA loja. Enquanto moravam aqui, fechar a
+        filial do Centro fechava a da Aldeota junto — e o schema de volta
+        significaria a mesma coisa de volta.
+        """
+        for campo in ("is_open", "accepts_delivery", "accepts_pickup"):
+            self.assertNotIn(campo, AdminRestaurantSettingsResponse.model_fields)
+            self.assertNotIn(campo, AdminRestaurantSettingsUpdate.model_fields)
 
     def test_money_is_stored_with_two_decimals(self):
         settings_row = make_settings()
@@ -293,16 +317,6 @@ class RestaurantSettingsTests(unittest.TestCase):
         # 20 e valido sozinho; impossivel para um minimo de 40 ja gravado.
         self.assertEqual(raised.exception.status_code, 422)
         self.assertEqual(settings_row.estimated_delivery_time_max, 60)
-
-    def test_store_status_only_changes_is_open(self):
-        settings_row = make_settings(is_open=True, accepts_delivery=True)
-        repository = FakeSettingsRepository(settings=settings_row)
-        response = build_service(repository).set_store_status(
-            scope(), StoreStatusRequest(is_open=False)
-        )
-
-        self.assertFalse(response.is_open)
-        self.assertTrue(settings_row.accepts_delivery)
 
     def test_settings_of_another_restaurant_are_not_reachable(self):
         settings_row = make_settings(restaurant_id=OTHER_RESTAURANT_ID)
@@ -722,3 +736,174 @@ class PaymentMethodTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BranchOperationTests(unittest.TestCase):
+    """A operacao por filial (revisao 20260818_0025).
+
+    O que estes testes protegem e uma coisa so, dita de varios angulos: a
+    pausa de uma filial nao pode chegar em outra. Enquanto `is_open` foi do
+    restaurante, ela chegava — e nao havia teste que pudesse falhar, porque
+    havia um valor so.
+    """
+
+    def setUp(self):
+        self.centro = make_branch(name="Centro")
+        self.aldeota = make_branch(name="Aldeota", is_main=False)
+        self.settings_row = make_settings()
+        self.repository = FakeSettingsRepository(settings=self.settings_row)
+        self.branches = FakeBranchRepository(branches=[self.centro, self.aldeota])
+
+    def service(self, current_period=None):
+        return build_service(
+            settings_repository=self.repository,
+            branch_repository=self.branches,
+            current_period=current_period,
+        )
+
+    def test_pausing_one_branch_leaves_the_other_open(self):
+        self.service().set_store_status(
+            scope(), self.centro.id, StoreStatusRequest(is_open=False)
+        )
+
+        self.assertFalse(self.centro.is_open)
+        self.assertTrue(self.aldeota.is_open)
+
+    def test_store_status_does_not_touch_the_order_types(self):
+        # E botao de acao rapida: o corpo de um campo so nao pode arrastar
+        # junto o que estava aberto em outra tela.
+        response = self.service().set_store_status(
+            scope(), self.centro.id, StoreStatusRequest(is_open=False)
+        )
+
+        self.assertFalse(response.is_open)
+        self.assertTrue(self.centro.accepts_delivery)
+        self.assertTrue(self.centro.accepts_pickup)
+
+    def test_order_types_are_edited_one_at_a_time(self):
+        self.service().set_branch_order_types(
+            scope(), self.centro.id, AdminBranchOrderTypesRequest(accepts_delivery=False)
+        )
+
+        self.assertFalse(self.centro.accepts_delivery)
+        self.assertTrue(self.centro.accepts_pickup)
+        self.assertTrue(self.aldeota.accepts_delivery)
+
+    def test_a_branch_outside_the_scope_is_404(self):
+        # 404 e nao 403: um 403 confirmaria que a filial existe.
+        with self.assertRaises(HTTPException) as raised:
+            self.service().set_store_status(
+                scope(branch_id=self.centro.id),
+                self.aldeota.id,
+                StoreStatusRequest(is_open=False),
+            )
+
+        self.assertEqual(raised.exception.status_code, 404)
+        self.assertTrue(self.aldeota.is_open)
+
+    def test_is_open_now_combines_the_switch_with_the_schedule(self):
+        """Aberta pela chave e fechada pelo relogio.
+
+        E o caso que faz o lojista ligar reclamando que nao entra pedido: ele
+        ve a loja "aberta" no painel e a agenda de hoje ja fechou. Sem os dois
+        campos lado a lado, a tela nao tem como dizer isso.
+        """
+        sem_faixa = self.service()
+        linha = sem_faixa.list_branch_operation(scope(), self.centro.id)[0]
+
+        self.assertTrue(linha.is_open)
+        self.assertFalse(linha.is_open_now)
+
+    def test_the_listing_only_narrows(self):
+        preso = scope(branch_id=self.centro.id)
+
+        so_a_dele = self.service().list_branch_operation(preso, None)
+        self.assertEqual([item.branch_id for item in so_a_dele], [self.centro.id])
+
+        with self.assertRaises(HTTPException) as raised:
+            self.service().list_branch_operation(preso, self.aldeota.id)
+        self.assertEqual(raised.exception.status_code, 404)
+
+    def test_the_owner_sees_every_branch(self):
+        linhas = self.service().list_branch_operation(scope(), None)
+        self.assertEqual(len(linhas), 2)
+
+    def test_an_override_wins_and_the_rest_keeps_inheriting(self):
+        self.service().update_branch_settings(
+            scope(),
+            self.centro.id,
+            AdminBranchSettingsUpdate(min_order_value=Decimal("40.00")),
+        )
+        linha = self.service().list_branch_operation(scope(), self.centro.id)[0]
+
+        self.assertEqual(linha.overrides.min_order_value, 40.00)
+        self.assertEqual(linha.effective.min_order_value, 40.00)
+        # Nao sobrescrito: continua vindo do restaurante, e mudar o padrao
+        # continua chegando nesta filial.
+        self.assertIsNone(linha.overrides.service_fee_amount)
+        self.assertEqual(linha.effective.service_fee_amount, 0.99)
+
+    def test_an_explicit_null_goes_back_to_inheriting(self):
+        """O terceiro estado do PATCH, e o motivo de `exclude_unset`.
+
+        Sem ele nao haveria como desfazer uma divergencia: a filial ficaria
+        com a copia congelada para sempre e a proxima edicao do padrao nao
+        chegaria nela.
+        """
+        self.centro.min_order_value = Decimal("40.00")
+
+        self.service().update_branch_settings(
+            scope(), self.centro.id, AdminBranchSettingsUpdate(min_order_value=None)
+        )
+
+        self.assertIsNone(self.centro.min_order_value)
+        linha = self.service().list_branch_operation(scope(), self.centro.id)[0]
+        self.assertEqual(linha.effective.min_order_value, 20.00)
+
+    def test_a_field_absent_from_the_body_is_not_touched(self):
+        self.centro.service_fee_amount = Decimal("2.00")
+
+        self.service().update_branch_settings(
+            scope(), self.centro.id, AdminBranchSettingsUpdate(min_order_value=Decimal("40.00"))
+        )
+
+        self.assertEqual(self.centro.service_fee_amount, Decimal("2.00"))
+
+    def test_money_is_stored_with_two_decimals(self):
+        self.service().update_branch_settings(
+            scope(), self.centro.id, AdminBranchSettingsUpdate(service_fee_amount=Decimal("1.239"))
+        )
+
+        self.assertEqual(self.centro.service_fee_amount, Decimal("1.24"))
+
+    def test_the_delivery_time_range_is_validated_against_the_branch(self):
+        # 20 e valido sozinho; impossivel para um minimo de 40 ja gravado NA
+        # FILIAL. A mescla e com a filial, nao com o padrao do restaurante.
+        self.centro.estimated_delivery_time_min = 40
+
+        with self.assertRaises(HTTPException) as raised:
+            self.service().update_branch_settings(
+                scope(),
+                self.centro.id,
+                AdminBranchSettingsUpdate(estimated_delivery_time_max=20),
+            )
+
+        self.assertEqual(raised.exception.status_code, 422)
+        self.assertIsNone(self.centro.estimated_delivery_time_max)
+
+    def test_a_branch_with_no_settings_row_still_answers(self):
+        """Restaurante que nunca passou pelo painel nao tem o que herdar.
+
+        Nao e erro: a linha de `restaurant_settings` sempre foi opcional, e o
+        restaurante que nunca a criou continua vendendo.
+        """
+        sem_padrao = build_service(
+            settings_repository=FakeSettingsRepository(settings=None),
+            branch_repository=self.branches,
+        )
+
+        linha = sem_padrao.list_branch_operation(scope(), self.centro.id)[0]
+
+        self.assertTrue(linha.is_open)
+        self.assertEqual(linha.effective.min_order_value, 0.0)
+        self.assertIsNone(linha.effective.default_delivery_fee)

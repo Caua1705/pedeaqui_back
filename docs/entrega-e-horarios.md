@@ -38,9 +38,10 @@ resultado.
 
 ```
 restaurante ativo
-restaurant_settings.accepts_delivery == false      → não atende
 filial (a informada, ou a padrão — BranchRepository.get_default_branch)
    └─ sem NENHUMA filial ativa → 400
+filial.accepts_delivery == false                   → não atende ("delivery_disabled")
+filial.is_open == false (o "fechar agora")         → não atende ("branch_closed")
 endereço (address_id do cliente, ou inline)
    └─ address_id sem login → 401;  address_id de outro cliente → 404
 faixa de funcionamento que contém o agora          → BranchHoursService
@@ -91,9 +92,10 @@ numa linha só.
 Existe **sim** uma taxa de contingência, e ela tem uma regra que confunde.
 
 `GoogleMapsUnavailableError` (Google fora do ar, chave errada, timeout) faz o
-serviço cair para `restaurant_settings.default_delivery_fee`, gravando
-`provider="configured_fallback"` no pedido. É por esse valor que se separa depois
-o pedido precificado por rota do precificado em contingência.
+serviço cair para o `default_delivery_fee` **resolvido** — o da filial quando
+ela sobrescreveu, o do restaurante quando não (`operacao-por-filial.md`) —
+gravando `provider="configured_fallback"` no pedido. É por esse valor que se
+separa depois o pedido precificado por rota do precificado em contingência.
 
 **Mas `default_delivery_fee` só vale como fallback se for MAIOR QUE ZERO.** A
 coluna é nullable e tem default 0, e a maioria das linhas em produção está em 0
@@ -101,8 +103,9 @@ sem ninguém ter escolhido isso. Tratar esse 0 como "entrega grátis na
 contingência" faria uma queda do Google virar frete grátis para a plataforma
 inteira sem nenhum lojista ter pedido.
 
-Consequência prática: **restaurante sem `default_delivery_fee` configurado
-continua recusando todo pedido de entrega quando o Google cai**
+Consequência prática: **filial sem `default_delivery_fee` configurado — nem
+nela, nem no padrão do restaurante — continua recusando todo pedido de entrega
+quando o Google cai**
 (`route_unavailable`). A saída operacional é a retirada (`pickup`), que não passa
 pela estimativa.
 
@@ -149,6 +152,16 @@ consulta **hoje e ontem**:
 Era ignorado, e uma linha marcada como fechada mas com horários preenchidos (o
 jeito comum de registrar "domingo fechado") abria a filial. Hoje `_open_periods`
 descarta linha com `is_closed=true` ou sem `opens_at`/`closes_at`.
+
+### A pausa manual e a agenda são checagens diferentes
+
+`is_open` da filial é o "fechar agora" — a pausa do dia. A agenda da semana é
+`branch_business_hours`. **`OrderService` checa as duas**, nessa ordem, e nenhuma
+substitui a outra: estar dentro do horário não significa que o balcão não
+apertou "fechar agora" às 21h.
+
+Na tela de escolha de filial as duas se combinam em `is_open_now`, e
+`closed_reason` diz qual delas fechou. Ver `operacao-por-filial.md` §3.
 
 ### `ensure_branch_is_open` vale para os dois tipos de pedido
 

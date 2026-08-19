@@ -167,8 +167,14 @@ def test_attendant_ainda_marca_produto_como_esgotado(cliente_http, loja):
 
 
 def test_attendant_ainda_abre_e_fecha_a_loja(cliente_http, loja):
+    """A rota mudou de alvo na revisao 20260818_0025 — o papel nao mudou.
+
+    Era `/admin/settings/store-status` e fechava o restaurante inteiro; hoje
+    fecha UMA filial. Continua sendo do atendente pelo mesmo motivo: "vamos
+    parar de aceitar pedido" as 21h e decisao de quem esta no balcao.
+    """
     r = cliente_http.patch(
-        "/admin/settings/store-status",
+        f"/admin/branches/{loja['matriz'].id}/store-status",
         json={"is_open": False},
         headers=como(loja, "attendant"),
     )

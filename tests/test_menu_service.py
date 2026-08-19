@@ -61,6 +61,44 @@ class FakeMenuRepository:
         return self.products
 
 
+def make_branch(is_open=True, **sobrescritas):
+    """Uma filial. Por default nao sobrescreve nada e herda o restaurante.
+
+    O bloco `settings` do cardapio descreve UMA filial desde a revisao
+    20260818_0025 — por isso o MenuService precisa de uma, e por isso um
+    valor passado aqui vence o do restaurante.
+    """
+    campos = {
+        "min_order_value": None,
+        "service_fee_enabled": None,
+        "service_fee_amount": None,
+        "estimated_delivery_time_min": None,
+        "estimated_delivery_time_max": None,
+        "default_delivery_fee": None,
+    }
+    campos.update(sobrescritas)
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        restaurant_id=RESTAURANT_ID,
+        is_open=is_open,
+        accepts_delivery=True,
+        accepts_pickup=True,
+        **campos,
+    )
+
+
+class FakeBranchRepository:
+    def __init__(self, default_branch=None, branches=()):
+        self.default_branch = default_branch
+        self.branches = list(branches)
+
+    def get_default_branch(self, restaurant_id):
+        return self.default_branch
+
+    def get_active_by_id_and_restaurant(self, branch_id, restaurant_id):
+        return next((b for b in self.branches if b.id == branch_id), None)
+
+
 class FakeProductRepository:
     def __init__(self, category_exists=True, by_category=(), by_slug=None):
         self.category_exists = category_exists
@@ -155,9 +193,15 @@ def make_product(name="X-Burger", slug="x-burger", price="24.90", image_path=Non
     )
 
 
-def make_service(menu_repository=None, product_repository=None, restaurant_service=None):
+def make_service(
+    menu_repository=None,
+    product_repository=None,
+    restaurant_service=None,
+    branch_repository=None,
+):
     service = MenuService(FakeDb())
     service.menu_repository = menu_repository or FakeMenuRepository()
+    service.branch_repository = branch_repository or FakeBranchRepository(make_branch())
     service.product_repository = product_repository or FakeProductRepository()
     service.restaurant_service = restaurant_service or FakeRestaurantService()
     return service
@@ -490,12 +534,35 @@ class TestGetRestaurantMenu:
         assert [b.image_path for b in menu.highlight_banners] == ["banners/destaque.jpg"]
         assert menu.banners[0].image_url.endswith("banners/hero.jpg")
 
-    def test_no_settings_row_means_settings_is_none(self):
-        """`settings=... if settings else None`. Restaurante sem linha de
-        configuracao devolve o cardapio assim mesmo, com `settings` nulo — nao
-        estoura e nao inventa default."""
-        service = make_service(menu_repository=FakeMenuRepository(settings=None))
-        assert service.get_restaurant_menu("pizzaria-do-ze").settings is None
+    def test_no_active_branch_means_settings_is_none(self):
+        """Sem filial nao ha operacao para descrever.
+
+        O bloco deixou de ser do restaurante, entao quem responde por ele e a
+        filial. Restaurante sem filial ativa continua devolvendo o cardapio,
+        com `settings` nulo — nao estoura e nao inventa default."""
+        service = make_service(branch_repository=FakeBranchRepository(None))
+        menu = service.get_restaurant_menu("pizzaria-do-ze")
+        assert menu.settings is None
+        assert menu.settings_branch_id is None
+
+    def test_no_settings_row_still_describes_the_branch(self):
+        """Restaurante sem linha de configuracao NAO zera o bloco.
+
+        Zera-lo esconderia o `is_open` da filial, que e NOT NULL e pode estar
+        pausada — o app mostraria como aberta uma loja que esta fechada. O que
+        falta ali e so o que se herdaria, e disso o default da plataforma da
+        conta."""
+        filial = make_branch(is_open=False)
+        service = make_service(
+            menu_repository=FakeMenuRepository(settings=None),
+            branch_repository=FakeBranchRepository(filial),
+        )
+
+        response = service.get_restaurant_menu("pizzaria-do-ze").settings
+
+        assert response is not None
+        assert response.is_open is False
+        assert response.min_order_value == 0.0
 
     def test_the_settings_row_is_converted(self):
         settings = SimpleNamespace(
@@ -505,18 +572,66 @@ class TestGetRestaurantMenu:
             default_delivery_fee=Decimal("7.00"),
             service_fee_enabled=False,
             service_fee_amount=Decimal("0.00"),
-            accepts_delivery=True,
-            accepts_pickup=True,
             payment_methods=["pix"],
-            is_open=True,
         )
-        service = make_service(menu_repository=FakeMenuRepository(settings=settings))
+        filial = make_branch()
+        service = make_service(
+            menu_repository=FakeMenuRepository(settings=settings),
+            branch_repository=FakeBranchRepository(filial),
+        )
 
-        response = service.get_restaurant_menu("pizzaria-do-ze").settings
+        menu = service.get_restaurant_menu("pizzaria-do-ze")
+        response = menu.settings
 
         assert response.min_order_value == 20.00
         assert response.default_delivery_fee == 7.00
         assert response.is_open is True
+        assert response.payment_methods == ["pix"]
+        assert menu.settings_branch_id == filial.id
+
+    def test_the_branch_overrides_the_restaurant(self):
+        """O motivo do regime de heranca, num teste.
+
+        A filial do shopping cobra o dobro de minimo e nao cobra taxa de
+        servico; o resto continua vindo do restaurante, e mudar o padrao
+        continua chegando nela.
+        """
+        settings = SimpleNamespace(
+            min_order_value=Decimal("20.00"),
+            estimated_delivery_time_min=30,
+            estimated_delivery_time_max=50,
+            default_delivery_fee=Decimal("7.00"),
+            service_fee_enabled=True,
+            service_fee_amount=Decimal("0.99"),
+            payment_methods=["pix"],
+        )
+        filial = make_branch(
+            min_order_value=Decimal("40.00"),
+            service_fee_enabled=False,
+        )
+        service = make_service(
+            menu_repository=FakeMenuRepository(settings=settings),
+            branch_repository=FakeBranchRepository(filial),
+        )
+
+        response = service.get_restaurant_menu("pizzaria-do-ze").settings
+
+        assert response.min_order_value == 40.00
+        assert response.service_fee_enabled is False
+        # Herdados: a filial nao os sobrescreveu.
+        assert response.service_fee_amount == 0.99
+        assert response.estimated_delivery_time_min == 30
+        assert response.default_delivery_fee == 7.00
+
+    def test_a_branch_of_another_restaurant_is_404(self):
+        """E nao a filial padrao calada: o app que mandou o id errado
+        mostraria o valor minimo de outra loja achando que acertou."""
+        service = make_service(branch_repository=FakeBranchRepository(make_branch()))
+
+        with pytest.raises(HTTPException) as raised:
+            service.get_restaurant_menu("pizzaria-do-ze", uuid.uuid4())
+
+        assert raised.value.status_code == 404
 
     def test_a_coupon_takes_its_image_from_the_template(self):
         """O cupom nao tem imagem propria: ela vem de `coupon.template`. Um

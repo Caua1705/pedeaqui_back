@@ -138,22 +138,24 @@ def _dias_sem_faixa(db: Session, branch_id: str) -> list[int]:
 
 
 def conferir_taxa_de_entrega(db: Session, restaurante: Restaurante) -> Conferencia:
-    """Base ou por-km nulo derruba TODA entrega para a contingencia.
+    """Base ou por-km nulo derruba TODA entrega daquela filial para a contingencia.
 
     E a contingencia (`default_delivery_fee`) so existe se for MAIOR QUE ZERO:
     a coluna nasce zero na maioria das linhas sem ninguem ter escolhido isso, e
     tratar esse zero como "entrega gratis" faria uma queda do Google virar
     frete gratis para a plataforma inteira (armadilha 11).
+
+    Tudo aqui e POR FILIAL desde a revisao 20260818_0025 — inclusive
+    "aceita entrega". Uma rede pode ter o quiosque que so faz retirada ao lado
+    da loja de rua que entrega, e a conferencia precisa passar filial a filial
+    para nao dar OK global por causa de uma delas.
     """
-    if not _aceita_entrega(db, restaurante):
-        return Conferencia("3.2", "Taxa de entrega por km", OK,
-                           ["  o restaurante nao aceita entrega; nada a conferir"])
-
-    contingencia = _default_delivery_fee(db, restaurante)
-    tem_contingencia = contingencia is not None and contingencia > 0
-
     linhas, situacao = [], OK
     for filial in _filiais_ativas(db, restaurante):
+        if not filial["accepts_delivery"]:
+            linhas.append(f"  {filial['name']}: nao aceita entrega; nada a conferir")
+            continue
+
         faltando = [
             nome for nome in ("delivery_base_fee", "delivery_fee_per_km")
             if filial[nome] is None
@@ -163,7 +165,8 @@ def conferir_taxa_de_entrega(db: Session, restaurante: Restaurante) -> Conferenc
                           f"+ {filial['delivery_fee_per_km']}/km")
             continue
 
-        if not tem_contingencia:
+        contingencia = filial["contingencia"]
+        if contingencia is None or contingencia <= 0:
             situacao = ERRO
             linhas.append(f"  {filial['name']}: {' e '.join(faltando)} sem valor, e "
                           "default_delivery_fee e zero - TODA entrega vira 'fora da area'")
@@ -173,27 +176,14 @@ def conferir_taxa_de_entrega(db: Session, restaurante: Restaurante) -> Conferenc
         linhas.append(f"  {filial['name']}: {' e '.join(faltando)} sem valor; toda entrega "
                       f"sai pela contingencia de {contingencia}, a mesma para 500 m e 15 km")
 
+    if not linhas:
+        linhas.append("  o restaurante nao tem nenhuma filial ativa")
+
     return Conferencia(
         "3.2", "Taxa de entrega por km", situacao, linhas,
         "Painel > Configuracoes > Filial. Entrega gratis e base 0 E por-km 0; "
         "deixar nulo nao e gratis, e quebrado.",
     )
-
-
-def _aceita_entrega(db: Session, restaurante: Restaurante) -> bool:
-    """Sem linha em restaurant_settings vale o default do modelo, que e True."""
-    valor = db.execute(text(
-        "SELECT accepts_delivery FROM restaurant_settings"
-        " WHERE restaurant_id = CAST(:id AS uuid)"
-    ), {"id": restaurante.id}).scalar()
-    return valor is not False
-
-
-def _default_delivery_fee(db: Session, restaurante: Restaurante) -> Decimal | None:
-    return db.execute(text(
-        "SELECT default_delivery_fee FROM restaurant_settings"
-        " WHERE restaurant_id = CAST(:id AS uuid)"
-    ), {"id": restaurante.id}).scalar()
 
 
 # ---------------------------------------------------------------------------
@@ -376,11 +366,26 @@ def _contar(db: Session, sql: str, restaurante: Restaurante) -> int:
 
 
 def _filiais_ativas(db: Session, restaurante: Restaurante) -> list[dict]:
+    """As filiais, ja com a operacao RESOLVIDA.
+
+    `contingencia` sai do COALESCE porque e assim que
+    `resolve_branch_operation` le: o valor da filial quando ela sobrescreveu,
+    o do restaurante quando nao. Repetir a regra em SQL e o preco de esta
+    conferencia rodar sem subir o app; se ela mudar la, muda aqui.
+    """
     linhas = db.execute(text(
-        "SELECT id, name, delivery_base_fee, delivery_fee_per_km"
-        "  FROM branches"
-        " WHERE restaurant_id = CAST(:id AS uuid) AND is_active IS TRUE"
-        " ORDER BY is_main DESC NULLS LAST, name"
+        """
+        SELECT b.id,
+               b.name,
+               b.delivery_base_fee,
+               b.delivery_fee_per_km,
+               b.accepts_delivery,
+               COALESCE(b.default_delivery_fee, s.default_delivery_fee) AS contingencia
+          FROM branches AS b
+          LEFT JOIN restaurant_settings AS s ON s.restaurant_id = b.restaurant_id
+         WHERE b.restaurant_id = CAST(:id AS uuid) AND b.is_active IS TRUE
+         ORDER BY b.is_main DESC NULLS LAST, b.name
+        """
     ), {"id": restaurante.id}).mappings().all()
     return [dict(linha) for linha in linhas]
 

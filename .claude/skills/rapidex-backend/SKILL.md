@@ -487,7 +487,8 @@ parecida" foi exatamente o bug acima.
 
 ## 11. `default_delivery_fee = 0` não é fallback
 
-Quando o Google cai, a taxa cai para `restaurant_settings.default_delivery_fee` —
+Quando o Google cai, a taxa cai para o `default_delivery_fee` **resolvido** (o
+da filial quando ela sobrescreveu, o do restaurante quando não — armadilha 35) —
 **mas só se for maior que zero.**
 
 A coluna é nullable com default 0, e a maioria das linhas em produção está em 0
@@ -495,8 +496,8 @@ sem ninguém ter escolhido isso. Tratar esse 0 como "entrega grátis na
 contingência" faria uma queda do Google virar **frete grátis para a plataforma
 inteira**, sem nenhum lojista ter pedido.
 
-Consequência: restaurante sem `default_delivery_fee` configurado continua
-recusando todo pedido de entrega quando o Google cai. A saída operacional é a
+Consequência: filial sem `default_delivery_fee` — nem nela, nem no padrão do
+restaurante — continua recusando todo pedido de entrega quando o Google cai. A saída operacional é a
 retirada.
 
 O preço: não dá para configurar "entrega grátis quando a rota falha". Quem quer
@@ -1057,3 +1058,47 @@ casas. Meia API de cada jeito é pior que qualquer uma das duas.
 Enquanto essa decisão não é tomada, **não converta um schema isolado** — nem
 para "arrumar de passagem" enquanto mexe em outra coisa. É a regra que este
 item existe para registrar.
+
+---
+
+## 35. Na operação da filial, `NULL` significa "herda" — e só `NULL`
+
+Desde a revisão `20260818_0025` há **dois regimes** de configuração em
+`branches`, e confundi-los custa caro de jeitos diferentes.
+
+**Estado do dia** — `is_open`, `accepts_delivery`, `accepts_pickup`. `NOT NULL`,
+sem herança. São o que alguém no balcão aperta. Antes moravam em
+`restaurant_settings` e fechavam a rede inteira: pausar a loja do Centro pausava
+a da Aldeota, e não havia como pausar só uma.
+
+**Termo comercial** — `min_order_value`, `service_fee_enabled/amount`,
+`estimated_delivery_time_min/max`, `default_delivery_fee`. Nullable na filial, e
+**`NULL` significa "herda o padrão de `restaurant_settings`"**.
+
+O único lugar que combina os dois é `resolve_branch_operation`
+(`src/services/branch_operation.py`). **Não leia `branch.min_order_value`
+direto**: a coluna crua responde "o que está sobrescrito", que quase nunca é a
+pergunta.
+
+**O `or` que quebraria isso.** A distinção é entre `NULL` e valor, nunca entre
+verdadeiro e falso:
+
+```python
+valor_da_filial or valor_do_restaurante      # ERRADO
+```
+
+`service_fee_enabled = False` na filial é uma escolha ("esta loja não cobra
+taxa") e `min_order_value = 0` também. Com `or`, as duas caem no valor do
+restaurante e a filial passa a cobrar o que o lojista desligou — sem nada no
+log. Por isso `_ou_herdado` testa `is not None`.
+
+**E há DUAS checagens de "fechado", que não se substituem.** `is_open` é a pausa
+manual; `branch_business_hours` é a agenda da semana. `OrderService` checa as
+duas, e a tela de escolha de filial as combina em `is_open_now`, com
+`closed_reason` dizendo qual fechou. Remover uma "porque a outra já cobre" abre
+o buraco de novo: estar dentro do horário não significa que o balcão não apertou
+"fechar agora" às 21h.
+
+**Consequência de contrato que já vai gerar chamado:** `current_period` pode vir
+PREENCHIDO com `is_open_now: false` — é a loja pausada dentro do horário. O
+documento é `docs/operacao-por-filial.md`.

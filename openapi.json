@@ -205,6 +205,213 @@
         "title": "AddressInput",
         "type": "object"
       },
+      "AdminBranchOperationEffective": {
+        "description": "O que o PROXIMO PEDIDO desta filial vai usar. Filial mesclada com padrao.",
+        "properties": {
+          "default_delivery_fee": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Delivery Fee"
+          },
+          "estimated_delivery_time_max": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Delivery Time Max"
+          },
+          "estimated_delivery_time_min": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Delivery Time Min"
+          },
+          "min_order_value": {
+            "title": "Min Order Value",
+            "type": "number"
+          },
+          "service_fee_amount": {
+            "title": "Service Fee Amount",
+            "type": "number"
+          },
+          "service_fee_enabled": {
+            "title": "Service Fee Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "min_order_value",
+          "service_fee_enabled",
+          "service_fee_amount"
+        ],
+        "title": "AdminBranchOperationEffective",
+        "type": "object"
+      },
+      "AdminBranchOperationOverrides": {
+        "description": "O que esta gravado NA FILIAL. Nulo significa \"herda do restaurante\".\n\nExiste ao lado de `effective` porque a tela precisa dos dois: o campo de\nedicao mostra a sobrescrita (vazio = herdando), e o texto ao lado mostra\no valor que vai valer. Publicar so o efetivo faria toda filial parecer\ndivergente; so a sobrescrita, faria toda filial parecer sem configuracao.",
+        "properties": {
+          "default_delivery_fee": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Delivery Fee"
+          },
+          "estimated_delivery_time_max": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Delivery Time Max"
+          },
+          "estimated_delivery_time_min": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Delivery Time Min"
+          },
+          "min_order_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Order Value"
+          },
+          "service_fee_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Fee Amount"
+          },
+          "service_fee_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Fee Enabled"
+          }
+        },
+        "title": "AdminBranchOperationOverrides",
+        "type": "object"
+      },
+      "AdminBranchOperationResponse": {
+        "description": "Como uma filial esta operando agora — uma linha da tela de operacao.\n\n`is_open` e `is_open_now` sao coisas diferentes e as duas precisam\naparecer: `is_open` e a chave que o lojista controla, `is_open_now`\ncombina essa chave com a agenda da semana. Uma filial com `is_open=true`\ne `is_open_now=false` esta fora do horario cadastrado — a tela consegue\ndizer isso em vez de deixar o lojista achando que a loja esta no ar.",
+        "properties": {
+          "accepts_delivery": {
+            "title": "Accepts Delivery",
+            "type": "boolean"
+          },
+          "accepts_pickup": {
+            "title": "Accepts Pickup",
+            "type": "boolean"
+          },
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
+          "branch_name": {
+            "title": "Branch Name",
+            "type": "string"
+          },
+          "effective": {
+            "$ref": "#/components/schemas/AdminBranchOperationEffective"
+          },
+          "is_open": {
+            "title": "Is Open",
+            "type": "boolean"
+          },
+          "is_open_now": {
+            "title": "Is Open Now",
+            "type": "boolean"
+          },
+          "overrides": {
+            "$ref": "#/components/schemas/AdminBranchOperationOverrides"
+          }
+        },
+        "required": [
+          "branch_id",
+          "branch_name",
+          "is_open",
+          "is_open_now",
+          "accepts_delivery",
+          "accepts_pickup",
+          "overrides",
+          "effective"
+        ],
+        "title": "AdminBranchOperationResponse",
+        "type": "object"
+      },
+      "AdminBranchOrderTypesRequest": {
+        "description": "Quais tipos de pedido esta filial aceita agora.\n\nSeparado de `store-status` porque sao gestos diferentes: fechar a loja e\n\"nao estamos atendendo\", desligar a entrega e \"estamos atendendo, so nao\nentregamos\" — o quiosque de shopping vive no segundo estado o dia\ninteiro, e o balcao sem motoboy cai nele no meio da tarde.\n\nEdicao parcial: mandar so `accepts_delivery` nao mexe na retirada.",
+        "properties": {
+          "accepts_delivery": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepts Delivery"
+          },
+          "accepts_pickup": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepts Pickup"
+          }
+        },
+        "title": "AdminBranchOrderTypesRequest",
+        "type": "object"
+      },
       "AdminBranchResponse": {
         "properties": {
           "address": {
@@ -403,6 +610,95 @@
           "state"
         ],
         "title": "AdminBranchResponse",
+        "type": "object"
+      },
+      "AdminBranchSettingsUpdate": {
+        "description": "As sobrescritas comerciais DESTA filial (revisao 20260818_0025).\n\nTres estados por campo, e a diferenca entre os dois ultimos e o motivo de\nesta rota existir separada do PATCH de padroes:\n\n- **campo ausente do corpo** — nao mexe;\n- **campo com valor** — esta filial passa a usar esse valor;\n- **campo com `null` explicito** — esta filial VOLTA A HERDAR o padrao do\n  restaurante.\n\nSem o terceiro estado nao haveria como desfazer uma divergencia: a filial\nficaria com a copia congelada para sempre, e mudar o padrao do\nrestaurante nao chegaria nela.\n\nA validacao de par (minimo x maximo do prazo) roda sobre a MESCLA com o\nque ja esta no banco, pelo mesmo motivo de `AdminBranchDeliveryRules`.",
+        "properties": {
+          "default_delivery_fee": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Delivery Fee"
+          },
+          "estimated_delivery_time_max": {
+            "anyOf": [
+              {
+                "maximum": 600.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Delivery Time Max"
+          },
+          "estimated_delivery_time_min": {
+            "anyOf": [
+              {
+                "maximum": 600.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Delivery Time Min"
+          },
+          "min_order_value": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Order Value"
+          },
+          "service_fee_amount": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Fee Amount"
+          },
+          "service_fee_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Fee Enabled"
+          }
+        },
+        "title": "AdminBranchSettingsUpdate",
         "type": "object"
       },
       "AdminBranchUpdate": {
@@ -2271,32 +2567,8 @@
         "type": "object"
       },
       "AdminRestaurantSettingsResponse": {
-        "description": "Configuracao do restaurante inteiro, nao da filial.",
+        "description": "Os PADROES do restaurante — o que a filial herda quando nao diverge.\n\nNenhum destes valores e o que um pedido usa: o pedido le a filial, e a\nfilial cai aqui so nos campos que ela deixou nulos. Quem quer o valor\nefetivo pede `GET /admin/branches/operation`.\n\n`is_open`, `accepts_delivery` e `accepts_pickup` SAIRAM deste schema na\nrevisao 20260818_0025. Eles nao tem padrao: sao o estado do dia de UMA\nloja, e viraram `PATCH /admin/branches/{branch_id}/store-status` e\n`PATCH /admin/branches/{branch_id}/order-types`.",
         "properties": {
-          "accepts_delivery": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": true,
-            "title": "Accepts Delivery"
-          },
-          "accepts_pickup": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": true,
-            "title": "Accepts Pickup"
-          },
           "default_delivery_fee": {
             "title": "Default Delivery Fee",
             "type": "number"
@@ -2322,18 +2594,6 @@
               }
             ],
             "title": "Estimated Delivery Time Min"
-          },
-          "is_open": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": true,
-            "title": "Is Open"
           },
           "min_order_value": {
             "title": "Min Order Value",
@@ -2367,28 +2627,6 @@
       "AdminRestaurantSettingsUpdate": {
         "description": "Edicao parcial das configuracoes do restaurante (BLOCO C5).\n\n`default_delivery_fee` NAO e a taxa de entrega do dia a dia — essa sai da\nregra por km da filial (`delivery_base_fee` + `delivery_fee_per_km`, em\nPATCH /admin/branches/{id}/delivery). Este e o valor de contingencia,\nusado quando aquela regra nao pode ser aplicada: rota indisponivel\n(Google fora do ar) ou filial sem base/por-km cadastrados. Ver\nDeliveryEstimateService._configured_fallback_fee.\n\nZero desliga o fallback em vez de significar entrega gratis. A coluna\ntem default 0 e a maior parte das linhas nunca foi tocada; ler esse 0\ncomo escolha transformaria uma queda do Google em frete gratis para\ntodo mundo.",
         "properties": {
-          "accepts_delivery": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Accepts Delivery"
-          },
-          "accepts_pickup": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Accepts Pickup"
-          },
           "default_delivery_fee": {
             "anyOf": [
               {
@@ -2853,6 +3091,21 @@
           "address": {
             "$ref": "#/components/schemas/BranchAddressResponse"
           },
+          "closed_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "outside_business_hours",
+                  "branch_paused"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closed Reason"
+          },
           "current_period": {
             "anyOf": [
               {
@@ -3121,7 +3374,7 @@
         "type": "object"
       },
       "BranchOpenPeriodResponse": {
-        "description": "A faixa de horario que esta valendo AGORA. Nula com a loja fechada.\n\nVai junto para a tela poder escrever \"aberta ate 23:00\" sem pedir os\nhorarios de novo em outra rota. Faixa que vira a noite (18:00-02:00) sai\ncom `closes_at` menor que `opens_at`, e isso e o dado correto: ela\npertence ao dia em que COMECA.",
+        "description": "A faixa de horario da AGENDA que contem o momento atual.\n\nVai junto para a tela poder escrever \"aberta ate 23:00\" sem pedir os\nhorarios de novo em outra rota. Faixa que vira a noite (18:00-02:00) sai\ncom `closes_at` menor que `opens_at`, e isso e o dado correto: ela\npertence ao dia em que COMECA.\n\nDesde que o \"fechar agora\" passou a ser por filial, este campo pode vir\nPREENCHIDO com `is_open_now = false`: a agenda diz aberta e o balcao\npausou. Nao e contradicao, sao duas coisas — a agenda e cadastro, a pausa\ne o dia de hoje. Quem decide se a filial atende e `is_open_now`, sempre.",
         "properties": {
           "closes_at": {
             "format": "time",
@@ -8512,6 +8765,18 @@
                 "type": "null"
               }
             ]
+          },
+          "settings_branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settings Branch Id"
           }
         },
         "required": [
@@ -8641,6 +8906,7 @@
         "type": "object"
       },
       "RestaurantSettingsResponse": {
+        "description": "A operacao de UMA filial, apesar do nome herdado.\n\nOs campos nao mudaram de nome nem de tipo, mas mudaram de dono: desde a\nrevisao 20260818_0025 este bloco descreve a filial que o `branch_id` do\n`/menu` pediu (ou a filial padrao, quando ele nao vem), e nao mais o\nrestaurante inteiro. `is_open` aqui e o \"fechar agora\" DAQUELA loja.\n\nO nome fica por ser contrato publicado, e renomear schema quebra o painel\njunto (armadilha 16). O `settings_branch_id` da resposta do cardapio diz\nde qual filial este bloco esta falando.\n\n`payment_methods` e o unico campo que continua sendo do restaurante, e e\ndado morto: quem manda em forma de pagamento e `branch_payment_methods`,\npor filial, em `GET /restaurants/{slug}/info?branch_id=...`.",
         "properties": {
           "accepts_delivery": {
             "anyOf": [
@@ -9007,7 +9273,7 @@
         "type": "object"
       },
       "StoreStatusRequest": {
-        "description": "Corpo do botao de abrir/fechar a loja (BLOCO C1).\n\nRota propria, do mesmo jeito que a disponibilidade do produto: e a acao\nmais clicada do painel e nao pode arrastar junto o resto das\nconfiguracoes que estavam abertas na tela.",
+        "description": "Corpo do botao de abrir/fechar a loja (BLOCO C1).\n\nRota propria, do mesmo jeito que a disponibilidade do produto: e a acao\nmais clicada do painel e nao pode arrastar junto o resto das\nconfiguracoes que estavam abertas na tela.\n\nO corpo nao mudou; o ALVO mudou. Era `PATCH /admin/settings/store-status`\ne fechava o restaurante inteiro; hoje e\n`PATCH /admin/branches/{branch_id}/store-status` e fecha uma loja.",
         "properties": {
           "is_open": {
             "title": "Is Open",
@@ -9560,6 +9826,66 @@
         ]
       }
     },
+    "/admin/branches/operation": {
+      "get": {
+        "description": "Como cada filial esta operando agora — a tela de operacao inteira.\n\nUma chamada por tela: o dono com cinco lojas ve as cinco chaves de\nabrir/fechar lado a lado, que e a conferencia que nao existia enquanto o\n`is_open` era um so para a rede.\n\nCada linha traz `is_open` (a chave que o lojista controla) e\n`is_open_now` (essa chave combinada com a agenda da semana). As duas\njuntas dizem \"voce deixou aberta, mas o horario de hoje ja fechou\" sem\numa segunda chamada.\n\n`overrides` e o que esta gravado na filial — nulo quer dizer que aquele\ncampo herda o padrao do restaurante. `effective` e o que o proximo\npedido vai usar.\n\nO `branch_id` da querystring so RESTRINGE: quem esta preso a uma filial\ne pedir outra recebe 404.",
+        "operationId": "list_branch_operation_admin_branches_operation_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AdminBranchOperationResponse"
+                  },
+                  "title": "Response List Branch Operation Admin Branches Operation Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Branch Operation",
+        "tags": [
+          "admin settings"
+        ]
+      }
+    },
     "/admin/branches/{branch_id}": {
       "get": {
         "operationId": "get_branch_admin_branches__branch_id__get",
@@ -9773,6 +10099,65 @@
           }
         ],
         "summary": "Replace Business Hours",
+        "tags": [
+          "admin settings"
+        ]
+      }
+    },
+    "/admin/branches/{branch_id}/order-types": {
+      "patch": {
+        "description": "Liga e desliga entrega e retirada NESTA filial.\n\nEram `accepts_delivery` e `accepts_pickup` do restaurante, e valiam para\na rede: o quiosque de shopping que so faz retirada desligava a entrega\nde todas as lojas.\n\nEdicao parcial — mandar so `accepts_delivery` nao mexe na retirada.\nDesligar as duas e permitido e equivale a fechar a loja.",
+        "operationId": "set_branch_order_types_admin_branches__branch_id__order_types_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "branch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Branch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminBranchOrderTypesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminBranchOperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Branch Order Types",
         "tags": [
           "admin settings"
         ]
@@ -10210,6 +10595,124 @@
         "summary": "Create Printing Sector",
         "tags": [
           "admin printing"
+        ]
+      }
+    },
+    "/admin/branches/{branch_id}/settings": {
+      "patch": {
+        "description": "As sobrescritas comerciais DESTA filial.\n\nTres estados por campo, e a diferenca entre os dois ultimos e o motivo\nde esta rota existir:\n\n- campo **ausente** do corpo: nao mexe;\n- campo **com valor**: esta filial passa a usar esse valor;\n- campo com **`null` explicito**: esta filial volta a herdar o padrao do\n  restaurante (`PATCH /admin/settings`).\n\nSem o terceiro estado nao haveria como desfazer uma divergencia — a\nfilial ficaria com a copia congelada para sempre, e mudar o padrao nao\nchegaria nela.",
+        "operationId": "update_branch_settings_admin_branches__branch_id__settings_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "branch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Branch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminBranchSettingsUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminBranchOperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Branch Settings",
+        "tags": [
+          "admin settings"
+        ]
+      }
+    },
+    "/admin/branches/{branch_id}/store-status": {
+      "patch": {
+        "description": "Abre ou fecha ESTA filial agora (BLOCO C1).\n\nEra `PATCH /admin/settings/store-status` e fechava o restaurante\ninteiro. Fechar a filial do Centro fechava a da Aldeota junto, e nao\nhavia como fechar so uma — que e a unica coisa que a operacao de fato\nquer fazer as 21h.\n\nRota separada do PATCH de configuracoes porque e botao de acao rapida:\no corpo de um campo so nao arrasta junto valores antigos que estavam\nabertos na tela de configuracao.\n\nO atendente preso a uma filial descobre o `branch_id` dele em\n`GET /admin/branches`, que ja devolve so a filial do escopo.",
+        "operationId": "set_store_status_admin_branches__branch_id__store_status_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "branch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Branch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StoreStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminBranchOperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Store Status",
+        "tags": [
+          "admin settings"
         ]
       }
     },
@@ -12706,7 +13209,7 @@
     },
     "/admin/settings": {
       "get": {
-        "description": "Configuracoes do restaurante (BLOCO C5).\n\nSem `platform_commission_percent`: e o percentual que a plataforma\ncobra, negociado por contrato, e nao e assunto do painel do lojista.",
+        "description": "Os PADROES do restaurante (BLOCO C5).\n\nNenhum pedido le estes valores direto: a filial os herda nos campos que\ndeixou nulos. O que uma loja vai de fato cobrar esta em\n`GET /admin/branches/operation`.\n\nSem `platform_commission_percent`: e o percentual que a plataforma\ncobra, negociado por contrato, e nao e assunto do painel do lojista.",
         "operationId": "get_restaurant_settings_admin_settings_get",
         "responses": {
           "200": {
@@ -12770,53 +13273,6 @@
           }
         ],
         "summary": "Update Restaurant Settings",
-        "tags": [
-          "admin settings"
-        ]
-      }
-    },
-    "/admin/settings/store-status": {
-      "patch": {
-        "description": "Abre ou fecha a loja agora (BLOCO C1).\n\nRota separada do PATCH de configuracoes porque e botao de acao rapida:\no corpo de um campo so nao arrasta junto valores antigos que estavam\nabertos na tela de configuracao.",
-        "operationId": "set_store_status_admin_settings_store_status_patch",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/StoreStatusRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AdminRestaurantSettingsResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Set Store Status",
         "tags": [
           "admin settings"
         ]
@@ -14328,6 +14784,7 @@
     },
     "/restaurants/{restaurant_slug}/menu": {
       "get": {
+        "description": "O cardapio, e a operacao da filial escolhida.\n\nOs PRODUTOS ainda sao do restaurante: `branch_id` nao filtra cardapio.\nQuem ele resolve e o bloco `settings` — valor minimo, taxa de servico,\naceita entrega/retirada e o \"fechar agora\" sao da filial desde a revisao\n20260818_0025, e sem o parametro o cliente veria os numeros de uma loja\nenquanto pede em outra.\n\nOmitido, vale a filial padrao (principal se houver, senao a primeira\nativa em ordem alfabetica) — a mesma de `POST /delivery/estimate` e de\n`GET /restaurants/{slug}/info` sem filial. Filial de outro restaurante\nresponde 404.",
         "operationId": "get_restaurant_menu_restaurants__restaurant_slug__menu_get",
         "parameters": [
           {
@@ -14337,6 +14794,23 @@
             "schema": {
               "title": "Restaurant Slug",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],

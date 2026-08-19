@@ -491,7 +491,21 @@ class OrderCouponIntegrationTests(unittest.TestCase):
     def test_order_recalculates_total_saves_snapshot_and_redemption(self):
         db = FakeDb()
         restaurant = SimpleNamespace(id=uuid.uuid4())
-        branch = SimpleNamespace(id=uuid.uuid4())
+        branch = SimpleNamespace(
+        id=uuid.uuid4(),
+        # As tres chaves da operacao sao da FILIAL desde a revisao
+        # 20260818_0025; os seis campos nulos sao "herda o padrao do
+        # restaurante", que e como toda filial nasce.
+        is_open=True,
+        accepts_delivery=True,
+        accepts_pickup=True,
+        min_order_value=None,
+        service_fee_enabled=None,
+        service_fee_amount=None,
+        estimated_delivery_time_min=None,
+        estimated_delivery_time_max=None,
+        default_delivery_fee=None,
+    )
         product_id = uuid.uuid4()
         product = SimpleNamespace(
             id=product_id,
@@ -530,9 +544,9 @@ class OrderCouponIntegrationTests(unittest.TestCase):
                 min_order_value=Decimal("0"),
                 service_fee_enabled=True,
                 service_fee_amount=Decimal("3.00"),
-                is_open=True,
-                accepts_delivery=True,
-                accepts_pickup=True,
+                estimated_delivery_time_min=None,
+                estimated_delivery_time_max=None,
+                default_delivery_fee=None,
                 platform_commission_percent=Decimal("10.00"),
             )
         )

@@ -30,6 +30,7 @@ from src.schemas.delivery_schema import (
     DeliveryEstimateResponse,
 )
 from src.services.branch_hours_service import BranchHoursService
+from src.services.branch_operation import BranchOperation, resolve_branch_operation
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import ZERO, money_to_float, quantize_money, to_decimal
 from src.utils.security import generate_tracking_token, utcnow
@@ -38,9 +39,9 @@ from src.utils.security import generate_tracking_token, utcnow
 logger = logging.getLogger("uvicorn.error")
 DELIVERY_TIMEZONE = ZoneInfo("America/Fortaleza")
 
-# Valor de `provider` quando a taxa veio de
-# `restaurant_settings.default_delivery_fee` em vez da regra por km da
-# filial. Vai gravado em `orders.delivery_estimate_provider`, e e por ele que
+# Valor de `provider` quando a taxa veio do `default_delivery_fee`
+# resolvido (o da filial, ou o do restaurante que ela herda) em vez da
+# regra por km da filial. Vai gravado em `orders.delivery_estimate_provider`, e e por ele que
 # se separa depois o pedido precificado por rota do precificado no modo de
 # contingencia.
 FALLBACK_FEE_PROVIDER = "configured_fallback"
@@ -261,18 +262,27 @@ class DeliveryEstimateService:
         )
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
         restaurant_settings = self.menu_repository.get_settings(restaurant.id)
-        if restaurant_settings and restaurant_settings.accepts_delivery is False:
-            result = self._not_serviceable("delivery_disabled", "Restaurante nao aceita entrega.")
+        # A filial e resolvida ANTES das duas recusas abaixo, e essa ordem
+        # mudou na revisao 20260818_0025. Antes `accepts_delivery` era do
+        # restaurante e dava para responder sem saber qual filial era; agora
+        # ele e da filial, e um `branch_id` invalido passa a responder 400
+        # antes de qualquer veredito de entrega — que e a ordem certa: nao se
+        # responde "esta filial nao entrega" sobre uma filial que nao existe.
+        branch = self._resolve_branch(restaurant.id, payload.branch_id)
+        operation = resolve_branch_operation(branch, restaurant_settings)
+        if not operation.accepts_delivery:
+            result = self._not_serviceable("delivery_disabled", "Esta filial nao aceita entrega.")
             self._log_final_result(result)
             return result
-
-        # Aqui existia `if getattr(branch, "accepts_delivery", True) is False`.
-        # A coluna nunca existiu em `branches`, entao o getattr devolvia o
-        # default True em 100% das chamadas: codigo morto que parecia uma
-        # regra. Quem liga e desliga entrega e restaurant_settings, conferido
-        # logo acima. Se um dia a entrega precisar ser desligada por filial,
-        # e coluna nova em `branches` + migracao, nao um getattr otimista.
-        branch = self._resolve_branch(restaurant.id, payload.branch_id)
+        if not operation.is_open:
+            # Mesmo `reason` do fechado-por-horario, de proposito: para o
+            # cliente as duas coisas sao a mesma ("esta loja nao esta
+            # atendendo agora"), e um codigo novo obrigaria todo front a
+            # tratar um caso que se resolve com a mesma tela. Quem precisa
+            # distinguir e o painel, e la o campo e `is_open`.
+            result = self._not_serviceable("branch_closed", "A loja esta fechada no momento.")
+            self._log_final_result(result)
+            return result
         logger.info(
             "[Delivery estimate debug] event=restaurant_branch_resolved "
             "restaurant_id=%s branch_id=%s branch_name=%s branch_latitude=%s branch_longitude=%s",
@@ -395,7 +405,7 @@ class DeliveryEstimateService:
                 # passando pela conferencia de distancia maxima logo abaixo,
                 # porque aqui a distancia E conhecida. Sem ele, vale o
                 # comportamento antigo: nao atendido.
-                fallback_fee = self._configured_fallback_fee(restaurant_settings)
+                fallback_fee = self._configured_fallback_fee(operation)
                 if fallback_fee is None:
                     result = self._not_serviceable(
                         "delivery_fee_config_unavailable",
@@ -529,7 +539,7 @@ class DeliveryEstimateService:
             # chamava "configured_fallback" — o nome estava certo e o
             # fallback e que nao existia: uma indisponibilidade do Google
             # derrubava TODO pedido de entrega da plataforma. Agora
-            # `restaurant_settings.default_delivery_fee` e esse fallback.
+            # o `default_delivery_fee` resolvido e esse fallback.
             #
             # O que se perde ao aceitar: a distancia e desconhecida, entao
             # `delivery_max_distance_km` NAO e conferida neste caminho. Um
@@ -539,7 +549,7 @@ class DeliveryEstimateService:
             # configured_fallback` no pedido e pode recusar. A alternativa —
             # recusar tudo — ja e o pior resultado possivel para os dois
             # lados durante uma queda do Google.
-            fallback_fee = self._configured_fallback_fee(restaurant_settings)
+            fallback_fee = self._configured_fallback_fee(operation)
             result = DeliveryEstimateResult(
                 serviceable=fallback_fee is not None,
                 reason=None if fallback_fee is not None else "route_unavailable",
@@ -738,25 +748,25 @@ class DeliveryEstimateService:
         return quantize_money(delivery_fee), quantize_money(raw_fee)
 
     @staticmethod
-    def _configured_fallback_fee(restaurant_settings) -> Decimal | None:
+    def _configured_fallback_fee(operation: BranchOperation) -> Decimal | None:
         """A taxa fixa a usar quando a regra da filial nao pode ser aplicada.
 
-        `restaurant_settings.default_delivery_fee` so vale como fallback se
-        for MAIOR QUE ZERO. A coluna e nullable e tem default 0, e a maioria
-        das linhas em producao esta em 0 sem ninguem ter escolhido isso —
-        tratar esse 0 como "entrega gratis na contingencia" faria uma queda
-        do Google virar frete gratis para a plataforma inteira, sem que
-        nenhum lojista tivesse pedido.
+        `default_delivery_fee` so vale como fallback se for MAIOR QUE ZERO. A
+        coluna e nullable e tem default 0, e a maioria das linhas em producao
+        esta em 0 sem ninguem ter escolhido isso — tratar esse 0 como
+        "entrega gratis na contingencia" faria uma queda do Google virar
+        frete gratis para a plataforma inteira, sem que nenhum lojista
+        tivesse pedido.
 
-        O preco disso: nao da para configurar "entrega gratis quando a rota
-        falha". Quem quer entrega gratis configura `delivery_base_fee = 0` na
-        filial, que e o caminho normal e continua funcionando — o fallback so
-        existe para quando aquele caminho nao esta disponivel.
+        O valor vem resolvido: e o da filial quando ela sobrescreveu, e o do
+        restaurante quando nao. Desde a revisao 20260818_0025 a filial pode
+        ter o proprio — a regra por km que este fallback substitui sempre foi
+        da filial, e uma taxa de contingencia unica deixava a loja do outro
+        lado da cidade com o mesmo numero da loja da esquina.
         """
-        fee = getattr(restaurant_settings, "default_delivery_fee", None)
-        if fee is None:
+        if operation.default_delivery_fee is None:
             return None
-        fee = quantize_money(to_decimal(fee))
+        fee = quantize_money(to_decimal(operation.default_delivery_fee))
         return fee if fee > ZERO else None
 
     @staticmethod

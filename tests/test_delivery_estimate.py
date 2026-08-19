@@ -79,11 +79,26 @@ class DeliveryEstimateTests(unittest.TestCase):
             delivery_min_fee=Decimal("8.00"),
             delivery_max_fee=Decimal("20.00"),
             delivery_max_distance_km=Decimal("10.00"),
+            # A operacao e da filial desde a revisao 20260818_0025. Os campos
+            # nulos sao "herda o padrao do restaurante" — o estado de toda
+            # filial que ninguem configurou individualmente.
+            is_open=True,
+            accepts_delivery=True,
+            accepts_pickup=True,
+            min_order_value=None,
+            service_fee_enabled=None,
+            service_fee_amount=None,
+            estimated_delivery_time_min=None,
+            estimated_delivery_time_max=None,
+            default_delivery_fee=None,
         )
         self.settings = SimpleNamespace(
-            accepts_delivery=True,
+            min_order_value=None,
+            service_fee_enabled=None,
+            service_fee_amount=None,
             estimated_delivery_time_min=60,
             estimated_delivery_time_max=75,
+            default_delivery_fee=None,
         )
         self.maps = FakeMapsClient()
         self.cache = FakeCache()
@@ -201,8 +216,8 @@ class DeliveryEstimateTests(unittest.TestCase):
         self.assertIsNone(result.eta_max)
 
     def test_missing_delivery_fee_config_without_default_is_not_serviceable(self):
-        # `self.settings` nao tem default_delivery_fee: e o restaurante que
-        # nunca configurou o valor de contingencia.
+        # Nem a filial nem o restaurante tem `default_delivery_fee`: e quem
+        # nunca configurou o valor de contingencia em lugar nenhum.
         self.business_hours = [open_period(40, 60)]
         self.branch.delivery_base_fee = None
 
@@ -231,12 +246,16 @@ class DeliveryEstimateTests(unittest.TestCase):
 
 
 class DefaultDeliveryFeeFallbackTests(DeliveryEstimateTests):
-    """`restaurant_settings.default_delivery_fee` como taxa de contingencia.
+    """`default_delivery_fee` como taxa de contingencia.
 
     Antes desta regra o campo era editavel pelo PATCH /admin/settings e nao
     era lido por caminho nenhum: uma queda do Google derrubava TODO pedido de
     entrega da plataforma, com o provider ja se chamando
     "configured_fallback" e nenhum fallback configurado atras dele.
+
+    Estes testes escrevem no PADRAO do restaurante (`self.settings`), que a
+    filial herda por ter a propria coluna nula. A sobrescrita por filial tem
+    classe propria logo abaixo.
 
     Herda de DeliveryEstimateTests so pelo setUp; os testes herdados rodam de
     novo aqui, o que e barato e confirma que ligar o campo nao muda o caminho

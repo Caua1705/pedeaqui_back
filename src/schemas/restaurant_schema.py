@@ -21,6 +21,22 @@ class RestaurantPublicResponse(BaseResponse):
 
 
 class RestaurantSettingsResponse(BaseResponse):
+    """A operacao de UMA filial, apesar do nome herdado.
+
+    Os campos nao mudaram de nome nem de tipo, mas mudaram de dono: desde a
+    revisao 20260818_0025 este bloco descreve a filial que o `branch_id` do
+    `/menu` pediu (ou a filial padrao, quando ele nao vem), e nao mais o
+    restaurante inteiro. `is_open` aqui e o "fechar agora" DAQUELA loja.
+
+    O nome fica por ser contrato publicado, e renomear schema quebra o painel
+    junto (armadilha 16). O `settings_branch_id` da resposta do cardapio diz
+    de qual filial este bloco esta falando.
+
+    `payment_methods` e o unico campo que continua sendo do restaurante, e e
+    dado morto: quem manda em forma de pagamento e `branch_payment_methods`,
+    por filial, em `GET /restaurants/{slug}/info?branch_id=...`.
+    """
+
     min_order_value: float
     estimated_delivery_time_min: int | None = None
     estimated_delivery_time_max: int | None = None

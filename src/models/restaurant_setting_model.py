@@ -21,13 +21,18 @@ class RestaurantSetting(Base):
     default_delivery_fee: Mapped[Decimal | None] = mapped_column(Numeric, default=0)
     service_fee_enabled: Mapped[bool | None] = mapped_column(Boolean, default=True)
     service_fee_amount: Mapped[Decimal | None] = mapped_column(Numeric, default=Decimal("0.99"))
-    accepts_delivery: Mapped[bool | None] = mapped_column(Boolean, default=True)
-    accepts_pickup: Mapped[bool | None] = mapped_column(Boolean, default=True)
+    # `is_open`, `accepts_delivery` e `accepts_pickup` NAO estao mais aqui:
+    # foram para `branches` na revisao 20260818_0025. Sao o estado do dia, e
+    # o estado do dia e de UMA loja — compartilha-los fechava a rede inteira
+    # de uma vez.
+    #
+    # Os campos que sobraram nesta tabela e que a filial tambem tem sao
+    # PADRAO: a coluna homonima em `branches` vem nula por default e nula
+    # significa "herda daqui".
     payment_methods: Mapped[list[str] | None] = mapped_column(
         JSONB,
         default=lambda: ["pix", "credit_card", "debit_card"],
     )
-    is_open: Mapped[bool | None] = mapped_column(Boolean, default=True)
     # Percentual da plataforma sobre este restaurante. Por restaurante e nao
     # constante global: e valor negociado, e muda de contrato para contrato.
     platform_commission_percent: Mapped[Decimal] = mapped_column(

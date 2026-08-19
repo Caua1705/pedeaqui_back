@@ -185,14 +185,45 @@ def test_contingencia_maior_que_zero_rebaixa_para_atencao(db):
     assert conferir_taxa_de_entrega(db, _alvo(restaurante)).situacao == ATENCAO
 
 
-def test_restaurante_que_nao_aceita_entrega_nao_e_cobrado(db):
+def test_filial_que_nao_aceita_entrega_nao_e_cobrada(db):
+    """`accepts_delivery` e da FILIAL desde a revisao 20260818_0025.
+
+    Enquanto foi do restaurante, o quiosque de shopping que so faz retirada
+    desligava a conferencia da rede inteira — e a loja de rua ao lado, sem
+    taxa por km cadastrada, passava no check sem ninguem olhar.
+    """
     restaurante = criar_restaurante(db)
-    criar_filial(db, restaurante)
-    configuracoes = criar_configuracoes(db, restaurante)
-    configuracoes.accepts_delivery = False
+    filial = criar_filial(db, restaurante)
+    criar_configuracoes(db, restaurante)
+    filial.accepts_delivery = False
     db.flush()
 
     assert conferir_taxa_de_entrega(db, _alvo(restaurante)).situacao == OK
+
+
+def test_a_filial_que_entrega_e_conferida_mesmo_com_a_vizinha_desligada(db):
+    restaurante = criar_restaurante(db)
+    quiosque = criar_filial(db, restaurante, nome="Quiosque")
+    criar_filial(db, restaurante, nome="Rua")
+    criar_configuracoes(db, restaurante)
+    quiosque.accepts_delivery = False
+    db.flush()
+
+    # A filial "Rua" nao tem base nem por-km, e o restaurante nao tem
+    # contingencia: toda entrega dela vira "fora da area".
+    assert conferir_taxa_de_entrega(db, _alvo(restaurante)).situacao == ERRO
+
+
+def test_a_contingencia_da_filial_vence_a_do_restaurante(db):
+    restaurante = criar_restaurante(db)
+    filial = criar_filial(db, restaurante)
+    configuracoes = criar_configuracoes(db, restaurante)
+    configuracoes.default_delivery_fee = Decimal("0.00")
+    filial.default_delivery_fee = Decimal("8.00")
+    db.flush()
+
+    # O zero do restaurante desligaria a contingencia; a filial sobrescreveu.
+    assert conferir_taxa_de_entrega(db, _alvo(restaurante)).situacao == ATENCAO
 
 
 # ---------------------------------------------------------------------------

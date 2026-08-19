@@ -15,6 +15,14 @@ outra, e nenhuma das duas erra alto.
 Aqui **o backend responde `is_open_now` como booleano.** O app nao calcula
 horario.
 
+E `is_open_now` combina DUAS coisas, desde que o "fechar agora" virou da
+filial: a agenda da semana e a pausa manual daquela loja. Elas sao
+independentes — a agenda diz que hoje abre as 18h, a pausa diz que hoje o
+gas acabou — e nenhuma das duas sozinha responde "posso pedir?". `closed_reason`
+diz qual das duas fechou, porque a tela escreve coisas diferentes para cada
+uma: uma passa sozinha quando o relogio virar, a outra so quando alguem no
+balcao apertar o botao.
+
 ## O custo do Google, que e o que desenha este arquivo
 
 Cada filial exigiria uma rota paga (`computeRoutes`), e uma tela que abre
@@ -68,8 +76,10 @@ from src.integrations.google_maps_routes_client import (
 from src.models.branch_model import Branch
 from src.models.customer_model import Customer
 from src.repositories.branch_repository import BranchRepository
+from src.repositories.menu_repository import MenuRepository
 from src.schemas.branch_availability_schema import (
     BranchAvailabilityItem,
+    BranchClosedReason,
     BranchAvailabilityRequest,
     BranchAvailabilityResponse,
     BranchDeliveryResponse,
@@ -77,6 +87,7 @@ from src.schemas.branch_availability_schema import (
 )
 from src.schemas.delivery_schema import DeliveryAddressInput, DeliveryEstimateRequest
 from src.services.branch_hours_service import BRANCH_TIMEZONE, BranchHoursService
+from src.services.branch_operation import resolve_branch_operation
 from src.services.delivery_estimate_service import DeliveryEstimateService
 from src.services.restaurant_service import RestaurantService
 from src.utils.geo import haversine_km
@@ -121,6 +132,7 @@ class BranchAvailabilityService:
         self.db = db
         self.restaurant_service = RestaurantService(db)
         self.branch_repository = BranchRepository(db)
+        self.menu_repository = MenuRepository(db)
         self.branch_hours_service = BranchHoursService(db)
         # Injetavel para o teste substituir o Google sem tocar em rede.
         self.delivery_service = delivery_service or DeliveryEstimateService(db)
@@ -134,6 +146,12 @@ class BranchAvailabilityService:
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
         branches = self.branch_repository.list_active_by_restaurant(restaurant.id)
         default_branch = self.branch_repository.get_default_branch(restaurant.id)
+        # Uma consulta para a lista inteira. Do que esta rota usa, so
+        # `is_open` importa — e ele nao herda nada. Mesmo assim a leitura
+        # passa por `resolve_branch_operation`, e nao por `branch.is_open`
+        # direto: um segundo jeito de ler a mesma regra e como a armadilha 10
+        # comeca, e o custo aqui e um SELECT ao lado de N chamadas ao Google.
+        restaurant_settings = self.menu_repository.get_settings(restaurant.id)
 
         destino = self._resolve_destination_once(payload, current_customer)
         # UM instante para todas as filiais. Lendo o relogio dentro do laco,
@@ -143,7 +161,9 @@ class BranchAvailabilityService:
         now = datetime.now(BRANCH_TIMEZONE)
 
         itens = [
-            self._branch_item(branch, restaurant.slug, destino, current_customer, now)
+            self._branch_item(
+                branch, restaurant.slug, restaurant_settings, destino, current_customer, now
+            )
             for branch in branches
         ]
         logger.info(
@@ -221,11 +241,13 @@ class BranchAvailabilityService:
         self,
         branch: Branch,
         restaurant_slug: str,
+        restaurant_settings,
         destino: DestinoDoCliente,
         current_customer: Customer | None,
         now: datetime,
     ) -> BranchAvailabilityItem:
         period = self.branch_hours_service.find_current_period(branch.id, now)
+        operation = resolve_branch_operation(branch, restaurant_settings)
 
         return BranchAvailabilityItem(
             id=branch.id,
@@ -238,10 +260,27 @@ class BranchAvailabilityService:
             latitude=float(branch.latitude) if branch.latitude is not None else None,
             longitude=float(branch.longitude) if branch.longitude is not None else None,
             is_main=bool(branch.is_main),
-            is_open_now=period is not None,
+            is_open_now=period is not None and operation.is_open,
+            closed_reason=self._closed_reason(period, operation.is_open),
             current_period=self._period_response(period),
             delivery=self._delivery(branch, restaurant_slug, destino, current_customer),
         )
+
+    @staticmethod
+    def _closed_reason(period, is_open: bool) -> BranchClosedReason | None:
+        """Por que a filial nao esta atendendo — ou None quando esta.
+
+        A agenda vem primeiro quando as duas coisas valem ao mesmo tempo
+        (fora do horario E pausada), e a razao e que `current_period` ja sai
+        nulo nesse caso: responder "pausada" faria a tela dizer que a agenda
+        esta em ordem enquanto o campo da agenda vem vazio. Os dois campos
+        contam a mesma historia ou nao contam nenhuma.
+        """
+        if period is None:
+            return "outside_business_hours"
+        if not is_open:
+            return "branch_paused"
+        return None
 
     @staticmethod
     def _period_response(period) -> BranchOpenPeriodResponse | None:

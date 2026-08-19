@@ -120,5 +120,7 @@ limites de corpo, TTLs).
 | [docs/impressao.md](docs/impressao.md) | setores, comandas, print-agent |
 | [docs/operacao.md](docs/operacao.md) | deploy, migrações, logs, diagnóstico |
 | [docs/onboarding-de-restaurante.md](docs/onboarding-de-restaurante.md) | **pôr um restaurante novo no ar** — a ordem real, o que só dá para fazer no banco, e os cinco passos que falham em silêncio |
+| [docs/contrato-filiais-frontend.md](docs/contrato-filiais-frontend.md) | contrato da tela de escolha de filial, para quem implementa o app |
+| [docs/operacao-por-filial.md](docs/operacao-por-filial.md) | **o "fechar agora" e os preços por filial** — os dois regimes (estado do dia × termo comercial), as rotas que mudaram de lugar e o que rodar depois do deploy |
 
 Armadilhas de quem escreve código: `.claude/skills/rapidex-backend/SKILL.md`.

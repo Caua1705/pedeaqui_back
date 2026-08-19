@@ -218,7 +218,7 @@ registrada.
 |---|---|---|
 | `SOMENTE_DONO` | owner | dinheiro: preço, cupom, `PATCH /admin/settings`, faturamento e comissão |
 | `GERENCIA` | owner, manager | escrita de cardápio, filial, horários, setores, lista de clientes, cancelamento |
-| `PESSOAS` | owner, manager, attendant | leitura do painel, pedidos, `availability`, `store-status`, `prep-time` |
+| `PESSOAS` | owner, manager, attendant | leitura do painel, pedidos, `availability`, `branches/operation`, `store-status` (por filial), `prep-time` |
 | `AGENTE_DE_IMPRESSAO` | print_agent | heartbeat e lista de impressoras |
 | `PESSOAS_E_AGENTE` | os quatro | ticket do stream, stream, vias de um pedido |
 

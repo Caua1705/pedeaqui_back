@@ -33,6 +33,7 @@ from src.schemas.order_schema import (
 )
 from src.schemas.common_schema import StatusHistoryResponse
 from src.services.branch_hours_service import BranchHoursService
+from src.services.branch_operation import BranchOperation, resolve_branch_operation
 from src.services.delivery_estimate_service import (
     DeliveryEstimateResult,
     DeliveryEstimateService,
@@ -86,7 +87,8 @@ class OrderService:
         # chamada paga ao Google: sao consultas baratas e recusam cedo o
         # pedido que a loja nao poderia receber de jeito nenhum.
         settings = self.menu_repository.get_settings(restaurant.id)
-        self._validate_store_accepts_order(payload.order_type, settings)
+        operation = resolve_branch_operation(branch, settings)
+        self._validate_branch_accepts_order(payload.order_type, operation)
         self.branch_hours_service.ensure_branch_is_open(branch.id)
         payment_flow = self._resolve_payment_flow(branch.id, payload.payment_method)
 
@@ -117,8 +119,8 @@ class OrderService:
             for item in payload.items
         ]
         subtotal = self._calculate_subtotal(payload, products_by_id, selected_options_by_item)
-        self._validate_minimum_order_value(subtotal, settings)
-        service_fee = self._calculate_service_fee(settings)
+        self._validate_minimum_order_value(subtotal, operation)
+        service_fee = self._calculate_service_fee(operation)
         delivery_fee = (
             quantize_money(to_decimal(delivery_estimate.delivery_fee))
             if delivery_estimate is not None
@@ -320,30 +322,37 @@ class OrderService:
         if order_type not in ORDER_TYPES:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de pedido inválido")
 
-    def _validate_store_accepts_order(self, order_type: str, settings) -> None:
-        """is_open, accepts_delivery e accepts_pickup, finalmente lidos.
+    def _validate_branch_accepts_order(
+        self,
+        order_type: str,
+        operation: BranchOperation,
+    ) -> None:
+        """is_open, accepts_delivery e accepts_pickup — da FILIAL escolhida.
 
-        Os tres campos existiam em restaurant_settings, apareciam no cardapio
-        e nao bloqueavam nada: quem impedia pedido com a loja fechada era o
-        frontend. Bastava chamar a API direto para furar.
+        Os tres campos existiam em `restaurant_settings` e valiam para a rede
+        inteira: quem fechasse a filial do Centro fechava a da Aldeota junto,
+        e nao havia como fechar so uma. Desde a revisao 20260818_0025 eles sao
+        da filial, e e a filial DESTE pedido que decide.
 
-        Sem linha de settings o restaurante segue aceitando pedido — e o
-        comportamento que sempre valeu, e mudar isso agora derrubaria
-        restaurantes que nunca configuraram nada.
+        Sao checagem de verdade, e nao enfeite de tela: antes de existirem,
+        quem impedia pedido com a loja fechada era o frontend, e bastava
+        chamar a API direto para furar.
+
+        Isto NAO substitui `ensure_branch_is_open`: aquele le a agenda da
+        semana, este le a pausa manual. Estar dentro do horario nao significa
+        que o balcao nao apertou "fechar agora" as 21h.
         """
-        if settings is None:
-            return
-        if settings.is_open is False:
+        if not operation.is_open:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="A loja esta fechada no momento",
             )
-        if order_type == "delivery" and settings.accepts_delivery is False:
+        if order_type == "delivery" and not operation.accepts_delivery:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Esta loja nao esta aceitando entrega",
             )
-        if order_type == "pickup" and settings.accepts_pickup is False:
+        if order_type == "pickup" and not operation.accepts_pickup:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Esta loja nao esta aceitando retirada",
@@ -672,14 +681,17 @@ class OrderService:
             return to_decimal(DEFAULT_PLATFORM_COMMISSION_PERCENT)
         return to_decimal(settings.platform_commission_percent)
 
-    def _calculate_service_fee(self, settings) -> Decimal:
-        if not settings or not settings.service_fee_enabled:
+    def _calculate_service_fee(self, operation: BranchOperation) -> Decimal:
+        if not operation.service_fee_enabled:
             return ZERO
-        return quantize_money(to_decimal(settings.service_fee_amount))
+        return operation.service_fee_amount
 
-    def _validate_minimum_order_value(self, subtotal: Decimal, settings) -> None:
-        minimum_order_value = quantize_money(to_decimal(settings.min_order_value if settings else ZERO))
-        if subtotal < minimum_order_value:
+    def _validate_minimum_order_value(
+        self,
+        subtotal: Decimal,
+        operation: BranchOperation,
+    ) -> None:
+        if subtotal < operation.min_order_value:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Pedido abaixo do valor mínimo do restaurante.",

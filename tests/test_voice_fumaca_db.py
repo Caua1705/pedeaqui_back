@@ -125,7 +125,10 @@ def test_a_voz_emite_credencial_e_a_ferramenta_devolve_produto(db, monkeypatch):
     )
     assert busca_na_outra.status_code == 200
     assert busca_na_outra.json()["produtos"] == []
-    assert busca_na_outra.json()["resumo"] == "Nenhum produto encontrado."
+    # E a negativa que volta ao modelo diz NESTA LOJA. A picanha existe no
+    # restaurante — so nao aqui. O modelo repete o que le, e "nao temos"
+    # dito sobre a rede inteira e uma frase que ninguem conserta depois.
+    assert busca_na_outra.json()["resumo"] == "Nenhum produto encontrado nesta loja."
 
 
 def _indexar(db, produto, category_name: str) -> None:

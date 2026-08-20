@@ -85,19 +85,28 @@ SEARCH_TOOL = {
 }
 
 
-def issue_client_secret(restaurant_id: uuid.UUID, restaurant_context: str) -> dict:
+def issue_client_secret(
+    restaurant_id: uuid.UUID,
+    restaurant_context: str,
+    branch_context: str,
+) -> dict:
     """Pede a OpenAI um segredo de curta duracao para o navegador usar.
 
     A chave mestra (`OPENAI_API_KEY`) nunca sai daqui. O que vai para o
     navegador e o `value` devolvido — um segredo que so serve para abrir uma
     sessao de Realtime ja configurada: modelo, voz, instrucoes e ferramentas
     sao fixados NESTE lado e o cliente nao consegue trocar nenhum deles.
+
+    A LOJA entra nas instrucoes AQUI, e nao no navegador, pelo mesmo motivo
+    que todo o resto: a pagina e do cliente e quem quiser edita. Instrucao de
+    loja escolhida pelo front seria o modelo falando do cardapio que o
+    proprio cliente mandou dizer que era o dele.
     """
     corpo = {
         "session": {
             "type": "realtime",
             "model": settings.VOICE_MODEL,
-            "instructions": instructions_for(restaurant_context),
+            "instructions": instructions_for(restaurant_context, branch_context),
             "audio": {"output": {"voice": settings.VOICE_NAME}},
             "tools": [SEARCH_TOOL],
             "tool_choice": "auto",

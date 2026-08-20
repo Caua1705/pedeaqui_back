@@ -24,7 +24,7 @@ O corpo enviado está em `realtime_client.py:90-99`:
 |---|---|---|
 | `session.type` | `"realtime"` | `realtime_client.py:92` |
 | `session.model` | `"gpt-realtime-mini"` | `realtime_client.py:48`, usado em `:93` |
-| `session.instructions` | `instructions_for(restaurant_context)` | `realtime_client.py:94` → `voice_prompt.py:49` |
+| `session.instructions` | `instructions_for(restaurant_context, branch_context)` — as regras, mais o bloco `O RESTAURANTE` e o bloco `A LOJA` | `realtime_client.py` → `voice_prompt.instructions_for` |
 | `session.audio.output.voice` | `"marin"` | `realtime_client.py:49`, usado em `:95` |
 | `session.tools` | `[SEARCH_TOOL]` | `realtime_client.py:96` |
 | `session.tool_choice` | `"auto"` | `realtime_client.py:97` |

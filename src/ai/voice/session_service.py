@@ -92,6 +92,7 @@ class VoiceSessionService:
         restaurant_id: uuid.UUID,
         customer_id: uuid.UUID | None,
         restaurant_context: str,
+        branch_context: str,
     ) -> tuple[AIVoiceSession, dict]:
         """Varre o que venceu, confere a cota, emite a credencial e registra.
 
@@ -108,7 +109,7 @@ class VoiceSessionService:
         self.encerrar_vencidas()
         self._conferir_cotas(restaurant_id, customer_id)
 
-        credencial = issue_client_secret(restaurant_id, restaurant_context)
+        credencial = issue_client_secret(restaurant_id, restaurant_context, branch_context)
         expira_em = _agora() + timedelta(seconds=settings.VOICE_MAX_SESSION_SECONDS)
         sessao = self.repository.registrar(
             restaurant_id=restaurant_id,

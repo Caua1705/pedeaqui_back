@@ -383,7 +383,9 @@ quando o modelo não preencher.
 | `resumo` | string | o texto que volta **para o modelo**. Nunca mostre na tela |
 
 `produtos` pode vir **vazio** (`[]`) — é resposta legítima quando nada casa.
-Nesse caso `resumo` é exatamente `"Nenhum produto encontrado."`.
+Nesse caso `resumo` é exatamente `"Nenhum produto encontrado nesta loja."`
+— a negativa é da **filial** que você mandou em `branch_id`, e não do
+restaurante: o produto pode existir na outra loja.
 
 Quando há produtos, `resumo` tem o formato
 `"Produtos encontrados: <nome> - R$ <valor>; <nome> - R$ <valor>"`, com no

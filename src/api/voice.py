@@ -33,6 +33,7 @@ from src.models.customer_model import Customer
 from src.ai import voice as pacote_de_voz
 from src.ai.voice.search_service import VoiceSearchService
 from src.ai.voice.session_service import UsoReportado, VoiceSessionService
+from src.ai.voice.voice_prompt import branch_context_for
 from src.services.chat_service import ChatService
 
 
@@ -111,13 +112,16 @@ def criar_sessao(
     """
     chat_service = ChatService(db, agent="/voz")
     restaurant = chat_service._get_active_restaurant(payload.restaurant_id)
-    chat_service._get_active_branch(restaurant.id, payload.branch_id)
-    restaurant_context = chat_service._build_restaurant_context(restaurant)
+    # A filial deixou de ser so uma barreira e virou DADO: e dela que sai o
+    # contexto que o modelo recebe. O retorno de `_get_active_branch` era
+    # descartado quando a checagem era o unico proposito da chamada.
+    branch = chat_service._get_active_branch(restaurant.id, payload.branch_id)
 
     sessao, credencial = VoiceSessionService(db).abrir(
         restaurant_id=restaurant.id,
         customer_id=cliente.id,
-        restaurant_context=restaurant_context,
+        restaurant_context=chat_service._build_restaurant_context(restaurant),
+        branch_context=branch_context_for(branch),
     )
 
     # Os tetos viajam junto com a credencial, e nao ficam escritos no HTML: e o
@@ -183,6 +187,9 @@ def buscar(payload: BuscaRequest, db: Session = Depends(get_db)) -> dict:
     completo, com preco e imagem do banco) e `resumo` volta para o MODELO
     (so nome e preco). Separar os dois e o que impede o modelo de falar um
     preco que o cartao nao mostra — ele nunca ve outro numero.
+
+    Os dois ja saem recortados pela filial do corpo. O `resumo` vazio diz
+    "nesta loja" por isso: o produto que nao esta aqui pode estar na outra.
     """
     service = VoiceSearchService(db)
     produtos = service.buscar(

@@ -108,6 +108,14 @@ class VoiceSearchService:
     def resumo_para_o_modelo(produtos: list) -> str:
         """O texto que volta para a Realtime como resultado da ferramenta.
 
+        A NEGATIVA E POR LOJA, e nao por restaurante (revisao
+        20260820_0026). "Nenhum produto encontrado" foi escrito quando o
+        cardapio era do restaurante e a frase era verdadeira; hoje a busca ja
+        chegou aqui filtrada por filial, e o produto que ela nao achou pode
+        estar na outra unidade. O modelo le esta string e o prompt de voz
+        junto — dizer "nesta loja" nos dois e o que impede o mais frouxo dos
+        dois de ser o que ele repete em audio.
+
         So nome e preco, e no maximo cinco. O modelo NAO precisa de id, imagem
         nem grupo de opcao — isso ja esta na tela do cliente, vindo do JSON
         completo da rota. Mandar o objeto inteiro para o modelo seria pagar
@@ -121,7 +129,7 @@ class VoiceSearchService:
         resto do sistema.
         """
         if not produtos:
-            return "Nenhum produto encontrado."
+            return "Nenhum produto encontrado nesta loja."
 
         linhas = [f"{produto.name} - {format_money_br(produto.price)}" for produto in produtos[:5]]
         return "Produtos encontrados: " + "; ".join(linhas)

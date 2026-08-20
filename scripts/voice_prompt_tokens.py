@@ -61,6 +61,11 @@ CODIFICACAO = tiktoken.get_encoding("o200k_base")
 CONTEXTO_MINIMO = "Nome do restaurante: Junior da Picanha"
 CONTEXTO_MAXIMO = CONTEXTO_MINIMO + "\nSobre a casa: " + ("palavra " * 45)[:300]
 
+# A loja tem o mesmo tamanho no piso e no teto: uma linha com um nome, e nada
+# mais (ver `branch_context_for`). Entra nos dois numeros porque desde a
+# revisao 20260820_0026 nenhuma sessao e emitida sem ela.
+CONTEXTO_DA_LOJA = "Loja: Centro"
+
 # Um resumo de busca com nomes de tamanho realista para uma churrascaria.
 PRODUTOS_DE_EXEMPLO = [
     "Picanha na Chapa - R$ 89,90",
@@ -118,8 +123,8 @@ def main() -> int:
 
 def _imprimir_prefixo() -> int:
     """O que vai na emissao da credencial e volta em TODA resposta."""
-    instrucoes_minimo = contar(instructions_for(CONTEXTO_MINIMO))
-    instrucoes_maximo = contar(instructions_for(CONTEXTO_MAXIMO))
+    instrucoes_minimo = contar(instructions_for(CONTEXTO_MINIMO, CONTEXTO_DA_LOJA))
+    instrucoes_maximo = contar(instructions_for(CONTEXTO_MAXIMO, CONTEXTO_DA_LOJA))
     ferramenta = contar(json.dumps(SEARCH_TOOL, ensure_ascii=False))
     resto = contar(
         json.dumps(
@@ -136,8 +141,9 @@ def _imprimir_prefixo() -> int:
     print("PREFIXO FIXO — reenviado em toda resposta do modelo")
     print()
     _linha("instructions (regras)", contar(VOICE_INSTRUCTIONS))
-    _linha("  + contexto do restaurante (sem descricao)", instrucoes_minimo - contar(VOICE_INSTRUCTIONS))
-    _linha("  + contexto do restaurante (descricao no teto)", instrucoes_maximo - contar(VOICE_INSTRUCTIONS))
+    _linha("  + contexto, restaurante e loja (sem descricao)", instrucoes_minimo - contar(VOICE_INSTRUCTIONS))
+    _linha("  + contexto, restaurante e loja (descricao no teto)", instrucoes_maximo - contar(VOICE_INSTRUCTIONS))
+    _linha("    a linha da loja, sozinha", contar(CONTEXTO_DA_LOJA), recuo=True)
     _linha("declaracao da ferramenta (schema + descricoes)", ferramenta)
     _linha("resto do corpo (modelo, voz, tool_choice)", resto)
     print()

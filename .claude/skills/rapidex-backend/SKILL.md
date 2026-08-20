@@ -524,13 +524,33 @@ fingerprint ou não entra na decisão.
 
 ## 13. Item nunca some da comanda
 
-O setor de impressão pende de **filial**; o produto pende de **restaurante**.
-Logo, um produto só consegue apontar para o setor de **uma** filial.
+Item cujo setor não serve vai para a via **`"SEM SETOR"`** e o caso é logado,
+em vez de desaparecer da produção.
 
-Num restaurante com várias lojas, o pedido da filial B pode conter produto
-apontando para setor da filial A — e um setor pode ter sido desativado depois de
-vinculado. Nos dois casos o item vai para a via **`"SEM SETOR"`** e o caso é
-logado, em vez de desaparecer da produção.
+**Esta armadilha perdeu metade em 20/08/2026, e é a única do arquivo que
+encolheu — vale saber por quê.** O texto era: "o setor pende de filial e o
+produto pende de restaurante, logo um produto só consegue apontar para o setor
+de UMA filial; o pedido da filial B pode conter produto apontando para setor da
+filial A". Aquilo nunca foi bug de código — era o **único desenho possível**
+enquanto o cardápio era do restaurante, e a via de resgate era o conserto certo
+para ele.
+
+Com o cardápio por filial (revisão `20260820_0026`), produto e setor passaram a
+viver na mesma loja e a FK composta `(branch_id, printing_sector_id)` tornou
+esse par **impossível de gravar**. A checagem correspondente saiu de
+`_split_items_by_sector` junto com o motivo: era um ramo que nenhum dado
+alcança, e um dia alguém gastaria uma tarde tentando reproduzi-lo.
+
+**A lição que fica não é sobre impressão.** Quando uma armadilha existe porque
+o schema não consegue expressar a regra, o conserto definitivo é o schema — e
+aí o tratamento em código sai junto, senão vira ruína que parece proteção.
+
+Os dois motivos que sobraram, e que nenhuma FK fecha:
+
+- **setor desativado** depois de vinculado — `is_active` é estado, não
+  integridade referencial;
+- **produto que não está mais naquele restaurante** — o item guarda
+  `product_id` para sempre.
 
 **O único jeito de um item NÃO ser impresso** é `printing_sector_id` nulo, que é
 decisão explícita do lojista (a lata que sai da geladeira do balcão).
@@ -1102,3 +1122,60 @@ o buraco de novo: estar dentro do horário não significa que o balcão não ape
 **Consequência de contrato que já vai gerar chamado:** `current_period` pode vir
 PREENCHIDO com `is_open_now: false` — é a loja pausada dentro do horário. O
 documento é `docs/operacao-por-filial.md`.
+
+---
+
+## 36. O cardápio é da filial, e nada nele herda
+
+Desde a revisão `20260820_0026`, `categories` e `products` têm `branch_id`
+`NOT NULL`. **Não é o regime da armadilha 35:** ali `NULL` significa "herda o
+padrão do restaurante"; aqui não existe nulo, não existe padrão e não existe
+sobrescrita. A picanha do Centro e a da Aldeota são duas linhas independentes.
+
+`restaurant_id` continua nas duas tabelas e **não é o filtro**. Consultar
+cardápio por restaurante devolve as lojas todas misturadas — que é exatamente
+o que o código antigo faria contra o schema novo, com 200 e sem log. Quatro FKs
+compostas impedem que os dois divirjam; ver `docs/cardapio-por-filial.md`.
+
+**`branch_id` atravessa CINCO caminhos, e cada um errava sozinho:**
+
+| Onde | O que acontece se faltar |
+|---|---|
+| `MenuRepository.get_active_products` | o cliente vê o cardápio das duas lojas |
+| `ProductRepository.list_active_by_ids` | pedido fecha na filial B com produto de A |
+| `AIRepository.similarity_search` | o Rapi oferece **com preço** o que a loja não vende |
+| `ChatCache.retrieval_key` | a segunda loja é servida do cache da primeira |
+| `ProductRepository.sellable_prices_by_id` | preço de uma loja carimbado em produto de outra |
+
+Os três últimos são o mesmo defeito em camadas diferentes: consertar só a busca
+deixa o cache servindo o resultado errado por 20 minutos, e o sintoma vira
+"intermitente".
+
+**`/chat` e `/voice/*` exigem `branch_id`, sem queda para a filial padrão.** Um
+default daria a mesma resposta errada escondida atrás de um caminho que parece
+configurado. Na voz é pior: o modelo **fala** nome e preço em áudio, e não há
+tela onde o cliente notasse.
+
+**`catalog_key` não tem semântica de herança.** Nada no cardápio, no pedido ou
+no Rapi a lê para decidir preço ou disponibilidade — ela existe só para
+`/admin/reports/products` somar o mesmo item das várias lojas numa linha. Única
+por `(branch_id, catalog_key)`: repetir entre lojas é o uso, repetir dentro de
+uma faz o relatório contar a mesma venda duas vezes. Não é o `products.code`,
+que é o código que o lojista imprime e busca no painel.
+
+**O slug passou a ser único por `(branch_id, slug)`.** Ele não identifica
+produto globalmente, e as duas lojas têm `picanha`. Quem usar slug como chave
+de cache no app serve o preço de uma loja na tela da outra.
+
+**A ordem dentro da revisão importa e só quebra com dado dentro.** A troca dos
+índices de slug tem que rodar ANTES da cópia — a cópia grava o mesmo slug numa
+outra filial do mesmo restaurante, e o índice antigo recusaria. Num banco vazio
+a cópia é no-op e a ordem errada passa verde na suíte inteira; no Júnior, com
+duas lojas, derruba o deploy. `tests/test_migracao_cardapio_por_filial_db.py`
+trava as duas metades.
+
+**O modo de falha mais caro deste passo não está no código.** É voltar a imagem
+sem `alembic downgrade`: o código antigo consulta por `restaurant_id`, que
+continua preenchido, e `/menu` responde 200 com os produtos das duas lojas
+misturados. Rollback de imagem exige downgrade junto.
+

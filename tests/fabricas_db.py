@@ -116,9 +116,42 @@ def criar_configuracoes(
     return configuracoes
 
 
-def criar_categoria(db: Session, restaurante: Restaurant, nome: str = "Categoria") -> Category:
+def filial_padrao(db: Session, restaurante: Restaurant) -> Branch:
+    """A filial do restaurante, criando "Matriz" se ele ainda nao tiver uma.
+
+    Existe porque cardapio pende de filial desde a revisao 20260820_0026 e a
+    esmagadora maioria dos testes nao fala de filial nenhuma — eles falam de
+    restaurante, categoria e produto. Sem isto, os 105 usos de
+    `criar_categoria`/`criar_produto` teriam que ganhar um parametro para
+    provar o que ja provavam.
+
+    Nao e magica de conveniencia: e o estado que a migracao GARANTE. Ela
+    recusa aplicar se existir cardapio em restaurante sem filial, entao um
+    restaurante com categoria e sem loja nao e um caso que o banco de
+    producao possa ter.
+
+    Quem testa DUAS lojas passa a filial explicitamente.
+    """
+    existente = (
+        db.query(Branch)
+        .filter(Branch.restaurant_id == restaurante.id)
+        .order_by(Branch.is_main.desc().nulls_last(), Branch.name.asc())
+        .first()
+    )
+    if existente is not None:
+        return existente
+    return criar_filial(db, restaurante)
+
+
+def criar_categoria(
+    db: Session,
+    restaurante: Restaurant,
+    nome: str = "Categoria",
+    filial: Branch | None = None,
+) -> Category:
     categoria = Category(
         restaurant_id=restaurante.id,
+        branch_id=(filial or filial_padrao(db, restaurante)).id,
         name=nome,
         slug=f"categoria-{_sufixo()}",
         is_active=True,
@@ -138,10 +171,20 @@ def criar_produto(
     is_available: bool = True,
     sort_order: int = 0,
     code: str | None = None,
+    catalog_key: str | None = None,
 ) -> Product:
+    """Um produto. A FILIAL sai da categoria, como em `create_product`.
+
+    Nao ha parametro de filial aqui de proposito: a FK composta
+    `(branch_id, category_id)` recusaria um produto que discordasse da
+    categoria dele, e reproduzir essa possibilidade na fabrica so criaria um
+    jeito de escrever teste que o banco nao aceita.
+    """
     produto = Product(
         restaurant_id=restaurante.id,
+        branch_id=categoria.branch_id,
         category_id=categoria.id,
+        catalog_key=catalog_key,
         name=nome,
         slug=f"produto-{_sufixo()}",
         price=preco,

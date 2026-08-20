@@ -8,6 +8,18 @@ nao tem como religar.
 Toda consulta recebe `restaurant_id`. Grupo de opcao e opcao nao tem essa
 coluna, entao chegam nele pela juncao com `products` — e o que impede um id
 de outro restaurante de ser editado por quem descobriu o UUID.
+
+**`branch_id` e um filtro a mais, nao um substituto.** Desde a revisao
+20260820_0026 categoria e produto pertencem a uma filial, e o painel precisa
+dos dois modos: o dono sem recorte ve o cardapio das lojas todas numa lista
+(cada linha dizendo de qual loja e), e quem esta preso a uma filial ve so a
+dele. Quem decide qual dos dois e o `AdminScope.resolve_branch_filter`, nunca
+este arquivo.
+
+As duas consultas por SLUG sao a excecao e recebem `branch_id` obrigatorio:
+elas existem para conferir colisao antes de gravar, e o indice unico que elas
+espelham e `(branch_id, slug)`. Conferir por restaurante recusaria a picanha
+da segunda loja por causa da picanha da primeira.
 """
 
 import uuid
@@ -50,11 +62,18 @@ class AdminMenuRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def list_categories(self, restaurant_id: uuid.UUID) -> list[Category]:
+    def list_categories(
+        self,
+        restaurant_id: uuid.UUID,
+        branch_id: uuid.UUID | None = None,
+    ) -> list[Category]:
+        conditions = [Category.restaurant_id == restaurant_id]
+        if branch_id is not None:
+            conditions.append(Category.branch_id == branch_id)
         stmt = (
             select(Category)
-            .where(Category.restaurant_id == restaurant_id)
-            .order_by(Category.sort_order.asc(), Category.name.asc())
+            .where(*conditions)
+            .order_by(Category.branch_id.asc(), Category.sort_order.asc(), Category.name.asc())
         )
         return list(self.db.scalars(stmt).all())
 
@@ -65,10 +84,10 @@ class AdminMenuRepository:
         )
         return self.db.scalar(stmt)
 
-    def get_category_by_slug(self, slug: str, restaurant_id: uuid.UUID) -> Category | None:
+    def get_category_by_slug(self, slug: str, branch_id: uuid.UUID) -> Category | None:
         stmt = select(Category).where(
             Category.slug == slug,
-            Category.restaurant_id == restaurant_id,
+            Category.branch_id == branch_id,
         )
         return self.db.scalar(stmt)
 
@@ -91,6 +110,7 @@ class AdminMenuRepository:
     def list_products(
         self,
         restaurant_id: uuid.UUID,
+        branch_id: uuid.UUID | None = None,
         category_id: uuid.UUID | None = None,
         search: str | None = None,
         is_active: bool | None = None,
@@ -101,11 +121,15 @@ class AdminMenuRepository:
             select(Product)
             .where(*self._product_conditions(
                 restaurant_id=restaurant_id,
+                branch_id=branch_id,
                 category_id=category_id,
                 search=search,
                 is_active=is_active,
             ))
-            .order_by(Product.sort_order.asc(), Product.name.asc())
+            # `branch_id` na frente para que a lista sem recorte saia agrupada
+            # por loja em vez de intercalada: sem isso, o dono com duas lojas
+            # ve duas "Picanha" em linhas vizinhas e nao sabe qual e qual.
+            .order_by(Product.branch_id.asc(), Product.sort_order.asc(), Product.name.asc())
             .limit(limit)
             .offset(offset)
         )
@@ -157,12 +181,14 @@ class AdminMenuRepository:
     def count_products(
         self,
         restaurant_id: uuid.UUID,
+        branch_id: uuid.UUID | None = None,
         category_id: uuid.UUID | None = None,
         search: str | None = None,
         is_active: bool | None = None,
     ) -> int:
         stmt = select(func.count(Product.id)).where(*self._product_conditions(
             restaurant_id=restaurant_id,
+            branch_id=branch_id,
             category_id=category_id,
             search=search,
             is_active=is_active,
@@ -212,10 +238,27 @@ class AdminMenuRepository:
         )
         return self.db.scalar(stmt)
 
-    def get_product_by_slug(self, slug: str, restaurant_id: uuid.UUID) -> Product | None:
+    def get_product_by_slug(self, slug: str, branch_id: uuid.UUID) -> Product | None:
         stmt = select(Product).where(
             Product.slug == slug,
-            Product.restaurant_id == restaurant_id,
+            Product.branch_id == branch_id,
+        )
+        return self.db.scalar(stmt)
+
+    def get_product_by_catalog_key(
+        self,
+        catalog_key: str,
+        branch_id: uuid.UUID,
+    ) -> Product | None:
+        """Quem ja usa esta chave de catalogo DENTRO da filial.
+
+        Espelha o indice unico parcial `(branch_id, catalog_key)`: entre
+        lojas diferentes a chave se repete de proposito — e para isso que ela
+        existe.
+        """
+        stmt = select(Product).where(
+            Product.catalog_key == catalog_key,
+            Product.branch_id == branch_id,
         )
         return self.db.scalar(stmt)
 
@@ -278,6 +321,7 @@ class AdminMenuRepository:
     @staticmethod
     def _product_conditions(
         restaurant_id: uuid.UUID,
+        branch_id: uuid.UUID | None,
         category_id: uuid.UUID | None,
         search: str | None,
         is_active: bool | None,
@@ -289,6 +333,8 @@ class AdminMenuRepository:
         OrderRepository._admin_list_conditions.
         """
         conditions = [Product.restaurant_id == restaurant_id]
+        if branch_id is not None:
+            conditions.append(Product.branch_id == branch_id)
         if category_id is not None:
             conditions.append(Product.category_id == category_id)
         if search:

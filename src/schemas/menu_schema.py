@@ -14,15 +14,29 @@ from src.schemas.restaurant_schema import (
 
 
 class RestaurantMenuResponse(BaseModel):
+    """O cardapio de UMA filial. Ver `MenuService.get_restaurant_menu`."""
+
     restaurant: RestaurantPublicResponse
 
-    # De qual filial o bloco `settings` esta falando. Vem do `branch_id` da
-    # querystring quando ele e informado, e da filial padrao quando nao.
+    # De qual filial esta resposta INTEIRA esta falando: produtos,
+    # categorias, precos, disponibilidade e o bloco `settings`. Vem do
+    # `branch_id` da querystring quando ele e informado, e da filial padrao
+    # quando nao.
     #
-    # Existe porque `settings` deixou de ser do restaurante: sem este campo,
-    # o app nao teria como saber se o valor minimo que esta mostrando e o da
-    # loja que o cliente escolheu. Nulo so quando o restaurante nao tem
-    # filial ativa — e ai `settings` tambem vem nulo.
+    # Nulo so quando o restaurante nao tem filial ativa — e ai `settings` vem
+    # nulo e as listas de produto e categoria vem vazias.
+    branch_id: UUID | None = None
+
+    # OBSOLETO desde a revisao 20260820_0026: mesmo valor de `branch_id`.
+    #
+    # Nasceu na 20260818_0025, quando so o bloco `settings` era da filial e o
+    # cardapio ainda era do restaurante — o nome descrevia a verdade daquele
+    # dia. Hoje ele mente por omissao: quem le "settings_branch_id" nao
+    # imagina que os PRODUTOS tambem sao dessa filial.
+    #
+    # Fica pelo tempo de o painel e o app trocarem de campo. Renomear no
+    # lugar quebraria os dois de uma vez (armadilha 16); campo novo com
+    # default e de graca (armadilha 7).
     settings_branch_id: UUID | None = None
     settings: RestaurantSettingsResponse | None
     branches: list[BranchResponse]

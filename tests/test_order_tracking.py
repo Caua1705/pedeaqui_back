@@ -87,6 +87,7 @@ def build_create_service():
     product = SimpleNamespace(
         id=product_id,
         code="P1",
+        catalog_key=None,
         name="Picanha",
         description=None,
         price=Decimal("50.00"),

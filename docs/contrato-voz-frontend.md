@@ -81,6 +81,7 @@ a UI precisar dele.
 | `limites` | resposta do passo 1 | os temporizadores do passo 8 |
 | `call_id` | cabeçalho `Location` do passo 3 | o corpo do passo 4 |
 | `restaurant_id` | o contexto da tela | corpo dos passos 1 e 6 |
+| `branch_id` | a filial que o cliente escolheu | corpo dos passos 1 e 6, **obrigatório nos dois** |
 | o token do cliente | o login do app | header dos passos 1 (e só dele) |
 
 **`credencial.value` nunca vai para o nosso backend, e o token do cliente nunca
@@ -124,12 +125,19 @@ Rate limit: **3 por minuto e 20 por hora**, por IP.
 **Requisição**
 
 ```json
-{ "restaurant_id": "0f9c8d2e-..." }
+{ "restaurant_id": "0f9c8d2e-...", "branch_id": "6a1f...-..." }
 ```
 
 | Campo | Tipo | Obrigatório |
 |---|---|---|
 | `restaurant_id` | string (UUID) | sim |
+| `branch_id` | string (UUID) | **sim, desde 20/08/2026** |
+
+**`branch_id` não tem queda para a filial padrão, e isso é decisão.** O
+cardápio é por loja desde a revisão `20260820_0026`; um default faria o modelo
+oferecer, **em áudio e com preço**, um produto que aquela loja não vende — e
+não há tela onde o cliente pudesse notar. Ver
+[`cardapio-por-filial.md`](cardapio-por-filial.md).
 
 **Resposta 200**
 
@@ -174,7 +182,8 @@ front** — eles podem mudar sem deploy do app.
 | 403 | `{"detail":"Conta inativa"}` | o cliente existe mas está desativado |
 | 403 | `{"detail":"O atendimento por voz nao esta disponivel neste restaurante."}` | a voz não está ligada nessa loja |
 | 404 | `{"detail":"Restaurante não encontrado"}` | `restaurant_id` inexistente ou restaurante inativo |
-| 422 | corpo padrão de validação do FastAPI | `restaurant_id` ausente ou não é um UUID |
+| 404 | `{"detail":"Filial não encontrada para este restaurante"}` | `branch_id` de outra loja ou de outro restaurante. Acontece **antes** de a credencial ser emitida: sessão de voz custa por minuto |
+| 422 | corpo padrão de validação do FastAPI | `restaurant_id` ou `branch_id` ausente, ou não é um UUID |
 | 429 | `{"detail":"Muitas requisições. Tente novamente em instantes."}` | **rate limit** — mais de 3/min ou 20/h vindos do mesmo IP |
 | 429 | `{"detail":"Voce ja usou 5 conversas por voz nas ultimas 24 horas. Tente mais tarde."}` | **cota do cliente** — o número aparece no texto |
 | 429 | `{"detail":"O atendimento por voz deste restaurante atingiu o limite do dia."}` | **cota do restaurante** |
@@ -343,6 +352,7 @@ corpo aceita só o que está na tabela acima.
 ```json
 {
   "restaurant_id": "0f9c8d2e-...",
+  "branch_id": "6a1f...-...",
   "consulta": "sobremesa de chocolate",
   "preco_maximo": 50
 }
@@ -351,6 +361,7 @@ corpo aceita só o que está na tabela acima.
 | Campo | Tipo | Obrigatório | Restrição |
 |---|---|---|---|
 | `restaurant_id` | string (UUID) | sim | — |
+| `branch_id` | string (UUID) | **sim, desde 20/08/2026** | a mesma filial da sessão |
 | `consulta` | string | sim | 1 a 500 caracteres |
 | `preco_maximo` | número ou `null` | não | se vier, tem de ser **maior que zero** |
 
@@ -389,7 +400,8 @@ partir do que o modelo falou.
 | Código | Corpo | Significa |
 |---|---|---|
 | 404 | `{"detail":"Restaurante não encontrado"}` | `restaurant_id` inexistente ou inativo |
-| 422 | corpo padrão de validação | `consulta` vazia ou > 500, `preco_maximo` ≤ 0, `restaurant_id` não-UUID |
+| 404 | `{"detail":"Filial não encontrada para este restaurante"}` | `branch_id` de outra loja |
+| 422 | corpo padrão de validação | `consulta` vazia ou > 500, `preco_maximo` ≤ 0, `restaurant_id`/`branch_id` não-UUID ou ausente |
 
 **Não há 401, 403 nem 429 aqui.** Esta rota não confere login, não confere se
 a voz está ligada no restaurante e não tem rate limit próprio.

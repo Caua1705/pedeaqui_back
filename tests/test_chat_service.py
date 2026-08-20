@@ -41,6 +41,11 @@ from src.services.menu_service import MenuService
 
 AGORA = datetime(2026, 8, 11, 20, 41, tzinfo=timezone.utc)
 
+# O Rapi responde por UMA filial desde a revisao 20260820_0026: cardapio e
+# por loja, e recomendar produto que aquela loja nao vende era o modo de
+# falha mais caro do passo (com preco, sem erro e sem log).
+BRANCH_ID = uuid.uuid4()
+
 
 @pytest.fixture(autouse=True)
 def sessao_limpa():
@@ -65,9 +70,11 @@ class FakeProductRepository:
     def __init__(self, products=()):
         self.products = list(products)
         self.ids_asked = None
+        self.branch_asked = None
 
-    def list_active_by_ids(self, restaurant_id, product_ids):
+    def list_active_by_ids(self, branch_id, product_ids):
         self.ids_asked = list(product_ids)
+        self.branch_asked = branch_id
         return [product for product in self.products if product.id in set(product_ids)]
 
 
@@ -75,6 +82,7 @@ def make_product(name="X-Burger", product_id=None):
     return SimpleNamespace(
         id=product_id or uuid.uuid4(),
         restaurant_id=uuid.uuid4(),
+        branch_id=BRANCH_ID,
         category_id=uuid.uuid4(),
         code="X1",
         name=name,
@@ -98,9 +106,31 @@ def make_restaurant(name="Restaurante de Teste", description=None):
     return SimpleNamespace(id=uuid.uuid4(), name=name, description=description)
 
 
-def make_service(restaurant=None, products=()):
+# Sentinela para distinguir "o teste nao falou de filial" (usa a padrao) de
+# "o teste quer uma filial inexistente" (passa None de proposito).
+SEM_FILIAL_INFORMADA = object()
+
+
+def make_branch(branch_id=None):
+    return SimpleNamespace(id=branch_id or BRANCH_ID, restaurant_id=uuid.uuid4())
+
+
+class FakeBranchRepository:
+    """A filial existe e e deste restaurante, salvo quando o teste diz o contrario."""
+
+    def __init__(self, branch=None):
+        self.branch = branch
+
+    def get_active_by_id_and_restaurant(self, branch_id, restaurant_id):
+        return self.branch
+
+
+def make_service(restaurant=None, products=(), branch=SEM_FILIAL_INFORMADA):
     service = ChatService(FakeDb())
     service.restaurant_repository = FakeRestaurantRepository(restaurant)
+    service.branch_repository = FakeBranchRepository(
+        make_branch() if branch is SEM_FILIAL_INFORMADA else branch
+    )
     service.product_repository = FakeProductRepository(products)
     return service
 
@@ -227,7 +257,7 @@ class TestHydrateProducts:
         primeiro, segundo = make_product("A"), make_product("B")
         service = make_service(products=[primeiro, segundo])
 
-        produtos = service._hydrate_products(uuid.uuid4(), [segundo.id, primeiro.id])
+        produtos = service._hydrate_products(BRANCH_ID, [segundo.id, primeiro.id])
 
         assert [produto.name for produto in produtos] == ["B", "A"]
 
@@ -237,14 +267,14 @@ class TestHydrateProducts:
         vivo = make_product("Vivo")
         service = make_service(products=[vivo])
 
-        produtos = service._hydrate_products(uuid.uuid4(), [vivo.id, uuid.uuid4()])
+        produtos = service._hydrate_products(BRANCH_ID, [vivo.id, uuid.uuid4()])
 
         assert [produto.name for produto in produtos] == ["Vivo"]
 
     def test_nothing_selected_asks_the_repository_for_an_empty_list(self):
         service = make_service(products=[make_product()])
 
-        assert service._hydrate_products(uuid.uuid4(), []) == []
+        assert service._hydrate_products(BRANCH_ID, []) == []
         assert service.product_repository.ids_asked == []
 
 
@@ -352,7 +382,7 @@ class TestOContextoChegaAoModelo:
             products=[produto],
         )
         service.retrieval_service = SimpleNamespace(
-            retrieve_products=lambda restaurant_id, question: [{"id": str(produto.id)}]
+            retrieve_products=lambda restaurant_id, branch_id, question: [{"id": str(produto.id)}]
         )
 
         def fake_invoke(**kwargs):
@@ -365,20 +395,26 @@ class TestOContextoChegaAoModelo:
             lambda: SimpleNamespace(invoke=fake_invoke),
         )
 
-        service.chat(uuid.uuid4(), "sessao-1", "quero carne")
+        service.chat(uuid.uuid4(), BRANCH_ID, "sessao-1", "quero carne")
 
         assert "Junior da Picanha" in recebido["restaurant_context"]
         assert "Carnes nobres na brasa" in recebido["restaurant_context"]
 
     def test_a_busca_continua_recebendo_o_id_e_nao_o_objeto(self, monkeypatch):
-        """`_answer` passou a receber a linha inteira; o que a busca vetorial
-        precisa continua sendo o uuid."""
+        """`_answer` recebe as linhas inteiras; a busca continua recebendo uuid.
+
+        Vale para o restaurante E para a filial: os dois sao carregados do
+        banco no comeco do turno (e e la que o 404 acontece), mas o que desce
+        para a busca vetorial e so o id.
+        """
         recebido = {}
         restaurante = make_restaurant("Junior da Picanha")
-        service = make_service(restaurant=restaurante)
+        filial = make_branch()
+        service = make_service(restaurant=restaurante, branch=filial)
 
-        def fake_retrieve(restaurant_id, question):
+        def fake_retrieve(restaurant_id, branch_id, question):
             recebido["restaurant_id"] = restaurant_id
+            recebido["branch_id"] = branch_id
             return []
 
         service.retrieval_service = SimpleNamespace(retrieve_products=fake_retrieve)
@@ -388,9 +424,10 @@ class TestOContextoChegaAoModelo:
             lambda: SimpleNamespace(invoke=lambda **kwargs: make_llm_response("text", "oi")),
         )
 
-        service.chat(uuid.uuid4(), "sessao-1", "oi")
+        service.chat(uuid.uuid4(), BRANCH_ID, "sessao-1", "oi")
 
         assert recebido["restaurant_id"] == restaurante.id
+        assert recebido["branch_id"] == filial.id
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +594,7 @@ class TestChatPipeline:
         produto = make_product("Pizza Calabresa")
         service = make_service(restaurant=make_restaurant(), products=[produto])
         service.retrieval_service = SimpleNamespace(
-            retrieve_products=lambda restaurant_id, question: [{"id": str(produto.id)}]
+            retrieve_products=lambda restaurant_id, branch_id, question: [{"id": str(produto.id)}]
         )
         monkeypatch.setattr(
             chat_module,
@@ -567,7 +604,7 @@ class TestChatPipeline:
             ),
         )
 
-        response = service.chat(uuid.uuid4(), "sessao-1", "quero pizza")
+        response = service.chat(uuid.uuid4(), BRANCH_ID, "sessao-1", "quero pizza")
 
         assert response.response_type == "products"
         assert [p.name for p in response.products] == ["Pizza Calabresa"]
@@ -586,7 +623,7 @@ class TestChatPipeline:
         service = make_service(restaurant=None)
 
         with pytest.raises(HTTPException) as exc:
-            service.chat(uuid.uuid4(), "sessao-1", "quero pizza")
+            service.chat(uuid.uuid4(), BRANCH_ID, "sessao-1", "quero pizza")
 
         assert exc.value.status_code == 404
 
@@ -596,10 +633,64 @@ class TestChatPipeline:
         proximo prompt daquela sessao."""
         service = make_service(restaurant=make_restaurant())
         service.retrieval_service = SimpleNamespace(
-            retrieve_products=lambda restaurant_id, question: (_ for _ in ()).throw(RuntimeError("busca caiu"))
+            retrieve_products=lambda restaurant_id, branch_id, question: (_ for _ in ()).throw(RuntimeError("busca caiu"))
         )
 
         with pytest.raises(RuntimeError):
-            service.chat(uuid.uuid4(), "sessao-1", "quero pizza")
+            service.chat(uuid.uuid4(), BRANCH_ID, "sessao-1", "quero pizza")
 
         assert _get_session_conversation("sessao-1") == []
+
+
+# ---------------------------------------------------------------------------
+# A filial do atendimento (revisao 20260820_0026)
+# ---------------------------------------------------------------------------
+
+
+class TestAFilialDoAtendimento:
+    def test_uma_filial_que_nao_e_deste_restaurante_e_404(self):
+        """E o 404 acontece ANTES de qualquer chamada paga.
+
+        `_get_active_branch` roda ao lado de `_get_active_restaurant`, na
+        entrada do turno: um `branch_id` errado nao chega a gastar embedding
+        nem token de LLM.
+        """
+        service = make_service(restaurant=make_restaurant(), branch=None)
+
+        with pytest.raises(HTTPException) as erro:
+            service.chat(uuid.uuid4(), uuid.uuid4(), "sessao-1", "quero carne")
+
+        assert erro.value.status_code == 404
+
+    def test_nao_ha_queda_para_a_filial_padrao(self, monkeypatch):
+        """A diferenca deliberada em relacao ao `/menu`, e o motivo dela.
+
+        O cardapio publico e navegacao: mostrar a loja principal a quem nao
+        escolheu nenhuma e razoavel. O Rapi RECOMENDA, com preco, e uma
+        recomendacao da loja errada e indistinguivel de uma certa — o cliente
+        pede, e quem descobre e a cozinha. Entre 404 e adivinhar, so o 404 e
+        honesto.
+        """
+        service = make_service(restaurant=make_restaurant(), branch=None)
+        chamou_a_busca = []
+        service.retrieval_service = SimpleNamespace(
+            retrieve_products=lambda **kwargs: chamou_a_busca.append(kwargs) or []
+        )
+
+        with pytest.raises(HTTPException):
+            service.chat(uuid.uuid4(), uuid.uuid4(), "sessao-1", "oi")
+
+        assert chamou_a_busca == []
+
+    def test_a_hidratacao_le_o_banco_da_filial_e_nao_do_restaurante(self):
+        """A ultima rede do caminho.
+
+        Se um id de outra loja escapar do cache de busca, ele nao encontra
+        produto aqui e sai da resposta em vez de virar cartao com preco.
+        """
+        produto = make_product()
+        service = make_service(products=[produto])
+
+        service._hydrate_products(BRANCH_ID, [produto.id])
+
+        assert service.product_repository.branch_asked == BRANCH_ID

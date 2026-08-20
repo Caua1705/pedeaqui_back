@@ -380,3 +380,132 @@ class PrinterNameContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CardapioPorFilialContractTests(unittest.TestCase):
+    """O `branch_id` tem que estar PUBLICADO em cada lugar em que ele decide.
+
+    O painel e o app geram o cliente deles a partir do /openapi.json
+    (armadilha 16). Um `branch_id` que exista no service e nao no documento e
+    um parametro que ninguem consegue mandar — e nesse caso as rotas voltam a
+    responder pela filial padrao, que e exatamente o defeito silencioso que a
+    revisao 20260820_0026 fecha.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.documento = app.openapi()
+        cls.components = cls.documento["components"]["schemas"]
+
+    def _corpo(self, caminho: str, metodo: str = "post") -> dict:
+        referencia = self.documento["paths"][caminho][metodo]["requestBody"]
+        nome = referencia["content"]["application/json"]["schema"]["$ref"].split("/")[-1]
+        return self.components[nome]
+
+    def _parametros(self, caminho: str, metodo: str = "get") -> set[str]:
+        return {
+            parametro["name"]
+            for parametro in self.documento["paths"][caminho][metodo].get("parameters", [])
+        }
+
+    def test_o_menu_publica_o_parametro_de_filial(self):
+        self.assertIn("branch_id", self._parametros("/restaurants/{restaurant_slug}/menu"))
+
+    def test_as_duas_rotas_de_produto_publicam_o_parametro(self):
+        """Sem ele, o link de produto volta a ser ambiguo entre as lojas."""
+        for caminho in (
+            "/restaurants/{restaurant_slug}/products/{product_slug}",
+            "/restaurants/{restaurant_slug}/categories/{category_slug}/products",
+        ):
+            self.assertIn("branch_id", self._parametros(caminho), caminho)
+
+    def test_a_resposta_do_menu_diz_de_qual_filial_ela_e(self):
+        menu = self.components["RestaurantMenuResponse"]
+
+        self.assertIn("branch_id", menu["properties"])
+        # `settings_branch_id` continua publicado: ele e o campo que o painel
+        # ja consome, e some so quando os dois lados tiverem trocado.
+        self.assertIn("settings_branch_id", menu["properties"])
+
+    def test_o_payment_methods_morto_saiu_do_bloco_de_operacao(self):
+        """Ele foi ecoado ali enquanto a coluna existiu, e podia discordar do
+        que a filial de fato aceita (armadilha 15)."""
+        settings = self.components["RestaurantSettingsResponse"]
+
+        self.assertNotIn("payment_methods", settings["properties"])
+
+    def test_o_chat_exige_a_filial(self):
+        """OBRIGATORIO, e nao opcional com queda para a filial padrao.
+
+        Opcional daria a MESMA resposta errada de antes — o Rapi oferecendo
+        com preco um produto que a loja nao vende —, so que escondida atras de
+        um caminho que parece configurado. Obrigatorio quebra o cliente que
+        nao mandou, na primeira chamada, com 422 e o nome do campo.
+        """
+        corpo = self._corpo("/chat")
+
+        self.assertIn("branch_id", corpo["properties"])
+        self.assertIn("branch_id", corpo["required"])
+
+    def test_as_duas_rotas_de_voz_exigem_a_filial(self):
+        """A sessao E a busca. A busca nao recebe o id da sessao, entao nao ha
+        de onde herdar a loja.
+
+        Medido nos SCHEMAS e nao no /openapi.json: o router da voz so e
+        montado com `VOICE_ENABLED`, e a suite roda com ele desligado — que e
+        o padrao em todo lugar. Sem esta excecao, as duas rotas ficariam sem
+        rede nenhuma.
+        """
+        from src.api.voice import BuscaRequest, SessaoRequest
+
+        for schema in (SessaoRequest, BuscaRequest):
+            campo = schema.model_fields["branch_id"]
+            self.assertTrue(campo.is_required(), schema.__name__)
+
+    def test_a_criacao_de_categoria_exige_a_filial_e_a_de_produto_nao(self):
+        """A assimetria e proposital, e esta na decisao 3 do service.
+
+        `AdminProductCreate.category_id` ja determina a loja. Pedir os dois
+        abriria a possibilidade de um corpo com `branch_id` e `category_id`
+        em desacordo, e o unico desfecho possivel seria um 400 que nao
+        precisa existir.
+        """
+        self.assertIn("branch_id", self.components["AdminCategoryCreate"]["required"])
+        self.assertNotIn("branch_id", self.components["AdminProductCreate"]["properties"])
+
+    def test_a_chave_de_catalogo_e_publicada_para_leitura_e_escrita(self):
+        """Sem ela no documento, o painel nao tem como ligar o produto de uma
+        loja ao da outra — e a pergunta que ela existe para responder some."""
+        self.assertIn("catalog_key", self.components["AdminProductResponse"]["properties"])
+        for nome in ("AdminProductCreate", "AdminProductUpdate"):
+            self.assertIn("catalog_key", self.components[nome]["properties"], nome)
+            self.assertNotIn("catalog_key", self.components[nome].get("required", []), nome)
+
+    def test_os_seis_relatorios_publicam_o_recorte_de_filial(self):
+        for rota in (
+            "commission", "summary", "sales-by-day",
+            "payment-methods", "products", "cancellations",
+        ):
+            caminho = f"/admin/reports/{rota}"
+            self.assertIn("branch_id", self._parametros(caminho), caminho)
+
+    def test_o_relatorio_diz_de_que_recorte_ele_fala(self):
+        """Nulo e "o restaurante inteiro", nunca "filial nenhuma"."""
+        # `PaymentMethodsResponse` existe em dois modulos e o FastAPI
+        # qualifica os dois pelo caminho do modulo. Nomear o do relatorio pelo
+        # nome curto acharia o de `restaurant_schema` — ou nenhum dos dois.
+        for nome in (
+            "CommissionReportResponse",
+            "SalesSummaryResponse",
+            "SalesByDayResponse",
+            "src__schemas__admin_report_schema__PaymentMethodsResponse",
+            "ProductSalesResponse",
+            "CancellationsResponse",
+        ):
+            self.assertIn("branch_id", self.components[nome]["properties"], nome)
+            self.assertNotIn("branch_id", self.components[nome].get("required", []), nome)
+
+    def test_o_ranking_de_produtos_publica_a_chave_de_catalogo(self):
+        """E ela que explica por que duas lojas aparecem numa linha so."""
+        self.assertIn("catalog_key", self.components["ProductSalesItem"]["properties"])
+

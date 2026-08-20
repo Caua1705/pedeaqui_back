@@ -40,6 +40,7 @@ from tests.fabricas_db import (
     criar_categoria,
     criar_cliente,
     criar_configuracoes,
+    criar_filial,
     criar_produto,
     criar_restaurante,
 )
@@ -60,7 +61,10 @@ def test_a_voz_emite_credencial_e_a_ferramenta_devolve_produto(db, monkeypatch):
     # Sem esta linha a emissão responde 403: a voz é ligada por restaurante e
     # nasce desligada em todo lugar.
     criar_configuracoes(db, restaurante, voice_enabled=True)
-    categoria = criar_categoria(db, restaurante, nome="Carnes")
+    # A filial explicita porque ela e parte do que este teste mede agora: a
+    # busca da voz e por LOJA desde a revisao 20260820_0026.
+    filial = criar_filial(db, restaurante)
+    categoria = criar_categoria(db, restaurante, nome="Carnes", filial=filial)
     produto = criar_produto(
         db, restaurante, categoria, nome="Picanha na Chapa", preco=Decimal("23.90")
     )
@@ -73,7 +77,10 @@ def test_a_voz_emite_credencial_e_a_ferramenta_devolve_produto(db, monkeypatch):
 
     # 1. A credencial. Passa por `_get_active_restaurant` e
     #    `_build_restaurant_context`.
-    sessao = cliente.post("/voice/session", json={"restaurant_id": str(restaurante.id)})
+    sessao = cliente.post(
+        "/voice/session",
+        json={"restaurant_id": str(restaurante.id), "branch_id": str(filial.id)},
+    )
     assert sessao.status_code == 200
     assert sessao.json()["credencial"]["value"] == "ek_de_teste"
     # Os tetos vêm do SERVIDOR junto com a credencial: página que escolhe o
@@ -86,7 +93,11 @@ def test_a_voz_emite_credencial_e_a_ferramenta_devolve_produto(db, monkeypatch):
     # 2. A ferramenta. Passa por `retrieval_service` e `_hydrate_products`.
     busca = cliente.post(
         "/voice/search",
-        json={"restaurant_id": str(restaurante.id), "consulta": "quero carne"},
+        json={
+            "restaurant_id": str(restaurante.id),
+            "branch_id": str(filial.id),
+            "consulta": "quero carne",
+        },
     )
     assert busca.status_code == 200
 
@@ -96,6 +107,25 @@ def test_a_voz_emite_credencial_e_a_ferramenta_devolve_produto(db, monkeypatch):
     # formato do chat de texto — vírgula, não ponto.
     assert corpo["produtos"][0]["price"] == 23.90
     assert corpo["resumo"] == "Produtos encontrados: Picanha na Chapa - R$ 23,90"
+
+    # 3. A OUTRA loja do mesmo restaurante nao conhece esta picanha.
+    #
+    # E o modo de falha que o passo 3 fechou, e o mais caro dos tres: na voz o
+    # modelo FALA nome e preco em audio, e o cliente aceita de ouvido — nao ha
+    # tela onde ele pudesse notar que aquilo e de outra loja.
+    outra = criar_filial(db, restaurante, nome="Aldeota")
+    db.flush()
+    busca_na_outra = cliente.post(
+        "/voice/search",
+        json={
+            "restaurant_id": str(restaurante.id),
+            "branch_id": str(outra.id),
+            "consulta": "quero carne",
+        },
+    )
+    assert busca_na_outra.status_code == 200
+    assert busca_na_outra.json()["produtos"] == []
+    assert busca_na_outra.json()["resumo"] == "Nenhum produto encontrado."
 
 
 def _indexar(db, produto, category_name: str) -> None:

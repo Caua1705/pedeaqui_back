@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, TIMESTAMP
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -29,10 +29,10 @@ class RestaurantSetting(Base):
     # Os campos que sobraram nesta tabela e que a filial tambem tem sao
     # PADRAO: a coluna homonima em `branches` vem nula por default e nula
     # significa "herda daqui".
-    payment_methods: Mapped[list[str] | None] = mapped_column(
-        JSONB,
-        default=lambda: ["pix", "credit_card", "debit_card"],
-    )
+    # `payment_methods` (jsonb) tambem NAO esta mais aqui: saiu na revisao
+    # 20260820_0027. Era dado morto desde que `branch_payment_methods`
+    # passou a mandar em forma de pagamento — o jsonb so era ecoado em
+    # `/menu` e podia discordar do que a filial de fato aceita.
     # Percentual da plataforma sobre este restaurante. Por restaurante e nao
     # constante global: e valor negociado, e muda de contrato para contrato.
     platform_commission_percent: Mapped[Decimal] = mapped_column(

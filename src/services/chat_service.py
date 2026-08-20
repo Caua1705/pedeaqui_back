@@ -12,6 +12,7 @@ from src.ai.schemas.chat_response_schema import ChatResponse
 from src.ai.services.chat_llm_service import ChatLLMService
 from src.ai.services.retrieval_service import RetrievalService
 from src.repositories.ai_feedback_repository import AIFeedbackRepository
+from src.repositories.branch_repository import BranchRepository
 from src.repositories.product_repository import ProductRepository
 from src.repositories.restaurant_repository import RestaurantRepository
 from src.schemas.ai_feedback_schema import AIFeedbackRequest, AIFeedbackResponse
@@ -45,10 +46,11 @@ class ChatService:
     def __init__(self, db: Session, agent: str = "/chat"):
         """`agent` so existe para o LOG — ver `RetrievalService`.
 
-        O agente de voz reusa `retrieval_service` e `_hydrate_products`
-        deste servico, entao as linhas de medicao dos dois agentes saiam com o
-        mesmo prefixo `[AI /chat perf]`. Passando "/voz", cada um mede o
-        proprio caminho sem que exista um segundo cronometro.
+        O agente de voz reusa `retrieval_service`, `_get_active_restaurant`,
+        `_get_active_branch` e `_hydrate_products` deste servico, entao as
+        linhas de medicao dos dois agentes saiam com o mesmo prefixo
+        `[AI /chat perf]`. Passando "/voz", cada um mede o proprio caminho sem
+        que exista um segundo cronometro.
 
         O default mantem o chat de texto escrevendo exatamente o que escrevia:
         nenhum grep existente muda de resultado.
@@ -58,6 +60,7 @@ class ChatService:
         self.retrieval_service = RetrievalService(db, agent=agent)
         self.product_repository = ProductRepository(db)
         self.restaurant_repository = RestaurantRepository(db)
+        self.branch_repository = BranchRepository(db)
 
     def create_feedback(self, request: AIFeedbackRequest) -> AIFeedbackResponse:
         """Registra o voto do cliente sobre uma resposta do Rapi.
@@ -83,6 +86,7 @@ class ChatService:
     def chat(
         self,
         restaurant_id: uuid.UUID,
+        branch_id: uuid.UUID,
         session_id: str,
         message: str,
     ) -> ChatResponse:
@@ -90,9 +94,10 @@ class ChatService:
         # A mensagem do usuario e dado pessoal e nao vai para o log.
         # O digest permite correlacionar requisicoes sem expor o conteudo.
         logger.info(
-            "[AI /chat] Nova requisicao | restaurant_id=%s | session_id=%s "
-            "| message_chars=%d | message_digest=%s",
+            "[AI /chat] Nova requisicao | restaurant_id=%s | branch_id=%s "
+            "| session_id=%s | message_chars=%d | message_digest=%s",
             restaurant_id,
+            branch_id,
             session_id,
             len(message),
             _message_digest(message),
@@ -106,9 +111,10 @@ class ChatService:
         # da casa que vai no prompt, e reler o restaurante la seria uma
         # segunda consulta para o mesmo dado.
         restaurant = self._get_active_restaurant(restaurant_id)
+        branch = self._get_active_branch(restaurant.id, branch_id)
 
         try:
-            return self._answer(restaurant, session_id, message)
+            return self._answer(restaurant, branch, session_id, message)
         except Exception:
             logger.exception(
                 "[AI /chat] Erro no pipeline | restaurant_id=%s | session_id=%s",
@@ -125,6 +131,7 @@ class ChatService:
     def _answer(
         self,
         restaurant,
+        branch,
         session_id: str,
         message: str,
     ) -> ChatResponse:
@@ -145,6 +152,7 @@ class ChatService:
 
         retrieved_products = self.retrieval_service.retrieve_products(
             restaurant_id=restaurant.id,
+            branch_id=branch.id,
             question=message,
         )
         llm_response = self._invoke_llm(
@@ -162,7 +170,7 @@ class ChatService:
             retrieved_products=retrieved_products,
             selected_product_ids=selected_product_ids,
         )
-        products = self._hydrate_products(restaurant.id, selected_product_ids)
+        products = self._hydrate_products(branch.id, selected_product_ids)
         self._log_price_divergence(retrieved_products, products)
         response = self._build_response(
             llm_response=llm_response,
@@ -189,6 +197,26 @@ class ChatService:
                 detail="Restaurante não encontrado",
             )
         return restaurant
+
+    def _get_active_branch(self, restaurant_id: uuid.UUID, branch_id: uuid.UUID):
+        """A loja de que este atendimento fala. 404 quando nao e deste restaurante.
+
+        Nao ha queda para a filial padrao aqui, ao contrario do `/menu`. O
+        cardapio publico e navegacao — mostrar a loja principal a quem nao
+        escolheu nenhuma e uma resposta razoavel. O Rapi RECOMENDA, com preco,
+        e uma recomendacao da loja errada e indistinguivel de uma certa: o
+        cliente pede, e quem descobre e a cozinha. Entre 404 e adivinhar, aqui
+        so 404 e honesto.
+        """
+        branch = self.branch_repository.get_active_by_id_and_restaurant(
+            branch_id, restaurant_id
+        )
+        if branch is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Filial não encontrada para este restaurante",
+            )
+        return branch
 
     @staticmethod
     def _build_restaurant_context(restaurant) -> str:
@@ -352,14 +380,20 @@ class ChatService:
 
     def _hydrate_products(
         self,
-        restaurant_id: uuid.UUID,
+        branch_id: uuid.UUID,
         selected_product_ids: list[uuid.UUID],
     ):
+        """Os cartoes que vao para a tela, lidos do banco DAQUELA loja.
+
+        Por filial desde a revisao 20260820_0026. E o ultimo ponto do caminho
+        em que um id de outra loja ainda poderia virar cartao com preco: aqui
+        ele simplesmente nao volta da consulta e o produto sai da resposta.
+        """
         hydration_started_at = perf_counter()
         products_by_id = {
             uuid.UUID(str(product.id)): product
             for product in self.product_repository.list_active_by_ids(
-                restaurant_id,
+                branch_id,
                 selected_product_ids,
             )
         }

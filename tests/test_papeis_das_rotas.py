@@ -23,7 +23,11 @@ teste rodar no laco rapido (`pytest -m "not db"`), que e onde uma rota nova
 aparece pela primeira vez.
 """
 
+import uuid
+from types import SimpleNamespace
+
 import pytest
+from fastapi import HTTPException
 
 from main import app
 from src.api.dependencies.admin_scope import (
@@ -32,6 +36,8 @@ from src.api.dependencies.admin_scope import (
     PESSOAS,
     PESSOAS_E_AGENTE,
     SOMENTE_DONO,
+    AdminScope,
+    ensure_pode_ler_dinheiro,
 )
 
 
@@ -95,9 +101,19 @@ PAPEL_ESPERADO = {
     # --- clientes e relatorios: o que uma senha vazada nao pode alcancar
     ("GET", "/admin/customers"): GERENCIA,
     ("GET", "/admin/reports/commission"): SOMENTE_DONO,
-    ("GET", "/admin/reports/summary"): SOMENTE_DONO,
-    ("GET", "/admin/reports/sales-by-day"): SOMENTE_DONO,
-    ("GET", "/admin/reports/payment-methods"): SOMENTE_DONO,
+    # Os tres de dinheiro passaram de SOMENTE_DONO para GERENCIA na revisao
+    # 20260820_0026, e a mudanca NAO afrouxa: a rota agora exige recorte de
+    # UMA filial para quem nao e dono (`ensure_pode_ler_dinheiro`), e gerente
+    # sem `branch_id` continua recebendo 403. O que se abriu foi o gerente
+    # lendo a PROPRIA loja — antes "ler faturamento" so existia na versao "do
+    # restaurante inteiro", e era essa que se recusava.
+    #
+    # `commission` ficou de fora: e o percentual negociado com a plataforma
+    # (armadilha 17), nao desempenho de loja, e nao ha recorte que a torne
+    # assunto de quem toca o balcao.
+    ("GET", "/admin/reports/summary"): GERENCIA,
+    ("GET", "/admin/reports/sales-by-day"): GERENCIA,
+    ("GET", "/admin/reports/payment-methods"): GERENCIA,
     ("GET", "/admin/reports/products"): GERENCIA,
     ("GET", "/admin/reports/cancellations"): GERENCIA,
     # --- cupom: desconto e preco por outra porta
@@ -215,3 +231,65 @@ def test_a_tabela_nao_tem_linha_para_rota_que_nao_existe_mais():
     orfas = set(PAPEL_ESPERADO) - reais | (SEM_EXIGENCIA_DE_PAPEL - reais)
 
     assert not orfas, f"a tabela cita rotas que o app nao tem: {sorted(orfas)}"
+
+
+# ---------------------------------------------------------------------------
+# A regra que a tabela acima nao consegue expressar
+# ---------------------------------------------------------------------------
+
+
+def _escopo(papel: str, branch_id=None) -> AdminScope:
+    return AdminScope(
+        admin_user=SimpleNamespace(role=papel),
+        restaurant_id=uuid.uuid4(),
+        branch_id=branch_id,
+    )
+
+
+class TestQuemLeDinheiro:
+    """`ensure_pode_ler_dinheiro`, a segunda excecao a `exigir_papel`.
+
+    A rota declara GERENCIA; quem decide de verdade e o RECORTE que veio
+    junto com a chamada — do mesmo jeito que `ensure_pode_definir_preco` e
+    decidido pelo corpo.
+
+    A troca de SOMENTE_DONO por "GERENCIA com recorte" nao afrouxa nada. O
+    que se recusava era ler o faturamento do RESTAURANTE INTEIRO, que era a
+    unica leitura que existia antes de os relatorios terem filial. Essa
+    continua recusada; o que passou a existir e o gerente lendo a propria
+    loja.
+    """
+
+    def test_o_dono_le_sem_recorte(self):
+        ensure_pode_ler_dinheiro(_escopo("owner"), None)
+
+    def test_o_dono_le_com_recorte(self):
+        ensure_pode_ler_dinheiro(_escopo("owner"), uuid.uuid4())
+
+    def test_o_gerente_le_a_propria_filial(self):
+        filial = uuid.uuid4()
+        ensure_pode_ler_dinheiro(_escopo("manager", filial), filial)
+
+    def test_o_gerente_sem_recorte_e_403(self):
+        """O caso que o SOMENTE_DONO antigo protegia, e continua protegido.
+
+        Sem `branch_id`, a consulta soma as lojas todas — e ai e exatamente a
+        leitura de antes.
+        """
+        with pytest.raises(HTTPException) as erro:
+            ensure_pode_ler_dinheiro(_escopo("manager"), None)
+
+        assert erro.value.status_code == 403
+
+    def test_o_atendente_nao_le_nem_com_recorte(self):
+        """403 com filial escolhida tambem: `PESSOAS` nao inclui dinheiro."""
+        with pytest.raises(HTTPException) as erro:
+            ensure_pode_ler_dinheiro(_escopo("attendant"), uuid.uuid4())
+
+        assert erro.value.status_code == 403
+
+    def test_o_agente_de_impressao_nao_le(self):
+        """A senha dele fica em texto puro no config.ini da maquina do balcao."""
+        with pytest.raises(HTTPException):
+            ensure_pode_ler_dinheiro(_escopo("print_agent"), uuid.uuid4())
+

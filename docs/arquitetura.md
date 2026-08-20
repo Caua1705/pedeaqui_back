@@ -290,9 +290,15 @@ para não se confundir com status operacional na mesma tabela.
 
 ## 7. O chat do Rapi, em resumo
 
-`POST /chat` → `services/chat_service.py`. Valida o restaurante **antes** de
-gastar token, gera o embedding da pergunta, faz busca vetorial no pgvector
-filtrada por `restaurant_id` e produto ativo, chama o LLM com structured output.
+`POST /chat` → `services/chat_service.py`. Valida o restaurante **e a
+filial** antes de gastar token, gera o embedding da pergunta, faz busca
+vetorial no pgvector filtrada por `branch_id` e produto ativo, chama o LLM com
+structured output.
+
+`branch_id` é obrigatório no corpo desde a revisão `20260820_0026`, e não cai
+para a filial padrão: o cardápio é por loja, e recomendar **com preço** um
+produto que aquela loja não vende é o defeito que ele existe para fechar. Ver
+`docs/cardapio-por-filial.md`.
 
 Duas defesas que importam: ids que o LLM inventou são descartados
 (`_validate_selected_product_ids`), e os produtos são recarregados do banco pelo

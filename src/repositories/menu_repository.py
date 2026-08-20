@@ -29,21 +29,35 @@ class MenuRepository:
         )
         return list(self.db.scalars(stmt).all())
 
-    def get_active_categories(self, restaurant_id: uuid.UUID) -> list[Category]:
+    def get_active_categories(self, branch_id: uuid.UUID) -> list[Category]:
+        """As categorias DAQUELA loja.
+
+        Filtra por filial e nao por restaurante desde a revisao
+        20260820_0026: cardapio e da filial, sem heranca. Filtrar por
+        restaurante devolveria as categorias das duas lojas na mesma lista,
+        e o cliente veria secao vazia para a que nao e dele.
+        """
         stmt = (
             select(Category)
-            .where(Category.restaurant_id == restaurant_id, Category.is_active.is_(True))
+            .where(Category.branch_id == branch_id, Category.is_active.is_(True))
             .order_by(Category.sort_order.asc(), Category.name.asc())
         )
         return list(self.db.scalars(stmt).all())
 
-    def get_active_products(self, restaurant_id: uuid.UUID) -> list[Product]:
+    def get_active_products(self, branch_id: uuid.UUID) -> list[Product]:
+        """Os produtos vendaveis DAQUELA loja.
+
+        `Category.branch_id` no WHERE alem de `Product.branch_id` e
+        redundante — a FK composta (branch_id, category_id) garante que os
+        dois concordam — e fica de fora: consulta que repete o que o banco ja
+        garante so envelhece.
+        """
         stmt = (
             select(Product)
             .join(Category, Product.category_id == Category.id)
             .options(selectinload(Product.option_groups).selectinload(ProductOptionGroup.options))
             .where(
-                Product.restaurant_id == restaurant_id,
+                Product.branch_id == branch_id,
                 Product.is_active.is_(True),
                 Product.is_available.is_(True),
                 Category.is_active.is_(True),

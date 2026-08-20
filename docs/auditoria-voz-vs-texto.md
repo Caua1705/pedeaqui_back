@@ -127,7 +127,8 @@ O caminho do texto entra na mesma função em `chat_service.py:135`.
 | Modelo de embedding | `settings.EMBEDDING_MODEL` | idem | `embedding_service.py:12`; default `text-embedding-3-small` em `config.py:51` |
 | Tabela | `ai_product_embeddings` JOIN `products` | idem | `ai_repository.py:36-37` |
 | `top_k` | 5 | 5 | default em `retrieval_service.py:29`; **nenhum dos dois chamadores passa o valor** (`chat_service.py:135-138`, `search_service.py:56-59`) |
-| Filtro de restaurante | `ape.restaurant_id` e `p.restaurant_id` | idem | `ai_repository.py:48-50` |
+| Filtro de restaurante | `ape.restaurant_id` e `p.restaurant_id` | idem | `ai_repository.py` |
+| Filtro de **filial** | `p.branch_id` | idem | acrescentado na revisão `20260820_0026`: sem ele o Rapi oferecia, com preço, produto que aquela loja não vende |
 | `is_active` / `is_available` | os dois exigidos | idem | `ai_repository.py:51-52` |
 | Ordenação | distância cosseno `<=>` | idem | `ai_repository.py:53` |
 
@@ -174,8 +175,8 @@ arquivo). **A voz passa pelos dois**, porque usa a mesma função.
 
 | Cache | TTL | Chave | Prova |
 |---|---|---|---|
-| Embedding da pergunta | 3600 s | `{restaurant_id}:{pergunta normalizada}` | `chat_cache.py:16`, chave em `:119` |
-| Resultado da busca | 1200 s | `{restaurant_id}:g{geração}:{pergunta normalizada}` | `chat_cache.py:17`, chave em `:129` |
+| Embedding da pergunta | 3600 s | `{restaurant_id}:{pergunta normalizada}` | `chat_cache.py`. **Sem a filial de propósito**: o vetor é da frase, e a frase é a mesma nas duas lojas |
+| Resultado da busca | 1200 s | `{restaurant_id}:{branch_id}:g{geração}:{pergunta normalizada}` | `chat_cache.py`. A filial entrou na revisão `20260820_0026`: sem ela, a segunda loja seria servida do cache da primeira e o filtro do SQL não valeria nada |
 
 A chave da voz é a string `consulta` **gerada pelo modelo**, e não o que o
 cliente falou (`page.html:155` → `src/api/voice.py:63`). O modelo reformula a

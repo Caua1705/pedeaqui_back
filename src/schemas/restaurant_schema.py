@@ -32,9 +32,11 @@ class RestaurantSettingsResponse(BaseResponse):
     junto (armadilha 16). O `settings_branch_id` da resposta do cardapio diz
     de qual filial este bloco esta falando.
 
-    `payment_methods` e o unico campo que continua sendo do restaurante, e e
-    dado morto: quem manda em forma de pagamento e `branch_payment_methods`,
-    por filial, em `GET /restaurants/{slug}/info?branch_id=...`.
+    `payment_methods` NAO esta mais aqui: saiu na revisao 20260820_0027,
+    junto com a coluna `restaurant_settings.payment_methods`. Era dado morto
+    e podia discordar do que a filial de fato aceita — quem manda e
+    `branch_payment_methods`, por filial, em
+    `GET /restaurants/{slug}/info?branch_id=...`.
     """
 
     min_order_value: float
@@ -45,7 +47,6 @@ class RestaurantSettingsResponse(BaseResponse):
     service_fee_amount: float
     accepts_delivery: bool | None = True
     accepts_pickup: bool | None = True
-    payment_methods: list[str] | None = None
     is_open: bool | None = True
 
 
@@ -67,7 +68,16 @@ class BranchResponse(BaseResponse):
 
 
 class CategoryResponse(BaseResponse):
+    """Uma categoria do cardapio de UMA filial.
+
+    `branch_id` entrou na revisao 20260820_0026 e vale como conferencia: o
+    `/menu` inteiro fala de uma filial so, entao todas as categorias da
+    resposta trazem o mesmo valor. Uma tela que o compare com o `branch_id`
+    da raiz percebe na hora que esta misturando duas cargas.
+    """
+
     id: UUID
+    branch_id: UUID
     name: str
     slug: str
     sort_order: int | None = 0

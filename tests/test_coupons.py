@@ -510,6 +510,7 @@ class OrderCouponIntegrationTests(unittest.TestCase):
         product = SimpleNamespace(
             id=product_id,
             code="P1",
+        catalog_key=None,
             name="Produto",
             description=None,
             price=Decimal("25.00"),

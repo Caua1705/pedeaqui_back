@@ -94,15 +94,21 @@ balcão e não manda ninguém cozinhar.
 
 **2. Item nunca some da comanda.**
 
-O setor pende de filial e o produto pende de restaurante, então um produto só
-consegue apontar para o setor de **uma** filial. Num restaurante com várias
-lojas, o pedido da filial B pode conter um produto apontando para setor da filial
-A — e um setor pode ter sido desativado depois de vinculado.
-
-Nesses dois casos o item vai para uma via **`"SEM SETOR"`** e o caso é logado
+Item cujo setor não serve vai para uma via **`"SEM SETOR"`** e o caso é logado
 (`[Impressao] item sem setor utilizavel`), em vez de o item desaparecer
 silenciosamente da produção. É sempre configuração errada, nunca operação normal
 — sem esse log, alguém descobriria pela comanda estranha no meio do almoço.
+
+**Esta via perdeu um dos dois motivos em 20/08/2026, e o que sobrou não a
+dispensa.** Até a revisão `20260820_0026`, o produto pendia de RESTAURANTE e o
+setor de FILIAL: o pedido da filial B podia trazer um produto apontando para o
+setor da filial A. Hoje o produto também pende de filial, e a FK composta
+`(branch_id, printing_sector_id)` torna esse par impossível de gravar — a rota
+que o tentaria responde **400** antes.
+
+O motivo que sobrou é o **setor desativado** depois de vinculado, que é estado
+e não integridade referencial, mais o produto que não está mais naquele
+restaurante. Nenhum dos dois tem chave estrangeira que os feche.
 
 **O único jeito de um item NÃO ser impresso** é o produto ter
 `printing_sector_id` nulo, que é decisão explícita do lojista.

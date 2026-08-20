@@ -38,6 +38,12 @@ que existe (a filial do lado, o restaurante do concorrente). O papel e sobre
 um recurso que ele sabe que existe — ele ve o botao na propria tela. Esconder
 com 404 nao esconderia nada e so tornaria o erro impossivel de depurar.
 
+Duas regras nao cabem em `exigir_papel`, e as duas moram aqui embaixo:
+`ensure_pode_definir_preco` (quem decide e o CORPO) e
+`ensure_pode_ler_dinheiro` (quem decide e o RECORTE de filial da consulta).
+Nos dois casos a rota inteira nao pode ser recusada — so uma parte do que ela
+faz.
+
 **Nao existe tabela central de rota -> papel, e isso e decisao.** A regra
 mora no `dependencies=[...]` de cada rota. Uma tabela envelhece separada das
 rotas, e a rota nova nasce sem linha nela — falhando ABERTA, que e o modo de
@@ -165,6 +171,44 @@ def ensure_pode_definir_preco(admin_user: AdminUser) -> None:
     isso, "editar produto" e "dar 99% em tudo" sao a mesma permissao.
     """
     ensure_role(admin_user, SOMENTE_DONO)
+
+
+def ensure_pode_ler_dinheiro(scope: AdminScope, branch_filter: uuid.UUID | None) -> None:
+    """O dono sempre; a gerencia so com o recorte de UMA filial. 403 no resto.
+
+    Segunda regra que `exigir_papel` nao consegue expressar, e pelo mesmo
+    motivo da primeira (`ensure_pode_definir_preco`): quem decide nao e a
+    rota, e o que veio junto com a chamada.
+
+    **Por que os relatorios de dinheiro eram SOMENTE_DONO.** Nao era pelo
+    dinheiro em si — era porque, sem recorte de filial, "ler o faturamento"
+    significava ler o do RESTAURANTE INTEIRO. Dar isso ao gerente da loja do
+    Centro era entregar-lhe o resultado da Aldeota, que nao e dele.
+
+    Com `branch_id` nos relatorios (revisao 20260820_0026), a pergunta muda:
+    o gerente pedindo a PROPRIA loja esta lendo o resultado do trabalho dele,
+    e negar isso obriga a operacao a usar a conta do dono — que e como se
+    perde a regra inteira.
+
+    O que continua barrado, e e o ponto: gerente **sem** recorte. Com
+    `branch_filter` nulo a consulta soma as lojas todas, e ai e a mesma
+    leitura de antes. Um gerente sem `branch_id` no `admin_users` pode pedir
+    a filial que quiser — mas tem que pedir uma.
+
+    `/reports/commission` NAO passa por aqui e continua SOMENTE_DONO na
+    rota: comissao e o percentual negociado com a plataforma (armadilha 17),
+    nao desempenho de loja, e nao existe recorte que a torne assunto de quem
+    toca o balcao.
+    """
+    if scope.admin_user.role == UNRESTRICTED_ROLE:
+        return
+    ensure_role(scope.admin_user, GERENCIA)
+    if branch_filter is not None:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Informe branch_id: seu perfil le o relatorio de uma filial por vez",
+    )
 
 
 def exigir_papel(papeis: tuple[str, ...]):

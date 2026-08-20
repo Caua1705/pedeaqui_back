@@ -112,7 +112,7 @@ class OrderService:
             current_customer,
             restaurant_id=restaurant.id,
         )
-        products_by_id = self._get_valid_products(restaurant.id, [item.product_id for item in payload.items])
+        products_by_id = self._get_valid_products(branch.id, [item.product_id for item in payload.items])
 
         selected_options_by_item = [
             self._validate_selected_options(products_by_id[item.product_id], item.selected_options)
@@ -549,9 +549,21 @@ class OrderService:
         # Em info e nao warning: nao e erro, e o custo de uma chamada ao
         # Google. Vira o primeiro grep quando a conta do Maps subir.
         logger.info("[Delivery estimate] estimativa nao reaproveitada motivo=%s", reason)
-    def _get_valid_products(self, restaurant_id: UUID, product_ids: list[UUID]) -> dict[UUID, object]:
+    def _get_valid_products(self, branch_id: UUID, product_ids: list[UUID]) -> dict[UUID, object]:
+        """Os produtos do pedido, conferidos contra a FILIAL que vai produzi-lo.
+
+        `branch_id` e nao `restaurant_id` desde a revisao 20260820_0026, e e a
+        barreira que faltava: com o cardapio por filial, um `product_id` da
+        loja do Centro num pedido da Aldeota passava por aqui sem nada
+        recusa-lo. O pedido entrava, com o preco do Centro, e quem descobria
+        era a cozinha da Aldeota procurando um produto que ela nao tem.
+
+        O 400 nao diz QUAL produto, pelo mesmo motivo de sempre (armadilha
+        23): a rota e publica e nao pode virar oraculo de quais UUIDs
+        existem.
+        """
         unique_ids = list(set(product_ids))
-        products = self.product_repository.list_active_by_ids(restaurant_id, unique_ids)
+        products = self.product_repository.list_active_by_ids(branch_id, unique_ids)
         products_by_id = {product.id: product for product in products}
         if len(products_by_id) != len(unique_ids):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Produto inválido ou indisponível")
@@ -711,6 +723,11 @@ class OrderService:
             order_id=order_id,
             product_id=product.id,
             product_code_snapshot=product.code,
+            # Congelada aqui pelo mesmo motivo do nome: `product_id` aponta
+            # para a linha de UMA filial e essa linha pode ser renomeada
+            # depois. E o que faz `/admin/reports/products` somar as duas
+            # lojas na mesma linha mesmo que uma delas renomeie o produto.
+            catalog_key_snapshot=product.catalog_key,
             product_name_snapshot=product.name,
             product_description_snapshot=product.description,
             unit_price_snapshot=unit_price,

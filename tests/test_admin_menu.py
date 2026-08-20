@@ -43,6 +43,26 @@ from src.services.admin_menu_service import AdminMenuService
 RESTAURANT_ID = uuid.uuid4()
 OTHER_RESTAURANT_ID = uuid.uuid4()
 
+# Cardapio pende de FILIAL desde a revisao 20260820_0026. Cada restaurante
+# deste arquivo tem uma loja, e o restaurante do lado tem a dele — e o que
+# permite os testes de isolamento continuarem medindo o que mediam.
+BRANCH_ID = uuid.uuid4()
+OTHER_BRANCH_ID = uuid.uuid4()
+# A segunda loja do MESMO restaurante. Existe para os testes novos: e nela
+# que o mesmo slug pode se repetir e que o gerente preso a primeira nao pode
+# escrever.
+SECOND_BRANCH_ID = uuid.uuid4()
+
+BRANCH_BY_RESTAURANT = {
+    RESTAURANT_ID: BRANCH_ID,
+    OTHER_RESTAURANT_ID: OTHER_BRANCH_ID,
+}
+RESTAURANT_BY_BRANCH = {
+    BRANCH_ID: RESTAURANT_ID,
+    SECOND_BRANCH_ID: RESTAURANT_ID,
+    OTHER_BRANCH_ID: OTHER_RESTAURANT_ID,
+}
+
 
 class FakeDb:
     def __init__(self):
@@ -59,21 +79,36 @@ def make_category(**overrides):
     values = {
         "id": uuid.uuid4(),
         "restaurant_id": RESTAURANT_ID,
+        "branch_id": None,
         "name": "Pizzas",
         "slug": "pizzas",
         "sort_order": 0,
         "is_active": True,
     }
     values.update(overrides)
-    return SimpleNamespace(**values)
+    return SimpleNamespace(**_com_filial(values))
+
+
+def _com_filial(values: dict) -> dict:
+    """Preenche a filial a partir do restaurante quando o teste nao a diz.
+
+    Sem isto, todo teste antigo teria que passar `branch_id` para provar o
+    que provava sobre restaurante — e os de isolamento passariam a medir
+    filial em vez de tenant.
+    """
+    if values.get("branch_id") is None:
+        values["branch_id"] = BRANCH_BY_RESTAURANT[values["restaurant_id"]]
+    return values
 
 
 def make_product(**overrides):
     values = {
         "id": uuid.uuid4(),
         "restaurant_id": RESTAURANT_ID,
+        "branch_id": None,
         "category_id": uuid.uuid4(),
         "code": None,
+        "catalog_key": None,
         "name": "Pizza Calabresa",
         "slug": "pizza-calabresa",
         "description": None,
@@ -86,7 +121,7 @@ def make_product(**overrides):
         "option_groups": [],
     }
     values.update(overrides)
-    return SimpleNamespace(**values)
+    return SimpleNamespace(**_com_filial(values))
 
 
 def make_option_group(**overrides):
@@ -146,8 +181,13 @@ class TenantScopedMenuRepository:
         self.added.append(entity)
         return entity
 
-    def list_categories(self, restaurant_id):
-        return [item for item in self.categories if item.restaurant_id == restaurant_id]
+    def list_categories(self, restaurant_id, branch_id=None):
+        return [
+            item
+            for item in self.categories
+            if item.restaurant_id == restaurant_id
+            and (branch_id is None or item.branch_id == branch_id)
+        ]
 
     def get_category(self, category_id, restaurant_id):
         for item in self.categories:
@@ -155,9 +195,9 @@ class TenantScopedMenuRepository:
                 return item
         return None
 
-    def get_category_by_slug(self, slug, restaurant_id):
+    def get_category_by_slug(self, slug, branch_id):
         for item in self.categories:
-            if item.slug == slug and item.restaurant_id == restaurant_id:
+            if item.slug == slug and item.branch_id == branch_id:
                 return item
         return None
 
@@ -169,6 +209,7 @@ class TenantScopedMenuRepository:
         return [
             item for item in self.products
             if item.restaurant_id == kwargs["restaurant_id"]
+            and (kwargs.get("branch_id") is None or item.branch_id == kwargs["branch_id"])
         ]
 
     def count_products(self, **kwargs):
@@ -213,9 +254,15 @@ class TenantScopedMenuRepository:
     def get_product_with_options(self, product_id, restaurant_id):
         return self.get_product(product_id, restaurant_id)
 
-    def get_product_by_slug(self, slug, restaurant_id):
+    def get_product_by_slug(self, slug, branch_id):
         for item in self.products:
-            if item.slug == slug and item.restaurant_id == restaurant_id:
+            if item.slug == slug and item.branch_id == branch_id:
+                return item
+        return None
+
+    def get_product_by_catalog_key(self, catalog_key, branch_id):
+        for item in self.products:
+            if item.catalog_key == catalog_key and item.branch_id == branch_id:
                 return item
         return None
 
@@ -255,9 +302,24 @@ class TenantScopedMenuRepository:
         return self._persist(option)
 
 
+class FakeBranchRepository:
+    """Filial ativa que pertence ao restaurante do mapa. Nada mais existe.
+
+    E o comportamento do `WHERE id = ? AND restaurant_id = ? AND is_active`
+    do repositorio real — o que impede o `branch_id` do corpo de apontar para
+    a loja de outro dono.
+    """
+
+    def get_active_by_id_and_restaurant(self, branch_id, restaurant_id):
+        if RESTAURANT_BY_BRANCH.get(branch_id) != restaurant_id:
+            return None
+        return SimpleNamespace(id=branch_id, restaurant_id=restaurant_id)
+
+
 def build_service(repository):
     service = AdminMenuService(FakeDb())
     service.repository = repository
+    service.branch_repository = FakeBranchRepository()
     return service
 
 
@@ -269,14 +331,14 @@ class CategoryTests(unittest.TestCase):
     def test_slug_is_derived_from_the_name(self):
         repository = TenantScopedMenuRepository()
         response = build_service(repository).create_category(
-            scope(), AdminCategoryCreate(name="Pizzas Doces & Salgadas")
+            scope(), AdminCategoryCreate(branch_id=BRANCH_ID, name="Pizzas Doces & Salgadas")
         )
 
         self.assertEqual(response.slug, "pizzas-doces-salgadas")
 
     def test_created_category_belongs_to_the_token_restaurant(self):
         repository = TenantScopedMenuRepository()
-        build_service(repository).create_category(scope(), AdminCategoryCreate(name="Bebidas"))
+        build_service(repository).create_category(scope(), AdminCategoryCreate(branch_id=BRANCH_ID, name="Bebidas"))
 
         # O restaurante nao vem do corpo em lugar nenhum do contrato: se um
         # dia vier, este teste falha.
@@ -285,7 +347,7 @@ class CategoryTests(unittest.TestCase):
     def test_duplicated_slug_in_the_same_restaurant_is_refused(self):
         repository = TenantScopedMenuRepository(categories=[make_category(slug="bebidas")])
         with self.assertRaises(HTTPException) as raised:
-            build_service(repository).create_category(scope(), AdminCategoryCreate(name="Bebidas"))
+            build_service(repository).create_category(scope(), AdminCategoryCreate(branch_id=BRANCH_ID, name="Bebidas"))
 
         self.assertEqual(raised.exception.status_code, 409)
 
@@ -294,7 +356,7 @@ class CategoryTests(unittest.TestCase):
             categories=[make_category(slug="bebidas", restaurant_id=OTHER_RESTAURANT_ID)]
         )
         response = build_service(repository).create_category(
-            scope(), AdminCategoryCreate(name="Bebidas")
+            scope(), AdminCategoryCreate(branch_id=BRANCH_ID, name="Bebidas")
         )
 
         self.assertEqual(response.slug, "bebidas")
@@ -303,7 +365,7 @@ class CategoryTests(unittest.TestCase):
         # O slug sairia vazio e a URL publica do cardapio ficaria quebrada.
         with self.assertRaises(HTTPException) as raised:
             build_service(TenantScopedMenuRepository()).create_category(
-                scope(), AdminCategoryCreate(name="🍕🍕")
+                scope(), AdminCategoryCreate(branch_id=BRANCH_ID, name="🍕🍕")
             )
 
         self.assertEqual(raised.exception.status_code, 400)
@@ -349,7 +411,7 @@ class CategoryReorderTests(unittest.TestCase):
 
     def test_positions_follow_the_order_of_the_body(self):
         build_service(self.repository).reorder_categories(
-            scope(), CategoryReorderRequest(category_ids=[self.second.id, self.first.id])
+            scope(), CategoryReorderRequest(branch_id=BRANCH_ID, category_ids=[self.second.id, self.first.id])
         )
 
         self.assertEqual((self.second.sort_order, self.first.sort_order), (0, 1))
@@ -359,7 +421,7 @@ class CategoryReorderTests(unittest.TestCase):
         # e a ordem final dependeria do desempate por nome.
         with self.assertRaises(HTTPException) as raised:
             build_service(self.repository).reorder_categories(
-                scope(), CategoryReorderRequest(category_ids=[self.first.id])
+                scope(), CategoryReorderRequest(branch_id=BRANCH_ID, category_ids=[self.first.id])
             )
 
         self.assertEqual(raised.exception.status_code, 400)
@@ -370,8 +432,7 @@ class CategoryReorderTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as raised:
             build_service(self.repository).reorder_categories(
                 scope(),
-                CategoryReorderRequest(
-                    category_ids=[self.first.id, self.second.id, foreign.id]
+                CategoryReorderRequest(branch_id=BRANCH_ID, category_ids=[self.first.id, self.second.id, foreign.id]
                 ),
             )
 
@@ -380,7 +441,7 @@ class CategoryReorderTests(unittest.TestCase):
     def test_repeated_ids_are_refused_by_the_contract(self):
         category_id = uuid.uuid4()
         with self.assertRaises(ValidationError):
-            CategoryReorderRequest(category_ids=[category_id, category_id])
+            CategoryReorderRequest(branch_id=BRANCH_ID, category_ids=[category_id, category_id])
 
 
 class ProductTests(unittest.TestCase):
@@ -797,3 +858,283 @@ class UnavailableByRequiredGroupTests(unittest.TestCase):
         option.is_active = True
 
         self.assertFalse(service.get_product(scope(), product.id).unavailable_by_required_group)
+
+
+class EscopoPorFilialTests(unittest.TestCase):
+    """O que a revisao 20260820_0026 tornou EXPRIMIVEL.
+
+    A decisao 2 do `admin_menu_service.py` dizia, com razao, que cardapio nao
+    tinha filial e que por isso o gerente preso a uma loja editava a rede
+    inteira. Aquilo era limitacao de schema descrita como decisao: nao havia
+    coluna para restringir.
+
+    Agora ha, e todo caminho de leitura e escrita passa pelo `AdminScope`.
+    **404 e nunca 403**, pela mesma regra do resto do painel: um 403
+    confirmaria que a filial do lado existe.
+    """
+
+    def _preso_a_matriz(self):
+        return scope(branch_id=BRANCH_ID)
+
+    def test_a_listagem_de_produtos_do_dono_traz_as_duas_lojas(self):
+        repository = TenantScopedMenuRepository(products=[
+            make_product(name="Costela"),
+            make_product(name="Tapioca", branch_id=SECOND_BRANCH_ID),
+        ])
+
+        pagina = build_service(repository).list_products(scope())
+
+        self.assertEqual(
+            {item.branch_id for item in pagina.items}, {BRANCH_ID, SECOND_BRANCH_ID}
+        )
+
+    def test_o_gerente_preso_a_uma_filial_ve_so_a_dele(self):
+        repository = TenantScopedMenuRepository(products=[
+            make_product(name="Costela"),
+            make_product(name="Tapioca", branch_id=SECOND_BRANCH_ID),
+        ])
+
+        pagina = build_service(repository).list_products(self._preso_a_matriz())
+
+        self.assertEqual([item.name for item in pagina.items], ["Costela"])
+
+    def test_o_filtro_da_querystring_so_restringe(self):
+        """Preso a matriz e pedindo a outra: 404, nao a lista alheia."""
+        repository = TenantScopedMenuRepository()
+
+        with self.assertRaises(HTTPException) as raised:
+            build_service(repository).list_products(
+                self._preso_a_matriz(), branch_id=SECOND_BRANCH_ID
+            )
+
+        self.assertEqual(raised.exception.status_code, 404)
+
+    def test_editar_produto_de_outra_filial_e_404(self):
+        de_outra_loja = make_product(branch_id=SECOND_BRANCH_ID)
+        repository = TenantScopedMenuRepository(products=[de_outra_loja])
+
+        with self.assertRaises(HTTPException) as raised:
+            build_service(repository).update_product(
+                self._preso_a_matriz(), de_outra_loja.id, AdminProductUpdate(name="Novo")
+            )
+
+        self.assertEqual(raised.exception.status_code, 404)
+
+    def test_o_grupo_de_opcoes_chega_a_filial_pelo_produto(self):
+        """Grupo nao tem coluna de filial: ele chega nela pelo produto.
+
+        Sem a reconferencia, o UUID de um grupo bastaria para o gerente da
+        matriz editar os complementos da picanha da outra loja.
+        """
+        de_outra_loja = make_product(branch_id=SECOND_BRANCH_ID)
+        grupo = make_option_group(product_id=de_outra_loja.id)
+        repository = TenantScopedMenuRepository(products=[de_outra_loja], groups=[grupo])
+
+        with self.assertRaises(HTTPException) as raised:
+            build_service(repository).update_option_group(
+                self._preso_a_matriz(), grupo.id, AdminOptionGroupUpdate(name="Ponto")
+            )
+
+        self.assertEqual(raised.exception.status_code, 404)
+
+    def test_a_opcao_chega_a_filial_por_dois_saltos(self):
+        de_outra_loja = make_product(branch_id=SECOND_BRANCH_ID)
+        grupo = make_option_group(product_id=de_outra_loja.id)
+        opcao = make_option(option_group_id=grupo.id)
+        repository = TenantScopedMenuRepository(
+            products=[de_outra_loja], groups=[grupo], options=[opcao]
+        )
+
+        with self.assertRaises(HTTPException) as raised:
+            build_service(repository).update_option(
+                self._preso_a_matriz(), opcao.id, AdminOptionUpdate(name="Bem passado")
+            )
+
+        self.assertEqual(raised.exception.status_code, 404)
+
+    def test_criar_categoria_em_filial_de_outro_restaurante_e_404(self):
+        repository = TenantScopedMenuRepository()
+
+        with self.assertRaises(HTTPException) as raised:
+            build_service(repository).create_category(
+                scope(), AdminCategoryCreate(branch_id=OTHER_BRANCH_ID, name="Bebidas")
+            )
+
+        self.assertEqual(raised.exception.status_code, 404)
+
+
+class SlugPorFilialTests(unittest.TestCase):
+    """O 409 passou a ser por FILIAL, e e o que permite as duas lojas
+    venderem "Picanha" sem uma delas virar `picanha-2` na URL."""
+
+    def test_o_mesmo_slug_na_outra_filial_nao_bloqueia(self):
+        repository = TenantScopedMenuRepository(
+            categories=[make_category(slug="bebidas", branch_id=SECOND_BRANCH_ID)]
+        )
+
+        resposta = build_service(repository).create_category(
+            scope(), AdminCategoryCreate(branch_id=BRANCH_ID, name="Bebidas")
+        )
+
+        self.assertEqual(resposta.slug, "bebidas")
+        self.assertEqual(resposta.branch_id, BRANCH_ID)
+
+    def test_o_mesmo_slug_na_mesma_filial_continua_409(self):
+        repository = TenantScopedMenuRepository(
+            categories=[make_category(slug="bebidas", branch_id=BRANCH_ID)]
+        )
+
+        with self.assertRaises(HTTPException) as raised:
+            build_service(repository).create_category(
+                scope(), AdminCategoryCreate(branch_id=BRANCH_ID, name="Bebidas")
+            )
+
+        self.assertEqual(raised.exception.status_code, 409)
+
+
+class ChaveDeCatalogoTests(unittest.TestCase):
+    """Repetir a chave ENTRE lojas e o uso; dentro de uma e o defeito.
+
+    Duas linhas da mesma loja com a mesma chave fariam o relatorio contar a
+    mesma venda duas vezes — o oposto do que a coluna existe para fazer.
+    """
+
+    def _categoria_e_repositorio(self, produtos=()):
+        categoria = make_category()
+        return categoria, TenantScopedMenuRepository(
+            categories=[categoria], products=list(produtos)
+        )
+
+    def test_a_chave_repetida_na_mesma_filial_e_409(self):
+        ja_existe = make_product(catalog_key="picanha")
+        categoria, repository = self._categoria_e_repositorio([ja_existe])
+
+        with self.assertRaises(HTTPException) as raised:
+            build_service(repository).create_product(
+                scope(),
+                AdminProductCreate(
+                    category_id=categoria.id,
+                    name="Picanha Premium",
+                    price=Decimal("120.00"),
+                    catalog_key="picanha",
+                ),
+            )
+
+        self.assertEqual(raised.exception.status_code, 409)
+
+    def test_a_chave_repetida_em_outra_filial_passa(self):
+        na_outra_loja = make_product(catalog_key="picanha", branch_id=SECOND_BRANCH_ID)
+        categoria, repository = self._categoria_e_repositorio([na_outra_loja])
+
+        criado = build_service(repository).create_product(
+            scope(),
+            AdminProductCreate(
+                category_id=categoria.id,
+                name="Picanha",
+                price=Decimal("89.90"),
+                catalog_key="picanha",
+            ),
+        )
+
+        self.assertEqual(criado.catalog_key, "picanha")
+
+    def test_a_chave_nula_nao_colide_com_nada(self):
+        """E o estado normal do produto sem par em outra loja — por isso o
+        indice unico e parcial."""
+        sem_chave = make_product(catalog_key=None)
+        categoria, repository = self._categoria_e_repositorio([sem_chave])
+
+        criado = build_service(repository).create_product(
+            scope(),
+            AdminProductCreate(
+                category_id=categoria.id, name="Fraldinha", price=Decimal("60.00")
+            ),
+        )
+
+        self.assertIsNone(criado.catalog_key)
+
+    def test_editar_o_proprio_produto_nao_colide_consigo_mesmo(self):
+        produto = make_product(catalog_key="picanha")
+        repository = TenantScopedMenuRepository(
+            categories=[make_category()], products=[produto]
+        )
+
+        atualizado = build_service(repository).update_product(
+            scope(), produto.id, AdminProductUpdate(catalog_key="picanha")
+        )
+
+        self.assertEqual(atualizado.catalog_key, "picanha")
+
+
+class ProdutoNaoMudaDeFilialTests(unittest.TestCase):
+    def test_a_filial_do_produto_vem_da_categoria(self):
+        """Nao ha `branch_id` em `AdminProductCreate`: a categoria ja diz a loja.
+
+        Pedir os dois abriria a chance de virem em desacordo, e a FK composta
+        recusaria a gravacao com um 500 de IntegrityError.
+        """
+        categoria = make_category(branch_id=SECOND_BRANCH_ID)
+        repository = TenantScopedMenuRepository(categories=[categoria])
+
+        criado = build_service(repository).create_product(
+            scope(),
+            AdminProductCreate(
+                category_id=categoria.id, name="Tapioca", price=Decimal("18.00")
+            ),
+        )
+
+        self.assertEqual(criado.branch_id, SECOND_BRANCH_ID)
+
+    def test_mover_para_categoria_de_outra_filial_e_400(self):
+        """400 com frase, e nao o 500 da violacao de FK.
+
+        Mover a linha levaria junto os grupos de opcao, o setor de impressao e
+        a chave de catalogo, e deixaria o historico de pedido apontando para
+        um produto que aquela loja nao vende mais.
+        """
+        produto = make_product()
+        da_outra_loja = make_category(branch_id=SECOND_BRANCH_ID)
+        repository = TenantScopedMenuRepository(
+            categories=[da_outra_loja], products=[produto]
+        )
+
+        with self.assertRaises(HTTPException) as raised:
+            build_service(repository).update_product(
+                scope(), produto.id, AdminProductUpdate(category_id=da_outra_loja.id)
+            )
+
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_mover_dentro_da_mesma_filial_continua_valendo(self):
+        produto = make_product()
+        outra_secao = make_category(slug="promocoes")
+        repository = TenantScopedMenuRepository(
+            categories=[outra_secao], products=[produto]
+        )
+
+        atualizado = build_service(repository).update_product(
+            scope(), produto.id, AdminProductUpdate(category_id=outra_secao.id)
+        )
+
+        self.assertEqual(atualizado.category_id, outra_secao.id)
+
+
+class ReordenacaoPorFilialTests(unittest.TestCase):
+    def test_a_lista_completa_exigida_e_a_da_FILIAL(self):
+        """O conjunto que compartilha a numeracao passou a ser a loja.
+
+        Medindo o restaurante, o dono com duas lojas nunca conseguiria
+        reordenar uma sem mandar as categorias da outra junto.
+        """
+        da_matriz = make_category(slug="carnes")
+        da_outra = make_category(slug="bebidas", branch_id=SECOND_BRANCH_ID)
+        repository = TenantScopedMenuRepository(categories=[da_matriz, da_outra])
+
+        resposta = build_service(repository).reorder_categories(
+            scope(),
+            CategoryReorderRequest(branch_id=BRANCH_ID, category_ids=[da_matriz.id]),
+        )
+
+        self.assertEqual([item.id for item in resposta], [da_matriz.id])
+        self.assertEqual(da_matriz.sort_order, 0)
+

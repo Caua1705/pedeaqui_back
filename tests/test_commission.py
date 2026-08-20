@@ -85,6 +85,7 @@ def build_service(*, commission_percent=Decimal("10.00"), service_fee=Decimal("0
     product = SimpleNamespace(
         id=product_id,
         code="P1",
+        catalog_key=None,
         name="Picanha",
         description=None,
         price=Decimal("50.00"),
@@ -209,12 +210,14 @@ class FakeReportRepository:
         self.orders = orders
         self.excluded = excluded
         self.bounds = None
+        self.branch_id = None
 
-    def list_orders_for_commission(self, restaurant_id, start_at, end_at):
+    def list_orders_for_commission(self, restaurant_id, start_at, end_at, branch_id=None):
         self.bounds = (start_at, end_at)
+        self.branch_id = branch_id
         return self.orders
 
-    def count_excluded_from_commission(self, restaurant_id, start_at, end_at):
+    def count_excluded_from_commission(self, restaurant_id, start_at, end_at, branch_id=None):
         return self.excluded
 
 

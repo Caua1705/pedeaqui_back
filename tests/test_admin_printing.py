@@ -195,10 +195,22 @@ def make_sector(name="Cozinha", branch_id=BRANCH_ID, is_active=True, sort_order=
     )
 
 
-def make_product(sector_id=None, category_id=None, restaurant_id=RESTAURANT_ID):
+def make_product(
+    sector_id=None,
+    category_id=None,
+    restaurant_id=RESTAURANT_ID,
+    branch_id=BRANCH_ID,
+):
+    """Produto de UMA filial.
+
+    A filial default e a mesma dos setores deste arquivo: desde a revisao
+    20260820_0026 produto e setor tem que estar na mesma loja, e a FK
+    composta nao deixa gravar o contrario.
+    """
     return SimpleNamespace(
         id=uuid.uuid4(),
         restaurant_id=restaurant_id,
+        branch_id=branch_id,
         category_id=category_id or uuid.uuid4(),
         printing_sector_id=sector_id,
     )
@@ -354,25 +366,6 @@ class PrintJobTests(unittest.TestCase):
 
         self.assertEqual(jobs_of(response), [(PRINT_JOB_CUSTOMER, "Via do cliente")])
 
-    def test_a_sector_of_another_branch_falls_back_instead_of_vanishing(self):
-        # O produto e do restaurante e o setor e da filial: num restaurante
-        # com varias lojas, o pedido da filial B pode trazer produto
-        # apontado para um setor da filial A. Some da producao = sai pedido
-        # errado, entao ele vai para a via de resgate.
-        foreign = make_sector("Cozinha", branch_id=OTHER_BRANCH_ID)
-        product = make_product(foreign.id)
-        detail = make_order_detail([make_item(product.id)], branch_id=BRANCH_ID)
-        service = build_service(FakeSectorRepository([foreign], [product]), order_detail=detail)
-
-        response = service.build_print_jobs(detail.id, make_scope())
-
-        self.assertEqual(
-            jobs_of(response),
-            [(PRINT_JOB_CUSTOMER, "Via do cliente"),
-             (PRINT_JOB_PRODUCTION, UNASSIGNED_SECTOR_NAME)],
-        )
-        self.assertIn("PRATO FEITO", response.jobs[1].content)
-
     def test_a_deactivated_sector_falls_back_too(self):
         # Desativar o setor sem reapontar os produtos e configuracao pela
         # metade, nao instrucao de parar de imprimir.
@@ -389,8 +382,12 @@ class PrintJobTests(unittest.TestCase):
         )
 
     def test_the_fallback_copy_comes_after_the_real_sectors(self):
+        # O setor desativado e o unico caminho que ainda leva a via de
+        # resgate: "setor de outra filial" deixou de ser gravavel na revisao
+        # 20260820_0026 (FK composta), e o teste daquele caso virou o de
+        # escrita, em ProductBindingTests.
         kitchen = make_sector("Cozinha")
-        orphan = make_sector("Cozinha", branch_id=OTHER_BRANCH_ID)
+        orphan = make_sector("Cozinha desligada", is_active=False)
         routed = make_product(kitchen.id)
         stray = make_product(orphan.id)
         detail = make_order_detail([make_item(stray.id), make_item(routed.id)])
@@ -572,7 +569,7 @@ class CategoryBindingTests(unittest.TestCase):
         # E como a configuracao acontece: "toda bebida vai para o Bar".
         # Produto a produto, um cardapio de 200 itens nunca sai do lugar.
         sector = make_sector("Bar")
-        category = SimpleNamespace(id=uuid.uuid4(), restaurant_id=RESTAURANT_ID)
+        category = SimpleNamespace(id=uuid.uuid4(), restaurant_id=RESTAURANT_ID, branch_id=BRANCH_ID)
         drinks = [make_product(category_id=category.id) for _ in range(3)]
         other = make_product()
         repository = FakeSectorRepository([sector], drinks + [other])
@@ -592,7 +589,7 @@ class CategoryBindingTests(unittest.TestCase):
         # O restaurante entra no WHERE junto com a categoria: sem ele, um
         # UUID de categoria alheia reescreveria o cardapio de outro dono.
         sector = make_sector()
-        category = SimpleNamespace(id=uuid.uuid4(), restaurant_id=RESTAURANT_ID)
+        category = SimpleNamespace(id=uuid.uuid4(), restaurant_id=RESTAURANT_ID, branch_id=BRANCH_ID)
         repository = FakeSectorRepository([sector])
         service = build_service(repository, FakeMenuRepository(categories=[category]))
 
@@ -605,7 +602,7 @@ class CategoryBindingTests(unittest.TestCase):
         self.assertEqual(repository.category_updates, [(category.id, RESTAURANT_ID, sector.id)])
 
     def test_a_category_of_another_restaurant_is_not_found(self):
-        category = SimpleNamespace(id=uuid.uuid4(), restaurant_id=uuid.uuid4())
+        category = SimpleNamespace(id=uuid.uuid4(), restaurant_id=uuid.uuid4(), branch_id=OTHER_BRANCH_ID)
         service = build_service(FakeSectorRepository(), FakeMenuRepository(categories=[category]))
 
         with self.assertRaises(HTTPException) as caught:

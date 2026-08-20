@@ -942,6 +942,11 @@
       },
       "AdminCategoryCreate": {
         "properties": {
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
           "is_active": {
             "default": true,
             "title": "Is Active",
@@ -961,6 +966,7 @@
           }
         },
         "required": [
+          "branch_id",
           "name"
         ],
         "title": "AdminCategoryCreate",
@@ -968,6 +974,11 @@
       },
       "AdminCategoryResponse": {
         "properties": {
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -1008,6 +1019,7 @@
         },
         "required": [
           "id",
+          "branch_id",
           "name",
           "slug"
         ],
@@ -2072,7 +2084,20 @@
         "type": "object"
       },
       "AdminProductCreate": {
+        "description": "Produto novo. A FILIAL vem da categoria, e nao do corpo.\n\n`category_id` ja determina a loja (categoria pertence a uma filial desde\na revisao 20260820_0026), entao um `branch_id` aqui seria um segundo jeito\nde dizer a mesma coisa — com a chance de os dois discordarem.",
         "properties": {
+          "catalog_key": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Key"
+          },
           "category_id": {
             "format": "uuid",
             "title": "Category Id",
@@ -2148,6 +2173,22 @@
       "AdminProductDetailResponse": {
         "description": "Produto com os grupos de opcoes, para a tela de edicao.\n\nA listagem nao traz os grupos: uma tela com 200 produtos faria 200\nsubconsultas para mostrar dado que nem aparece na tabela.",
         "properties": {
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
+          "catalog_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Key"
+          },
           "category_id": {
             "format": "uuid",
             "title": "Category Id",
@@ -2284,6 +2325,7 @@
         },
         "required": [
           "id",
+          "branch_id",
           "category_id",
           "name",
           "price"
@@ -2325,6 +2367,22 @@
       },
       "AdminProductResponse": {
         "properties": {
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
+          "catalog_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Key"
+          },
           "category_id": {
             "format": "uuid",
             "title": "Category Id",
@@ -2454,6 +2512,7 @@
         },
         "required": [
           "id",
+          "branch_id",
           "category_id",
           "name",
           "price"
@@ -2462,8 +2521,20 @@
         "type": "object"
       },
       "AdminProductUpdate": {
-        "description": "Edicao parcial do produto.\n\nSem `image_path`: a imagem so muda por POST /admin/products/{id}/image,\nque valida o arquivo e grava no bucket. Se o caminho fosse texto livre\naqui, o painel poderia apontar o produto para qualquer objeto do\nStorage, inclusive de outro restaurante.\n\nSem `slug` pelo mesmo motivo da categoria: ele e URL publica.",
+        "description": "Edicao parcial do produto.\n\nSem `image_path`: a imagem so muda por POST /admin/products/{id}/image,\nque valida o arquivo e grava no bucket. Se o caminho fosse texto livre\naqui, o painel poderia apontar o produto para qualquer objeto do\nStorage, inclusive de outro restaurante.\n\nSem `slug` pelo mesmo motivo da categoria: ele e URL publica.\n\nSem `branch_id`: produto nao muda de loja. Mover a linha levaria junto os\ngrupos de opcao, o setor de impressao e a chave de catalogo, e deixaria o\nhistorico de pedido apontando para um produto que a filial nao vende\nmais. Quem quer o item na outra loja cria um la e usa a mesma\n`catalog_key`. Pelo mesmo motivo, `category_id` so aceita categoria DA\nMESMA filial — categoria de outra loja responde 400.",
         "properties": {
+          "catalog_key": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Key"
+          },
           "category_id": {
             "anyOf": [
               {
@@ -3905,6 +3976,18 @@
             "title": "Billable Orders Count",
             "type": "integer"
           },
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
           "breakdown": {
             "items": {
               "$ref": "#/components/schemas/CancellationBreakdownItem"
@@ -4118,8 +4201,13 @@
         "type": "object"
       },
       "CategoryReorderRequest": {
-        "description": "Nova ordem das categorias, da primeira para a ultima.\n\nA lista inteira e nao pares (id, posicao) porque e assim que uma tela de\narrastar-e-soltar pensa: o painel manda o que esta vendo e o servidor\nnumera. Enviar posicoes soltas abriria espaco para duas categorias com o\nmesmo `sort_order` e ordem final imprevisivel.",
+        "description": "Nova ordem das categorias DE UMA FILIAL, da primeira para a ultima.\n\nA lista inteira e nao pares (id, posicao) porque e assim que uma tela de\narrastar-e-soltar pensa: o painel manda o que esta vendo e o servidor\nnumera. Enviar posicoes soltas abriria espaco para duas categorias com o\nmesmo `sort_order` e ordem final imprevisivel.\n\n`branch_id` entrou na revisao 20260820_0026 e nao e decorativo: o\nconjunto que compartilha a numeracao passou a ser a FILIAL. Sem ele, a\nconferencia de \"lista completa\" mediria as categorias das lojas todas, e\no dono com duas lojas nunca conseguiria reordenar uma sem mandar a outra\njunto.",
         "properties": {
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
           "category_ids": {
             "items": {
               "format": "uuid",
@@ -4132,13 +4220,20 @@
           }
         },
         "required": [
+          "branch_id",
           "category_ids"
         ],
         "title": "CategoryReorderRequest",
         "type": "object"
       },
       "CategoryResponse": {
+        "description": "Uma categoria do cardapio de UMA filial.\n\n`branch_id` entrou na revisao 20260820_0026 e vale como conferencia: o\n`/menu` inteiro fala de uma filial so, entao todas as categorias da\nresposta trazem o mesmo valor. Uma tela que o compare com o `branch_id`\nda raiz percebe na hora que esta misturando duas cargas.",
         "properties": {
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -4179,6 +4274,7 @@
         },
         "required": [
           "id",
+          "branch_id",
           "name",
           "slug"
         ],
@@ -4240,6 +4336,11 @@
       },
       "ChatRequest": {
         "properties": {
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
           "message": {
             "maxLength": 2000,
             "minLength": 1,
@@ -4260,6 +4361,7 @@
         },
         "required": [
           "restaurant_id",
+          "branch_id",
           "session_id",
           "message"
         ],
@@ -4388,6 +4490,18 @@
       },
       "CommissionReportResponse": {
         "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
           "commission_base_total": {
             "title": "Commission Base Total",
             "type": "string"
@@ -8150,7 +8264,13 @@
         "type": "object"
       },
       "ProductResponse": {
+        "description": "Um produto do cardapio de UMA filial.\n\n`restaurant_id` e `branch_id` aparecem os dois: o primeiro por ja ser\ncontrato publicado, o segundo porque desde a revisao 20260820_0026 e ele\nque diz de qual LOJA sao este preco e esta disponibilidade. Dois produtos\ncom o mesmo nome e precos diferentes so se distinguem por ele.",
         "properties": {
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
           "category_id": {
             "format": "uuid",
             "title": "Category Id",
@@ -8276,6 +8396,7 @@
         "required": [
           "id",
           "restaurant_id",
+          "branch_id",
           "category_id",
           "name",
           "price"
@@ -8285,6 +8406,17 @@
       },
       "ProductSalesItem": {
         "properties": {
+          "catalog_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Key"
+          },
           "orders_count": {
             "title": "Orders Count",
             "type": "integer"
@@ -8325,6 +8457,18 @@
       },
       "ProductSalesResponse": {
         "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
           "listed_revenue_total": {
             "title": "Listed Revenue Total",
             "type": "string"
@@ -8710,6 +8854,7 @@
         "type": "object"
       },
       "RestaurantMenuResponse": {
+        "description": "O cardapio de UMA filial. Ver `MenuService.get_restaurant_menu`.",
         "properties": {
           "banners": {
             "items": {
@@ -8717,6 +8862,18 @@
             },
             "title": "Banners",
             "type": "array"
+          },
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
           },
           "branches": {
             "items": {
@@ -8906,7 +9063,7 @@
         "type": "object"
       },
       "RestaurantSettingsResponse": {
-        "description": "A operacao de UMA filial, apesar do nome herdado.\n\nOs campos nao mudaram de nome nem de tipo, mas mudaram de dono: desde a\nrevisao 20260818_0025 este bloco descreve a filial que o `branch_id` do\n`/menu` pediu (ou a filial padrao, quando ele nao vem), e nao mais o\nrestaurante inteiro. `is_open` aqui e o \"fechar agora\" DAQUELA loja.\n\nO nome fica por ser contrato publicado, e renomear schema quebra o painel\njunto (armadilha 16). O `settings_branch_id` da resposta do cardapio diz\nde qual filial este bloco esta falando.\n\n`payment_methods` e o unico campo que continua sendo do restaurante, e e\ndado morto: quem manda em forma de pagamento e `branch_payment_methods`,\npor filial, em `GET /restaurants/{slug}/info?branch_id=...`.",
+        "description": "A operacao de UMA filial, apesar do nome herdado.\n\nOs campos nao mudaram de nome nem de tipo, mas mudaram de dono: desde a\nrevisao 20260818_0025 este bloco descreve a filial que o `branch_id` do\n`/menu` pediu (ou a filial padrao, quando ele nao vem), e nao mais o\nrestaurante inteiro. `is_open` aqui e o \"fechar agora\" DAQUELA loja.\n\nO nome fica por ser contrato publicado, e renomear schema quebra o painel\njunto (armadilha 16). O `settings_branch_id` da resposta do cardapio diz\nde qual filial este bloco esta falando.\n\n`payment_methods` NAO esta mais aqui: saiu na revisao 20260820_0027,\njunto com a coluna `restaurant_settings.payment_methods`. Era dado morto\ne podia discordar do que a filial de fato aceita — quem manda e\n`branch_payment_methods`, por filial, em\n`GET /restaurants/{slug}/info?branch_id=...`.",
         "properties": {
           "accepts_delivery": {
             "anyOf": [
@@ -8973,20 +9130,6 @@
           "min_order_value": {
             "title": "Min Order Value",
             "type": "number"
-          },
-          "payment_methods": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Payment Methods"
           },
           "service_fee_amount": {
             "title": "Service Fee Amount",
@@ -9073,6 +9216,18 @@
       },
       "SalesByDayResponse": {
         "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
           "days": {
             "items": {
               "$ref": "#/components/schemas/SalesByDayItem"
@@ -9115,6 +9270,18 @@
           },
           "average_ticket_comparison": {
             "$ref": "#/components/schemas/MetricComparison"
+          },
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
           },
           "breakdown": {
             "$ref": "#/components/schemas/SalesBreakdown"
@@ -9608,6 +9775,18 @@
       },
       "src__schemas__admin_report_schema__PaymentMethodsResponse": {
         "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
           "orders_count": {
             "title": "Orders Count",
             "type": "integer"
@@ -10718,8 +10897,29 @@
     },
     "/admin/categories": {
       "get": {
-        "description": "Todas as categorias, ativas e inativas.\n\nDiferente do cardapio publico de proposito: quem desativou uma categoria\nprecisa continuar vendo-a para religar.",
+        "description": "Todas as categorias, ativas e inativas, das filiais que o token alcanca.\n\nDiferente do cardapio publico de proposito: quem desativou uma categoria\nprecisa continuar vendo-a para religar.\n\nSem `branch_id`, quem enxerga o restaurante inteiro recebe as lojas todas\nnuma lista, cada linha com o `branch_id` dela — e a tela em que o dono\nconfere se as duas lojas tem as mesmas secoes. Quem esta preso a uma\nfilial recebe so a dele, e pedir outra responde 404.",
         "operationId": "list_categories_admin_categories_get",
+        "parameters": [
+          {
+            "description": "So restringe; nunca amplia",
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "So restringe; nunca amplia",
+              "title": "Branch Id"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -10734,6 +10934,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -10747,6 +10957,7 @@
         ]
       },
       "post": {
+        "description": "Cria a categoria numa filial. `branch_id` e obrigatorio no corpo.\n\nSem default de propriedade nenhuma: cair na filial padrao criaria a\nsecao numa loja que o lojista nao escolheu, e ele so descobriria pelo\ncardapio publico da outra.",
         "operationId": "create_category_admin_categories_post",
         "requestBody": {
           "content": {
@@ -10793,7 +11004,7 @@
     },
     "/admin/categories/reorder": {
       "patch": {
-        "description": "Grava a nova ordem do cardapio.\n\nEspera a lista COMPLETA das categorias do restaurante, na ordem\ndesejada. Faltando alguma, responde 400 — ver\nAdminMenuService.reorder_categories.",
+        "description": "Grava a nova ordem do cardapio DE UMA FILIAL.\n\nEspera `branch_id` e a lista COMPLETA das categorias daquela filial, na\nordem desejada. Faltando alguma, responde 400 — ver\nAdminMenuService.reorder_categories.",
         "operationId": "reorder_categories_admin_categories_reorder_patch",
         "requestBody": {
           "content": {
@@ -12219,8 +12430,28 @@
     },
     "/admin/products": {
       "get": {
+        "description": "Os produtos, paginados. Cada item diz de qual filial e.\n\nSem `branch_id`, quem enxerga o restaurante inteiro ve as lojas todas —\ne ai a mesma \"Picanha\" aparece uma vez por loja, com precos que podem\ndivergir. A lista vem agrupada por filial de proposito, para que duas\nlinhas de mesmo nome nunca saiam vizinhas sem explicacao.",
         "operationId": "list_products_admin_products_get",
         "parameters": [
+          {
+            "description": "So restringe; nunca amplia",
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "So restringe; nunca amplia",
+              "title": "Branch Id"
+            }
+          },
           {
             "in": "query",
             "name": "category_id",
@@ -12329,6 +12560,7 @@
         ]
       },
       "post": {
+        "description": "Cria o produto. A FILIAL vem da categoria, nao do corpo.\n\nNao ha `branch_id` aqui de proposito: `category_id` ja determina a loja,\ne pedir os dois abriria a chance de virem em desacordo. Ver a decisao 3\nno cabecalho de `admin_menu_service.py`.",
         "operationId": "create_product_admin_products_post",
         "requestBody": {
           "content": {
@@ -12473,7 +12705,7 @@
         ]
       },
       "patch": {
-        "description": "Edita nome, descricao, categoria, codigo e preco.\n\nO preco e a unica parte que o gerente nao alcanca — ver\n`ensure_pode_definir_preco`. Ele fica com o resto da tela.",
+        "description": "Edita nome, descricao, categoria, codigo, chave de catalogo e preco.\n\nO preco e a unica parte que o gerente nao alcanca — ver\n`ensure_pode_definir_preco`. Ele fica com o resto da tela.\n\n`category_id` so aceita categoria da MESMA filial: produto nao muda de\nloja. `catalog_key` explicitamente nulo LIMPA a chave; campo ausente nao\nmexe nela.",
         "operationId": "update_product_admin_products__product_id__patch",
         "parameters": [
           {
@@ -12817,7 +13049,7 @@
     },
     "/admin/reports/cancellations": {
       "get": {
-        "description": "O outro lado do faturamento: o que nao virou venda.\n\nExatamente o complemento do que os outros relatorios excluem —\ncancelados, recusados e estornados. A taxa e sobre TODOS os pedidos do\nperiodo (faturados + excluidos), nao so sobre os faturados.",
+        "description": "O outro lado do faturamento: o que nao virou venda.\n\nExatamente o complemento do que os outros relatorios excluem —\ncancelados, recusados e estornados. A taxa e sobre TODOS os pedidos do\nperiodo (faturados + excluidos), nao so sobre os faturados, e o recorte\nde filial vale para os dois lados da fracao.",
         "operationId": "cancellations_report_admin_reports_cancellations_get",
         "parameters": [
           {
@@ -12842,6 +13074,25 @@
               "format": "date",
               "title": "End Date",
               "type": "string"
+            }
+          },
+          {
+            "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+              "title": "Branch Id"
             }
           }
         ],
@@ -12880,7 +13131,7 @@
     },
     "/admin/reports/commission": {
       "get": {
-        "description": "Comissao da plataforma no periodo, com extrato pedido a pedido.\n\nAs datas sao interpretadas no fuso da operacao (America/Fortaleza).\nCancelados, recusados e estornados nao entram; quantos foram fica em\n`excluded_orders_count`.",
+        "description": "Comissao da plataforma no periodo, com extrato pedido a pedido.\n\nAs datas sao interpretadas no fuso da operacao (America/Fortaleza).\nCancelados, recusados e estornados nao entram; quantos foram fica em\n`excluded_orders_count`.\n\nSOMENTE_DONO com ou sem `branch_id`: comissao e contrato com a\nplataforma, nao desempenho de loja.",
         "operationId": "commission_report_admin_reports_commission_get",
         "parameters": [
           {
@@ -12905,6 +13156,25 @@
               "format": "date",
               "title": "End Date",
               "type": "string"
+            }
+          },
+          {
+            "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+              "title": "Branch Id"
             }
           }
         ],
@@ -12943,7 +13213,7 @@
     },
     "/admin/reports/payment-methods": {
       "get": {
-        "description": "Quanto entrou por forma de pagamento no periodo.\n\n`payment_method` nulo e pedido sem forma registrada, e continua nulo na\nresposta — nao vira \"other\", que e uma forma de pagamento de verdade.",
+        "description": "Quanto entrou por forma de pagamento no periodo.\n\n`payment_method` nulo e pedido sem forma registrada, e continua nulo na\nresposta — nao vira \"other\", que e uma forma de pagamento de verdade.\n\nQuem nao e dono precisa mandar `branch_id`. E o relatorio em que o\nrecorte mais muda a leitura: as formas aceitas sao de cada filial\n(`branch_payment_methods`), entao a soma da rede mistura lojas que nem\noferecem os mesmos meios.",
         "operationId": "payment_methods_report_admin_reports_payment_methods_get",
         "parameters": [
           {
@@ -12968,6 +13238,25 @@
               "format": "date",
               "title": "End Date",
               "type": "string"
+            }
+          },
+          {
+            "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+              "title": "Branch Id"
             }
           }
         ],
@@ -13006,7 +13295,7 @@
     },
     "/admin/reports/products": {
       "get": {
-        "description": "Produtos mais vendidos no periodo, por unidades.\n\nAgrupa pelo nome gravado no item do pedido, nao pelo nome atual do\nproduto: renomear um produto no meio do periodo o separa em duas linhas,\nque e o correto — foram dois itens diferentes no cardapio de quem\ncomprou.\n\n`listed_revenue_total` NAO fecha com o faturamento de `/reports/summary`:\ne receita bruta de item, sem cupom, cashback nem taxas. A resposta\ncarrega essa ressalva em `revenue_note`.",
+        "description": "Produtos mais vendidos no periodo, por unidades.\n\nAgrupa pelo nome gravado no item do pedido, nao pelo nome atual do\nproduto: renomear um produto no meio do periodo o separa em duas linhas,\nque e o correto — foram dois itens diferentes no cardapio de quem\ncomprou.\n\n**Sem `branch_id`, os produtos que compartilham `catalog_key` somam as\nlojas numa linha so.** E a pergunta que a chave existe para responder\n(\"quanto vendi de picanha nas duas lojas\"). Produto sem chave continua\ncontado por linha de `products`.\n\n`listed_revenue_total` NAO fecha com o faturamento de `/reports/summary`:\ne receita bruta de item, sem cupom, cashback nem taxas. A resposta\ncarrega essa ressalva em `revenue_note`.",
         "operationId": "product_sales_report_admin_reports_products_get",
         "parameters": [
           {
@@ -13031,6 +13320,25 @@
               "format": "date",
               "title": "End Date",
               "type": "string"
+            }
+          },
+          {
+            "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+              "title": "Branch Id"
             }
           },
           {
@@ -13083,7 +13391,7 @@
     },
     "/admin/reports/sales-by-day": {
       "get": {
-        "description": "Faturamento e pedidos dia a dia, para o grafico.\n\nDevolve TODOS os dias do periodo, inclusive os sem venda, com zero. O\ndia e o dia local (America/Fortaleza): um pedido das 22h de sexta conta\nna sexta, nao no sabado UTC.",
+        "description": "Faturamento e pedidos dia a dia, para o grafico.\n\nDevolve TODOS os dias do periodo, inclusive os sem venda, com zero. O\ndia e o dia local (America/Fortaleza): um pedido das 22h de sexta conta\nna sexta, nao no sabado UTC.\n\nQuem nao e dono precisa mandar `branch_id`.",
         "operationId": "sales_by_day_admin_reports_sales_by_day_get",
         "parameters": [
           {
@@ -13108,6 +13416,25 @@
               "format": "date",
               "title": "End Date",
               "type": "string"
+            }
+          },
+          {
+            "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+              "title": "Branch Id"
             }
           }
         ],
@@ -13146,7 +13473,7 @@
     },
     "/admin/reports/summary": {
       "get": {
-        "description": "Faturamento, pedidos, ticket medio e divisao entrega/retirada.\n\nTraz junto os mesmos numeros do periodo anterior de igual tamanho — sete\ndias comparam com os sete anteriores. `change_percent` vem nulo quando o\nperiodo anterior foi zero; nao existe variacao percentual a partir de\nzero.\n\nCancelados, recusados e estornados nao entram no faturamento. Quantos\nforam fica em `excluded_orders_count`, e o detalhe em\n`/reports/cancellations`.",
+        "description": "Faturamento, pedidos, ticket medio e divisao entrega/retirada.\n\nTraz junto os mesmos numeros do periodo anterior de igual tamanho — sete\ndias comparam com os sete anteriores. `change_percent` vem nulo quando o\nperiodo anterior foi zero; nao existe variacao percentual a partir de\nzero.\n\nCancelados, recusados e estornados nao entram no faturamento. Quantos\nforam fica em `excluded_orders_count`, e o detalhe em\n`/reports/cancellations`.\n\nQuem nao e dono precisa mandar `branch_id` — ver\n`ensure_pode_ler_dinheiro`.",
         "operationId": "sales_summary_admin_reports_summary_get",
         "parameters": [
           {
@@ -13171,6 +13498,25 @@
               "format": "date",
               "title": "End Date",
               "type": "string"
+            }
+          },
+          {
+            "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+              "title": "Branch Id"
             }
           }
         ],
@@ -14453,6 +14799,7 @@
     },
     "/restaurants/{restaurant_slug}/categories/{category_slug}/products": {
       "get": {
+        "description": "Os produtos de uma categoria, dentro de uma filial.\n\nO `category_slug` e unico por `(branch_id, slug)`, entao sem o parametro\nesta rota responde pela filial padrao. Categoria que so existe em outra\nloja responde 404.",
         "operationId": "get_products_by_category_restaurants__restaurant_slug__categories__category_slug__products_get",
         "parameters": [
           {
@@ -14471,6 +14818,23 @@
             "schema": {
               "title": "Category Slug",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -14784,7 +15148,7 @@
     },
     "/restaurants/{restaurant_slug}/menu": {
       "get": {
-        "description": "O cardapio, e a operacao da filial escolhida.\n\nOs PRODUTOS ainda sao do restaurante: `branch_id` nao filtra cardapio.\nQuem ele resolve e o bloco `settings` — valor minimo, taxa de servico,\naceita entrega/retirada e o \"fechar agora\" sao da filial desde a revisao\n20260818_0025, e sem o parametro o cliente veria os numeros de uma loja\nenquanto pede em outra.\n\nOmitido, vale a filial padrao (principal se houver, senao a primeira\nativa em ordem alfabetica) — a mesma de `POST /delivery/estimate` e de\n`GET /restaurants/{slug}/info` sem filial. Filial de outro restaurante\nresponde 404.",
+        "description": "O cardapio DAQUELA FILIAL.\n\nDesde a revisao 20260820_0026 o `branch_id` resolve a resposta inteira:\nprodutos, categorias, precos, disponibilidade e o bloco `settings`. Cada\nloja tem o proprio cardapio, sem heranca — chamar sem o parametro depois\nde o cliente ter escolhido a loja mostra o cardapio e os numeros de\noutra.\n\nOmitido, vale a filial padrao (principal se houver, senao a primeira\nativa em ordem alfabetica) — a mesma de `POST /delivery/estimate` e de\n`GET /restaurants/{slug}/info` sem filial. Filial de outro restaurante\nresponde 404; restaurante sem filial ativa responde 200 com as listas\nvazias.",
         "operationId": "get_restaurant_menu_restaurants__restaurant_slug__menu_get",
         "parameters": [
           {
@@ -15042,6 +15406,7 @@
     },
     "/restaurants/{restaurant_slug}/products/{product_slug}": {
       "get": {
+        "description": "Um produto pelo slug, dentro de uma filial.\n\n**Sem `branch_id`, vale a filial padrao — e e por isso que os links ja\ndivulgados continuam funcionando.** A migracao 20260820_0026 deixou as\nlinhas que ja existiam na filial padrao, com os mesmos ids e os mesmos\nslugs, entao um link antigo abre exatamente o produto que sempre abriu.\n\nProduto que existe SO numa filial nao padrao responde 404 pelo link sem\nparametro: sem loja escolhida nao ha preco a mostrar.",
         "operationId": "get_product_detail_restaurants__restaurant_slug__products__product_slug__get",
         "parameters": [
           {
@@ -15060,6 +15425,23 @@
             "schema": {
               "title": "Product Slug",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],

@@ -123,12 +123,19 @@ class ChatCache:
         lojista mexer no menu — a pergunta nao mudou. Botar a geracao nesta
         chave jogaria fora, a cada reindex, justamente as chamadas que custam
         dinheiro.
+
+        **E de proposito sem a FILIAL, pelo mesmo raciocinio.** O vetor e da
+        frase, nao do cardapio: "tem picanha?" gera o mesmo vetor nas duas
+        lojas. Botar a filial aqui compraria um embedding por loja para
+        guardar N copias do mesmo numero. Quem precisa da filial e a chave da
+        BUSCA, logo abaixo — e la ela e obrigatoria.
         """
         return f"{restaurant_id}:{self.normalize_message(message)}"
 
     def retrieval_key(
         self,
         restaurant_id: object,
+        branch_id: object,
         message: str,
         max_price: object = None,
     ) -> str:
@@ -139,13 +146,20 @@ class ChatCache:
         precisar saber quais perguntas estavam guardadas. As antigas caem
         sozinhas quando o TTL vence.
 
-        `max_price` entra na chave porque muda o CONJUNTO devolvido: sem ele,
-        "sobremesa ate R$ 20" seria servida do cache de "sobremesa" sem teto, e
-        o cliente veria produtos acima do que pediu.
+        **`branch_id` entra na chave desde a revisao 20260820_0026, e sem ele
+        o filtro por filial da busca nao valeria nada:** a primeira loja a
+        perguntar "tem picanha?" guardaria a resposta dela por 20 minutos, e a
+        segunda receberia essa mesma lista — com os produtos e os ids da
+        primeira. O Rapi ofereceria, com preco, um produto que aquela loja nao
+        vende, e o cache faria o defeito parecer intermitente.
+
+        `max_price` entra pelo mesmo tipo de motivo: muda o CONJUNTO
+        devolvido. Sem ele, "sobremesa ate R$ 20" seria servida do cache de
+        "sobremesa" sem teto, e o cliente veria produtos acima do que pediu.
         """
         generation = menu_generation.current(restaurant_id)
         teto = "" if max_price is None else f":p{max_price}"
-        return f"{restaurant_id}:g{generation}{teto}:{self.normalize_message(message)}"
+        return f"{restaurant_id}:{branch_id}:g{generation}{teto}:{self.normalize_message(message)}"
 
     def get_embedding(self, key: str) -> list[float] | None:
         value = self._get(self._embeddings, key)

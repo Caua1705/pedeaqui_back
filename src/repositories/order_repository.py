@@ -24,6 +24,7 @@ def billable_order_conditions(
     restaurant_id: uuid.UUID,
     start_at: datetime,
     end_at: datetime,
+    branch_id: uuid.UUID | None = None,
 ) -> list:
     """WHERE de "o que virou venda neste periodo".
 
@@ -36,20 +37,30 @@ def billable_order_conditions(
 
     `end_at` e EXCLUSIVO: quem chama passa o instante em que o dia seguinte
     comeca, para nao perder pedido feito 23:59:59.7.
+
+    `branch_id` nulo significa "o restaurante inteiro", nunca "filial
+    nenhuma": e o recorte de quem enxerga todas as lojas. Ele entra AQUI e
+    nao em cada consulta de relatorio, pelo mesmo motivo do paragrafo acima —
+    um relatorio que filtrasse a filial por conta propria seria a chance de o
+    faturamento da tela e a base do extrato falarem de conjuntos diferentes.
     """
-    return [
+    conditions = [
         Order.restaurant_id == restaurant_id,
         Order.created_at >= start_at,
         Order.created_at < end_at,
         Order.status.notin_(NON_BILLABLE_ORDER_STATUSES),
         Order.payment_status != "refunded",
     ]
+    if branch_id is not None:
+        conditions.append(Order.branch_id == branch_id)
+    return conditions
 
 
 def excluded_order_conditions(
     restaurant_id: uuid.UUID,
     start_at: datetime,
     end_at: datetime,
+    branch_id: uuid.UUID | None = None,
 ) -> list:
     """O complemento exato de `billable_order_conditions` no mesmo periodo.
 
@@ -58,8 +69,12 @@ def excluded_order_conditions(
     Um pedido do periodo cai em um dos dois conjuntos e nunca nos dois, que
     e o que permite ao relatorio de cancelamentos e ao de faturamento serem
     lidos lado a lado.
+
+    `branch_id` entra do mesmo jeito que no billable, e tem que entrar: com o
+    recorte valendo so num dos dois, a taxa de cancelamento sairia com os
+    cancelados de UMA loja sobre os faturados da rede.
     """
-    return [
+    conditions = [
         Order.restaurant_id == restaurant_id,
         Order.created_at >= start_at,
         Order.created_at < end_at,
@@ -68,6 +83,9 @@ def excluded_order_conditions(
             Order.payment_status == "refunded",
         ),
     ]
+    if branch_id is not None:
+        conditions.append(Order.branch_id == branch_id)
+    return conditions
 
 # Tudo o que `OrderService.to_order_detail_response` le, carregado de uma
 # vez. Ficam juntos porque as tres consultas de detalhe (painel, cliente
@@ -371,6 +389,7 @@ class OrderRepository:
         restaurant_id: uuid.UUID,
         start_at: datetime,
         end_at: datetime,
+        branch_id: uuid.UUID | None = None,
     ) -> list[Order]:
         """Pedidos que geram comissao no periodo.
 
@@ -381,7 +400,7 @@ class OrderRepository:
         """
         stmt = (
             select(Order)
-            .where(*billable_order_conditions(restaurant_id, start_at, end_at))
+            .where(*billable_order_conditions(restaurant_id, start_at, end_at, branch_id))
             .order_by(Order.created_at.asc())
         )
         return list(self.db.scalars(stmt).all())
@@ -391,6 +410,7 @@ class OrderRepository:
         restaurant_id: uuid.UUID,
         start_at: datetime,
         end_at: datetime,
+        branch_id: uuid.UUID | None = None,
     ) -> int:
         """Quantos pedidos do periodo ficaram de fora do relatorio.
 
@@ -401,7 +421,7 @@ class OrderRepository:
         stmt = (
             select(func.count())
             .select_from(Order)
-            .where(*excluded_order_conditions(restaurant_id, start_at, end_at))
+            .where(*excluded_order_conditions(restaurant_id, start_at, end_at, branch_id))
         )
         return self.db.scalar(stmt) or 0
 

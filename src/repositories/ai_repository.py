@@ -28,12 +28,24 @@ class AIRepository:
     def similarity_search(
         self,
         restaurant_id: uuid.UUID,
+        branch_id: uuid.UUID,
         embedding: list[float],
         top_k: int = 5,
         max_price: Decimal | None = None,
         min_similarity: float = 0.0,
     ) -> list[dict[str, Any]]:
-        """Return the most similar active products for one restaurant.
+        """Os produtos mais parecidos DAQUELA LOJA.
+
+        `branch_id` e obrigatorio desde a revisao 20260820_0026 e e a correcao
+        mais importante deste arquivo. Enquanto a busca era por restaurante, o
+        Rapi oferecia — com preco, com foto e sem um unico erro no log — um
+        produto que aquela loja nao vende. O cliente pedia, e quem descobria
+        era a cozinha.
+
+        `ape.restaurant_id` continua no WHERE ao lado dele: e por esse indice
+        que a varredura da tabela de vetores comeca. O `p.branch_id` recorta
+        depois, na juncao, e nao ha indice ANN no meio para ele atrapalhar
+        (ver `docs/busca-vetorial-e-indice-ann.md`).
 
         `max_price` e `min_similarity` entram no WHERE, ANTES do LIMIT, e essa
         ordem e o ponto.
@@ -65,6 +77,7 @@ class AIRepository:
             WHERE
                 ape.restaurant_id = :restaurant_id
                 AND p.restaurant_id = :restaurant_id
+                AND p.branch_id = :branch_id
                 AND p.is_active IS TRUE
                 AND p.is_available IS TRUE
                 AND (
@@ -80,6 +93,7 @@ class AIRepository:
             stmt,
             {
                 "restaurant_id": restaurant_id,
+                "branch_id": branch_id,
                 "embedding": self._format_vector(embedding),
                 "top_k": top_k,
                 "max_price": max_price,

@@ -25,8 +25,17 @@ class ProductOptionGroupResponse(BaseResponse):
 
 
 class ProductResponse(BaseResponse):
+    """Um produto do cardapio de UMA filial.
+
+    `restaurant_id` e `branch_id` aparecem os dois: o primeiro por ja ser
+    contrato publicado, o segundo porque desde a revisao 20260820_0026 e ele
+    que diz de qual LOJA sao este preco e esta disponibilidade. Dois produtos
+    com o mesmo nome e precos diferentes so se distinguem por ele.
+    """
+
     id: UUID
     restaurant_id: UUID
+    branch_id: UUID
     category_id: UUID
     code: str | None = None
     name: str

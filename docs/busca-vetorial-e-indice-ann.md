@@ -130,3 +130,11 @@ SELECT r.slug, count(*) AS produtos_indexados
 - **O `Execution Time` do `EXPLAIN ANALYZE` é medido fora do laço
   cronometrado.** A instrumentação cobra por nó e por linha, e numa varredura
   de milhares de linhas ela infla justamente o número em disputa.
+- **Os números acima foram medidos ANTES do filtro por filial** (revisão
+  `20260820_0026`). O script já inclui o filtro e continua executável, mas a
+  tabela não foi refeita. A conclusão não muda de sentido — `p.branch_id` é
+  mais uma condição sobre uma linha que a junção com `products` já visitava, e
+  o que dimensiona a conta continua sendo o tamanho de **um cardápio de uma
+  loja**, que ficou igual ou menor. Ainda assim, é medição não repetida: se
+  alguém precisar do número exato, rode `scripts/bench_busca_vetorial.py` de
+  novo.

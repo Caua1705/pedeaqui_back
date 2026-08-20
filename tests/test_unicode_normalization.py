@@ -84,7 +84,7 @@ class TestWritePathKeepsTheBaseInOneForm:
         assert AdminProductUpdate(sort_order=3).name is None
 
     def test_a_category_name_is_stored_composed(self):
-        assert AdminCategoryCreate(name=nfd("Porções")).name == "Porções"
+        assert AdminCategoryCreate(branch_id=uuid4(), name=nfd("Porções")).name == "Porções"
 
     def test_a_printing_sector_name_is_stored_composed(self):
         # Nome de setor vai impresso na comanda e escolhe a impressora do

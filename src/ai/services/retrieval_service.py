@@ -37,24 +37,35 @@ class RetrievalService:
     def retrieve_products(
         self,
         restaurant_id: uuid.UUID,
+        branch_id: uuid.UUID,
         question: str,
         top_k: int = 5,
         max_price: Decimal | None = None,
     ) -> list[dict[str, Any]]:
-        """Return a compact context for the top matching products.
+        """Os produtos DAQUELA LOJA que respondem a pergunta.
 
-        `max_price` e opcional e nenhum chamador atual precisa passar: sem ele
-        a busca e exatamente a de antes.
+        `branch_id` e obrigatorio desde a revisao 20260820_0026 e atravessa as
+        tres camadas deste caminho, porque cada uma delas errava sozinha: a
+        BUSCA (filtro por filial no SQL), o CACHE (chave por filial) e o PRECO
+        VIGENTE (leitura da linha viva daquela loja). Faltando em qualquer
+        uma, o Rapi volta a oferecer com preco um produto que a loja nao
+        vende — sem erro e sem log.
+
+        `max_price` continua opcional: sem ele a busca e exatamente a de
+        antes.
         """
         # Duas chaves, e nao uma: o vetor da pergunta sobrevive ao reindex, o
         # resultado da busca nao. Ver `ChatCache.embedding_key`/`retrieval_key`.
         #
-        # `max_price` entra so na chave da BUSCA. O vetor de "quero uma
-        # sobremesa" e o mesmo com ou sem teto de preco; o conjunto de
-        # produtos, nao. Sem isso, uma pergunta com teto seria servida do cache
-        # da mesma pergunta sem teto.
+        # `max_price` e `branch_id` entram so na chave da BUSCA. O vetor de
+        # "quero uma sobremesa" e o mesmo com ou sem teto de preco, e o mesmo
+        # nas duas lojas; o conjunto de produtos, nao. Sem isso, uma pergunta
+        # com teto seria servida do cache da mesma pergunta sem teto — e a
+        # segunda loja, do cache da primeira.
         embedding_cache_key = chat_cache.embedding_key(restaurant_id, question)
-        retrieval_cache_key = chat_cache.retrieval_key(restaurant_id, question, max_price)
+        retrieval_cache_key = chat_cache.retrieval_key(
+            restaurant_id, branch_id, question, max_price
+        )
 
         embedding_started_at = perf_counter()
         embedding = chat_cache.get_embedding(embedding_cache_key)
@@ -79,6 +90,7 @@ class RetrievalService:
         if retrieved_products is None:
             products = self.ai_repository.similarity_search(
                 restaurant_id=restaurant_id,
+                branch_id=branch_id,
                 embedding=embedding,
                 top_k=top_k,
                 max_price=max_price,
@@ -98,13 +110,13 @@ class RetrievalService:
             self.agent,
             str(retrieval_cache_hit).lower(),
         )
-        retrieved_products = self._with_current_prices(restaurant_id, retrieved_products)
+        retrieved_products = self._with_current_prices(branch_id, retrieved_products)
         logger.info("[AI %s perf] context_products=%d", self.agent, len(retrieved_products))
         return retrieved_products
 
     def _with_current_prices(
         self,
-        restaurant_id: uuid.UUID,
+        branch_id: uuid.UUID,
         retrieved_products: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """Carimba o preco vigente em cada produto, a cada requisicao.
@@ -123,9 +135,13 @@ class RetrievalService:
         Produto que nao volta da consulta some do contexto: ele foi desativado
         ou ficou indisponivel depois de entrar no cache, e o modelo nao pode
         recomendar o que a hidratacao nao vai conseguir transformar em cartao.
+
+        A consulta e por FILIAL, e e a ultima rede deste caminho: um id que
+        tenha escapado do cache de outra loja nao encontra preco aqui e sai do
+        contexto em vez de chegar ao modelo.
         """
         product_ids = [product["id"] for product in retrieved_products]
-        prices = self.product_repository.sellable_prices_by_id(restaurant_id, product_ids)
+        prices = self.product_repository.sellable_prices_by_id(branch_id, product_ids)
 
         priced_products = []
         for product in retrieved_products:

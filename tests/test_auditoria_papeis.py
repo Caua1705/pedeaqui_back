@@ -42,9 +42,15 @@ PERIODO = fab.periodo_de_relatorio()
 
 
 def _admin(db: Session, restaurante, filial, role: str) -> AdminUser:
+    """Um lojista do restaurante. `filial` nula = enxerga todas as lojas.
+
+    A nulidade importa desde a revisao 20260820_0026: e ela que separa o
+    gerente que le o faturamento da propria loja do que estaria lendo o da
+    rede inteira.
+    """
     admin = AdminUser(
         restaurant_id=restaurante.id,
-        branch_id=filial.id,
+        branch_id=filial.id if filial is not None else None,
         name=f"Usuario {role}",
         email=f"{uuid.uuid4().hex[:10]}@exemplo.com",
         password_hash="$2b$12$" + "x" * 53,
@@ -69,7 +75,11 @@ def loja(db: Session):
     restaurante = fab.criar_restaurante(db, "Loja da Auditoria")
     matriz = fab.criar_filial(db, restaurante, "Matriz")
     outra = fab.criar_filial(db, restaurante, "Filial 2")
-    categoria = fab.criar_categoria(db, restaurante)
+    # A categoria nasce NA MATRIZ, explicitamente, porque e a filial a que os
+    # usuarios deste teste estao presos. Sem dizer a loja, a fabrica escolhe a
+    # primeira em ordem alfabetica ("Filial 2") e o gerente da matriz passa a
+    # receber 404 legitimo em toda edicao de cardapio.
+    categoria = fab.criar_categoria(db, restaurante, filial=matriz)
     produto = fab.criar_produto(db, restaurante, categoria, preco=Decimal("100.00"))
     cliente = fab.criar_cliente(db, nome="Cliente Com Telefone")
     pedido = fab.criar_pedido(
@@ -247,12 +257,68 @@ def test_manager_nao_cria_cupom(cliente_http, loja):
     assert r.status_code == 403, (r.status_code, r.text[:300])
 
 
-def test_manager_nao_le_faturamento_mas_le_o_operacional(cliente_http, loja):
+def test_manager_le_o_faturamento_da_propria_filial_e_so_dela(cliente_http, loja):
+    """A regra que mudou na revisao 20260820_0026, e por que ela nao afrouxa.
+
+    O gerente era barrado em `/reports/summary` com 403. O motivo nunca foi
+    "dinheiro e do dono": era que, SEM recorte de filial, ler o faturamento
+    significava ler o do RESTAURANTE INTEIRO — e o gerente da matriz nao tem
+    nada com o resultado da Filial 2.
+
+    Agora ele le, e le SO a loja dele: o `AdminScope` resolve o recorte a
+    partir do `branch_id` do proprio usuario, e a soma volta com os R$ 100 da
+    matriz, nunca com os R$ 777 da outra. O que continua barrado e a leitura
+    sem recorte — ver o teste seguinte.
+    """
     financeiro = cliente_http.get(
         f"/admin/reports/summary?{PERIODO}", headers=como(loja, "manager")
     )
-    assert financeiro.status_code == 403, (financeiro.status_code, financeiro.text[:300])
+    assert financeiro.status_code == 200, (financeiro.status_code, financeiro.text[:300])
 
+    corpo = financeiro.json()
+    assert corpo["branch_id"] == str(loja["matriz"].id)
+    assert corpo["revenue_total"] == "100.00"
+
+
+def test_manager_nao_alcanca_o_faturamento_da_outra_filial(cliente_http, loja):
+    """404 e nao 403: para quem esta preso a matriz, a outra loja nao existe."""
+    r = cliente_http.get(
+        f"/admin/reports/summary?{PERIODO}&branch_id={loja['outra'].id}",
+        headers=como(loja, "manager"),
+    )
+    assert r.status_code == 404, (r.status_code, r.text[:300])
+
+
+def test_manager_sem_filial_nenhuma_nao_le_faturamento(cliente_http, db, loja):
+    """O caso que o 403 antigo protegia, e que continua protegido.
+
+    Gerente SEM `branch_id` no cadastro enxerga o restaurante inteiro. Pedir
+    `/reports/summary` sem recorte e exatamente a leitura que se recusava —
+    o faturamento das lojas todas somado. `ensure_pode_ler_dinheiro` responde
+    403 pedindo que ele escolha uma loja.
+    """
+    sem_filial = _admin(db, loja["restaurante"], None, "manager")
+    db.flush()
+    cabecalho = {"Authorization": f"Bearer {AdminAuthService.create_access_token(sem_filial)}"}
+
+    negado = cliente_http.get(f"/admin/reports/summary?{PERIODO}", headers=cabecalho)
+    assert negado.status_code == 403, (negado.status_code, negado.text[:300])
+
+    # Escolhendo uma loja, ele passa — e recebe so o faturamento dela.
+    permitido = cliente_http.get(
+        f"/admin/reports/summary?{PERIODO}&branch_id={loja['outra'].id}",
+        headers=cabecalho,
+    )
+    assert permitido.status_code == 200, (permitido.status_code, permitido.text[:300])
+    assert permitido.json()["revenue_total"] == "777.00"
+
+
+def test_manager_continua_lendo_o_operacional_sem_recorte(cliente_http, loja):
+    """`/reports/products` nao diz quanto entrou, entao nao pede filial.
+
+    Ele responde o restaurante inteiro para quem enxerga o restaurante
+    inteiro — e e o mesmo comportamento de antes desta revisao.
+    """
     operacional = cliente_http.get(
         f"/admin/reports/products?{PERIODO}", headers=como(loja, "manager")
     )

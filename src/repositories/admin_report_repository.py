@@ -10,6 +10,12 @@ O recorte de quem entra na conta NAO e reescrito aqui. Vem de
 que o extrato de comissao usa. E a unica forma de garantir que o faturamento
 da tela e a base do extrato falem do mesmo conjunto de pedidos.
 
+Todas recebem tambem `branch_id`, nulavel, onde nulo significa "o
+restaurante inteiro" — o recorte de quem enxerga todas as lojas — e nunca
+"filial nenhuma". Ele NAO e aplicado neste arquivo: entra pelas mesmas
+`billable_order_conditions` / `excluded_order_conditions`, pelo motivo do
+paragrafo acima.
+
 Todas as consultas recebem `start_at`/`end_at` ja convertidos para instantes
 UTC pelo service; nenhuma delas conhece data solta. A unica excecao e o
 agrupamento por dia, que precisa saber o fuso para decidir a que dia local
@@ -19,7 +25,7 @@ pertence um instante — ver `sales_by_day`.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Date, cast, desc, func, select
+from sqlalchemy import Date, Text, cast, desc, func, select
 from sqlalchemy.orm import Session
 
 from src.core.constants import PLATFORM_TIMEZONE
@@ -50,6 +56,28 @@ def _money_sum(column):
     return func.coalesce(func.sum(column), 0)
 
 
+def _identidade_do_item():
+    """O que faz duas linhas de item serem "o mesmo produto" no ranking.
+
+    A chave de catalogo quando ela existe, e o proprio `product_id` quando
+    nao. As duas metades sao necessarias:
+
+    - **com chave** — a picanha das duas lojas e um item so. E a pergunta
+      inteira que `catalog_key` existe para responder.
+    - **sem chave** — o comportamento e o de antes da revisao 20260820_0026:
+      cada linha de `products` e um produto. Sem esta metade, dois produtos
+      diferentes que por acaso tenham o mesmo nome (e nenhuma chave) seriam
+      somados como se fossem um.
+
+    O `cast` para texto e o que permite as duas caberem na mesma expressao;
+    o valor nunca e exibido.
+    """
+    return func.coalesce(
+        OrderItem.catalog_key_snapshot,
+        cast(OrderItem.product_id, Text),
+    )
+
+
 class AdminReportRepository:
     def __init__(self, db: Session):
         self.db = db
@@ -59,6 +87,7 @@ class AdminReportRepository:
         restaurant_id: uuid.UUID,
         start_at: datetime,
         end_at: datetime,
+        branch_id: uuid.UUID | None = None,
     ) -> dict:
         """Os numeros do topo da tela, em uma consulta so.
 
@@ -74,7 +103,7 @@ class AdminReportRepository:
             _money_sum(Order.service_fee),
             _money_sum(Order.discount_total),
             _money_sum(Order.commission_amount),
-        ).where(*billable_order_conditions(restaurant_id, start_at, end_at))
+        ).where(*billable_order_conditions(restaurant_id, start_at, end_at, branch_id))
         row = self.db.execute(stmt).one()
         return {
             "orders_count": row[0] or 0,
@@ -91,11 +120,12 @@ class AdminReportRepository:
         restaurant_id: uuid.UUID,
         start_at: datetime,
         end_at: datetime,
+        branch_id: uuid.UUID | None = None,
     ) -> list[tuple[str, int, object]]:
         """Divisao entrega/retirada: (order_type, pedidos, faturamento)."""
         stmt = (
             select(Order.order_type, func.count(Order.id), _money_sum(Order.total))
-            .where(*billable_order_conditions(restaurant_id, start_at, end_at))
+            .where(*billable_order_conditions(restaurant_id, start_at, end_at, branch_id))
             .group_by(Order.order_type)
         )
         return [(row[0], row[1], row[2]) for row in self.db.execute(stmt).all()]
@@ -105,6 +135,7 @@ class AdminReportRepository:
         restaurant_id: uuid.UUID,
         start_at: datetime,
         end_at: datetime,
+        branch_id: uuid.UUID | None = None,
     ) -> list[tuple[object, int, object]]:
         """Serie diaria: (dia local, pedidos, faturamento).
 
@@ -115,7 +146,7 @@ class AdminReportRepository:
         day = _local_day(Order.created_at).label("day")
         stmt = (
             select(day, func.count(Order.id), _money_sum(Order.total))
-            .where(*billable_order_conditions(restaurant_id, start_at, end_at))
+            .where(*billable_order_conditions(restaurant_id, start_at, end_at, branch_id))
             .group_by(day)
             .order_by(day)
         )
@@ -126,6 +157,7 @@ class AdminReportRepository:
         restaurant_id: uuid.UUID,
         start_at: datetime,
         end_at: datetime,
+        branch_id: uuid.UUID | None = None,
     ) -> list[tuple[str | None, int, object]]:
         """Quebra por forma de pagamento: (metodo, pedidos, faturamento).
 
@@ -136,7 +168,7 @@ class AdminReportRepository:
         """
         stmt = (
             select(Order.payment_method, func.count(Order.id), _money_sum(Order.total))
-            .where(*billable_order_conditions(restaurant_id, start_at, end_at))
+            .where(*billable_order_conditions(restaurant_id, start_at, end_at, branch_id))
             .group_by(Order.payment_method)
             .order_by(desc(_money_sum(Order.total)))
         )
@@ -148,8 +180,9 @@ class AdminReportRepository:
         start_at: datetime,
         end_at: datetime,
         limit: int,
-    ) -> list[tuple[uuid.UUID | None, str, int, int, object]]:
-        """Produtos mais vendidos: (product_id, nome, pedidos, unidades, receita).
+        branch_id: uuid.UUID | None = None,
+    ) -> list[tuple[uuid.UUID | None, str, str | None, int, int, object]]:
+        """Mais vendidos: (product_id, nome, catalog_key, pedidos, unidades, receita).
 
         Agrupa pelo NOME gravado no item (`product_name_snapshot`), nao pelo
         nome atual do produto. O item guarda o snapshot justamente porque o
@@ -169,28 +202,49 @@ class AdminReportRepository:
         rateio por item gravado em lugar nenhum. Por isso a soma desta tela e
         MAIOR que o faturamento do resumo quando houve desconto, e a resposta
         diz isso em `revenue_note`.
+
+        **A CHAVE DE CATALOGO E O QUE JUNTA AS LOJAS.** Com o cardapio por
+        filial (revisao 20260820_0026), a picanha do Centro e a da Aldeota sao
+        duas linhas de `products` com ids diferentes: agrupar por `product_id`
+        listaria "Picanha" duas vezes e o dono nunca veria quanto vendeu na
+        rede. `_identidade_do_item` resolve isso sem perder o caso antigo — ver
+        a funcao.
         """
+        identidade = _identidade_do_item()
         stmt = (
             select(
-                OrderItem.product_id,
+                # `min` e nao a coluna crua porque `product_id` nao esta no
+                # GROUP BY. Quando a identidade E o produto, o grupo tem um
+                # id so e o `min` devolve exatamente ele; quando e a chave de
+                # catalogo, o grupo tem um por loja e o `min` aponta para uma
+                # delas — o painel usa este campo so para linkar a tela de
+                # edicao, e com o recorte por filial ele volta a ser exato.
+                func.min(cast(OrderItem.product_id, Text)),
                 OrderItem.product_name_snapshot,
+                # Mesma situacao, resultado EXATO: dentro de um grupo a chave
+                # ou e a mesma em todas as linhas, ou e nula em todas.
+                func.min(OrderItem.catalog_key_snapshot),
                 func.count(func.distinct(OrderItem.order_id)),
                 func.coalesce(func.sum(OrderItem.quantity), 0),
                 _money_sum(OrderItem.total),
             )
             .join(Order, Order.id == OrderItem.order_id)
-            .where(*billable_order_conditions(restaurant_id, start_at, end_at))
-            .group_by(OrderItem.product_id, OrderItem.product_name_snapshot)
+            .where(*billable_order_conditions(restaurant_id, start_at, end_at, branch_id))
+            .group_by(identidade, OrderItem.product_name_snapshot)
             .order_by(desc(func.coalesce(func.sum(OrderItem.quantity), 0)))
             .limit(limit)
         )
-        return [(row[0], row[1], row[2], row[3], row[4]) for row in self.db.execute(stmt).all()]
+        return [
+            (row[0], row[1], row[2], row[3], row[4], row[5])
+            for row in self.db.execute(stmt).all()
+        ]
 
     def cancellation_totals(
         self,
         restaurant_id: uuid.UUID,
         start_at: datetime,
         end_at: datetime,
+        branch_id: uuid.UUID | None = None,
     ) -> dict:
         """Quantos pedidos ficaram de fora do faturamento, e quanto somavam.
 
@@ -201,7 +255,7 @@ class AdminReportRepository:
         stmt = select(
             func.count(Order.id),
             _money_sum(Order.total),
-        ).where(*excluded_order_conditions(restaurant_id, start_at, end_at))
+        ).where(*excluded_order_conditions(restaurant_id, start_at, end_at, branch_id))
         row = self.db.execute(stmt).one()
         return {"orders_count": row[0] or 0, "amount_total": row[1]}
 
@@ -210,6 +264,7 @@ class AdminReportRepository:
         restaurant_id: uuid.UUID,
         start_at: datetime,
         end_at: datetime,
+        branch_id: uuid.UUID | None = None,
     ) -> list[tuple[str, str, int, object]]:
         """Quebra por (status, payment_status) dos pedidos que nao viraram venda.
 
@@ -225,7 +280,7 @@ class AdminReportRepository:
                 func.count(Order.id),
                 _money_sum(Order.total),
             )
-            .where(*excluded_order_conditions(restaurant_id, start_at, end_at))
+            .where(*excluded_order_conditions(restaurant_id, start_at, end_at, branch_id))
             .group_by(Order.status, Order.payment_status)
             .order_by(desc(func.count(Order.id)))
         )

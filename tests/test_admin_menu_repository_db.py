@@ -24,6 +24,7 @@ from tests.fabricas_db import (
     criar_opcao,
     criar_produto,
     criar_restaurante,
+    filial_padrao,
 )
 
 
@@ -297,8 +298,16 @@ class TestAsCategorias:
         assert repositorio.list_categories(meu.id) == []
         assert repositorio.get_category(categoria.id, meu.id) is None
         assert repositorio.get_category(categoria.id, vizinho.id).id == categoria.id
-        assert repositorio.get_category_by_slug(categoria.slug, meu.id) is None
-        assert repositorio.get_category_by_slug(categoria.slug, vizinho.id).id == categoria.id
+        # As duas consultas por slug espelham o indice unico, que e
+            # `(branch_id, slug)` desde a revisao 20260820_0026: elas recebem
+            # FILIAL, e nao restaurante. A filial do vizinho serve de
+            # "restaurante alheio" aqui porque uma filial pertence a um
+            # restaurante so.
+        assert repositorio.get_category_by_slug(categoria.slug, filial_padrao(db, meu).id) is None
+        assert (
+            repositorio.get_category_by_slug(categoria.slug, categoria.branch_id).id
+            == categoria.id
+        )
 
     def test_listar_por_ids_recorta_e_confere_o_restaurante(self, db):
         meu = criar_restaurante(db, nome="O Meu")
@@ -386,8 +395,10 @@ class TestEscopoPorRestaurante:
 
         assert repositorio.get_product(produto.id, meu.id) is None
         assert repositorio.get_product(produto.id, vizinho.id).id == produto.id
-        assert repositorio.get_product_by_slug(produto.slug, meu.id) is None
-        assert repositorio.get_product_by_slug(produto.slug, vizinho.id).id == produto.id
+        assert repositorio.get_product_by_slug(produto.slug, filial_padrao(db, meu).id) is None
+        assert (
+            repositorio.get_product_by_slug(produto.slug, produto.branch_id).id == produto.id
+        )
         assert repositorio.get_product_with_options(produto.id, meu.id) is None
 
     def test_o_produto_com_opcoes_traz_grupos_e_opcoes_carregados(self, db):

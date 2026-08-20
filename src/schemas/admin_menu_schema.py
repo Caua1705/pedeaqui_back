@@ -6,6 +6,13 @@ lojista precisa ver e escrever tambem o que esta desligado, entao os campos
 `is_active` / `is_available` sao parte do contrato em vez de filtro implicito.
 
 Nenhum schema daqui aceita `restaurant_id`: ele sai do token (AdminScope).
+
+`branch_id` e outra historia e aparece em UM lugar so, `AdminCategoryCreate`.
+Desde a revisao 20260820_0026 categoria e produto pertencem a uma filial, mas
+so a categoria precisa dize-lo: o produto herda a filial da CATEGORIA em que
+ele nasce. Pedir a filial nos dois abriria a possibilidade de um corpo com os
+dois em desacordo, e o unico desfecho possivel para esse corpo seria um 400
+que nao precisa existir.
 """
 
 from decimal import Decimal
@@ -29,6 +36,10 @@ MAX_REORDER_ITEMS = 200
 
 class AdminCategoryResponse(BaseResponse):
     id: UUID
+    # De qual loja e esta categoria. Obrigatorio na resposta porque a
+    # listagem do dono vem com as filiais TODAS: sem o campo, duas categorias
+    # "Bebidas" apareceriam como linhas repetidas sem explicacao.
+    branch_id: UUID
     name: str
     slug: str
     sort_order: int | None = 0
@@ -36,6 +47,13 @@ class AdminCategoryResponse(BaseResponse):
 
 
 class AdminCategoryCreate(BaseModel):
+    # A filial dona da categoria. OBRIGATORIO e sem default: cair na filial
+    # padrao criaria a categoria numa loja que o lojista nao escolheu, e ele
+    # so descobriria pelo cardapio publico da outra.
+    #
+    # Quem esta preso a uma filial e mandar outra recebe 404, pela mesma
+    # regra de `AdminScope.ensure_branch_allowed`.
+    branch_id: UUID
     name: str = Field(min_length=1, max_length=MAX_NAME_LENGTH)
     sort_order: int = Field(default=0, ge=0)
     is_active: bool = True
@@ -66,14 +84,21 @@ class AdminCategoryUpdate(BaseModel):
 
 
 class CategoryReorderRequest(BaseModel):
-    """Nova ordem das categorias, da primeira para a ultima.
+    """Nova ordem das categorias DE UMA FILIAL, da primeira para a ultima.
 
     A lista inteira e nao pares (id, posicao) porque e assim que uma tela de
     arrastar-e-soltar pensa: o painel manda o que esta vendo e o servidor
     numera. Enviar posicoes soltas abriria espaco para duas categorias com o
     mesmo `sort_order` e ordem final imprevisivel.
+
+    `branch_id` entrou na revisao 20260820_0026 e nao e decorativo: o
+    conjunto que compartilha a numeracao passou a ser a FILIAL. Sem ele, a
+    conferencia de "lista completa" mediria as categorias das lojas todas, e
+    o dono com duas lojas nunca conseguiria reordenar uma sem mandar a outra
+    junto.
     """
 
+    branch_id: UUID
     category_ids: list[UUID] = Field(min_length=1, max_length=MAX_REORDER_ITEMS)
 
     @model_validator(mode="after")
@@ -135,6 +160,10 @@ class AdminOptionGroupResponse(BaseResponse):
 
 class AdminProductResponse(BaseResponse):
     id: UUID
+    # De qual loja sao este preco e esta disponibilidade. Somente leitura: o
+    # produto herda a filial da categoria em que nasce, e nao muda de loja
+    # depois — ver `AdminProductUpdate`.
+    branch_id: UUID
     category_id: UUID
     code: str | None = None
     name: str
@@ -146,6 +175,16 @@ class AdminProductResponse(BaseResponse):
     is_active: bool | None = True
     is_available: bool | None = True
     sort_order: int | None = 0
+    # A MESMA picanha nas duas lojas, para o relatorio.
+    #
+    # NAO tem semantica de heranca: preco, nome e disponibilidade continuam
+    # sendo de cada linha. Ela so responde "estas duas linhas sao o mesmo
+    # item do catalogo", e e o que faz `/admin/reports/products` somar as
+    # lojas em vez de listar duas "Picanha".
+    #
+    # Unica dentro da filial. Repetir a chave de outro produto DA MESMA loja
+    # responde 409.
+    catalog_key: str | None = None
     # Somente leitura, como `image_path`: quem escreve e
     # PATCH /admin/products/{id}/printing-sector, que confere se o setor e
     # de uma filial deste lojista. Texto livre aqui apontaria o produto para
@@ -192,6 +231,13 @@ class AdminProductListResponse(BaseModel):
 
 
 class AdminProductCreate(BaseModel):
+    """Produto novo. A FILIAL vem da categoria, e nao do corpo.
+
+    `category_id` ja determina a loja (categoria pertence a uma filial desde
+    a revisao 20260820_0026), entao um `branch_id` aqui seria um segundo jeito
+    de dizer a mesma coisa — com a chance de os dois discordarem.
+    """
+
     category_id: UUID
     name: str = Field(min_length=1, max_length=MAX_NAME_LENGTH)
     description: str | None = Field(default=None, max_length=MAX_DESCRIPTION_LENGTH)
@@ -199,6 +245,10 @@ class AdminProductCreate(BaseModel):
     # erro de centavo (mesma regra do resto do projeto, ver utils/money).
     price: Decimal = Field(ge=0)
     code: str | None = Field(default=None, max_length=60)
+    # Opcional, e o normal e vir vazio: produto sem par em outra loja nao
+    # precisa de chave. Quem quiser ligar este a um ja existente copia a
+    # `catalog_key` dele — a do `AdminProductResponse` da outra filial.
+    catalog_key: str | None = Field(default=None, max_length=120)
     is_active: bool = True
     is_available: bool = True
     sort_order: int = Field(default=0, ge=0)
@@ -218,6 +268,13 @@ class AdminProductUpdate(BaseModel):
     Storage, inclusive de outro restaurante.
 
     Sem `slug` pelo mesmo motivo da categoria: ele e URL publica.
+
+    Sem `branch_id`: produto nao muda de loja. Mover a linha levaria junto os
+    grupos de opcao, o setor de impressao e a chave de catalogo, e deixaria o
+    historico de pedido apontando para um produto que a filial nao vende
+    mais. Quem quer o item na outra loja cria um la e usa a mesma
+    `catalog_key`. Pelo mesmo motivo, `category_id` so aceita categoria DA
+    MESMA filial — categoria de outra loja responde 400.
     """
 
     category_id: UUID | None = None
@@ -225,6 +282,7 @@ class AdminProductUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=MAX_DESCRIPTION_LENGTH)
     price: Decimal | None = Field(default=None, ge=0)
     code: str | None = Field(default=None, max_length=60)
+    catalog_key: str | None = Field(default=None, max_length=120)
     is_active: bool | None = None
     is_available: bool | None = None
     sort_order: int | None = Field(default=None, ge=0)

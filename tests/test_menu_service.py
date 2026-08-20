@@ -24,6 +24,10 @@ from src.services.menu_service import MenuService
 
 
 RESTAURANT_ID = uuid.uuid4()
+# O cardapio e da FILIAL desde a revisao 20260820_0026. Os fakes deste arquivo
+# tem uma filial so, entao todo produto e toda categoria nascem nela — o que
+# este arquivo mede (ordem e filtro dos adicionais) nao depende de qual e.
+BRANCH_ID = uuid.uuid4()
 
 
 class FakeDb:
@@ -36,6 +40,8 @@ class FakeMenuRepository:
         self.settings = settings
         self.branches = list(branches)
         self.banners = banners or {}
+        self.categorias_pedidas_para = None
+        self.produtos_pedidos_para = None
         self.coupons = list(coupons)
         self.categories = list(categories)
         self.products = list(products)
@@ -54,10 +60,12 @@ class FakeMenuRepository:
     def get_active_coupons(self, restaurant_id):
         return self.coupons
 
-    def get_active_categories(self, restaurant_id):
+    def get_active_categories(self, branch_id):
+        self.categorias_pedidas_para = branch_id
         return self.categories
 
-    def get_active_products(self, restaurant_id):
+    def get_active_products(self, branch_id):
+        self.produtos_pedidos_para = branch_id
         return self.products
 
 
@@ -78,7 +86,7 @@ def make_branch(is_open=True, **sobrescritas):
     }
     campos.update(sobrescritas)
     return SimpleNamespace(
-        id=uuid.uuid4(),
+        id=BRANCH_ID,
         restaurant_id=RESTAURANT_ID,
         is_open=is_open,
         accepts_delivery=True,
@@ -104,14 +112,16 @@ class FakeProductRepository:
         self.category_exists = category_exists
         self.by_category = list(by_category)
         self.by_slug = by_slug
+        self.filial_pedida = None
 
-    def active_category_exists(self, restaurant_id, category_slug):
+    def active_category_exists(self, branch_id, category_slug):
         return self.category_exists
 
-    def list_active_by_category_slug(self, restaurant_id, category_slug):
+    def list_active_by_category_slug(self, branch_id, category_slug):
         return self.by_category
 
-    def get_active_by_slug(self, restaurant_id, product_slug):
+    def get_active_by_slug(self, branch_id, product_slug):
+        self.filial_pedida = branch_id
         return self.by_slug
 
 
@@ -179,6 +189,7 @@ def make_product(name="X-Burger", slug="x-burger", price="24.90", image_path=Non
     return SimpleNamespace(
         id=uuid.uuid4(),
         restaurant_id=RESTAURANT_ID,
+        branch_id=BRANCH_ID,
         category_id=uuid.uuid4(),
         code="X1",
         name=name,
@@ -572,7 +583,6 @@ class TestGetRestaurantMenu:
             default_delivery_fee=Decimal("7.00"),
             service_fee_enabled=False,
             service_fee_amount=Decimal("0.00"),
-            payment_methods=["pix"],
         )
         filial = make_branch()
         service = make_service(
@@ -586,7 +596,7 @@ class TestGetRestaurantMenu:
         assert response.min_order_value == 20.00
         assert response.default_delivery_fee == 7.00
         assert response.is_open is True
-        assert response.payment_methods == ["pix"]
+        assert menu.branch_id == filial.id
         assert menu.settings_branch_id == filial.id
 
     def test_the_branch_overrides_the_restaurant(self):
@@ -718,3 +728,97 @@ class TestGetRestaurantMenu:
         service = make_service(menu_repository=FakeMenuRepository(coupons=[orfao]))
 
         assert service.get_restaurant_menu("pizzaria-do-ze").coupons == []
+
+
+# ---------------------------------------------------------------------------
+# O cardapio passou a ser da FILIAL (revisao 20260820_0026)
+# ---------------------------------------------------------------------------
+
+
+class TestOCardapioSaiDaFilial:
+    """A pergunta que estas asercoes fazem e sempre a mesma: **de qual loja?**
+
+    Enquanto o cardapio foi do restaurante, `get_active_products` recebia o
+    `restaurant_id` e nao havia resposta errada possivel. Agora ha uma por
+    chamada, e o custo dela e o cliente vendo — com preco — um produto que a
+    loja escolhida nao vende.
+    """
+
+    def test_os_produtos_sao_pedidos_para_a_filial_e_nao_para_o_restaurante(self):
+        filial = make_branch()
+        repositorio = FakeMenuRepository(products=[make_product()])
+        service = make_service(
+            menu_repository=repositorio,
+            branch_repository=FakeBranchRepository(filial),
+        )
+
+        service.get_restaurant_menu("pizzaria-do-ze")
+
+        assert repositorio.produtos_pedidos_para == filial.id
+        assert repositorio.categorias_pedidas_para == filial.id
+        assert filial.id != RESTAURANT_ID
+
+    def test_o_branch_id_da_querystring_manda_no_cardapio_inteiro(self):
+        escolhida = make_branch()
+        padrao = make_branch()
+        padrao.id = uuid.uuid4()
+        repositorio = FakeMenuRepository(products=[make_product()])
+        service = make_service(
+            menu_repository=repositorio,
+            branch_repository=FakeBranchRepository(padrao, branches=[padrao, escolhida]),
+        )
+
+        menu = service.get_restaurant_menu("pizzaria-do-ze", escolhida.id)
+
+        assert repositorio.produtos_pedidos_para == escolhida.id
+        assert menu.branch_id == escolhida.id
+
+    def test_restaurante_sem_filial_ativa_responde_a_vitrine_sem_cardapio(self):
+        """200 com listas vazias, e nao 404.
+
+        Nome, banner e cupom sao do restaurante e continuam existindo. O que
+        nao existe e loja de onde tirar produto — e devolver o cardapio de
+        "nenhuma filial" seria inventar um.
+        """
+        repositorio = FakeMenuRepository(products=[make_product()], categories=[object()])
+        service = make_service(
+            menu_repository=repositorio,
+            branch_repository=FakeBranchRepository(None),
+        )
+
+        menu = service.get_restaurant_menu("pizzaria-do-ze")
+
+        assert menu.products == []
+        assert menu.categories == []
+        assert menu.settings is None
+        assert menu.branch_id is None
+        # E o repositorio nem chegou a ser consultado: sem filial nao ha o que
+        # perguntar.
+        assert repositorio.produtos_pedidos_para is None
+
+    def test_a_rota_de_um_produto_recusa_restaurante_sem_filial(self):
+        """404, ao contrario do cardapio inteiro, e a diferenca e de contrato.
+
+        O cardapio tem resposta parcial para dar (a vitrine). "Um produto" nao
+        tem: sem loja aquele produto nao existe, e nao ha preco a mostrar.
+        """
+        service = make_service(branch_repository=FakeBranchRepository(None))
+
+        with pytest.raises(HTTPException) as erro:
+            service.get_product_detail("pizzaria-do-ze", "picanha")
+
+        assert erro.value.status_code == 404
+
+    def test_o_produto_e_procurado_dentro_da_filial(self):
+        """O slug e unico por `(branch_id, slug)`: sem a filial no WHERE, a
+        consulta volta a poder casar mais de uma linha."""
+        filial = make_branch()
+        repositorio = FakeProductRepository(by_slug=make_product())
+        service = make_service(
+            product_repository=repositorio,
+            branch_repository=FakeBranchRepository(filial),
+        )
+
+        service.get_product_detail("pizzaria-do-ze", "x-burger")
+
+        assert repositorio.filial_pedida == filial.id

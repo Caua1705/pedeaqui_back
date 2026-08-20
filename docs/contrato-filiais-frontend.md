@@ -7,6 +7,13 @@ aqui; não é necessário acesso ao código do backend.
 (`https://api.pederapidex.com` em produção, `http://localhost:8000` em
 desenvolvimento).
 
+> **⚠️ Mudou em 20/08/2026 (revisões `20260820_0026`/`0027`): o cardápio
+> passou a ser POR FILIAL.** A §8 deste documento diz que `/menu` devolve os
+> mesmos produtos qualquer que seja a filial. **Não devolve mais.** O passo 3
+> está em [`cardapio-por-filial.md`](cardapio-por-filial.md), e é ele que vale
+> para produto, preço e disponibilidade. O resto deste documento — a rota de
+> escolha de filial — continua correto.
+
 > **Mudou em 18/08/2026 (revisão `20260818_0025`).** O "fechar agora" passou a
 > ser de cada filial, e `is_open_now` agora combina a agenda da semana com essa
 > pausa. Entrou o campo `closed_reason`, e `current_period` passou a poder vir
@@ -302,10 +309,9 @@ perguntei" (`address_provided: false`) de "perguntei e não deu"
    veredito.
 3. **Cliente escolhe a filial** → guarde o `id` dela.
 4. **Cardápio** → `GET /restaurants/{slug}/menu?branch_id=<a filial escolhida>`.
-   Os PRODUTOS ainda são do restaurante (ver §8), mas o bloco `settings` —
-   valor mínimo, taxa de serviço, aceita entrega/retirada, `is_open` — é da
-   filial que o `branch_id` pedir. **Chamar sem o parâmetro depois de o cliente
-   ter escolhido mostra o mínimo e a taxa de outra loja.**
+   Desde 20/08/2026 o `branch_id` resolve a resposta INTEIRA: produtos,
+   categorias, preços e o bloco `settings`. **Chamar sem o parâmetro depois de
+   o cliente ter escolhido mostra o cardápio e a taxa de outra loja.**
 5. **Fechar o pedido** → `POST /restaurants/{slug}/delivery/estimate` com o
    `branch_id` escolhido, para obter o `estimate_token`, e depois
    `POST /orders`.
@@ -339,9 +345,11 @@ no campo de endereço — chame quando o endereço estiver completo.
 
 ## 8. O que esta rota NÃO faz
 
-- **Não filtra o cardápio por filial.** `GET /restaurants/{slug}/menu` devolve
-  os mesmos PRODUTOS qualquer que seja a filial escolhida — o `branch_id` de lá
-  resolve só o bloco `settings`. Cardápio por filial é trabalho separado.
+- **Não filtra o cardápio por filial** — mas `/menu` filtra, desde
+  20/08/2026. Esta rota devolve as filiais; quem devolve o cardápio de uma
+  delas é `GET /restaurants/{slug}/menu?branch_id=...`, e lá o parâmetro
+  resolve produtos, preços e o bloco `settings`. Ver
+  [`cardapio-por-filial.md`](cardapio-por-filial.md).
 - **Não diz a que horas a filial fechada abre de novo.** `current_period` é
   nulo com a loja fechada. Para montar "abre às 18:00" use
   `GET /restaurants/{slug}/info?branch_id=...`, que devolve a semana inteira.

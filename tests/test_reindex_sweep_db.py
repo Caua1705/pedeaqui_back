@@ -28,7 +28,12 @@ from src.models.ai_product_embedding_model import AIProductEmbedding
 from src.models.category_model import Category
 from src.models.product_model import Product
 from src.repositories.ai_repository import AIRepository
-from tests.fabricas_db import criar_categoria, criar_produto, criar_restaurante
+from tests.fabricas_db import (
+    criar_categoria,
+    criar_produto,
+    criar_restaurante,
+    filial_padrao,
+)
 
 
 pytestmark = pytest.mark.db
@@ -174,6 +179,7 @@ class TestCategoriaRenomeada:
         categoria = criar_categoria(db, restaurante, nome="Carnes")
         renomeada = Category(
             restaurant_id=restaurante.id,
+            branch_id=categoria.branch_id,
             name="Carnes Nobres",
             slug=f"{categoria.slug}-nova",
             is_active=True,
@@ -360,8 +366,10 @@ class TestAOrdemDaLista:
         Os dois são construídos à mão porque os triggers de `products` e
         `categories` são BEFORE UPDATE: o valor só entra pelo INSERT.
         """
+        filial = filial_padrao(db, restaurante)
         categoria = Category(
             restaurant_id=restaurante.id,
+            branch_id=filial.id,
             name="Categoria Antiga",
             slug=f"categoria-antiga-{uuid.uuid4().hex[:12]}",
             is_active=True,
@@ -372,6 +380,7 @@ class TestAOrdemDaLista:
 
         produto = Product(
             restaurant_id=restaurante.id,
+            branch_id=filial.id,
             category_id=categoria.id,
             name="Antigo",
             slug=f"antigo-{uuid.uuid4().hex[:12]}",

@@ -17,6 +17,14 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 class ChatRequest(BaseModel):
     restaurant_id: uuid.UUID
+    # OBRIGATORIO desde a revisao 20260820_0026, e sem default de proposito.
+    #
+    # O cardapio e por filial. Um `branch_id` opcional que caisse na filial
+    # padrao daria a MESMA resposta errada de antes — o Rapi oferecendo com
+    # preco um produto que aquela loja nao vende —, so que escondida atras de
+    # um caminho que parece configurado. Campo obrigatorio quebra o cliente
+    # que nao mandou, na primeira chamada, com 422 e o nome do campo.
+    branch_id: uuid.UUID
     session_id: str = Field(min_length=1, max_length=MAX_SESSION_ID_LENGTH)
     message: str = Field(min_length=1, max_length=MAX_CHAT_MESSAGE_LENGTH)
 
@@ -40,6 +48,7 @@ def chat(
 ) -> ChatResponse:
     return ChatService(db).chat(
         restaurant_id=payload.restaurant_id,
+        branch_id=payload.branch_id,
         session_id=payload.session_id,
         message=payload.message,
     )

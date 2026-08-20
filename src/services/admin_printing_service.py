@@ -20,14 +20,25 @@ prepararia o pedido do mesmo jeito, porque comanda impressa e ordem de
 producao. A via do CLIENTE continua saindo: ela serve de conferencia no
 balcao e nao manda ninguem cozinhar.
 
-**Item nunca some da comanda.** O setor pende de filial e o produto pende de
-restaurante, entao um produto so consegue apontar para o setor de UMA
-filial. Num restaurante com varias lojas, o pedido da filial B pode conter
-um produto apontando para um setor da filial A — e um setor pode ter sido
-desativado depois de vinculado. Nesses dois casos o item vai para uma via
-"SEM SETOR" e o caso e logado, em vez de o item desaparecer silenciosamente
-da producao. O unico jeito de um item NAO ser impresso e o produto ter
-`printing_sector_id` nulo, que e uma decisao explicita do lojista.
+**Item nunca some da comanda.** Item cujo setor nao serve vai para uma via
+"SEM SETOR", e o caso e logado, em vez de desaparecer da producao. O unico
+jeito de um item NAO ser impresso e o produto ter `printing_sector_id` nulo,
+que e uma decisao explicita do lojista.
+
+**A via "SEM SETOR" perdeu um dos dois motivos na revisao 20260820_0026, e o
+que sobrou nao a dispensa.** Ate ali, o produto pendia de RESTAURANTE e o
+setor de FILIAL, entao o pedido da filial B podia conter produto apontando
+para o setor da filial A — armadilha 13, o motivo original desta via. Hoje o
+produto tambem pende de filial e a FK composta
+`(branch_id, printing_sector_id)` torna esse estado impossivel de gravar; a
+checagem correspondente saiu de `_split_items_by_sector` junto com o motivo.
+
+Os outros dois casos continuam de pe e nao tem FK que os feche:
+
+- **setor desativado depois de vinculado** — `is_active` e estado, nao
+  integridade referencial;
+- **produto que nao esta mais neste restaurante** — o item guarda
+  `product_id` para sempre, e a consulta e por restaurante.
 
 **Nada e apagado.** Setor so e ligado e desligado, pelo mesmo motivo do
 cardapio: `products.printing_sector_id` referencia a linha por FK.
@@ -76,9 +87,9 @@ logger = logging.getLogger("uvicorn.error")
 # identifica a bobina no log dele.
 CUSTOMER_JOB_NAME = "Via do cliente"
 
-# Via de resgate: recebe o item cujo setor nao serve para esta filial (setor
-# de outra loja, ou setor desativado depois do vinculo). Existe para que
-# nenhum item saia da comanda sem alguem ter mandado.
+# Via de resgate: recebe o item cujo setor nao serve (setor desativado
+# depois do vinculo, ou produto que nao esta mais neste restaurante). Existe
+# para que nenhum item saia da comanda sem alguem ter mandado.
 UNASSIGNED_SECTOR_NAME = "SEM SETOR"
 
 
@@ -164,6 +175,7 @@ class AdminPrintingService:
         """
         product = self._get_product(scope, product_id)
         sector = self._resolve_sector(scope, payload.printing_sector_id)
+        self._ensure_sector_is_in_branch(sector, product.branch_id)
 
         product.printing_sector_id = sector.id if sector else None
         self._commit()
@@ -194,7 +206,9 @@ class AdminPrintingService:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Categoria nao encontrada"
             )
+        scope.ensure_branch_allowed(category.branch_id)
         sector = self._resolve_sector(scope, payload.printing_sector_id)
+        self._ensure_sector_is_in_branch(sector, category.branch_id)
 
         updated = 0
 
@@ -313,6 +327,13 @@ class AdminPrintingService:
         arrumou pensando no fluxo da cozinha, e ela precisa ser a mesma em
         todo pedido para quem separa as bobinas nao se perder.
 
+        NAO ha mais checagem de `sector.branch_id != order.branch_id` aqui.
+        O produto do pedido e da filial do pedido (`_get_valid_products`
+        recusa o contrario) e o setor do produto e da filial do produto (FK
+        composta): as tres filiais sao a mesma por construcao. Manter a
+        comparacao seria um ramo que nenhum dado alcanca, e um dia alguem
+        gastaria uma tarde tentando reproduzi-lo.
+
         Os itens DENTRO de cada via preservam a ordem do pedido, que e a
         mesma da tela do painel e a mesma da via do cliente — conferir uma
         contra a outra so funciona se as linhas estiverem na mesma sequencia.
@@ -342,7 +363,7 @@ class AdminPrintingService:
                 # Decisao explicita do lojista: este produto nao imprime via
                 # de producao (a lata que sai da geladeira do balcao).
                 continue
-            if sector.branch_id != order.branch_id or not sector.is_active:
+            if not sector.is_active:
                 self._log_unusable_sector(order, item, sector)
                 unassigned.append(item)
                 continue
@@ -364,19 +385,16 @@ class AdminPrintingService:
     ) -> None:
         """Avisa que um item caiu na via de resgate.
 
-        E sempre configuracao errada, nunca operacao normal: ou o produto
-        aponta para o setor de outra filial (e o pedido e desta), ou o setor
-        foi desativado sem os produtos serem reapontados. Sem este log,
+        E sempre configuracao errada, nunca operacao normal: o setor foi
+        desativado sem os produtos dele serem reapontados. Sem este log,
         alguem descobriria pela comanda estranha no meio do almoco.
+
+        O outro motivo — setor de outra filial — deixou de existir na revisao
+        20260820_0026 e por isso saiu daqui: ele nao e mais gravavel.
         """
-        reason = (
-            "setor de outra filial"
-            if sector.branch_id != order.branch_id
-            else "setor desativado"
-        )
         logger.warning(
-            "[Impressao] item sem setor utilizavel (%s) order_id=%s product_id=%s sector_id=%s",
-            reason,
+            "[Impressao] item sem setor utilizavel (setor desativado) "
+            "order_id=%s product_id=%s sector_id=%s",
             order.id,
             item.product_id,
             sector.id,
@@ -395,6 +413,34 @@ class AdminPrintingService:
         if sector_id is None:
             return None
         return self._get_sector(scope, sector_id)
+
+    @staticmethod
+    def _ensure_sector_is_in_branch(
+        sector: PrintingSector | None,
+        branch_id: uuid.UUID,
+    ) -> None:
+        """Setor e produto tem que ser da MESMA loja. 400 quando nao sao.
+
+        A FK composta `(branch_id, printing_sector_id)` da revisao
+        20260820_0026 ja recusaria a gravacao — mas com um `IntegrityError`
+        que vira 500, e o lojista precisa de uma frase. Esta checagem existe
+        para a frase, nao para a garantia: quem garante e o banco.
+
+        Nao e 404 apesar de a regra ser "de outra filial": o dono ENXERGA as
+        duas lojas e escolheu mal na tela; esconder o setor que ele acabou de
+        ver na propria lista nao esconderia nada. O 404 fica com
+        `_get_sector`, para o setor de uma filial que este token nao alcanca.
+
+        `None` passa: e o "este produto nao imprime via de producao".
+        """
+        if sector is None:
+            return
+        if sector.branch_id == branch_id:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O setor de impressao e de outra filial",
+        )
 
     def _get_sector(self, scope: AdminScope, sector_id: uuid.UUID) -> PrintingSector:
         """Setor dentro do escopo do token.
@@ -425,11 +471,19 @@ class AdminPrintingService:
         return branch
 
     def _get_product(self, scope: AdminScope, product_id: uuid.UUID):
+        """Produto dentro do escopo do token, restaurante E filial.
+
+        A checagem de filial entrou com o cardapio por filial (revisao
+        20260820_0026) e nao e redundante com `_ensure_sector_is_in_branch`:
+        aquela compara produto com setor, e passaria feliz se os DOIS fossem
+        da filial que este lojista nao alcanca.
+        """
         product = self.menu_repository.get_product(product_id, scope.restaurant_id)
         if product is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Produto nao encontrado"
             )
+        scope.ensure_branch_allowed(product.branch_id)
         return product
 
     def _ensure_name_is_free(self, name: str, branch_id: uuid.UUID) -> None:

@@ -70,8 +70,21 @@ def rede(db: Session):
     aldeota = fab.criar_filial(db, restaurante, "Aldeota")
     centro.is_main = True
     fab.criar_configuracoes(db, restaurante)
-    categoria = fab.criar_categoria(db, restaurante)
-    produto = fab.criar_produto(db, restaurante, categoria, preco=Decimal("50.00"))
+
+    # UM cardapio por loja, desde a revisao 20260820_0026. As duas vendem a
+    # mesma picanha, e as duas linhas compartilham `catalog_key` — e assim que
+    # a rede fica com dois produtos independentes que o relatorio ainda sabe
+    # somar.
+    produtos = {}
+    for filial in (centro, aldeota):
+        categoria = fab.criar_categoria(db, restaurante, filial=filial)
+        produtos[filial.name] = fab.criar_produto(
+            db,
+            restaurante,
+            categoria,
+            preco=Decimal("50.00"),
+            catalog_key="picanha",
+        )
 
     for filial in (centro, aldeota):
         _abre_a_semana_inteira(db, filial)
@@ -102,7 +115,7 @@ def rede(db: Session):
         "restaurante": restaurante,
         "centro": centro,
         "aldeota": aldeota,
-        "produto": produto,
+        "produtos": produtos,
         "auth": {"Authorization": f"Bearer {AdminAuthService.create_access_token(dono)}"},
     }
 
@@ -117,12 +130,17 @@ def _fechar(cliente_http, rede, filial) -> None:
 
 
 def _pedido(rede, filial) -> dict:
+    """Um pedido com o produto DAQUELA loja.
+
+    Mandar o produto da outra e 400 desde a revisao 20260820_0026, e ha um
+    teste so para isso — `test_produto_de_uma_filial_nao_fecha_pedido_na_outra`.
+    """
     return {
         "branch_id": str(filial.id),
         "order_type": "pickup",
         "payment_method": "cash",
         "customer": {"name": "Ana", "phone": "85999999999"},
-        "items": [{"product_id": str(rede["produto"].id), "quantity": 1}],
+        "items": [{"product_id": str(rede["produtos"][filial.name].id), "quantity": 1}],
     }
 
 

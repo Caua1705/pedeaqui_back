@@ -20,6 +20,10 @@ O que os dois compartilham, e que nao pode divergir:
    pelo mesmo predicado SQL do extrato — `billable_order_conditions`, em
    src/repositories/order_repository.py. Nenhum relatorio daqui reescreve
    essa regra.
+3. **O recorte de filial.** `branch_id` nulo e "o restaurante inteiro", e ele
+   entra pelo mesmo predicado do item 2 — nenhuma consulta daqui filtra
+   filial por conta propria. Quem decide se o nulo e permitido nao e este
+   arquivo: e `ensure_pode_ler_dinheiro`, na rota.
 """
 
 from datetime import date, datetime, time, timedelta
@@ -87,20 +91,22 @@ class AdminReportService:
         restaurant_id: UUID,
         start_date: date,
         end_date: date,
+        branch_id: UUID | None = None,
     ) -> CommissionReportResponse:
         self._validate_period(start_date, end_date)
         start_at, end_at = self._period_bounds(start_date, end_date)
 
         orders = self.order_repository.list_orders_for_commission(
-            restaurant_id, start_at, end_at
+            restaurant_id, start_at, end_at, branch_id
         )
         excluded_count = self.order_repository.count_excluded_from_commission(
-            restaurant_id, start_at, end_at
+            restaurant_id, start_at, end_at, branch_id
         )
 
         items = [self._to_item(order) for order in orders]
         return CommissionReportResponse(
             restaurant_id=restaurant_id,
+            branch_id=branch_id,
             start_date=start_date,
             end_date=end_date,
             orders_count=len(items),
@@ -119,6 +125,7 @@ class AdminReportService:
         restaurant_id: UUID,
         start_date: date,
         end_date: date,
+        branch_id: UUID | None = None,
     ) -> SalesSummaryResponse:
         """Os numeros do topo da aba Desempenho, com o periodo anterior ao lado.
 
@@ -132,20 +139,21 @@ class AdminReportService:
         period = self._period(start_date, end_date)
         previous = self._previous_period(period)
 
-        current_totals = self._totals_for(restaurant_id, period)
-        previous_totals = self._totals_for(restaurant_id, previous)
+        current_totals = self._totals_for(restaurant_id, period, branch_id)
+        previous_totals = self._totals_for(restaurant_id, previous, branch_id)
 
         start_at, end_at = self._period_bounds(start_date, end_date)
         type_rows = self.report_repository.totals_by_order_type(
-            restaurant_id, start_at, end_at
+            restaurant_id, start_at, end_at, branch_id
         )
         excluded = self.report_repository.cancellation_totals(
-            restaurant_id, start_at, end_at
+            restaurant_id, start_at, end_at, branch_id
         )
 
         revenue = current_totals["revenue_total"]
         return SalesSummaryResponse(
             restaurant_id=restaurant_id,
+            branch_id=branch_id,
             period=period,
             previous_period=previous,
             orders_count=current_totals["orders_count"],
@@ -183,6 +191,7 @@ class AdminReportService:
         restaurant_id: UUID,
         start_date: date,
         end_date: date,
+        branch_id: UUID | None = None,
     ) -> SalesByDayResponse:
         """Serie diaria do periodo, com os dias sem venda preenchidos com zero.
 
@@ -193,7 +202,7 @@ class AdminReportService:
         self._validate_period(start_date, end_date)
         start_at, end_at = self._period_bounds(start_date, end_date)
 
-        rows = self.report_repository.sales_by_day(restaurant_id, start_at, end_at)
+        rows = self.report_repository.sales_by_day(restaurant_id, start_at, end_at, branch_id)
         by_day = {
             row[0]: (row[1], quantize_money(to_decimal(row[2]))) for row in rows
         }
@@ -211,6 +220,7 @@ class AdminReportService:
 
         return SalesByDayResponse(
             restaurant_id=restaurant_id,
+            branch_id=branch_id,
             period=self._period(start_date, end_date),
             orders_count=sum(item.orders_count for item in days),
             revenue_total=quantize_money(
@@ -224,18 +234,20 @@ class AdminReportService:
         restaurant_id: UUID,
         start_date: date,
         end_date: date,
+        branch_id: UUID | None = None,
     ) -> PaymentMethodsResponse:
         self._validate_period(start_date, end_date)
         start_at, end_at = self._period_bounds(start_date, end_date)
 
         rows = self.report_repository.totals_by_payment_method(
-            restaurant_id, start_at, end_at
+            restaurant_id, start_at, end_at, branch_id
         )
         revenue_total = quantize_money(
             sum((to_decimal(row[2]) for row in rows), ZERO)
         )
         return PaymentMethodsResponse(
             restaurant_id=restaurant_id,
+            branch_id=branch_id,
             period=self._period(start_date, end_date),
             orders_count=sum(row[1] for row in rows),
             revenue_total=revenue_total,
@@ -258,6 +270,7 @@ class AdminReportService:
         start_date: date,
         end_date: date,
         limit: int = DEFAULT_PRODUCT_LIMIT,
+        branch_id: UUID | None = None,
     ) -> ProductSalesResponse:
         """Ranking de produtos por unidades vendidas.
 
@@ -265,25 +278,39 @@ class AdminReportService:
         mais sai", e ordenar por dinheiro poe o prato mais caro no topo com
         tres unidades vendidas. A receita vem na linha para quem quiser a
         outra leitura.
+
+        **Sem `branch_id`, produtos que compartilham `catalog_key` somam as
+        lojas numa linha so** — e a pergunta que a chave existe para
+        responder. Produto sem chave continua contado por linha de
+        `products`, como antes. Ver `_identidade_do_item` no repositorio.
         """
         self._validate_period(start_date, end_date)
         start_at, end_at = self._period_bounds(start_date, end_date)
 
         rows = self.report_repository.top_products(
-            restaurant_id, start_at, end_at, limit
+            restaurant_id, start_at, end_at, limit, branch_id
         )
         products = [
             ProductSalesItem(
                 product_id=product_id,
                 product_name=product_name,
+                catalog_key=catalog_key,
                 orders_count=orders_count,
                 quantity_total=int(quantity_total or 0),
                 revenue_total=quantize_money(to_decimal(item_revenue)),
             )
-            for product_id, product_name, orders_count, quantity_total, item_revenue in rows
+            for (
+                product_id,
+                product_name,
+                catalog_key,
+                orders_count,
+                quantity_total,
+                item_revenue,
+            ) in rows
         ]
         return ProductSalesResponse(
             restaurant_id=restaurant_id,
+            branch_id=branch_id,
             period=self._period(start_date, end_date),
             products=products,
             listed_revenue_total=quantize_money(
@@ -297,6 +324,7 @@ class AdminReportService:
         restaurant_id: UUID,
         start_date: date,
         end_date: date,
+        branch_id: UUID | None = None,
     ) -> CancellationsResponse:
         """Pedidos que nao viraram venda, e a taxa que isso representa.
 
@@ -309,11 +337,11 @@ class AdminReportService:
         start_at, end_at = self._period_bounds(start_date, end_date)
 
         totals = self.report_repository.cancellation_totals(
-            restaurant_id, start_at, end_at
+            restaurant_id, start_at, end_at, branch_id
         )
-        billable = self.report_repository.sales_totals(restaurant_id, start_at, end_at)
+        billable = self.report_repository.sales_totals(restaurant_id, start_at, end_at, branch_id)
         rows = self.report_repository.cancellations_by_status(
-            restaurant_id, start_at, end_at
+            restaurant_id, start_at, end_at, branch_id
         )
 
         cancelled_count = totals["orders_count"]
@@ -321,6 +349,7 @@ class AdminReportService:
         all_orders = cancelled_count + billable_count
         return CancellationsResponse(
             restaurant_id=restaurant_id,
+            branch_id=branch_id,
             period=self._period(start_date, end_date),
             orders_count=cancelled_count,
             amount_total=quantize_money(to_decimal(totals["amount_total"])),
@@ -339,7 +368,12 @@ class AdminReportService:
             ],
         )
 
-    def _totals_for(self, restaurant_id: UUID, period: ReportPeriod) -> dict:
+    def _totals_for(
+        self,
+        restaurant_id: UUID,
+        period: ReportPeriod,
+        branch_id: UUID | None = None,
+    ) -> dict:
         """Somas de um periodo, ja com o ticket medio resolvido.
 
         Existe porque o resumo precisa exatamente disto duas vezes — para o
@@ -348,7 +382,7 @@ class AdminReportService:
         dificil de enxergar.
         """
         start_at, end_at = self._period_bounds(period.start_date, period.end_date)
-        totals = self.report_repository.sales_totals(restaurant_id, start_at, end_at)
+        totals = self.report_repository.sales_totals(restaurant_id, start_at, end_at, branch_id)
 
         orders_count = totals["orders_count"]
         revenue = quantize_money(to_decimal(totals["revenue_total"]))

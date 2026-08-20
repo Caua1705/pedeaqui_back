@@ -26,6 +26,11 @@
   <label>restaurant_id: <input id="restaurante" placeholder="cole o uuid do restaurante"></label>
 </p>
 <p>
+  <!-- Obrigatorio desde a revisao 20260820_0026: o cardapio e por filial, e
+       a busca precisa saber de qual loja falar. Sem ele a sessao nem abre. -->
+  <label>branch_id: <input id="filial" placeholder="cole o uuid da filial"></label>
+</p>
+<p>
   <!-- A emissao exige cliente autenticado: audio anonimo e consumo sem
        ninguem a quem cobrar. Esta pagina nao tem tela de login, entao o
        token entra a mao. -->
@@ -121,6 +126,8 @@ let timerDaInatividade = null;
 async function comecar() {
   const restaurantId = document.getElementById("restaurante").value.trim();
   if (!restaurantId) { alert("cole o restaurant_id"); return; }
+  const branchId = document.getElementById("filial").value.trim();
+  if (!branchId) { alert("cole o branch_id"); return; }
   const token = document.getElementById("token").value.trim();
   if (!token) { alert("cole o token do cliente"); return; }
 
@@ -132,7 +139,7 @@ async function comecar() {
   const sessaoResp = await fetch("/voice/session", {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-    body: JSON.stringify({ restaurant_id: restaurantId })
+    body: JSON.stringify({ restaurant_id: restaurantId, branch_id: branchId })
   });
   if (!sessaoResp.ok) {
     // 401 = token ausente ou vencido. 429 = cota ou rate limit; o corpo diz
@@ -159,7 +166,7 @@ async function comecar() {
 
   canal = pc.createDataChannel("oai-events");
   canal.onopen = () => estado("conectado — pode falar");
-  canal.onmessage = (evento) => tratarEvento(JSON.parse(evento.data), restaurantId);
+  canal.onmessage = (evento) => tratarEvento(JSON.parse(evento.data), restaurantId, branchId);
 
   const oferta = await pc.createOffer();
   await pc.setLocalDescription(oferta);
@@ -361,7 +368,7 @@ function tratarErro(evento) {
   }
 }
 
-function tratarEvento(evento, restaurantId) {
+function tratarEvento(evento, restaurantId, branchId) {
   // Tudo vai para o log; so alguns tipos viram acao.
   if (evento.type !== "response.output_audio_transcript.delta") {
     log("<- " + evento.type);
@@ -415,15 +422,15 @@ function tratarEvento(evento, restaurantId) {
   // API ja mudou esses nomes antes; quem garante uma execucao so e o call_id,
   // nao a escolha de um evento.
   if (evento.type === "response.function_call_arguments.done") {
-    executarBusca(evento.call_id, evento.name, evento.arguments, restaurantId);
+    executarBusca(evento.call_id, evento.name, evento.arguments, restaurantId, branchId);
     return;
   }
   if (evento.type === "response.output_item.done" && evento.item && evento.item.type === "function_call") {
-    executarBusca(evento.item.call_id, evento.item.name, evento.item.arguments, restaurantId);
+    executarBusca(evento.item.call_id, evento.item.name, evento.item.arguments, restaurantId, branchId);
   }
 }
 
-async function executarBusca(callId, nome, argumentosJson, restaurantId) {
+async function executarBusca(callId, nome, argumentosJson, restaurantId, branchId) {
   if (nome !== "buscar_no_cardapio") { return; }
   // Sem call_id nao ha como devolver o resultado nem como deduplicar — os dois
   // eventos medidos sempre trazem, mas um evento novo da API poderia nao
@@ -453,6 +460,7 @@ async function executarBusca(callId, nome, argumentosJson, restaurantId) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       restaurant_id: restaurantId,
+      branch_id: branchId,
       consulta: consulta,
       preco_maximo: precoMaximo
     })

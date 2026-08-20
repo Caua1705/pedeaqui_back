@@ -10,8 +10,14 @@ mesma do resto do app (`https://api.pederapidex.com` em produção,
 
 É o **passo 2** de três. O passo 1 (`91a68a4`) criou a tela de escolha de
 filial, documentada em [`contrato-filiais-frontend.md`](contrato-filiais-frontend.md).
-O passo 3 fará o cardápio por filial e **não** foi feito aqui: os produtos
-continuam sendo do restaurante.
+
+> **⚠️ O passo 3 foi feito em 20/08/2026** (revisões `20260820_0026`/`0027`).
+> Onde este documento diz que os produtos continuam sendo do restaurante,
+> **ele está desatualizado**: cardápio, preço e disponibilidade passaram a ser
+> de cada filial, e `payment_methods` saiu de `settings`. Vale
+> [`cardapio-por-filial.md`](cardapio-por-filial.md). O que este documento
+> descreve sobre OPERAÇÃO — os dois regimes, `is_open`, herança dos números
+> comerciais — continua correto e não foi tocado.
 
 ---
 
@@ -164,10 +170,10 @@ vem preenchido com os padrões da plataforma, porque zerá-lo esconderia o
 `is_open` de uma filial que pode estar pausada. `settings` só é nulo quando não
 há filial ativa nenhuma.
 
-`payment_methods` dentro de `settings` é o único campo que continua sendo do
-restaurante — e continua sendo **dado morto**: a fonte da verdade das formas de
-pagamento é `GET /restaurants/{slug}/info?branch_id=...`, por filial. Não o
-use.
+`payment_methods` dentro de `settings` era o único campo que continuava sendo
+do restaurante, e era **dado morto**. **Ele saiu da resposta e da tabela na
+revisão `20260820_0027`.** A fonte da verdade das formas de pagamento é
+`GET /restaurants/{slug}/info?branch_id=...`, por filial.
 
 ### 3.5 O que o app deve fazer, em ordem
 
@@ -329,8 +335,8 @@ default_delivery_fee   fica  ←   default_delivery_fee        NULL = herda
 
 Não se moveram, e não vão se mover: `platform_commission_percent` e
 `voice_enabled` são da **plataforma**, não do lojista, e não aparecem em schema
-nenhum do painel. `payment_methods` (jsonb) continua onde estava por já ser
-dado morto — removê-lo muda contrato público e é assunto do passo 3.
+nenhum do painel. `payment_methods` (jsonb) ficou onde estava por já ser dado morto — removê-lo
+muda contrato público, e foi feito no passo 3 (revisão `20260820_0027`).
 
 ### 5.2 Onde a regra mora, uma vez só
 
@@ -416,9 +422,9 @@ filial por conta própria, que é o defeito que este passo fecha.
 
 ## 7. O que este passo NÃO faz
 
-- **Não filtra o cardápio por filial.** `branch_id` no `/menu` resolve só o
-  bloco `settings`. Produtos, categorias, preços e disponibilidade continuam
-  sendo do restaurante — é o passo 3.
+- **Não filtrava o cardápio por filial.** Naquele passo, `branch_id` no
+  `/menu` resolvia só o bloco `settings`. **Isso mudou no passo 3** — ver
+  [`cardapio-por-filial.md`](cardapio-por-filial.md).
 - **Não mexe em cupons, relatórios nem no Rapi.**
 - **Não move `payment_methods` do jsonb.** Ver §5.1.
 - **Não cria "horário por filial"** — isso já existia

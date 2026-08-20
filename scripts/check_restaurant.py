@@ -198,51 +198,98 @@ def conferir_setores_de_impressao(db: Session, restaurante: Restaurante) -> Conf
     lata que sai da geladeira do balcao). O que nao e decisao e o cardapio
     INTEIRO assim: sai so a via do cliente e a cozinha nao recebe nada, sem
     erro em lugar nenhum.
+
+    **Conferencia FILIAL A FILIAL desde a revisao 20260820_0026**, pelo mesmo
+    motivo da taxa de entrega: cada loja tem o proprio cardapio e as proprias
+    impressoras, e uma contagem global daria OK pela loja bem configurada
+    enquanto a outra nao imprime nada.
+
+    E ela e a conferencia mais importante logo depois daquela migracao: o
+    remapeamento de setor das copias e por NOME, e todo produto que nao
+    encontrou um setor de mesmo nome na loja de destino ficou com nulo.
     """
-    total = _contar(db, "SELECT count(*) FROM products WHERE restaurant_id = CAST(:id AS uuid)"
-                        " AND is_active IS TRUE", restaurante)
-    if total == 0:
+    filiais = _filiais_ativas(db, restaurante)
+    if not filiais:
         return Conferencia("5.2", "Setor de impressao dos produtos", ERRO,
-                           ["  o restaurante nao tem nenhum produto ativo"],
-                           "Cadastre o cardapio (passo 5 do onboarding).")
+                           ["  o restaurante nao tem nenhuma filial ativa"],
+                           "Crie a filial (passo 1 do onboarding).")
 
-    setores = _contar(db, """
-        SELECT count(*) FROM printing_sectors ps
-          JOIN branches b ON b.id = ps.branch_id
-         WHERE b.restaurant_id = CAST(:id AS uuid) AND ps.is_active IS TRUE
-    """, restaurante)
-    sem_setor = _contar(db, "SELECT count(*) FROM products WHERE restaurant_id = CAST(:id AS uuid)"
-                            " AND is_active IS TRUE AND printing_sector_id IS NULL", restaurante)
-    setor_morto = _contar(db, """
-        SELECT count(*) FROM products p
-          JOIN printing_sectors ps ON ps.id = p.printing_sector_id
-         WHERE p.restaurant_id = CAST(:id AS uuid)
-           AND p.is_active IS TRUE AND ps.is_active IS FALSE
-    """, restaurante)
-
-    linhas = [f"  {total - sem_setor} de {total} produtos ativos com setor"]
+    linhas: list[str] = []
     situacao = OK
-
-    if setores == 0:
-        situacao = ERRO
-        linhas.append("  nenhum setor de impressao cadastrado - a cozinha nao recebe NADA")
-    elif sem_setor == total:
-        situacao = ERRO
-        linhas.append("  NENHUM produto tem setor - sai so a via do cliente")
-    elif sem_setor:
-        situacao = ATENCAO
-        linhas.append(f"  {sem_setor} produtos sem setor (pode ser proposital: bebida de balcao)")
-
-    if setor_morto:
-        situacao = ERRO if situacao != ERRO else situacao
-        linhas.append(f"  {setor_morto} produtos apontam para setor DESATIVADO - vao para a via "
-                      "'SEM SETOR' (armadilha 13)")
+    for filial in filiais:
+        situacao = _pior(situacao, _conferir_setores_da_filial(db, filial, linhas))
 
     return Conferencia(
         "5.2", "Setor de impressao dos produtos", situacao, linhas,
         "Use PATCH /admin/categories/{id}/printing-sector, que aponta a categoria "
         "inteira. Produto a produto, um cardapio de 200 itens nunca sai do lugar.",
     )
+
+
+def _conferir_setores_da_filial(db: Session, filial: dict, linhas: list[str]) -> str:
+    """A situacao de UMA loja, escrevendo o diagnostico dela em `linhas`."""
+    nome = filial["name"]
+    total = _contar_por_id(db, SQL_PRODUTOS_ATIVOS, filial["id"])
+    if total == 0:
+        linhas.append(f"  {nome}: NENHUM produto ativo - esta loja nao vende nada")
+        return ERRO
+
+    setores = _contar_por_id(db, SQL_SETORES_ATIVOS, filial["id"])
+    sem_setor = _contar_por_id(db, SQL_PRODUTOS_SEM_SETOR, filial["id"])
+    setor_morto = _contar_por_id(db, SQL_PRODUTOS_COM_SETOR_DESATIVADO, filial["id"])
+
+    linhas.append(f"  {nome}: {total - sem_setor} de {total} produtos ativos com setor")
+
+    # Os diagnosticos se ACUMULAM em vez de o primeiro encerrar a conferencia:
+    # "nenhum setor cadastrado" e "produto apontando para setor desativado" sao
+    # dois problemas diferentes e podem valer juntos. Ver so o primeiro faria o
+    # lojista consertar um e rodar de novo para descobrir o outro.
+    situacao = OK
+    if setores == 0:
+        situacao = ERRO
+        linhas.append(f"  {nome}: nenhum setor cadastrado - a cozinha nao recebe NADA")
+    elif sem_setor == total:
+        situacao = ERRO
+        linhas.append(f"  {nome}: NENHUM produto tem setor - sai so a via do cliente")
+    elif sem_setor:
+        situacao = ATENCAO
+        linhas.append(f"  {nome}: {sem_setor} sem setor (pode ser proposital: "
+                      "bebida de balcao)")
+
+    if setor_morto:
+        situacao = ERRO
+        linhas.append(f"  {nome}: {setor_morto} produtos apontam para setor DESATIVADO - "
+                      "vao para a via 'SEM SETOR'")
+    return situacao
+
+
+SQL_PRODUTOS_ATIVOS = """
+    SELECT count(*) FROM products
+     WHERE branch_id = CAST(:id AS uuid) AND is_active IS TRUE
+"""
+
+SQL_PRODUTOS_SEM_SETOR = """
+    SELECT count(*) FROM products
+     WHERE branch_id = CAST(:id AS uuid)
+       AND is_active IS TRUE
+       AND printing_sector_id IS NULL
+"""
+
+SQL_SETORES_ATIVOS = """
+    SELECT count(*) FROM printing_sectors
+     WHERE branch_id = CAST(:id AS uuid) AND is_active IS TRUE
+"""
+
+# Setor de OUTRA filial nao aparece aqui e nao precisa: a FK composta
+# (branch_id, printing_sector_id) da revisao 20260820_0026 nao deixa gravar
+# esse par. Sobrou o setor desativado, que e estado e nao integridade.
+SQL_PRODUTOS_COM_SETOR_DESATIVADO = """
+    SELECT count(*) FROM products p
+      JOIN printing_sectors ps ON ps.id = p.printing_sector_id
+     WHERE p.branch_id = CAST(:id AS uuid)
+       AND p.is_active IS TRUE
+       AND ps.is_active IS FALSE
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -361,8 +408,27 @@ def conferir_comissao(db: Session, restaurante: Restaurante) -> Conferencia:
 # ---------------------------------------------------------------------------
 
 
+def _pior(atual: str, novo: str) -> str:
+    """A situacao acumulada de varias filiais. So piora.
+
+    Uma loja em ordem nao apaga o erro da outra — sem isto, o restaurante com
+    a segunda loja sem nenhum setor sairia com OK global.
+    """
+    ordem = (OK, ATENCAO, ERRO)
+    return atual if ordem.index(atual) >= ordem.index(novo) else novo
+
+
 def _contar(db: Session, sql: str, restaurante: Restaurante) -> int:
-    return db.execute(text(sql), {"id": restaurante.id}).scalar() or 0
+    return _contar_por_id(db, sql, restaurante.id)
+
+
+def _contar_por_id(db: Session, sql: str, identificador: str) -> int:
+    """O mesmo `_contar`, com o id solto.
+
+    Existe porque as contagens de cardapio passaram a ser por FILIAL, e a
+    filial e um `dict` (vem de `_filiais_ativas`), nao um `Restaurante`.
+    """
+    return db.execute(text(sql), {"id": identificador}).scalar() or 0
 
 
 def _filiais_ativas(db: Session, restaurante: Restaurante) -> list[dict]:

@@ -44,6 +44,11 @@ class CommissionReportItem(BaseModel):
 
 class CommissionReportResponse(BaseModel):
     restaurant_id: UUID
+    # De que recorte este relatorio esta falando. Nulo significa "o
+    # restaurante inteiro", nunca "filial nenhuma" — e o que o dono recebe
+    # quando nao pede loja nenhuma. Sem este campo o painel nao tem como
+    # saber se o numero na tela e da loja escolhida ou da rede.
+    branch_id: UUID | None = None
     start_date: date
     end_date: date
     orders_count: int
@@ -116,6 +121,11 @@ class MetricComparison(BaseModel):
 
 class SalesSummaryResponse(BaseModel):
     restaurant_id: UUID
+    # De que recorte este relatorio esta falando. Nulo significa "o
+    # restaurante inteiro", nunca "filial nenhuma" — e o que o dono recebe
+    # quando nao pede loja nenhuma. Sem este campo o painel nao tem como
+    # saber se o numero na tela e da loja escolhida ou da rede.
+    branch_id: UUID | None = None
     period: ReportPeriod
     previous_period: ReportPeriod
     orders_count: int
@@ -142,6 +152,11 @@ class SalesByDayItem(BaseModel):
 
 class SalesByDayResponse(BaseModel):
     restaurant_id: UUID
+    # De que recorte este relatorio esta falando. Nulo significa "o
+    # restaurante inteiro", nunca "filial nenhuma" — e o que o dono recebe
+    # quando nao pede loja nenhuma. Sem este campo o painel nao tem como
+    # saber se o numero na tela e da loja escolhida ou da rede.
+    branch_id: UUID | None = None
     period: ReportPeriod
     orders_count: int
     revenue_total: Decimal
@@ -162,6 +177,11 @@ class PaymentMethodItem(BaseModel):
 
 class PaymentMethodsResponse(BaseModel):
     restaurant_id: UUID
+    # De que recorte este relatorio esta falando. Nulo significa "o
+    # restaurante inteiro", nunca "filial nenhuma" — e o que o dono recebe
+    # quando nao pede loja nenhuma. Sem este campo o painel nao tem como
+    # saber se o numero na tela e da loja escolhida ou da rede.
+    branch_id: UUID | None = None
     period: ReportPeriod
     orders_count: int
     revenue_total: Decimal
@@ -173,6 +193,13 @@ class ProductSalesItem(BaseModel):
     # continua, porque vem do snapshot gravado no item do pedido.
     product_id: UUID | None = None
     product_name: str
+    # A chave que junta o mesmo item das varias lojas nesta linha.
+    #
+    # Nula para produto sem chave — e ai a linha conta uma linha de
+    # `products` so, como antes do cardapio por filial. Preenchida, a linha
+    # pode somar duas lojas, e `product_id` aponta para uma delas: para
+    # separar, chame a rota com `branch_id`.
+    catalog_key: str | None = None
     orders_count: int
     quantity_total: int
     revenue_total: Decimal
@@ -180,6 +207,11 @@ class ProductSalesItem(BaseModel):
 
 class ProductSalesResponse(BaseModel):
     restaurant_id: UUID
+    # De que recorte este relatorio esta falando. Nulo significa "o
+    # restaurante inteiro", nunca "filial nenhuma" — e o que o dono recebe
+    # quando nao pede loja nenhuma. Sem este campo o painel nao tem como
+    # saber se o numero na tela e da loja escolhida ou da rede.
+    branch_id: UUID | None = None
     period: ReportPeriod
     products: list[ProductSalesItem]
     # Soma de `revenue_total` dos itens listados. NAO e o faturamento do
@@ -198,6 +230,11 @@ class CancellationBreakdownItem(BaseModel):
 
 class CancellationsResponse(BaseModel):
     restaurant_id: UUID
+    # De que recorte este relatorio esta falando. Nulo significa "o
+    # restaurante inteiro", nunca "filial nenhuma" — e o que o dono recebe
+    # quando nao pede loja nenhuma. Sem este campo o painel nao tem como
+    # saber se o numero na tela e da loja escolhida ou da rede.
+    branch_id: UUID | None = None
     period: ReportPeriod
     orders_count: int
     amount_total: Decimal

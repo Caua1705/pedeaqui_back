@@ -40,6 +40,14 @@ from src.services.admin_menu_service import AdminMenuService
 # rota daqui aceita restaurante, categoria ou produto de outro dono — o
 # service confere tudo contra `scope.restaurant_id`.
 #
+# **E, desde a revisao 20260820_0026, contra `scope.branch_id` tambem.**
+# Cardapio passou a ter filial, entao o escopo de filial passou a valer aqui:
+# `?branch_id=` nas listagens so RESTRINGE (quem esta preso a uma filial e
+# pedir outra recebe 404), e o acesso por id confere a filial da linha antes
+# de deixar editar. Ate aqui, um gerente preso a uma loja editava o cardapio
+# da rede inteira — nao por decisao, mas porque nao havia coluna para
+# restringir.
+#
 # Papeis, neste arquivo:
 #
 # - LER o cardapio: PESSOAS. O balcao precisa achar o produto na tela para
@@ -59,15 +67,21 @@ router = APIRouter(prefix="/admin", tags=["admin menu"])
     dependencies=[Depends(exigir_papel(PESSOAS))],
 )
 def list_categories(
+    branch_id: UUID | None = Query(default=None, description="So restringe; nunca amplia"),
     scope: AdminScope = Depends(get_admin_scope),
     db: Session = Depends(get_db),
 ) -> list[AdminCategoryResponse]:
-    """Todas as categorias, ativas e inativas.
+    """Todas as categorias, ativas e inativas, das filiais que o token alcanca.
 
     Diferente do cardapio publico de proposito: quem desativou uma categoria
     precisa continuar vendo-a para religar.
+
+    Sem `branch_id`, quem enxerga o restaurante inteiro recebe as lojas todas
+    numa lista, cada linha com o `branch_id` dela — e a tela em que o dono
+    confere se as duas lojas tem as mesmas secoes. Quem esta preso a uma
+    filial recebe so a dele, e pedir outra responde 404.
     """
-    return AdminMenuService(db).list_categories(scope)
+    return AdminMenuService(db).list_categories(scope, branch_id)
 
 
 @router.post(
@@ -81,6 +95,12 @@ def create_category(
     scope: AdminScope = Depends(get_admin_scope),
     db: Session = Depends(get_db),
 ) -> AdminCategoryResponse:
+    """Cria a categoria numa filial. `branch_id` e obrigatorio no corpo.
+
+    Sem default de propriedade nenhuma: cair na filial padrao criaria a
+    secao numa loja que o lojista nao escolheu, e ele so descobriria pelo
+    cardapio publico da outra.
+    """
     return AdminMenuService(db).create_category(scope, payload)
 
 
@@ -97,10 +117,10 @@ def reorder_categories(
     scope: AdminScope = Depends(get_admin_scope),
     db: Session = Depends(get_db),
 ) -> list[AdminCategoryResponse]:
-    """Grava a nova ordem do cardapio.
+    """Grava a nova ordem do cardapio DE UMA FILIAL.
 
-    Espera a lista COMPLETA das categorias do restaurante, na ordem
-    desejada. Faltando alguma, responde 400 — ver
+    Espera `branch_id` e a lista COMPLETA das categorias daquela filial, na
+    ordem desejada. Faltando alguma, responde 400 — ver
     AdminMenuService.reorder_categories.
     """
     return AdminMenuService(db).reorder_categories(scope, payload)
@@ -132,6 +152,7 @@ def update_category(
     dependencies=[Depends(exigir_papel(PESSOAS))],
 )
 def list_products(
+    branch_id: UUID | None = Query(default=None, description="So restringe; nunca amplia"),
     category_id: UUID | None = Query(default=None),
     search: str | None = Query(default=None, description="Parte do nome ou do codigo"),
     is_active: bool | None = Query(default=None),
@@ -140,8 +161,16 @@ def list_products(
     scope: AdminScope = Depends(get_admin_scope),
     db: Session = Depends(get_db),
 ) -> AdminProductListResponse:
+    """Os produtos, paginados. Cada item diz de qual filial e.
+
+    Sem `branch_id`, quem enxerga o restaurante inteiro ve as lojas todas —
+    e ai a mesma "Picanha" aparece uma vez por loja, com precos que podem
+    divergir. A lista vem agrupada por filial de proposito, para que duas
+    linhas de mesmo nome nunca saiam vizinhas sem explicacao.
+    """
     return AdminMenuService(db).list_products(
         scope,
+        branch_id=branch_id,
         category_id=category_id,
         search=search,
         is_active=is_active,
@@ -167,6 +196,12 @@ def create_product(
     scope: AdminScope = Depends(get_admin_scope),
     db: Session = Depends(get_db),
 ) -> AdminProductResponse:
+    """Cria o produto. A FILIAL vem da categoria, nao do corpo.
+
+    Nao ha `branch_id` aqui de proposito: `category_id` ja determina a loja,
+    e pedir os dois abriria a chance de virem em desacordo. Ver a decisao 3
+    no cabecalho de `admin_menu_service.py`.
+    """
     return AdminMenuService(db).create_product(scope, payload)
 
 
@@ -221,10 +256,14 @@ def update_product(
     scope: AdminScope = Depends(get_admin_scope),
     db: Session = Depends(get_db),
 ) -> AdminProductResponse:
-    """Edita nome, descricao, categoria, codigo e preco.
+    """Edita nome, descricao, categoria, codigo, chave de catalogo e preco.
 
     O preco e a unica parte que o gerente nao alcanca — ver
     `ensure_pode_definir_preco`. Ele fica com o resto da tela.
+
+    `category_id` so aceita categoria da MESMA filial: produto nao muda de
+    loja. `catalog_key` explicitamente nulo LIMPA a chave; campo ausente nao
+    mexe nela.
     """
     if payload.price is not None:
         ensure_pode_definir_preco(scope.admin_user)

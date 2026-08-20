@@ -28,7 +28,9 @@ from src.utils.images import detect_image_extension
 
 
 RESTAURANT_ID = uuid.uuid4()
+BRANCH_ID = uuid.uuid4()
 OTHER_RESTAURANT_ID = uuid.uuid4()
+BRANCH_ID = uuid.uuid4()
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 64
 JPEG_BYTES = b"\xff\xd8\xff\xe0" + b"0" * 64
@@ -80,6 +82,10 @@ def make_product(**overrides):
     values = {
         "id": uuid.uuid4(),
         "restaurant_id": RESTAURANT_ID,
+        # A filial nao muda nada nesta tela (a imagem e do produto), mas o
+        # `_get_product` do service confere o escopo dela antes de deixar
+        # gravar — sem a coluna, o fake nem chega no upload.
+        "branch_id": BRANCH_ID,
         "image_path": None,
     }
     values.update(overrides)

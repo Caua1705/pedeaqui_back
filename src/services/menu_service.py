@@ -38,28 +38,33 @@ class MenuService:
         restaurant_slug: str,
         branch_id: UUID | None = None,
     ) -> RestaurantMenuResponse:
-        """O cardapio do restaurante, com a operacao DA FILIAL escolhida.
+        """O cardapio DAQUELA FILIAL, e a operacao dela.
 
-        Os produtos ainda sao do restaurante — cardapio por filial e trabalho
-        separado. O que ja e por filial e o bloco `settings`: valor minimo,
-        taxa de servico, aceita entrega/retirada e o "fechar agora" saem da
-        filial que o `branch_id` pedir.
+        Desde a revisao 20260820_0026 o `branch_id` resolve a resposta
+        inteira: produtos, categorias, precos, disponibilidade E o bloco
+        `settings`. Nao existe mais "o cardapio do restaurante" — cada loja
+        tem o seu, sem heranca e sem sobrescrita.
 
         Sem `branch_id` vale a filial padrao, a mesma de
         `POST /delivery/estimate` e de `GET /restaurants/{slug}/info` sem
-        filial. Nao ha caminho que devolva o bloco "do restaurante": ele
-        deixou de existir, e inventar um faria o cliente ver um valor minimo
-        que nenhuma loja cobra.
+        filial. Nao ha caminho que devolva o cardapio "do restaurante":
+        juntar as lojas numa lista so mostraria a mesma picanha duas vezes,
+        com dois precos e sem dizer qual e de qual.
+
+        Restaurante sem filial ativa responde 200 com `products` e
+        `categories` vazios — a vitrine (nome, banner, cupom) continua de pe,
+        mas nao ha loja de onde tirar cardapio.
         """
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
         settings = self.menu_repository.get_settings(restaurant.id)
-        branch = self._resolve_settings_branch(restaurant.id, branch_id)
+        branch = self._resolve_menu_branch(restaurant.id, branch_id)
         operation = resolve_branch_operation(branch, settings) if branch else None
 
         return RestaurantMenuResponse(
             restaurant=self.restaurant_service.to_public_response(restaurant),
+            branch_id=branch.id if branch else None,
             settings_branch_id=branch.id if branch else None,
-            settings=self._settings_response(operation, settings) if operation else None,
+            settings=self._settings_response(operation) if operation else None,
             branches=[BranchResponse.model_validate(branch) for branch in self.menu_repository.get_active_branches(restaurant.id)],
             banners=[self._banner_response(banner) for banner in self.menu_repository.get_banners_by_type(restaurant.id, "hero")],
             highlight_banners=[
@@ -67,20 +72,46 @@ class MenuService:
                 for banner in self.menu_repository.get_banners_by_type(restaurant.id, "highlight")
             ],
             coupons=self._coupon_responses(restaurant.id),
-            categories=[CategoryResponse.model_validate(category) for category in self.menu_repository.get_active_categories(restaurant.id)],
-            products=self._sellable_product_responses(self.menu_repository.get_active_products(restaurant.id)),
+            categories=self._category_responses(branch),
+            products=self._product_responses_of_branch(branch),
         )
 
-    def get_products_by_category(self, restaurant_slug: str, category_slug: str) -> list[ProductResponse]:
+    def get_products_by_category(
+        self,
+        restaurant_slug: str,
+        category_slug: str,
+        branch_id: UUID | None = None,
+    ) -> list[ProductResponse]:
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
-        if not self.product_repository.active_category_exists(restaurant.id, category_slug):
+        branch = self._require_menu_branch(restaurant.id, branch_id)
+        if not self.product_repository.active_category_exists(branch.id, category_slug):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Categoria não encontrada")
-        products = self.product_repository.list_active_by_category_slug(restaurant.id, category_slug)
+        products = self.product_repository.list_active_by_category_slug(branch.id, category_slug)
         return self._sellable_product_responses(products)
 
-    def get_product_detail(self, restaurant_slug: str, product_slug: str) -> ProductResponse:
+    def get_product_detail(
+        self,
+        restaurant_slug: str,
+        product_slug: str,
+        branch_id: UUID | None = None,
+    ) -> ProductResponse:
+        """O produto por slug, DENTRO de uma filial.
+
+        Sem `branch_id` vale a filial padrao, e isso nao e detalhe: e o que
+        faz os links ja divulgados continuarem funcionando. A migracao
+        20260820_0026 deixou as linhas que ja existiam NA filial padrao —
+        mesmos ids, mesmos slugs —, entao
+        `/restaurants/junior-da-picanha/products/picanha` abre exatamente o
+        produto que sempre abriu.
+
+        Produto que so existe numa filial NAO padrao responde 404 pelo link
+        sem parametro. E a resposta correta: sem filial nao ha preco a
+        mostrar, e escolher uma loja por conta propria e o defeito que o
+        passo 2 fechou.
+        """
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
-        product = self.product_repository.get_active_by_slug(restaurant.id, product_slug)
+        branch = self._require_menu_branch(restaurant.id, branch_id)
+        product = self.product_repository.get_active_by_slug(branch.id, product_slug)
         if not product:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Produto não encontrado")
 
@@ -102,20 +133,21 @@ class MenuService:
 
         return self.product_response(product)
 
-    def _resolve_settings_branch(
+    def _resolve_menu_branch(
         self,
         restaurant_id: UUID,
         branch_id: UUID | None,
     ) -> Branch | None:
-        """A filial de que o bloco `settings` vai falar.
+        """A filial de que o cardapio inteiro vai falar.
 
         404 para filial que nao e deste restaurante, e nao a filial padrao
         calada: o app que mandou o id errado precisa descobrir isso, senao
-        ele mostra o valor minimo de outra loja achando que acertou.
+        ele mostra o cardapio e o valor minimo de outra loja achando que
+        acertou.
 
-        `None` (e nao 404) quando o restaurante nao tem filial ativa: o
-        cardapio continua sendo respondido, so sem o bloco de operacao — nao
-        ha loja para ele descrever.
+        `None` (e nao 404) quando o restaurante nao tem filial ativa: a
+        vitrine continua sendo respondida, so sem cardapio e sem o bloco de
+        operacao — nao ha loja para eles descreverem.
         """
         if branch_id is None:
             return self.branch_repository.get_default_branch(restaurant_id)
@@ -130,15 +162,45 @@ class MenuService:
             )
         return branch
 
+    def _require_menu_branch(self, restaurant_id: UUID, branch_id: UUID | None) -> Branch:
+        """Igual a `_resolve_menu_branch`, mas "sem filial" vira 404.
+
+        As rotas de UM produto e de UMA categoria nao tem resposta parcial
+        para dar: sem loja nao existe aquele produto nem aquele preco. O
+        cardapio inteiro tem — ele ainda devolve a vitrine.
+        """
+        branch = self._resolve_menu_branch(restaurant_id, branch_id)
+        if branch is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Restaurante sem filial disponível",
+            )
+        return branch
+
+    def _category_responses(self, branch: Branch | None) -> list[CategoryResponse]:
+        if branch is None:
+            return []
+        return [
+            CategoryResponse.model_validate(category)
+            for category in self.menu_repository.get_active_categories(branch.id)
+        ]
+
+    def _product_responses_of_branch(self, branch: Branch | None) -> list[ProductResponse]:
+        if branch is None:
+            return []
+        return self._sellable_product_responses(
+            self.menu_repository.get_active_products(branch.id)
+        )
+
     @staticmethod
-    def _settings_response(
-        operation: BranchOperation,
-        settings,
-    ) -> RestaurantSettingsResponse:
+    def _settings_response(operation: BranchOperation) -> RestaurantSettingsResponse:
         """O bloco de operacao, ja resolvido para a filial.
 
-        `payment_methods` e o unico campo que ainda sai da linha do
-        restaurante — ver a docstring de RestaurantSettingsResponse.
+        `payment_methods` saiu daqui na revisao 20260820_0027, junto com a
+        coluna: quem manda em forma de pagamento e `branch_payment_methods`,
+        por filial, em `GET /restaurants/{slug}/info?branch_id=...`. Enquanto
+        ele foi ecoado aqui, o app que acreditasse nele mostrava ao cliente
+        uma forma que o pedido recusa com 400.
         """
         return RestaurantSettingsResponse(
             min_order_value=money_to_float(operation.min_order_value),
@@ -149,7 +211,6 @@ class MenuService:
             service_fee_amount=money_to_float(operation.service_fee_amount),
             accepts_delivery=operation.accepts_delivery,
             accepts_pickup=operation.accepts_pickup,
-            payment_methods=settings.payment_methods if settings else None,
             is_open=operation.is_open,
         )
 
@@ -158,6 +219,7 @@ class MenuService:
         return ProductResponse(
             id=product.id,
             restaurant_id=product.restaurant_id,
+            branch_id=product.branch_id,
             category_id=product.category_id,
             code=product.code,
             name=product.name,

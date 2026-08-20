@@ -197,7 +197,7 @@ def _rotas_de_detalhe(t: Tenant, extras: dict) -> list[tuple[str, str, dict | No
         (
             "PATCH",
             "/admin/categories/reorder",
-            {"category_ids": [str(t.categoria.id)]},
+            {"branch_id": str(t.categoria.branch_id), "category_ids": [str(t.categoria.id)]},
         ),
         (
             "PATCH",

@@ -51,6 +51,10 @@ class FakeReportRepository:
         self.cancellations = cancellations or {"orders_count": 0, "amount_total": Decimal("0")}
         self.cancellations_by_status_rows = cancellations_by_status or []
         self.calls = []
+        # Toda consulta registra a filial que recebeu. E o que permite provar
+        # que o recorte CHEGOU ao repositorio sem subir Postgres — e, no
+        # resumo, que ele chegou tambem na consulta do periodo anterior.
+        self.branches_asked = []
 
     @staticmethod
     def _empty_totals():
@@ -64,30 +68,37 @@ class FakeReportRepository:
             "commission_total": Decimal("0"),
         }
 
-    def sales_totals(self, restaurant_id, start_at, end_at):
+    def sales_totals(self, restaurant_id, start_at, end_at, branch_id=None):
         self.calls.append(("sales_totals", start_at, end_at))
+        self.branches_asked.append(branch_id)
         # Permite dar numeros diferentes ao periodo atual e ao anterior, que
         # e o que o resumo compara.
         return self.totals_by_period.get(start_at.date(), self.default_totals)
 
-    def totals_by_order_type(self, restaurant_id, start_at, end_at):
+    def totals_by_order_type(self, restaurant_id, start_at, end_at, branch_id=None):
+        self.branches_asked.append(branch_id)
         return self.by_type
 
-    def sales_by_day(self, restaurant_id, start_at, end_at):
+    def sales_by_day(self, restaurant_id, start_at, end_at, branch_id=None):
         self.calls.append(("sales_by_day", start_at, end_at))
+        self.branches_asked.append(branch_id)
         return self.by_day
 
-    def totals_by_payment_method(self, restaurant_id, start_at, end_at):
+    def totals_by_payment_method(self, restaurant_id, start_at, end_at, branch_id=None):
+        self.branches_asked.append(branch_id)
         return self.by_method
 
-    def top_products(self, restaurant_id, start_at, end_at, limit):
+    def top_products(self, restaurant_id, start_at, end_at, limit, branch_id=None):
         self.calls.append(("top_products", start_at, end_at, limit))
+        self.branches_asked.append(branch_id)
         return self.products[:limit]
 
-    def cancellation_totals(self, restaurant_id, start_at, end_at):
+    def cancellation_totals(self, restaurant_id, start_at, end_at, branch_id=None):
+        self.branches_asked.append(branch_id)
         return self.cancellations
 
-    def cancellations_by_status(self, restaurant_id, start_at, end_at):
+    def cancellations_by_status(self, restaurant_id, start_at, end_at, branch_id=None):
+        self.branches_asked.append(branch_id)
         return self.cancellations_by_status_rows
 
 
@@ -333,7 +344,7 @@ class ProductSalesTests(unittest.TestCase):
     def test_items_carry_quantity_and_revenue(self):
         product_id = uuid.uuid4()
         repository = FakeReportRepository(
-            products=[(product_id, "Picanha", 4, 9, Decimal("450.00"))]
+            products=[(product_id, "Picanha", "picanha", 4, 9, Decimal("450.00"))]
         )
         report = build_service(repository).product_sales_report(
             RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 31)
@@ -346,7 +357,9 @@ class ProductSalesTests(unittest.TestCase):
         self.assertEqual(item.revenue_total, Decimal("450.00"))
 
     def test_product_removed_from_the_menu_keeps_the_snapshot_name(self):
-        repository = FakeReportRepository(products=[(None, "Combo antigo", 1, 1, Decimal("30.00"))])
+        repository = FakeReportRepository(
+            products=[(None, "Combo antigo", None, 1, 1, Decimal("30.00"))]
+        )
         report = build_service(repository).product_sales_report(
             RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 31)
         )
@@ -356,7 +369,7 @@ class ProductSalesTests(unittest.TestCase):
 
     def test_limit_is_passed_through_to_the_query(self):
         repository = FakeReportRepository(
-            products=[(uuid.uuid4(), f"P{i}", 1, 1, Decimal("10.00")) for i in range(50)]
+            products=[(uuid.uuid4(), f"P{i}", None, 1, 1, Decimal("10.00")) for i in range(50)]
         )
         report = build_service(repository).product_sales_report(
             RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 31), limit=5

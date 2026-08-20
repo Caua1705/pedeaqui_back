@@ -17,6 +17,15 @@ class OrderItem(Base):
     order_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orders.id"), nullable=False)
     product_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("products.id"))
     product_code_snapshot: Mapped[str | None] = mapped_column(Text)
+    # A chave de catalogo do produto NO MOMENTO DA VENDA (revisao
+    # 20260820_0026). Congelada aqui pelo mesmo motivo do nome: `product_id`
+    # aponta para a linha de UMA filial, e a linha pode ser renomeada depois.
+    #
+    # E o que faz `/admin/reports/products` somar as duas lojas na mesma
+    # linha mesmo que uma delas renomeie o produto. Nula para produto sem
+    # chave — e ai o relatorio volta a agrupar so pelo nome, que e o
+    # comportamento antigo.
+    catalog_key_snapshot: Mapped[str | None] = mapped_column(Text)
     product_name_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
     product_description_snapshot: Mapped[str | None] = mapped_column(Text)
     unit_price_snapshot: Mapped[Decimal] = mapped_column(Numeric, nullable=False)

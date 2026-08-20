@@ -16,15 +16,16 @@ congelado, **não rode nada de lá**.
                                │
      ┌──────────────┬──────────┼───────────┬───────────────┬──────────────┐
      │              │          │           │               │              │
-restaurant_      branches      │       categories    restaurant_      admin_users
- settings           │          │           │           coupons
-  (1 : 1)           │          │           │              │
-        ┌───────────┼──────┐   │       products      coupon_redemptions
-        │           │      │   │           │              │
-branch_       branch_   printing_          │              │
-business_     payment_   sectors ◄─────────┤              │
- hours        methods               (products.printing_   │
-                                     sector_id, NULLABLE) │
+restaurant_      branches                          restaurant_      admin_users
+ settings           │                              coupons
+  (1 : 1)           │                                 │
+        ┌───────────┼──────┬─────────────┐     coupon_redemptions
+        │           │      │             │            │
+branch_       branch_   printing_    categories       │
+business_     payment_   sectors ◄──┐     │           │
+ hours        methods               └── products      │
+                            (products.printing_       │
+                             sector_id, NULLABLE)     │
                                │                          │
                             orders ◄─────────────────────-┘
                                │
@@ -76,14 +77,29 @@ business_     payment_   sectors ◄─────────┤              
 
 | Tabela | Guarda | Notas |
 |---|---|---|
-| `categories` | `restaurant_id`, nome, `slug`, `sort_order`, `is_active` | |
-| `products` | `restaurant_id`, `category_id`, `printing_sector_id` (**NULLABLE**), `price`, `is_active`, `is_available` | `printing_sector_id` nulo = **não gera via de produção** (é decisão do lojista, não falta de configuração) |
+| `categories` | `restaurant_id`, **`branch_id`**, nome, `slug`, `sort_order`, `is_active` | Pende de **filial** desde a revisão `20260820_0026`. `slug` é único por `(branch_id, slug)` |
+| `products` | `restaurant_id`, **`branch_id`**, `category_id`, `printing_sector_id` (**NULLABLE**), **`catalog_key`** (NULLABLE), `price`, `is_active`, `is_available` | Pende de **filial**: cada loja tem os próprios produtos e preços, sem herança. `printing_sector_id` nulo = **não gera via de produção** (decisão do lojista, não falta de configuração). `catalog_key` liga o mesmo item entre lojas e serve **só a relatório** |
 | `product_option_groups` | `min_select`, `max_select`, `is_required`, `is_active` | Os "escolha o acompanhamento" |
 | `product_options` | `additional_price`, `is_active` | |
 
 **Nada é apagado no cardápio, só desativado** (`is_active=false`), porque
 `order_items.product_id` referencia `products` por FK. Apagar um produto
 quebraria pedidos antigos.
+
+**O cardápio é da FILIAL, sem herança.** Não existe "produto do restaurante"
+nem sobrescrita por loja: a picanha do Centro e a da Aldeota são duas linhas
+independentes. Quatro FKs compostas garantem que as pontas não divirjam:
+
+```
+products (branch_id, category_id)        -> categories (branch_id, id)
+products (branch_id, printing_sector_id) -> printing_sectors (branch_id, id)
+products (restaurant_id, branch_id)      -> branches (restaurant_id, id)
+categories (restaurant_id, branch_id)    -> branches (restaurant_id, id)
+```
+
+A segunda é a que torna **impossível de gravar** o produto de uma loja
+apontando para a impressora de outra — o estado que a armadilha 13 do skill
+descrevia. Documento completo: [`cardapio-por-filial.md`](cardapio-por-filial.md).
 
 ### O pedido
 
@@ -155,6 +171,10 @@ Tabelas que carregam `restaurant_id` próprio: `branches`, `categories`,
 `products`, `restaurant_settings`, `restaurant_banners`, `restaurant_coupons`,
 `orders`, `admin_users`, `ai_product_embeddings`, `ai_feedback`,
 `cashback_transactions`, `restaurant_payment_credentials`, `delivery_estimates`.
+
+**Em `categories` e `products` o filtro que vale é `branch_id`**, e o
+`restaurant_id` fica ao lado como redundância amarrada por FK composta:
+consultar cardápio por restaurante devolve as lojas todas misturadas.
 
 Duas defesas complementares:
 

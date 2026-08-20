@@ -108,11 +108,12 @@ class TestAsDuasChavesDoCache:
     def test_a_chave_da_busca_muda_quando_a_geracao_muda(self, monkeypatch):
         cache = ChatCache()
         restaurant_id = uuid.uuid4()
+        branch_id = uuid.uuid4()
 
         monkeypatch.setattr(menu_generation, "current", lambda _: 0)
-        antes = cache.retrieval_key(restaurant_id, "tem pizza vegana?")
+        antes = cache.retrieval_key(restaurant_id, branch_id, "tem pizza vegana?")
         monkeypatch.setattr(menu_generation, "current", lambda _: 1)
-        depois = cache.retrieval_key(restaurant_id, "tem pizza vegana?")
+        depois = cache.retrieval_key(restaurant_id, branch_id, "tem pizza vegana?")
 
         assert antes != depois
 
@@ -120,14 +121,45 @@ class TestAsDuasChavesDoCache:
         cache = ChatCache()
         reindexado = uuid.uuid4()
         intocado = uuid.uuid4()
+        filial = uuid.uuid4()
         geracoes = {reindexado: 0, intocado: 5}
 
         monkeypatch.setattr(menu_generation, "current", lambda rid: geracoes[rid])
-        antes = cache.retrieval_key(intocado, "tem pizza vegana?")
+        antes = cache.retrieval_key(intocado, filial, "tem pizza vegana?")
         geracoes[reindexado] = 1
-        depois = cache.retrieval_key(intocado, "tem pizza vegana?")
+        depois = cache.retrieval_key(intocado, filial, "tem pizza vegana?")
 
         assert antes == depois
+
+    def test_duas_filiais_nao_compartilham_a_chave_da_busca(self, monkeypatch):
+        """A metade do filtro por filial que mora no CACHE.
+
+        Sem isto, a primeira loja a perguntar "tem picanha?" guarda a
+        resposta dela por 20 minutos e a segunda recebe essa mesma lista —
+        com os produtos e os precos da primeira. O filtro por filial do SQL
+        nao chega a ser consultado, e o defeito parece intermitente.
+        """
+        cache = ChatCache()
+        restaurant_id = uuid.uuid4()
+
+        monkeypatch.setattr(menu_generation, "current", lambda _: 0)
+        centro = cache.retrieval_key(restaurant_id, uuid.uuid4(), "tem picanha?")
+        aldeota = cache.retrieval_key(restaurant_id, uuid.uuid4(), "tem picanha?")
+
+        assert centro != aldeota
+
+    def test_a_chave_do_embedding_ignora_a_filial(self, monkeypatch):
+        """O vetor e da FRASE, e a frase e a mesma nas duas lojas.
+
+        Botar a filial aqui compraria um embedding por loja para guardar N
+        copias do mesmo numero.
+        """
+        cache = ChatCache()
+        restaurant_id = uuid.uuid4()
+
+        assert cache.embedding_key(restaurant_id, "tem picanha?") == cache.embedding_key(
+            restaurant_id, "tem picanha?"
+        )
 
     def test_a_normalizacao_da_pergunta_continua_valendo(self):
         cache = ChatCache()

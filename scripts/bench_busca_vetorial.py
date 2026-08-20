@@ -77,6 +77,7 @@ CONSULTA = """
     WHERE
         ape.restaurant_id = :restaurant_id
         AND p.restaurant_id = :restaurant_id
+        AND p.branch_id = :branch_id
         AND p.is_active IS TRUE
         AND p.is_available IS TRUE
         AND (CAST(:max_price AS numeric) IS NULL OR p.price <= CAST(:max_price AS numeric))
@@ -155,19 +156,26 @@ def _rodar_alembic(argumentos: list[str], ambiente: dict[str, str]) -> None:
         raise RuntimeError(f"`alembic {' '.join(argumentos)}` falhou:\n{resultado.stderr}")
 
 
-def semear(engine: Engine, produtos: int, restaurantes: int) -> tuple[str, list]:
-    """Cria os cardapios. Devolve o restaurante a consultar e os temas dele.
+def semear(engine: Engine, produtos: int, restaurantes: int) -> tuple[str, str, list]:
+    """Cria os cardapios. Devolve o restaurante, a filial e os temas dela.
 
     Cada restaurante tem temas PROPRIOS: e o que faz a consulta de um deles
     nao encontrar vizinho nenhum nos outros, como num cardapio de verdade.
+
+    UMA filial por restaurante, de proposito: o cardapio pende de filial
+    desde a revisao 20260820_0026, e o que esta medicao dimensiona e o
+    tamanho de UM cardapio. Duas lojas com o mesmo cardapio dobrariam a
+    tabela sem mudar o recorte que a consulta faz.
     """
     alvo = None
     with engine.begin() as conexao:
         for numero in range(restaurantes):
             centros = [vetor_aleatorio() for _ in range(TEMAS)]
-            restaurant_id = _semear_um_restaurante(conexao, numero, produtos, centros)
+            restaurant_id, branch_id = _semear_um_restaurante(
+                conexao, numero, produtos, centros
+            )
             if numero == 0:
-                alvo = (str(restaurant_id), centros)
+                alvo = (str(restaurant_id), str(branch_id), centros)
 
     with engine.connect() as conexao:
         conexao.exec_driver_sql("ANALYZE")
@@ -180,17 +188,26 @@ def _semear_um_restaurante(conexao, numero: int, produtos: int, centros: list):
         "INSERT INTO restaurants (name, slug) VALUES (:n, :s) RETURNING id"
     ), {"n": f"Bench {numero}", "s": f"bench-{numero}"}).scalar()
 
+    branch_id = conexao.execute(text(
+        "INSERT INTO branches (restaurant_id, name, slug, address, neighborhood,"
+        " city, state, is_main, is_active)"
+        " VALUES (:r, 'Matriz', :s, 'Rua X', 'Centro', 'Fortaleza', 'CE', true, true)"
+        " RETURNING id"
+    ), {"r": restaurant_id, "s": f"matriz-{numero}"}).scalar()
+
     category_id = conexao.execute(text(
-        "INSERT INTO categories (restaurant_id, name, slug, sort_order)"
-        " VALUES (:r, 'Geral', :s, 1) RETURNING id"
-    ), {"r": restaurant_id, "s": f"geral-{numero}"}).scalar()
+        "INSERT INTO categories (restaurant_id, branch_id, name, slug, sort_order)"
+        " VALUES (:r, :b, 'Geral', :s, 1) RETURNING id"
+    ), {"r": restaurant_id, "b": branch_id, "s": f"geral-{numero}"}).scalar()
 
     for indice in range(produtos):
         product_id = conexao.execute(text(
-            "INSERT INTO products (restaurant_id, category_id, name, slug, price,"
-            " is_active, is_available) VALUES (:r, :c, :n, :s, :p, true, true) RETURNING id"
-        ), {"r": restaurant_id, "c": category_id, "n": f"Produto {indice}",
-            "s": f"produto-{numero}-{indice}", "p": 10 + (indice % 90)}).scalar()
+            "INSERT INTO products (restaurant_id, branch_id, category_id, name, slug,"
+            " price, is_active, is_available)"
+            " VALUES (:r, :b, :c, :n, :s, :p, true, true) RETURNING id"
+        ), {"r": restaurant_id, "b": branch_id, "c": category_id,
+            "n": f"Produto {indice}", "s": f"produto-{numero}-{indice}",
+            "p": 10 + (indice % 90)}).scalar()
 
         conexao.execute(text(
             "INSERT INTO ai_product_embeddings (restaurant_id, product_id, content,"
@@ -199,7 +216,7 @@ def _semear_um_restaurante(conexao, numero: int, produtos: int, centros: list):
         ), {"r": restaurant_id, "p": product_id, "ct": f"Produto {indice}",
             "h": f"{numero}-{indice}", "e": formatar(perto_de(centros[indice % TEMAS], 0.02))})
 
-    return restaurant_id
+    return restaurant_id, branch_id
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +234,7 @@ def perguntas(centros: list, quantas: int) -> list[dict]:
     return [
         {
             "restaurant_id": None,
+            "branch_id": None,
             "embedding": formatar(perto_de(random.choice(centros), 0.025)),
             "top_k": TOP_K, "max_price": None, "min_similarity": MIN_SIMILARITY,
         }
@@ -224,7 +242,7 @@ def perguntas(centros: list, quantas: int) -> list[dict]:
     ]
 
 
-def medir(engine: Engine, restaurant_id: str, lote: list[dict]) -> dict:
+def medir(engine: Engine, restaurant_id: str, branch_id: str, lote: list[dict]) -> dict:
     """Ida e volta de cada consulta, mais o tempo do servidor e o plano.
 
     O `EXPLAIN ANALYZE` roda FORA do laco cronometrado: a instrumentacao
@@ -233,11 +251,19 @@ def medir(engine: Engine, restaurant_id: str, lote: list[dict]) -> dict:
     """
     with engine.connect() as conexao:
         for parametros in lote[:20]:
-            conexao.execute(text(CONSULTA), {**parametros, "restaurant_id": restaurant_id}).fetchall()
+            conexao.execute(text(CONSULTA), {
+                **parametros,
+                "restaurant_id": restaurant_id,
+                "branch_id": branch_id,
+            }).fetchall()
 
         tempos, devolvidas = [], []
         for parametros in lote:
-            parametros = {**parametros, "restaurant_id": restaurant_id}
+            parametros = {
+                **parametros,
+                "restaurant_id": restaurant_id,
+                "branch_id": branch_id,
+            }
             inicio = time.perf_counter()
             linhas = conexao.execute(text(CONSULTA), parametros).fetchall()
             tempos.append((time.perf_counter() - inicio) * 1000)
@@ -245,7 +271,7 @@ def medir(engine: Engine, restaurant_id: str, lote: list[dict]) -> dict:
 
         plano = [linha[0] for linha in conexao.execute(
             text("EXPLAIN (ANALYZE) " + CONSULTA),
-            {**lote[0], "restaurant_id": restaurant_id},
+            {**lote[0], "restaurant_id": restaurant_id, "branch_id": branch_id},
         ).fetchall()]
 
     return {
@@ -314,10 +340,12 @@ def main() -> int:
 
     recriar_banco()
     engine = montar_schema()
-    restaurant_id, centros = semear(engine, argumentos.produtos, argumentos.restaurantes)
+    restaurant_id, branch_id, centros = semear(
+        engine, argumentos.produtos, argumentos.restaurantes
+    )
     lote = perguntas(centros, argumentos.consultas)
 
-    sem_indice = medir(engine, restaurant_id, lote)
+    sem_indice = medir(engine, restaurant_id, branch_id, lote)
     print("SEM INDICE (o que roda hoje)")
     imprimir("sem indice", sem_indice, None)
 
@@ -333,7 +361,7 @@ def main() -> int:
     for nome, ddl in cenarios:
         construcao = criar_indice(engine, ddl)
         print(f"\nCOM {nome.upper()}  (construcao: {construcao:.2f} s)")
-        imprimir(nome, medir(engine, restaurant_id, lote), sem_indice["mediana"])
+        imprimir(nome, medir(engine, restaurant_id, branch_id, lote), sem_indice["mediana"])
 
     with engine.connect() as conexao:
         conexao.exec_driver_sql("DROP INDEX IF EXISTS bench_ann")

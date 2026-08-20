@@ -47,6 +47,11 @@ PAGINA = Path(pacote_de_voz.__file__).resolve().parent / "page.html"
 
 class SessaoRequest(BaseModel):
     restaurant_id: uuid.UUID
+    # OBRIGATORIO desde a revisao 20260820_0026, pelo mesmo motivo do `/chat`
+    # — ver `ChatRequest`. Aqui ele e conferido ANTES de a credencial ser
+    # emitida: uma sessao de voz custa dinheiro por minuto, e nao vale abrir
+    # uma para descobrir na primeira busca que a loja nao existe.
+    branch_id: uuid.UUID
 
 
 class ConexaoRequest(BaseModel):
@@ -66,6 +71,11 @@ class EncerramentoRequest(UsoReportado):
 
 class BuscaRequest(BaseModel):
     restaurant_id: uuid.UUID
+    # OBRIGATORIO, e conferido de novo aqui apesar de a sessao ja ter sido
+    # aberta com uma filial: esta rota nao recebe o id da sessao, entao nao
+    # ha de onde herdar a loja. E o mesmo regime que o `restaurant_id` deste
+    # corpo ja tinha.
+    branch_id: uuid.UUID
     consulta: str = Field(min_length=1, max_length=500)
     # `gt=0` porque teto zero ou negativo esvazia a busca inteira, e o modelo
     # e quem preenche este campo.
@@ -101,6 +111,7 @@ def criar_sessao(
     """
     chat_service = ChatService(db, agent="/voz")
     restaurant = chat_service._get_active_restaurant(payload.restaurant_id)
+    chat_service._get_active_branch(restaurant.id, payload.branch_id)
     restaurant_context = chat_service._build_restaurant_context(restaurant)
 
     sessao, credencial = VoiceSessionService(db).abrir(
@@ -174,7 +185,12 @@ def buscar(payload: BuscaRequest, db: Session = Depends(get_db)) -> dict:
     preco que o cartao nao mostra — ele nunca ve outro numero.
     """
     service = VoiceSearchService(db)
-    produtos = service.buscar(payload.restaurant_id, payload.consulta, payload.preco_maximo)
+    produtos = service.buscar(
+        payload.restaurant_id,
+        payload.branch_id,
+        payload.consulta,
+        payload.preco_maximo,
+    )
 
     return {
         "produtos": produtos,

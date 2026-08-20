@@ -7,12 +7,23 @@ Duas decisoes valem para o arquivo inteiro:
    referenciam essas linhas por FK, e um DELETE quebraria o historico de
    pedido que o cliente ainda consulta. "Excluir" no painel e desativar.
 
-2. **Cardapio nao tem filial.** As tabelas de categoria e produto so tem
-   `restaurant_id`; nao existe coluna de filial para restringir. Entao um
-   manager preso a uma filial edita o cardapio do restaurante inteiro —
-   igual ao que ja acontece com cupom, que tambem e do restaurante. O
-   escopo por filial vale para o que TEM filial: pedidos e configuracao de
-   filial.
+2. **Cardapio TEM filial, e o escopo passou a valer aqui.** Ate a revisao
+   20260820_0026, categoria e produto so tinham `restaurant_id`: nao existia
+   coluna para restringir, e um manager preso a uma filial editava o
+   cardapio do restaurante inteiro. Aquilo era limitacao de schema descrita
+   como decisao. Agora que a coluna existe, deixar como estava seria
+   escolher o vazamento — entao **toda leitura e toda escrita passam por
+   `AdminScope`**, com 404 (nunca 403) para filial fora do escopo.
+
+   Cupom continua sendo do restaurante, e continua sem recorte: ele e da
+   marca, e o codigo do anuncio nao sabe em que loja o cliente vai pedir.
+
+3. **A filial de um produto vem da CATEGORIA dele, nunca do corpo.** Um
+   `branch_id` em `AdminProductCreate` seria um segundo jeito de dizer o que
+   `category_id` ja diz, com a chance de os dois discordarem — e a FK
+   composta `(branch_id, category_id)` recusaria a gravacao com um 500 em vez
+   de um erro legivel. Produto tambem NAO muda de filial depois: ver
+   `AdminProductUpdate`.
 """
 
 import secrets
@@ -33,6 +44,7 @@ from src.models.category_model import Category
 from src.models.product_model import Product
 from src.models.product_option_model import ProductOption, ProductOptionGroup
 from src.repositories.admin_menu_repository import AdminMenuRepository
+from src.repositories.branch_repository import BranchRepository
 from src.schemas.admin_menu_schema import (
     AdminCategoryCreate,
     AdminCategoryResponse,
@@ -75,6 +87,7 @@ class AdminMenuService:
     def __init__(self, db: Session, storage_client: SupabaseStorageClient | None = None):
         self.db = db
         self.repository = AdminMenuRepository(db)
+        self.branch_repository = BranchRepository(db)
         self.restaurant_repository = RestaurantRepository(db)
         self.storage_client = storage_client or SupabaseStorageClient(
             base_url=settings.SUPABASE_URL,
@@ -83,8 +96,22 @@ class AdminMenuService:
             timeout_seconds=settings.SUPABASE_STORAGE_TIMEOUT_SECONDS,
         )
 
-    def list_categories(self, scope: AdminScope) -> list[AdminCategoryResponse]:
-        categories = self.repository.list_categories(scope.restaurant_id)
+    def list_categories(
+        self,
+        scope: AdminScope,
+        branch_id: uuid.UUID | None = None,
+    ) -> list[AdminCategoryResponse]:
+        """Todas as categorias, ativas e inativas, das filiais que este lojista ve.
+
+        Sem `branch_id`, quem enxerga o restaurante inteiro recebe as lojas
+        todas numa lista so — cada linha dizendo de qual filial e. Nao e
+        descuido: e a unica tela em que o dono confere se as duas lojas tem
+        as mesmas secoes.
+        """
+        categories = self.repository.list_categories(
+            scope.restaurant_id,
+            branch_id=scope.resolve_branch_filter(branch_id),
+        )
         return [AdminCategoryResponse.model_validate(category) for category in categories]
 
     def create_category(
@@ -92,11 +119,13 @@ class AdminMenuService:
         scope: AdminScope,
         payload: AdminCategoryCreate,
     ) -> AdminCategoryResponse:
+        branch = self._get_branch(payload.branch_id, scope)
         slug = self._build_slug(payload.name)
-        self._ensure_category_slug_is_free(slug, scope.restaurant_id)
+        self._ensure_category_slug_is_free(slug, branch.id)
 
         category = Category(
             restaurant_id=scope.restaurant_id,
+            branch_id=branch.id,
             name=payload.name,
             slug=slug,
             sort_order=payload.sort_order,
@@ -122,15 +151,21 @@ class AdminMenuService:
         scope: AdminScope,
         payload: CategoryReorderRequest,
     ) -> list[AdminCategoryResponse]:
-        """Renumera as categorias na ordem em que vieram no corpo.
+        """Renumera as categorias DE UMA FILIAL na ordem em que vieram no corpo.
 
-        Exige a lista COMPLETA do restaurante. Renumerar so uma parte
+        Exige a lista COMPLETA daquela filial. Renumerar so uma parte
         deixaria as de fora com `sort_order` repetido, e a ordem final do
         cardapio passaria a depender do desempate por nome — que nao e o que
         o lojista arrastou na tela. Quem receber este 400 recarrega a lista:
         e o sinal de que alguem criou categoria em outra aba.
+
+        O conjunto que compartilha a numeracao e a FILIAL, e nao o
+        restaurante: o `sort_order` so significa alguma coisa dentro do
+        cardapio de uma loja, porque e ele que ordena a resposta de
+        `/menu?branch_id=...`.
         """
-        existing = self.repository.list_categories(scope.restaurant_id)
+        branch = self._get_branch(payload.branch_id, scope)
+        existing = self.repository.list_categories(scope.restaurant_id, branch_id=branch.id)
         existing_ids = {category.id for category in existing}
         sent_ids = set(payload.category_ids)
 
@@ -142,7 +177,7 @@ class AdminMenuService:
         if existing_ids - sent_ids:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Envie todas as categorias do restaurante na nova ordem",
+                detail="Envie todas as categorias da filial na nova ordem",
             )
 
         by_id = {category.id: category for category in existing}
@@ -212,6 +247,7 @@ class AdminMenuService:
     def list_products(
         self,
         scope: AdminScope,
+        branch_id: uuid.UUID | None = None,
         category_id: uuid.UUID | None = None,
         search: str | None = None,
         is_active: bool | None = None,
@@ -219,8 +255,10 @@ class AdminMenuService:
         offset: int = 0,
     ) -> AdminProductListResponse:
         normalized_search = self._normalize_search(search)
+        branch_filter = scope.resolve_branch_filter(branch_id)
         products = self.repository.list_products(
             restaurant_id=scope.restaurant_id,
+            branch_id=branch_filter,
             category_id=category_id,
             search=normalized_search,
             is_active=is_active,
@@ -229,6 +267,7 @@ class AdminMenuService:
         )
         total = self.repository.count_products(
             restaurant_id=scope.restaurant_id,
+            branch_id=branch_filter,
             category_id=category_id,
             search=normalized_search,
             is_active=is_active,
@@ -250,11 +289,19 @@ class AdminMenuService:
         )
 
     def get_product(self, scope: AdminScope, product_id: uuid.UUID) -> AdminProductDetailResponse:
+        """A tela de edicao de UM produto, com os grupos de opcoes.
+
+        A conferencia de filial vale para a LEITURA tambem, e nao so para a
+        escrita: esta resposta traz preco, e o preco de cada loja e dela. Uma
+        rota de leitura aberta seria a forma mais silenciosa de vazar o
+        cardapio da filial do lado.
+        """
         product = self.repository.get_product_with_options(product_id, scope.restaurant_id)
         if product is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Produto nao encontrado"
             )
+        scope.ensure_branch_allowed(product.branch_id)
         return AdminProductDetailResponse(
             **self._one_product_response(product).model_dump(),
             option_groups=[
@@ -271,18 +318,28 @@ class AdminMenuService:
         scope: AdminScope,
         payload: AdminProductCreate,
     ) -> AdminProductResponse:
-        self._get_category(payload.category_id, scope)
+        """Produto novo. A filial sai da CATEGORIA, nunca do corpo.
+
+        Ver a decisao 3 no cabecalho do arquivo. `_get_category` ja recusa
+        categoria de outro restaurante e categoria fora do escopo de filial,
+        entao o `branch_id` que sai dela e sempre um que este lojista pode
+        escrever.
+        """
+        category = self._get_category(payload.category_id, scope)
         slug = self._build_slug(payload.name)
-        self._ensure_product_slug_is_free(slug, scope.restaurant_id)
+        self._ensure_product_slug_is_free(slug, category.branch_id)
+        self._ensure_catalog_key_is_free(payload.catalog_key, category.branch_id)
 
         product = Product(
             restaurant_id=scope.restaurant_id,
-            category_id=payload.category_id,
+            branch_id=category.branch_id,
+            category_id=category.id,
             name=payload.name,
             slug=slug,
             description=payload.description,
             price=quantize_money(payload.price),
             code=payload.code,
+            catalog_key=payload.catalog_key,
             is_active=payload.is_active,
             is_available=payload.is_available,
             sort_order=payload.sort_order,
@@ -298,10 +355,16 @@ class AdminMenuService:
     ) -> AdminProductResponse:
         product = self._get_product(product_id, scope)
         changes = payload.model_dump(exclude_unset=True)
-        # Mover de categoria so vale para categoria do mesmo restaurante,
-        # senao o produto sumiria do cardapio de quem o cadastrou.
+        # Mover de categoria so vale DENTRO da mesma filial. A FK composta
+        # (branch_id, category_id) ja recusaria o contrario, mas com um 500
+        # de IntegrityError: quem tentou precisa de uma frase, nao de um
+        # traceback.
         if "category_id" in changes:
-            self._get_category(changes["category_id"], scope)
+            self._ensure_category_is_in_branch(changes["category_id"], product, scope)
+        if "catalog_key" in changes:
+            self._ensure_catalog_key_is_free(
+                changes["catalog_key"], product.branch_id, product_id=product.id
+            )
         if "price" in changes and changes["price"] is not None:
             changes["price"] = quantize_money(changes["price"])
 
@@ -481,12 +544,31 @@ class AdminMenuService:
         self._commit()
         return self._option_response(option)
 
+    def _get_branch(self, branch_id: uuid.UUID, scope: AdminScope):
+        """A filial do corpo, conferida contra o token. 404 nos dois casos.
+
+        Duas checagens que parecem uma: `ensure_branch_allowed` recusa a
+        filial que existe mas nao e deste lojista, e o repositorio recusa a
+        que nao e deste restaurante. As duas respondem 404 — um 403
+        confirmaria que aquela filial existe.
+        """
+        scope.ensure_branch_allowed(branch_id)
+        branch = self.branch_repository.get_active_by_id_and_restaurant(
+            branch_id, scope.restaurant_id
+        )
+        if branch is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Filial nao encontrada"
+            )
+        return branch
+
     def _get_category(self, category_id: uuid.UUID, scope: AdminScope) -> Category:
         category = self.repository.get_category(category_id, scope.restaurant_id)
         if category is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Categoria nao encontrada"
             )
+        scope.ensure_branch_allowed(category.branch_id)
         return category
 
     def _get_product(self, product_id: uuid.UUID, scope: AdminScope) -> Product:
@@ -495,6 +577,7 @@ class AdminMenuService:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Produto nao encontrado"
             )
+        scope.ensure_branch_allowed(product.branch_id)
         return product
 
     def _get_option_group(self, group_id: uuid.UUID, scope: AdminScope) -> ProductOptionGroup:
@@ -503,6 +586,10 @@ class AdminMenuService:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Grupo de opcoes nao encontrado"
             )
+        # O grupo nao tem filial: ele chega a ela pelo produto. Reconferir
+        # pelo produto e o que impede um gerente do Centro de editar os
+        # complementos da picanha da Aldeota tendo so o UUID do grupo.
+        self._get_product(group.product_id, scope)
         return group
 
     def _get_option(self, option_id: uuid.UUID, scope: AdminScope) -> ProductOption:
@@ -511,24 +598,79 @@ class AdminMenuService:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Opcao nao encontrada"
             )
+        self._get_option_group(option.option_group_id, scope)
         return option
 
-    def _ensure_category_slug_is_free(self, slug: str, restaurant_id: uuid.UUID) -> None:
-        if self.repository.get_category_by_slug(slug, restaurant_id) is not None:
+    def _ensure_category_is_in_branch(
+        self,
+        category_id: uuid.UUID,
+        product: Product,
+        scope: AdminScope,
+    ) -> None:
+        """Mover de categoria so vale dentro da mesma loja.
+
+        Produto nao muda de filial: a mudanca levaria junto os grupos de
+        opcao, o setor de impressao e a chave de catalogo, e deixaria o
+        historico de pedido apontando para um produto que aquela loja nao
+        vende mais. Quem quer o item na outra loja cria um la com a mesma
+        `catalog_key`.
+        """
+        category = self._get_category(category_id, scope)
+        if category.branch_id != product.branch_id:
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Ja existe uma categoria com esse nome neste restaurante",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A categoria e de outra filial; produto nao muda de filial",
             )
 
-    def _ensure_product_slug_is_free(self, slug: str, restaurant_id: uuid.UUID) -> None:
+    def _ensure_category_slug_is_free(self, slug: str, branch_id: uuid.UUID) -> None:
+        if self.repository.get_category_by_slug(slug, branch_id) is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Ja existe uma categoria com esse nome nesta filial",
+            )
+
+    def _ensure_product_slug_is_free(self, slug: str, branch_id: uuid.UUID) -> None:
         # O slug e a chave da URL publica do produto e a busca do cardapio
         # aceita so um resultado: dois produtos com o mesmo slug fariam o
         # link publico apontar para um deles sem criterio.
-        if self.repository.get_product_by_slug(slug, restaurant_id) is not None:
+        #
+        # POR FILIAL desde a revisao 20260820_0026: a picanha da segunda loja
+        # tem o mesmo slug da primeira, e e assim que tem que ser — o slug e
+        # a URL, e `picanha-2` contaria ao cliente que ele esta na "segunda"
+        # loja.
+        if self.repository.get_product_by_slug(slug, branch_id) is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Ja existe um produto com esse nome neste restaurante",
+                detail="Ja existe um produto com esse nome nesta filial",
             )
+
+    def _ensure_catalog_key_is_free(
+        self,
+        catalog_key: str | None,
+        branch_id: uuid.UUID,
+        product_id: uuid.UUID | None = None,
+    ) -> None:
+        """A chave de catalogo e unica DENTRO da filial.
+
+        Nula nao colide com nada: e o estado normal do produto sem par em
+        outra loja, e o indice unico e parcial justamente por isso.
+
+        Repetir a chave dentro da MESMA loja faria o relatorio contar a mesma
+        venda duas vezes — que e o oposto do que a coluna existe para fazer.
+        Entre lojas diferentes, repetir e o uso correto e nao passa por aqui.
+
+        O 409 e escrito aqui e nao deixado para a `IntegrityError` do indice
+        pelo mesmo motivo do slug: o painel precisa de uma frase para mostrar.
+        """
+        if catalog_key is None:
+            return
+        existing = self.repository.get_product_by_catalog_key(catalog_key, branch_id)
+        if existing is None or existing.id == product_id:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ja existe um produto com essa chave de catalogo nesta filial",
+        )
 
     def _commit(self, before_commit=None) -> None:
         """Grava, com rollback em qualquer falha.
@@ -627,8 +769,10 @@ class AdminMenuService:
         """
         return AdminProductResponse(
             id=product.id,
+            branch_id=product.branch_id,
             category_id=product.category_id,
             code=product.code,
+            catalog_key=product.catalog_key,
             name=product.name,
             slug=product.slug,
             description=product.description,

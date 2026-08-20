@@ -318,8 +318,14 @@ decisão legítima (a lata que sai da geladeira do balcão) e é indistinguível
 "esqueci de configurar". Um cardápio inteiro sem setor imprime só a via do
 cliente, e a cozinha não recebe nada — sem erro em lugar nenhum.
 
-Produto apontando para setor de **outra filial**, ou para setor desativado,
-não some: vai para a via `"SEM SETOR"` e o caso é registrado no log.
+Produto apontando para setor **desativado** não some: vai para a via
+`"SEM SETOR"` e o caso é registrado no log. Setor de **outra filial** não é
+mais possível — desde a revisão `20260820_0026` produto e setor vivem na mesma
+loja, e a rota que tentasse cruzá-los responde 400.
+
+**Cada filial tem o próprio cardápio e as próprias impressoras**, então esta
+conferência é filial a filial. O `check_restaurant.py` já a faz assim: uma loja
+bem configurada não apaga o erro da outra.
 
 ---
 

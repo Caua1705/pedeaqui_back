@@ -66,14 +66,23 @@ class AdminCustomerRepository:
         `total_spent` ignora cancelado e recusado (mesma lista do relatorio
         de comissao): pedido cancelado nao e dinheiro que entrou, e somar
         faria o lojista ver como melhor cliente quem mais desistiu.
+
+        `billable_orders_count` usa EXATAMENTE o mesmo filtro, e existe por
+        causa da divisao: o ticket medio e `total_spent` dividido por ele, e
+        nunca por `orders_count`. Um numerador filtrado sobre um denominador
+        que nao e sub-reporta o ticket de todo cliente que ja cancelou
+        alguma coisa — e o erro nao aparece em lugar nenhum, so num numero
+        um pouco menor do que deveria.
         """
-        spent = func.sum(Order.total).filter(
-            Order.status.not_in(NON_BILLABLE_ORDER_STATUSES)
-        )
+        faturaveis = Order.status.not_in(NON_BILLABLE_ORDER_STATUSES)
+        spent = func.sum(Order.total).filter(faturaveis)
         stmt = (
             select(
                 Order.customer_phone_snapshot.label("customer_phone"),
                 func.count(Order.id).label("orders_count"),
+                # `count` nunca devolve NULL, entao aqui nao ha `coalesce`
+                # para fazer — diferente do `sum` da linha de baixo.
+                func.count(Order.id).filter(faturaveis).label("billable_orders_count"),
                 func.coalesce(spent, 0).label("total_spent"),
                 func.min(Order.created_at).label("first_order_at"),
                 func.max(Order.created_at).label("last_order_at"),

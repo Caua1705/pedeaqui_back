@@ -1071,6 +1071,14 @@
       },
       "AdminCustomerListItem": {
         "properties": {
+          "average_ticket": {
+            "title": "Average Ticket",
+            "type": "number"
+          },
+          "billable_orders_count": {
+            "title": "Billable Orders Count",
+            "type": "integer"
+          },
           "customer_name": {
             "title": "Customer Name",
             "type": "string"
@@ -1078,6 +1086,17 @@
           "customer_phone": {
             "title": "Customer Phone",
             "type": "string"
+          },
+          "days_since_last_order": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days Since Last Order"
           },
           "first_order_at": {
             "anyOf": [
@@ -1107,6 +1126,9 @@
             "title": "Orders Count",
             "type": "integer"
           },
+          "segment": {
+            "$ref": "#/components/schemas/CustomerSegment"
+          },
           "total_spent": {
             "title": "Total Spent",
             "type": "number"
@@ -1116,7 +1138,10 @@
           "customer_name",
           "customer_phone",
           "orders_count",
-          "total_spent"
+          "billable_orders_count",
+          "total_spent",
+          "average_ticket",
+          "segment"
         ],
         "title": "AdminCustomerListItem",
         "type": "object"
@@ -5938,6 +5963,18 @@
         ],
         "title": "CustomerOrderHistoryItem",
         "type": "object"
+      },
+      "CustomerSegment": {
+        "description": "A classificacao RFV que o painel pinta na linha do cliente.\n\n`str, Enum` e nao string livre pelo mesmo motivo de `PaymentErrorCode`: so\nassim a LISTA de valores sai no `/openapi.json`, e o painel gera o tipo\ndele a partir do documento em vez de decorar as cinco strings.\n\nOs valores sao codigos estaveis, em minusculas e sem acento. **Nao existe\n`segment_label`**, e e decisao: rotulo em portugues vindo daqui\ntransformaria mudanca de texto de tela em deploy de backend. Quem escreve\n\"Em risco\" e o painel.\n\nA regra que produz cada um esta em `src/services/customer_segment.py`, e\na leitura de cada rotulo esta no contrato do painel\n(`docs/contrato-clientes-frontend.md`) — em especial a de `NOVO`, que\nsignifica \"relacionamento novo\" e nao \"poucos pedidos\".",
+        "enum": [
+          "novo",
+          "ocasional",
+          "fiel",
+          "em_risco",
+          "perdido"
+        ],
+        "title": "CustomerSegment",
+        "type": "string"
       },
       "DeleteCustomerAccountRequest": {
         "description": "A senha atual, e nada mais.\n\nCorpo em `DELETE` e incomum mas legal. A alternativa — senha na\nquerystring — a colocaria no log de todo proxy no caminho.",

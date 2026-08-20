@@ -208,6 +208,41 @@ class Settings(BaseSettings):
     # recadastro em maos, nunca de surpresa.
     PAYMENT_CREDENTIALS_ENCRYPTION_KEY: str | None = None
 
+    # --- Classificacao RFV da listagem de clientes do painel ---
+    #
+    # A cadencia NAO e um numero por restaurante: e o intervalo medio do
+    # PROPRIO cliente, medido da linha que a consulta ja devolve
+    # ((last - first) / (orders_count - 1)). Uma faixa fixa calibrada pela
+    # media da casa erraria os dois extremos do mesmo cardapio — o cliente de
+    # almoco de terca e o de aniversario — e erraria para o lado caro, porque
+    # "em risco" existe para disparar reativacao. Ver
+    # `src/services/customer_segment.py`.
+    #
+    # Estes seis valores sao politica da plataforma, e por isso vivem aqui e
+    # nao em `restaurant_settings`: o ritmo de cada loja ja esta resolvido
+    # pela cadencia do cliente, e coluna por restaurante seria botao de tela
+    # que ninguem pediu para girar. Se um dia for preciso, a coluna nasce
+    # nullable e ESTE valor vira o padrao herdado (armadilha 35).
+    RFV_AT_RISK_FACTOR: float = 2.0
+    RFV_LOST_FACTOR: float = 4.0
+    # Piso: abaixo de uma semana a media de dois pedidos e ruido. Sem ele,
+    # dois pedidos no mesmo almoco (esqueceu a bebida) dao cadencia ~0 e o
+    # cliente vira "perdido" no dia seguinte. O preco do piso e explicito:
+    # quem almoca todo dia so entra em "em risco" depois de 14 dias.
+    RFV_MIN_CADENCE_DAYS: int = 7
+    # Teto: sem ele, dois pedidos separados por oito meses dao cadencia de
+    # 240 dias e o cliente nunca sai de "fiel".
+    RFV_MAX_CADENCE_DAYS: int = 60
+    # Quem tem UM pedido nao tem intervalo medivel — nao ha o que dividir.
+    RFV_FALLBACK_CADENCE_DAYS: int = 30
+    # A partir do terceiro pedido existe padrao; dois podem ser coincidencia.
+    RFV_ORDERS_FOR_LOYAL: int = 3
+    # "Novo" conta do PRIMEIRO pedido, e nao do ultimo: o que envelhece e o
+    # relacionamento. Sem esta janela, cliente com dois pedidos espacados em
+    # dez meses que pediu semana passada sairia como "novo" — a tela mentindo
+    # na primeira leitura. Ele cai em "ocasional".
+    RFV_NEW_WINDOW_DAYS: int = 30
+
     RATE_LIMIT_ENABLED: bool = True
     # Cabecalho com o IP real do cliente. Atras do Traefik o socket peer e o
     # proxy; deixe vazio apenas se a API for exposta sem proxy na frente.

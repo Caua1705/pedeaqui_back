@@ -10,6 +10,7 @@ pedido naquele restaurante, nao ha linha para agrupar.
 """
 
 import uuid
+from datetime import datetime
 
 from sqlalchemy.orm import Session
 
@@ -19,7 +20,9 @@ from src.schemas.admin_customer_schema import (
     AdminCustomerListItem,
     AdminCustomerListResponse,
 )
-from src.utils.money import money_to_float
+from src.services.customer_segment import classify_customer, days_since_last_order
+from src.utils.money import money_to_float, to_decimal
+from src.utils.security import utcnow
 
 
 # Mesmo teto das outras buscas do painel: nao e regra de negocio, e para
@@ -63,22 +66,52 @@ class AdminCustomerService:
             [row.customer_phone for row in rows],
         )
 
+        # UM `agora` para a pagina inteira. Chamando o relogio dentro do laco,
+        # uma pagina lida na virada do dia classificaria as primeiras linhas
+        # contra ontem e as ultimas contra hoje — e a linha que mudasse de
+        # rotulo no meio seria impossivel de reproduzir depois.
+        agora = utcnow()
+
         return AdminCustomerListResponse(
-            items=[
-                AdminCustomerListItem(
-                    customer_name=names.get(row.customer_phone, ""),
-                    customer_phone=row.customer_phone,
-                    orders_count=row.orders_count,
-                    total_spent=money_to_float(row.total_spent),
-                    first_order_at=row.first_order_at,
-                    last_order_at=row.last_order_at,
-                )
-                for row in rows
-            ],
+            items=[self._item(row, names, agora) for row in rows],
             total=total,
             limit=limit,
             offset=offset,
         )
+
+    @staticmethod
+    def _item(row, names: dict[str, str], agora: datetime) -> AdminCustomerListItem:
+        """Uma linha da consulta virando uma linha do contrato."""
+        return AdminCustomerListItem(
+            customer_name=names.get(row.customer_phone, ""),
+            customer_phone=row.customer_phone,
+            orders_count=row.orders_count,
+            billable_orders_count=row.billable_orders_count,
+            total_spent=money_to_float(row.total_spent),
+            average_ticket=AdminCustomerService._average_ticket(
+                row.total_spent, row.billable_orders_count
+            ),
+            first_order_at=row.first_order_at,
+            last_order_at=row.last_order_at,
+            days_since_last_order=days_since_last_order(row.last_order_at, agora),
+            segment=classify_customer(
+                orders_count=row.orders_count,
+                first_order_at=row.first_order_at,
+                last_order_at=row.last_order_at,
+                now=agora,
+            ),
+        )
+
+    @staticmethod
+    def _average_ticket(total_spent, billable_orders_count: int) -> float:
+        """O gasto dividido pelos pedidos que geraram gasto.
+
+        Por `billable_orders_count` e NUNCA por `orders_count` — os dois
+        contam coisas diferentes, e so um deles combina com o numerador.
+        """
+        if billable_orders_count <= 0:
+            return 0.0
+        return money_to_float(to_decimal(total_spent) / billable_orders_count)
 
     @staticmethod
     def _normalize_search(search: str | None) -> str | None:

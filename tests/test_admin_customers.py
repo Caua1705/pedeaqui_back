@@ -10,7 +10,7 @@ e nao so como comentario.
 
 import unittest
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -21,6 +21,7 @@ from src.repositories.admin_customer_repository import (
     AdminCustomerRepository,
     _build_customer_search_condition,
 )
+from src.schemas.admin_customer_schema import CustomerSegment
 from src.services.admin_customer_service import AdminCustomerService
 
 
@@ -41,6 +42,10 @@ def make_row(**overrides):
     values = {
         "customer_phone": "85999990000",
         "orders_count": 3,
+        # Por padrao todo pedido e faturavel. O caso interessante — os dois
+        # numeros DIFERENTES, que e o que o ticket medio erraria — tem teste
+        # proprio em `TicketMedioTests`.
+        "billable_orders_count": 3,
         "total_spent": Decimal("150.00"),
         "first_order_at": NOW,
         "last_order_at": NOW,
@@ -186,6 +191,99 @@ class ListingTests(unittest.TestCase):
         build_service(repository).list_customers(scope(), search="  " + "a" * 500)
 
         self.assertEqual(len(repository.list_kwargs["search"]), 120)
+
+
+class TicketMedioTests(unittest.TestCase):
+    """O ticket medio, e a divisao que ele quase virou.
+
+    `total_spent` NAO soma cancelado nem recusado, mas `orders_count` conta
+    todos os pedidos. Dividir um pelo outro sub-reporta o ticket de todo
+    cliente que ja cancelou alguma coisa — e o erro nao aparece em lugar
+    nenhum: nao ha excecao, nao ha log, so um numero um pouco menor do que
+    deveria, do lado de um total que esta certo.
+    """
+
+    def test_divide_pelos_pedidos_que_geraram_dinheiro(self):
+        row = make_row(
+            orders_count=5,
+            billable_orders_count=3,
+            total_spent=Decimal("150.00"),
+        )
+        response = build_service(RecordingCustomerRepository(rows=[row])).list_customers(scope())
+
+        # 150 / 3, e nunca 150 / 5 = 30.
+        self.assertEqual(response.items[0].average_ticket, 50.00)
+
+    def test_os_dois_contadores_vao_no_contrato(self):
+        """Sem `billable_orders_count` na resposta, a tela mostra tres numeros
+        que nao fecham e o lojista abre chamado."""
+        row = make_row(orders_count=5, billable_orders_count=3, total_spent=Decimal("150.00"))
+        response = build_service(RecordingCustomerRepository(rows=[row])).list_customers(scope())
+
+        item = response.items[0]
+        self.assertEqual((item.orders_count, item.billable_orders_count), (5, 3))
+        self.assertEqual(item.total_spent, 150.00)
+
+    def test_so_cancelamento_nao_divide_por_zero(self):
+        """Cliente que pediu duas vezes e cancelou as duas. E estado normal, e
+        nao pode virar 500."""
+        row = make_row(orders_count=2, billable_orders_count=0, total_spent=Decimal("0"))
+        response = build_service(RecordingCustomerRepository(rows=[row])).list_customers(scope())
+
+        self.assertEqual(response.items[0].average_ticket, 0.0)
+
+    def test_arredonda_para_duas_casas(self):
+        row = make_row(orders_count=3, billable_orders_count=3, total_spent=Decimal("100.00"))
+        response = build_service(RecordingCustomerRepository(rows=[row])).list_customers(scope())
+
+        # 33,333... — o contrato e float de duas casas, como o resto do schema.
+        self.assertEqual(response.items[0].average_ticket, 33.33)
+
+
+class SegmentoNaRespostaTests(unittest.TestCase):
+    """A classificacao chega ao contrato. A REGRA em si tem arquivo proprio
+    (`test_customer_segment.py`); o que se prova aqui e o encanamento."""
+
+    def test_a_linha_sai_com_segmento_e_dias(self):
+        agora = datetime.now(timezone.utc)
+        row = make_row(
+            orders_count=12,
+            billable_orders_count=12,
+            first_order_at=agora - timedelta(days=257),
+            last_order_at=agora - timedelta(days=180),
+        )
+        response = build_service(RecordingCustomerRepository(rows=[row])).list_customers(scope())
+
+        item = response.items[0]
+        self.assertEqual(item.segment, CustomerSegment.PERDIDO)
+        self.assertEqual(item.days_since_last_order, 180)
+
+    def test_o_segmento_serializa_como_o_codigo_estavel(self):
+        """O painel le a string do JSON, e nao o nome do membro do enum."""
+        row = make_row(billable_orders_count=3)
+        response = build_service(RecordingCustomerRepository(rows=[row])).list_customers(scope())
+
+        self.assertIn(
+            response.model_dump(mode="json")["items"][0]["segment"],
+            {"novo", "ocasional", "fiel", "em_risco", "perdido"},
+        )
+
+    def test_a_pagina_inteira_e_classificada_no_mesmo_instante(self):
+        """Uma pagina lida na virada do dia nao pode ter as primeiras linhas
+        contra ontem e as ultimas contra hoje: a linha que mudasse de rotulo
+        no meio seria impossivel de reproduzir depois."""
+        agora = datetime.now(timezone.utc)
+        na_fronteira = dict(
+            orders_count=1,
+            billable_orders_count=1,
+            first_order_at=agora - timedelta(days=120, seconds=1),
+            last_order_at=agora - timedelta(days=120, seconds=1),
+        )
+        rows = [make_row(customer_phone=f"8599999000{i}", **na_fronteira) for i in range(20)]
+        response = build_service(RecordingCustomerRepository(rows=rows)).list_customers(scope())
+
+        segmentos = {item.segment for item in response.items}
+        self.assertEqual(len(segmentos), 1, segmentos)
 
 
 class SearchConditionTests(unittest.TestCase):

@@ -3,11 +3,16 @@
 Documento para quem vai implementar o painel do lojista. Tudo o que é preciso
 saber está aqui; não é necessário acesso ao código do backend.
 
-**Estado em 20/08/2026.** Rota: `GET /admin/customers`. Autenticação: token de
+**Estado em 21/08/2026.** Rota: `GET /admin/customers`. Autenticação: token de
 lojista, papel **owner** ou **manager** (atendente e agente de impressão
 recebem **403** — a rota entrega nome e telefone da base inteira, e é a que
 mais pesa numa senha vazada).
 
+> **Novo em 21/08/2026: cinco filtros.** `segment`, `last_order_from`,
+> `last_order_to`, `min_ticket` e `max_ticket` — todos opcionais, todos
+> aplicados **antes do `LIMIT`**, e o `total` do envelope conta o que sobrou
+> depois deles. Estão na §6. A resposta ganhou `cadence_days`.
+>
 > **Novo em 20/08/2026.** A resposta ganhou quatro campos:
 > `billable_orders_count`, `average_ticket`, `days_since_last_order` e
 > `segment`. Nada foi removido nem renomeado — quem já consome a rota continua
@@ -22,7 +27,14 @@ mais pesa numa senha vazada).
 | `billable_orders_count` | int | pedidos que viraram dinheiro: `orders_count` **menos** cancelado e recusado |
 | `average_ticket` | float | `total_spent / billable_orders_count`; **0.0** quando não há pedido faturável |
 | `days_since_last_order` | int \| null | dias inteiros desde o último pedido; `null` só se não houver data |
+| `cadence_days` | float | o ritmo **deste** cliente, em dias, já grampeado (§3) |
 | `segment` | enum | a classificação RFV — os cinco valores estão na §2 |
+
+**`days_since_last_order` e `cadence_days` são o par que explica o rótulo.**
+"23 dias sem pedir, ritmo de 7" diz sozinho por que este cliente está em risco
+e o vizinho da lista, com os mesmos 23 dias, não está. Os três saem da **mesma
+expressão** no banco: o número que a tela mostra não consegue discordar da
+etiqueta ao lado dele.
 
 **Por que `billable_orders_count` vai na tela, e não só nos bastidores.** Sem
 ele os três números não fecham e o lojista abre chamado: *"5 pedidos, R$ 160
@@ -116,6 +128,7 @@ uma loja. **Deixe visível na tela qual recorte está ativo**, ao lado do rótul
       "first_order_at": "2026-05-24T19:12:00Z",
       "last_order_at": "2026-08-17T20:03:00Z",
       "days_since_last_order": 3,
+      "cadence_days": 7.0,
       "segment": "fiel"
     }
   ],
@@ -125,22 +138,56 @@ uma loja. **Deixe visível na tela qual recorte está ativo**, ao lado do rótul
 }
 ```
 
-Os parâmetros continuam os mesmos: `branch_id`, `search` (telefone só com
-dígitos, ou parte do nome), `limit` (1–100, padrão 50) e `offset`. A ordem é
-do pedido mais recente para o mais antigo.
+---
+
+## 6. Os cinco filtros
+
+Todos opcionais e combináveis. Somam-se aos que já existiam (`branch_id`,
+`search`, `limit` 1–100 com padrão 50, `offset`).
+
+| Parâmetro | Tipo | O que faz |
+|---|---|---|
+| `segment` | enum | só os clientes daquela classe |
+| `last_order_from` | date | último pedido **a partir** deste dia (inclusive) |
+| `last_order_to` | date | último pedido **até** este dia (inclusive) |
+| `min_ticket` | decimal ≥ 0 | ticket médio a partir deste valor |
+| `max_ticket` | decimal ≥ 0 | ticket médio até este valor |
+
+```
+GET /admin/customers?segment=em_risco&min_ticket=50&limit=20
+```
+
+**Os filtros valem antes do `LIMIT`, e o `total` conta o que sobrou depois
+deles.** Peça `?segment=perdido&limit=2` numa base com três perdidos e você
+recebe `total: 3` com dois itens — é a paginação de verdade sobre o recorte
+filtrado, não um `Array.filter` na página. **Não replique o filtro no painel:**
+filtrando o array recebido você estaria filtrando 50 linhas, e não a base.
+
+### As duas datas
+
+Lidas no fuso da operação (America/Fortaleza), como nos relatórios — a data
+que o lojista escolhe é o **dia dele**. `last_order_to` é **inclusivo**: o
+cliente que pediu hoje às 23h entra num recorte que termina hoje.
+
+Cada uma funciona sozinha; não é preciso mandar o par.
+
+### Os dois erros que respondem 400
+
+| Situação | Resposta |
+|---|---|
+| `last_order_from` depois de `last_order_to` | **400** |
+| `min_ticket` maior que `max_ticket` | **400** |
+
+São 400 e não lista vazia de propósito: intervalo invertido é bug de quem
+chamou, e uma lista vazia deixaria o lojista procurando o cliente que sumiu da
+tela. `segment` fora dos cinco códigos responde **422**, como qualquer enum.
 
 ---
 
-## 6. O que esta rota NÃO faz
+## 7. O que esta rota NÃO faz
 
-- **Não filtra por `segment`.** Não existe `?segment=em_risco`. A
-  classificação é calculada sobre a página já paginada, então filtrar aqui
-  devolveria página com três linhas. Quando essa tela for pedida, a regra
-  precisa descer para o SQL — é trabalho de backend, não dá para contornar no
-  painel filtrando o array recebido (você estaria filtrando 50 linhas, não a
-  base).
-- **Não ordena por `segment` nem por `average_ticket`.** Só pelo último
-  pedido.
+- **Não ordena por `segment`, `average_ticket` nem `cadence_days`.** A ordem é
+  sempre do último pedido para trás.
 - **Não avisa quando alguém muda de classe.** O rótulo é derivado na leitura;
   não há evento, não há histórico e não há "entrou em risco hoje".
 - **Não dispara nada.** O gatilho de reativação não existe ainda, e quando
@@ -148,3 +195,5 @@ do pedido mais recente para o mais antigo.
 - **Não devolve e-mail, CPF, data de nascimento nem `customer_id`.** São do
   cadastro global da plataforma; o lojista é dono do que o cliente informou ao
   pedir na loja dele, e isso é nome e telefone.
+- **Não aceita mais de um segmento por vez.** `?segment=` recebe um código,
+  não uma lista.

@@ -35,6 +35,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.core.constants import PLATFORM_TIMEZONE
+from src.utils.date_window import period_bounds
 from src.repositories.admin_report_repository import AdminReportRepository
 from src.repositories.order_repository import OrderRepository
 from src.schemas.admin_report_schema import (
@@ -465,9 +466,7 @@ class AdminReportService:
         O fim e o comeco do dia SEGUINTE (exclusivo) para nao perder pedido
         gravado as 23:59:59.7.
         """
-        start_at = datetime.combine(start_date, time.min, tzinfo=REPORT_TIMEZONE)
-        end_at = datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=REPORT_TIMEZONE)
-        return start_at, end_at
+        return period_bounds(start_date, end_date)
 
     @staticmethod
     def _to_item(order) -> CommissionReportItem:

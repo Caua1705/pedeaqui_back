@@ -1079,6 +1079,10 @@
             "title": "Billable Orders Count",
             "type": "integer"
           },
+          "cadence_days": {
+            "title": "Cadence Days",
+            "type": "number"
+          },
           "customer_name": {
             "title": "Customer Name",
             "type": "string"
@@ -1141,6 +1145,7 @@
           "billable_orders_count",
           "total_spent",
           "average_ticket",
+          "cadence_days",
           "segment"
         ],
         "title": "AdminCustomerListItem",
@@ -11637,7 +11642,7 @@
     },
     "/admin/customers": {
       "get": {
-        "description": "Clientes que ja pediram neste restaurante (BLOCO D1).\n\nAgrupado por telefone, do pedido mais recente para o mais antigo. Nao\ndevolve e-mail, CPF nem o id de cadastro: sao dados da conta global da\nplataforma, nao do relacionamento com esta loja.",
+        "description": "Clientes que ja pediram neste restaurante (BLOCO D1).\n\nAgrupado por telefone, do pedido mais recente para o mais antigo. Nao\ndevolve e-mail, CPF nem o id de cadastro: sao dados da conta global da\nplataforma, nao do relacionamento com esta loja.\n\n**Os cinco filtros valem antes do `LIMIT`**, e o `total` do envelope conta\no que sobrou depois deles. Filtrar a pagina ja paginada devolveria tres\nlinhas de cinquenta e um total que nao bate com o que a tela mostra.\n\nAs duas datas sao lidas no fuso da operacao (America/Fortaleza), como nos\nrelatorios, e `last_order_to` e INCLUSIVO — o dia inteiro entra.",
         "operationId": "list_customers_admin_customers_get",
         "parameters": [
           {
@@ -11675,6 +11680,106 @@
               ],
               "description": "Telefone (so digitos) ou parte do nome",
               "title": "Search"
+            }
+          },
+          {
+            "description": "Classificacao RFV: novo, ocasional, fiel, em_risco, perdido",
+            "in": "query",
+            "name": "segment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CustomerSegment"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Classificacao RFV: novo, ocasional, fiel, em_risco, perdido",
+              "title": "Segment"
+            }
+          },
+          {
+            "description": "Ultimo pedido a partir deste dia (inclusive)",
+            "in": "query",
+            "name": "last_order_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Ultimo pedido a partir deste dia (inclusive)",
+              "title": "Last Order From"
+            }
+          },
+          {
+            "description": "Ultimo pedido ate este dia (inclusive)",
+            "in": "query",
+            "name": "last_order_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Ultimo pedido ate este dia (inclusive)",
+              "title": "Last Order To"
+            }
+          },
+          {
+            "description": "Ticket medio minimo, em reais",
+            "in": "query",
+            "name": "min_ticket",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Ticket medio minimo, em reais",
+              "title": "Min Ticket"
+            }
+          },
+          {
+            "description": "Ticket medio maximo, em reais",
+            "in": "query",
+            "name": "max_ticket",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Ticket medio maximo, em reais",
+              "title": "Max Ticket"
             }
           },
           {

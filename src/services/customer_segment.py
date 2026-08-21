@@ -1,131 +1,160 @@
-"""A classificacao RFV de um cliente, a partir do que a listagem ja consulta.
+"""A classificacao RFV de um cliente, escrita UMA vez, em SQL.
 
-Funcao pura, sem banco e sem `Session`: recebe os quatro numeros que
-`AdminCustomerRepository.list_customers` ja devolve por linha
-(`orders_count`, `first_order_at`, `last_order_at`) mais o agora, e responde
-um `CustomerSegment`. Nao ha consulta nova, coluna nova nem migracao.
+Estas expressoes sao montadas dentro da agregacao de
+`AdminCustomerRepository`, entao o rotulo existe **antes** do `LIMIT` — e por
+isso da para filtrar por ele sem devolver pagina com tres linhas.
 
-## A cadencia e do CLIENTE, nao do restaurante
+## Por que nao ha mais uma versao em Python
 
-    cadencia_bruta = (last_order_at - first_order_at) / (orders_count - 1)
+Havia. `classify_customer` era uma funcao pura, testada sem banco, e foi
+apagada quando os cinco filtros entraram (21/08/2026). O docstring dela
+registrava a divida e as duas saidas possiveis: ou a versao SQL vira a unica,
+ou as duas nascem do mesmo lugar. **Venceu a primeira, e o motivo nao foi
+gosto.**
 
-Faixa fixa nao serve, e faixa fixa por restaurante tambem nao: o mesmo
-cardapio atende o cliente de almoco de terca e o de aniversario, e uma media
-da casa erra os dois. Erra para o lado caro, ainda: "em risco" existe para
-disparar reativacao, e chamar de volta quem esta no proprio ritmo queima o
-canal com quem nunca foi embora.
+Com os filtros pre-`LIMIT`, o SQL deixou de ser opcional. Manter a funcao
+Python ao lado a deixaria sem nenhum chamador de producao: quinze testes
+rapidos e verdes provando codigo que requisicao nenhuma executa. E o mesmo
+caso da armadilha 13 — quando o mecanismo forte passa a cobrir o fraco, o
+fraco sai junto, senao vira ruina que parece protecao.
 
-A media crua tem dois modos de falha, e os dois sao reais — por isso ela e
-grampeada entre `RFV_MIN_CADENCE_DAYS` e `RFV_MAX_CADENCE_DAYS`:
+**E havia uma divergencia concreta que so a implementacao unica elimina.** O
+Python fazia `(now - last).days`, piso inteiro. O SQL natural seria
+`extract(epoch ...) / 86400`, fracionario. Com cadencia de 7 dias o limiar e
+14: um cliente a **14 dias e 23 horas** sairia `fiel` de um lado e `em_risco`
+do outro. Uma janela de ate 24h por cliente e por limiar, que nenhuma leitura
+de codigo revela e que um teste de equivalencia so pegaria se alguem tivesse
+pensado em por um caso fracionario na tabela.
 
-| Caso | Cadencia crua | O que aconteceria sem o grampo |
-|---|---|---|
-| dois pedidos no mesmo almoco (esqueceu a bebida) | ~0 dia | "perdido" no dia seguinte |
-| dois pedidos separados por oito meses | 240 dias | nunca sai de "fiel" |
+O piso inteiro ficou (`floor`), e `days_since_expression` alimenta ao mesmo
+tempo o rotulo e o campo `days_since_last_order` da resposta: **o numero na
+tela nao consegue discordar da etiqueta ao lado.**
 
-Quem tem UM pedido nao tem intervalo: nao ha o que dividir, e vale
-`RFV_FALLBACK_CADENCE_DAYS`.
+## Por que um modulo de `services/` e importado por um repositorio
 
-## O que "novo" significa, e por que existe "ocasional"
+E o unico lugar do projeto onde a seta aponta para tras, e e deliberado. A
+camada e `endpoint -> service -> repository`, e ela continua valendo para o
+CAMINHO DA REQUISICAO: nada aqui consulta, decide ou commita. O que este
+modulo entrega sao pedacos de expressao SQL, e eles precisam estar DENTRO da
+agregacao — em `HAVING` sobre alias o Postgres nao deixa, e repetir o `CASE`
+no filtro seria a segunda copia que este arquivo inteiro existe para evitar.
 
-`NOVO` conta do PRIMEIRO pedido (`RFV_NEW_WINDOW_DAYS`), e nao do ultimo: o
-que envelhece e o relacionamento. Sem essa janela, o cliente de dois pedidos
-espacados em dez meses que pediu semana passada sairia como "novo" — a tela
-mentindo na primeira leitura de quem a abre. Ele e `OCASIONAL`: poucos
-pedidos, relacionamento antigo, e em dia com o proprio ritmo.
+A regra continua sendo de dominio, e por isso mora em `services/` ao lado de
+`branch_operation.py`, e nao em `repositories/`, onde viraria detalhe de
+consulta. Quem for mover isto, mova a regra inteira — nao uma metade.
 
-## A CLASSIFICACAO NAO E ARMAZENADA — e o que isso custa depois
+## A escada, na ordem em que o CASE a le
 
-Ela e derivada na leitura. Ninguem precisa de cron para ela ficar em dia, e
-nao ha coluna que envelheca. Em troca, duas coisas que a frente de reativacao
-vai encontrar, e que ficam anotadas aqui de proposito:
+    sem last_order_at                     -> novo
+    dias > cadencia * RFV_LOST_FACTOR      -> perdido
+    dias > cadencia * RFV_AT_RISK_FACTOR   -> em_risco
+    orders_count >= RFV_ORDERS_FOR_LOYAL   -> fiel
+    primeiro pedido dentro da janela       -> novo
+    senao                                  -> ocasional
 
-1. **Nao existe evento "virou em risco hoje".** Um gatilho do tipo "me avise
-   quando alguem sumir" precisa de varredura periodica comparando com o
-   estado anterior, ou de gravar a classe. Nada disso esta construido.
-2. **FILTRAR por classe nao funciona daqui.** Esta funcao roda sobre a pagina
-   ja paginada, entao filtrar depois devolveria pagina com tres linhas.
-   Quando a tela pedir "mostre so os em risco", a formula tem que ir para o
-   SQL — e **o buraco e escreve-la duas vezes**: uma versao em Python e uma
-   em `CASE`, discordando em silencio no dia em que alguem mexer so numa. Ou
-   a versao SQL passa a ser a unica e esta some, ou as duas nascem do mesmo
-   lugar. Nao ha terceira saida que envelheca bem.
+Recencia ANTES de contagem, e a ordem e a regra: invertida, o cliente de doze
+pedidos sumido ha seis meses sai como "fiel" — e e exatamente ele que a
+reativacao precisa achar.
+
+## Duas armadilhas de SQL que estao dentro destas funcoes
+
+**`GREATEST`/`LEAST` do Postgres IGNORAM NULL.** `GREATEST(NULL, 0)` devolve
+`0`, e nao `NULL`. Usar isso para pisar os dias em zero transformaria "cliente
+sem pedido" em "pediu hoje", sem erro nenhum. Por isso o piso dos dias e um
+`CASE` — em `cadence_expression` o `LEAST`/`GREATEST` continua, e la e seguro
+porque o valor ja passou por `coalesce`.
+
+**A divisao por zero nao acontece por sorte.** `nullif(orders_count - 1, 0)`
+faz a media virar NULL em vez de erro quando ha um pedido so, e o `coalesce`
+seguinte a manda para `RFV_FALLBACK_CADENCE_DAYS`. O mesmo `coalesce` cobre
+data faltando (`created_at` e nullable no model): se `first` ou `last` for
+NULL, o intervalo e NULL e cai no mesmo lugar. Os dois `return` que a versao
+Python tinha viraram propagacao de NULL.
 """
 
 from datetime import datetime
+
+from sqlalchemy import DateTime, Integer, Numeric, case, cast, func, literal
 
 from src.core.config import settings
 from src.schemas.admin_customer_schema import CustomerSegment
 
 
-def days_since_last_order(last_order_at: datetime | None, now: datetime) -> int | None:
-    """Dias inteiros desde o ultimo pedido. `None` quando nao ha pedido.
+SEGUNDOS_POR_DIA = 86400.0
 
-    Piso em zero: `orders.created_at` e preenchido pelo banco, mas relogio
-    adiantado em qualquer ponta produziria dias negativos, e "-1 dia sem
-    pedir" nao e uma frase que o painel consiga mostrar.
+
+def days_since_expression(moment, now: datetime):
+    """Dias inteiros entre `moment` e o agora. NULL quando nao ha data.
+
+    `floor`, e nao a divisao crua, porque o limiar e comparado com dias
+    inteiros desde sempre — ver o cabecalho deste modulo.
     """
-    if last_order_at is None:
-        return None
-    return max((now - last_order_at).days, 0)
+    decorridos = func.extract("epoch", _agora(now) - moment) / SEGUNDOS_POR_DIA
+    dias = func.floor(decorridos)
+    # `CASE` e nao `GREATEST(dias, 0)`: o GREATEST do Postgres ignora NULL e
+    # devolveria 0 para quem nao tem pedido nenhum. Aqui `dias < 0` e NULL
+    # quando `dias` e NULL, o CASE cai no `else_`, e o NULL sobrevive.
+    return case((dias < 0, literal(0)), else_=cast(dias, Integer))
 
 
-def cadence_days(
-    orders_count: int,
-    first_order_at: datetime | None,
-    last_order_at: datetime | None,
-) -> float:
+def cadence_expression(orders_count, first_order_at, last_order_at):
     """De quantos em quantos dias ESTE cliente costuma pedir.
 
-    Com menos de dois pedidos nao ha intervalo para medir — nem com datas
-    faltando, que o model permite (`created_at` e nullable).
+    Grampeada entre `RFV_MIN_CADENCE_DAYS` e `RFV_MAX_CADENCE_DAYS`. Sem o
+    piso, dois pedidos no mesmo almoco dao cadencia ~0 e o cliente vira
+    "perdido" no dia seguinte; sem o teto, dois pedidos separados por oito
+    meses nunca saem de "fiel".
     """
-    if orders_count < 2:
-        return float(settings.RFV_FALLBACK_CADENCE_DAYS)
-    if first_order_at is None or last_order_at is None:
-        return float(settings.RFV_FALLBACK_CADENCE_DAYS)
+    intervalo = func.extract("epoch", last_order_at - first_order_at) / SEGUNDOS_POR_DIA
+    # NULL, e nao erro, quando ha um pedido so: nao ha intervalo a medir.
+    media = intervalo / func.nullif(orders_count - 1, 0)
+    bruta = func.coalesce(media, float(settings.RFV_FALLBACK_CADENCE_DAYS))
+    # Aqui o LEAST/GREATEST e seguro: `bruta` nunca e NULL depois do coalesce.
+    return func.least(
+        func.greatest(bruta, float(settings.RFV_MIN_CADENCE_DAYS)),
+        float(settings.RFV_MAX_CADENCE_DAYS),
+    )
 
-    intervalo = (last_order_at - first_order_at).total_seconds() / 86400
-    media = intervalo / (orders_count - 1)
-    return min(max(media, settings.RFV_MIN_CADENCE_DAYS), settings.RFV_MAX_CADENCE_DAYS)
 
+def average_ticket_expression(total_spent, billable_orders_count):
+    """O gasto dividido pelos pedidos que geraram gasto.
 
-def classify_customer(
-    orders_count: int,
-    first_order_at: datetime | None,
-    last_order_at: datetime | None,
-    now: datetime,
-) -> CustomerSegment:
-    """O rotulo RFV desta linha da listagem.
-
-    A escada e lida de cima para baixo e a ORDEM e a regra: recencia primeiro,
-    contagem depois. Invertida, o cliente de doze pedidos semanais sumido ha
-    seis meses sairia como "fiel" — e e exatamente ele que a reativacao
-    precisa achar.
+    Arredondado a duas casas AQUI, e nao so na resposta: o filtro
+    `min_ticket`/`max_ticket` compara este valor, e um ticket exibido como
+    33,33 que nao passa em `min_ticket=33.33` por causa da terceira casa e um
+    chamado que ninguem consegue reproduzir.
     """
-    dias = days_since_last_order(last_order_at, now)
-    if dias is None:
-        return CustomerSegment.NOVO
-
-    cadencia = cadence_days(orders_count, first_order_at, last_order_at)
-    if dias > cadencia * settings.RFV_LOST_FACTOR:
-        return CustomerSegment.PERDIDO
-    if dias > cadencia * settings.RFV_AT_RISK_FACTOR:
-        return CustomerSegment.EM_RISCO
-    if orders_count >= settings.RFV_ORDERS_FOR_LOYAL:
-        return CustomerSegment.FIEL
-    if _relacionamento_e_novo(first_order_at, now):
-        return CustomerSegment.NOVO
-    return CustomerSegment.OCASIONAL
+    ticket = total_spent / func.nullif(billable_orders_count, 0)
+    return func.round(cast(func.coalesce(ticket, 0), Numeric), 2)
 
 
-def _relacionamento_e_novo(first_order_at: datetime | None, now: datetime) -> bool:
-    """O PRIMEIRO pedido ainda esta dentro da janela de novidade?
+def segment_expression(orders_count, first_order_at, last_order_at, now: datetime):
+    """O rotulo RFV desta linha. Ver a escada no cabecalho do modulo."""
+    dias = days_since_expression(last_order_at, now)
+    idade_do_relacionamento = days_since_expression(first_order_at, now)
+    cadencia = cadence_expression(orders_count, first_order_at, last_order_at)
 
-    Sem `first_order_at` nao da para dizer que o relacionamento e antigo, e
-    quem chegou ate aqui esta em dia com o proprio ritmo: "novo" e a leitura
-    que nao inventa historico.
+    return case(
+        (last_order_at.is_(None), literal(CustomerSegment.NOVO.value)),
+        (dias > cadencia * settings.RFV_LOST_FACTOR, literal(CustomerSegment.PERDIDO.value)),
+        (dias > cadencia * settings.RFV_AT_RISK_FACTOR, literal(CustomerSegment.EM_RISCO.value)),
+        (orders_count >= settings.RFV_ORDERS_FOR_LOYAL, literal(CustomerSegment.FIEL.value)),
+        # Sem `first_order_at` nao da para dizer que o relacionamento e
+        # antigo, e quem chegou ate aqui esta em dia com o proprio ritmo:
+        # "novo" e a leitura que nao inventa historico.
+        (
+            func.coalesce(idade_do_relacionamento, 0) <= settings.RFV_NEW_WINDOW_DAYS,
+            literal(CustomerSegment.NOVO.value),
+        ),
+        else_=literal(CustomerSegment.OCASIONAL.value),
+    )
+
+
+def _agora(now: datetime):
+    """O instante do lado de CA, preso na consulta como parametro.
+
+    Nao e `func.now()`: o service ja promete um unico agora para a pagina
+    inteira, e um relogio escolhido pelo banco nao da para o teste fixar nem
+    para a consulta ser reproduzida depois.
     """
-    if first_order_at is None:
-        return True
-    return (now - first_order_at).days <= settings.RFV_NEW_WINDOW_DAYS
+    return literal(now, DateTime(timezone=True))

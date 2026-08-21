@@ -10,10 +10,11 @@ e nao so como comentario.
 
 import unittest
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
+from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
 from src.api.dependencies.admin_scope import AdminScope
@@ -42,11 +43,16 @@ def make_row(**overrides):
     values = {
         "customer_phone": "85999990000",
         "orders_count": 3,
-        # Por padrao todo pedido e faturavel. O caso interessante — os dois
-        # numeros DIFERENTES, que e o que o ticket medio erraria — tem teste
-        # proprio em `TicketMedioTests`.
         "billable_orders_count": 3,
         "total_spent": Decimal("150.00"),
+        # Estes tres vem CALCULADOS do banco desde 21/08/2026 — a linha falsa
+        # os traz prontos porque a consulta os traria. Quem prova o valor
+        # deles e `test_clientes_rfv_db.py`, contra o Postgres; o que se prova
+        # aqui e que eles chegam ao contrato sem ninguem recalcular no meio.
+        "average_ticket": Decimal("50.00"),
+        "days_since_last_order": 0,
+        "segment": "fiel",
+        "cadence_days": 30.0,
         "first_order_at": NOW,
         "last_order_at": NOW,
     }
@@ -108,8 +114,8 @@ class DataSourceTests(unittest.TestCase):
     def test_the_query_never_reads_the_customers_table(self):
         db = CapturingDb()
         repository = AdminCustomerRepository(db)
-        repository.list_customers(RESTAURANT_ID, search="maria")
-        repository.count_customers(RESTAURANT_ID)
+        repository.list_customers(RESTAURANT_ID, NOW, search="maria")
+        repository.count_customers(RESTAURANT_ID, NOW)
         repository.get_latest_names(RESTAURANT_ID, ["85999990000"])
 
         for statement in db.statements:
@@ -122,7 +128,7 @@ class DataSourceTests(unittest.TestCase):
 
     def test_total_spent_ignores_cancelled_and_rejected(self):
         db = CapturingDb()
-        AdminCustomerRepository(db).list_customers(RESTAURANT_ID)
+        AdminCustomerRepository(db).list_customers(RESTAURANT_ID, NOW)
 
         sql = compile_sql(db.statements[0])
         # Pedido cancelado nao e dinheiro que entrou; somar faria o cliente
@@ -193,97 +199,152 @@ class ListingTests(unittest.TestCase):
         self.assertEqual(len(repository.list_kwargs["search"]), 120)
 
 
-class TicketMedioTests(unittest.TestCase):
-    """O ticket medio, e a divisao que ele quase virou.
+class ContratoDaLinhaTests(unittest.TestCase):
+    """A linha da consulta vira linha do contrato SEM ninguem recalcular.
 
-    `total_spent` NAO soma cancelado nem recusado, mas `orders_count` conta
-    todos os pedidos. Dividir um pelo outro sub-reporta o ticket de todo
-    cliente que ja cancelou alguma coisa — e o erro nao aparece em lugar
-    nenhum: nao ha excecao, nao ha log, so um numero um pouco menor do que
-    deveria, do lado de um total que esta certo.
+    Desde 21/08/2026 `segment`, `average_ticket` e `days_since_last_order`
+    sao colunas da consulta. Se alguem reintroduzir uma conta em Python aqui,
+    ela vai discordar do SQL que os filtros usam — e a tela passa a mostrar um
+    rotulo que o `?segment=` nao encontra.
     """
 
-    def test_divide_pelos_pedidos_que_geraram_dinheiro(self):
+    def test_os_tres_campos_calculados_vem_da_linha(self):
         row = make_row(
-            orders_count=5,
-            billable_orders_count=3,
-            total_spent=Decimal("150.00"),
+            average_ticket=Decimal("41.67"),
+            days_since_last_order=23,
+            segment="em_risco",
         )
-        response = build_service(RecordingCustomerRepository(rows=[row])).list_customers(scope())
+        item = build_service(
+            RecordingCustomerRepository(rows=[row])
+        ).list_customers(scope()).items[0]
 
-        # 150 / 3, e nunca 150 / 5 = 30.
-        self.assertEqual(response.items[0].average_ticket, 50.00)
+        self.assertEqual(item.average_ticket, 41.67)
+        self.assertEqual(item.days_since_last_order, 23)
+        self.assertEqual(item.segment, CustomerSegment.EM_RISCO)
 
     def test_os_dois_contadores_vao_no_contrato(self):
         """Sem `billable_orders_count` na resposta, a tela mostra tres numeros
         que nao fecham e o lojista abre chamado."""
         row = make_row(orders_count=5, billable_orders_count=3, total_spent=Decimal("150.00"))
-        response = build_service(RecordingCustomerRepository(rows=[row])).list_customers(scope())
+        item = build_service(
+            RecordingCustomerRepository(rows=[row])
+        ).list_customers(scope()).items[0]
 
-        item = response.items[0]
         self.assertEqual((item.orders_count, item.billable_orders_count), (5, 3))
         self.assertEqual(item.total_spent, 150.00)
 
-    def test_so_cancelamento_nao_divide_por_zero(self):
-        """Cliente que pediu duas vezes e cancelou as duas. E estado normal, e
-        nao pode virar 500."""
-        row = make_row(orders_count=2, billable_orders_count=0, total_spent=Decimal("0"))
-        response = build_service(RecordingCustomerRepository(rows=[row])).list_customers(scope())
-
-        self.assertEqual(response.items[0].average_ticket, 0.0)
-
-    def test_arredonda_para_duas_casas(self):
-        row = make_row(orders_count=3, billable_orders_count=3, total_spent=Decimal("100.00"))
-        response = build_service(RecordingCustomerRepository(rows=[row])).list_customers(scope())
-
-        # 33,333... — o contrato e float de duas casas, como o resto do schema.
-        self.assertEqual(response.items[0].average_ticket, 33.33)
-
-
-class SegmentoNaRespostaTests(unittest.TestCase):
-    """A classificacao chega ao contrato. A REGRA em si tem arquivo proprio
-    (`test_customer_segment.py`); o que se prova aqui e o encanamento."""
-
-    def test_a_linha_sai_com_segmento_e_dias(self):
-        agora = datetime.now(timezone.utc)
-        row = make_row(
-            orders_count=12,
-            billable_orders_count=12,
-            first_order_at=agora - timedelta(days=257),
-            last_order_at=agora - timedelta(days=180),
-        )
-        response = build_service(RecordingCustomerRepository(rows=[row])).list_customers(scope())
-
-        item = response.items[0]
-        self.assertEqual(item.segment, CustomerSegment.PERDIDO)
-        self.assertEqual(item.days_since_last_order, 180)
-
     def test_o_segmento_serializa_como_o_codigo_estavel(self):
         """O painel le a string do JSON, e nao o nome do membro do enum."""
-        row = make_row(billable_orders_count=3)
-        response = build_service(RecordingCustomerRepository(rows=[row])).list_customers(scope())
+        response = build_service(
+            RecordingCustomerRepository(rows=[make_row(segment="ocasional")])
+        ).list_customers(scope())
 
-        self.assertIn(
-            response.model_dump(mode="json")["items"][0]["segment"],
-            {"novo", "ocasional", "fiel", "em_risco", "perdido"},
+        self.assertEqual(response.model_dump(mode="json")["items"][0]["segment"], "ocasional")
+
+    def test_cliente_sem_pedido_faturavel_sai_com_ticket_zero(self):
+        """Quem pediu duas vezes e cancelou as duas. O banco devolve zero (a
+        divisao vira NULL e cai no `coalesce`), e o contrato tambem."""
+        row = make_row(
+            orders_count=2,
+            billable_orders_count=0,
+            total_spent=Decimal("0"),
+            average_ticket=Decimal("0"),
+        )
+        item = build_service(
+            RecordingCustomerRepository(rows=[row])
+        ).list_customers(scope()).items[0]
+
+        self.assertEqual(item.average_ticket, 0.0)
+
+
+class FiltrosTests(unittest.TestCase):
+    """Os cinco filtros, do jeito que chegam ao repositorio."""
+
+    def _filtros_de(self, **kwargs):
+        repository = RecordingCustomerRepository()
+        build_service(repository).list_customers(scope(), **kwargs)
+        return repository.list_kwargs["filters"]
+
+    def test_sem_filtro_nenhum_campo_vira_comparacao(self):
+        filtros = self._filtros_de()
+
+        self.assertEqual(
+            (
+                filtros.segment,
+                filtros.last_order_from,
+                filtros.last_order_to,
+                filtros.min_ticket,
+                filtros.max_ticket,
+            ),
+            (None, None, None, None, None),
         )
 
-    def test_a_pagina_inteira_e_classificada_no_mesmo_instante(self):
-        """Uma pagina lida na virada do dia nao pode ter as primeiras linhas
-        contra ontem e as ultimas contra hoje: a linha que mudasse de rotulo
-        no meio seria impossivel de reproduzir depois."""
-        agora = datetime.now(timezone.utc)
-        na_fronteira = dict(
-            orders_count=1,
-            billable_orders_count=1,
-            first_order_at=agora - timedelta(days=120, seconds=1),
-            last_order_at=agora - timedelta(days=120, seconds=1),
-        )
-        rows = [make_row(customer_phone=f"8599999000{i}", **na_fronteira) for i in range(20)]
-        response = build_service(RecordingCustomerRepository(rows=rows)).list_customers(scope())
+    def test_o_segmento_chega_como_enum(self):
+        filtros = self._filtros_de(segment=CustomerSegment.PERDIDO)
 
-        segmentos = {item.segment for item in response.items}
-        self.assertEqual(len(segmentos), 1, segmentos)
+        self.assertEqual(filtros.segment, CustomerSegment.PERDIDO)
+
+    def test_as_datas_sao_lidas_no_fuso_da_operacao(self):
+        """A data que o lojista escolhe e o DIA DELE. Sem a conversao, tres
+        horas de pedidos caem no dia errado do recorte."""
+        filtros = self._filtros_de(
+            last_order_from=date(2026, 8, 1), last_order_to=date(2026, 8, 31)
+        )
+
+        self.assertEqual(
+            filtros.last_order_from.astimezone(timezone.utc),
+            datetime(2026, 8, 1, 3, tzinfo=timezone.utc),
+        )
+        # Fim EXCLUSIVO na meia-noite do dia seguinte: com o fim fechado, o
+        # pedido das 23:59:59.7 do dia 31 ficaria de fora do proprio dia.
+        self.assertEqual(
+            filtros.last_order_to.astimezone(timezone.utc),
+            datetime(2026, 9, 1, 3, tzinfo=timezone.utc),
+        )
+
+    def test_cada_data_funciona_sozinha(self):
+        so_o_comeco = self._filtros_de(last_order_from=date(2026, 8, 1))
+        so_o_fim = self._filtros_de(last_order_to=date(2026, 8, 31))
+
+        self.assertIsNotNone(so_o_comeco.last_order_from)
+        self.assertIsNone(so_o_comeco.last_order_to)
+        self.assertIsNone(so_o_fim.last_order_from)
+        self.assertIsNotNone(so_o_fim.last_order_to)
+
+    def test_periodo_invertido_responde_400(self):
+        """Lista vazia deixaria o lojista procurando o cliente que sumiu da
+        tela; 400 diz que o pedido e que estava errado."""
+        with self.assertRaises(HTTPException) as raised:
+            self._filtros_de(
+                last_order_from=date(2026, 8, 31), last_order_to=date(2026, 8, 1)
+            )
+
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_faixa_de_ticket_invertida_responde_400(self):
+        with self.assertRaises(HTTPException) as raised:
+            self._filtros_de(min_ticket=Decimal("80"), max_ticket=Decimal("20"))
+
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_a_pagina_e_a_contagem_recebem_os_MESMOS_filtros(self):
+        """Filtro que vale so num dos lados devolve pagina que nao bate com o
+        total — e o lojista ve "23 clientes" sobre uma lista de 5."""
+        repository = RecordingCustomerRepository()
+        build_service(repository).list_customers(
+            scope(), segment=CustomerSegment.FIEL, min_ticket=Decimal("30")
+        )
+
+        self.assertEqual(repository.list_kwargs["filters"], repository.count_kwargs["filters"])
+
+    def test_a_pagina_e_a_contagem_sao_classificadas_no_MESMO_instante(self):
+        """O `agora` vai dentro da consulta como parametro. Se cada consulta
+        pegasse o proprio, uma leitura na virada do dia classificaria a pagina
+        contra hoje e o total contra ontem."""
+        repository = RecordingCustomerRepository()
+        build_service(repository).list_customers(scope())
+
+        self.assertIs(repository.list_kwargs["now"], repository.count_kwargs["now"])
 
 
 class SearchConditionTests(unittest.TestCase):

@@ -57,9 +57,17 @@ class AdminCustomerListItem(BaseModel):
     average_ticket: float
     first_order_at: datetime | None = None
     last_order_at: datetime | None = None
-    # O que torna a classificacao auditavel na propria tela: o lojista ve o
-    # rotulo e o numero que o produziu, lado a lado.
+    # Os dois numeros que tornam a classificacao auditavel na propria tela: o
+    # lojista ve o rotulo e o que o produziu, lado a lado. "23 dias sem pedir,
+    # ritmo de 7" explica sozinho por que este cliente esta em risco e o
+    # vizinho da lista, com os mesmos 23 dias, nao esta.
+    #
+    # `cadence_days` e o intervalo medio DESTE cliente, ja grampeado entre
+    # RFV_MIN_CADENCE_DAYS e RFV_MAX_CADENCE_DAYS — nao e o intervalo cru, e
+    # sim o que a classificacao de fato usou. Fracionario de proposito: um
+    # cliente de tres pedidos costuma ter meio dia no meio.
     days_since_last_order: int | None = None
+    cadence_days: float
     segment: CustomerSegment
 
 

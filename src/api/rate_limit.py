@@ -66,6 +66,14 @@ LOGIN_RATE_LIMIT = "10/minute"
 ADMIN_LOGIN_RATE_LIMIT = "10/minute;60/hour"
 FORGOT_PASSWORD_RATE_LIMIT = "5/minute;20/hour"
 PUBLIC_ORDER_LOOKUP_RATE_LIMIT = "30/minute"
+# Avaliacao de pedido. Rota publica, autorizada pelo `tracking_token` — nao ha
+# login para responsabilizar, entao o limite por IP e a segunda barreira
+# depois do token.
+#
+# MAIS APERTADO que a consulta logo acima, apesar de as duas usarem o mesmo
+# token, porque esta ESCREVE. E a consulta e legitimamente repetida (o cliente
+# reabre a tela para ver se saiu para entrega); avaliar e uma vez por pedido.
+REVIEW_ORDER_RATE_LIMIT = "10/minute;60/hour"
 CREATE_ORDER_RATE_LIMIT = "10/minute;60/hour"
 # Criar cobranca chama o gateway, que cobra por requisicao e tem limite
 # proprio. Um pouco mais folgado que criar pedido porque o cliente pode

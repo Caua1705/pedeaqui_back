@@ -5590,6 +5590,54 @@
         "title": "CreateOrderResponse",
         "type": "object"
       },
+      "CreateOrderReviewRequest": {
+        "additionalProperties": false,
+        "description": "A avaliacao que o cliente manda. Nota obrigatoria, o resto opcional.\n\nUMA nota geral, e nao notas separadas por comida/entrega/embalagem. O\nmotivo nao e so taxa de resposta: o formulario teria que mudar de forma\npor `order_type`, porque pedido de RETIRADA nao tem entrega — e uma nota\nde entrega nula ficaria indistinguivel de \"nao respondeu\", fazendo a\nmedia por dimensao depender do mix de retirada da loja.",
+        "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "problem_tag": {
+            "anyOf": [
+              {
+                "enum": [
+                  "atrasou",
+                  "veio_errado",
+                  "veio_frio",
+                  "faltou_item",
+                  "qualidade",
+                  "outro"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem Tag"
+          },
+          "rating": {
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Rating",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rating"
+        ],
+        "title": "CreateOrderReviewRequest",
+        "type": "object"
+      },
       "CurrentCustomerResponse": {
         "properties": {
           "birth_date": {
@@ -7352,6 +7400,68 @@
           "jobs"
         ],
         "title": "OrderPrintJobsResponse",
+        "type": "object"
+      },
+      "OrderReviewResponse": {
+        "description": "A avaliacao gravada, devolvida para a tela confirmar o que ficou.\n\nNao leva `order_id`: quem chamou ja tem o token do pedido, e devolve-lo\nso acrescentaria um identificador interno a uma resposta publica.",
+        "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "problem_tag": {
+            "anyOf": [
+              {
+                "enum": [
+                  "atrasou",
+                  "veio_errado",
+                  "veio_frio",
+                  "faltou_item",
+                  "qualidade",
+                  "outro"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem Tag"
+          },
+          "rating": {
+            "title": "Rating",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "rating",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "OrderReviewResponse",
         "type": "object"
       },
       "OrderTypeSplitItem": {
@@ -15364,6 +15474,74 @@
           }
         },
         "summary": "Track Order",
+        "tags": [
+          "orders"
+        ]
+      }
+    },
+    "/restaurants/{restaurant_slug}/orders/track/{tracking_token}/review": {
+      "put": {
+        "description": "A nota do cliente sobre um pedido entregue.\n\n**PUT e nao POST**, e a escolha e o contrato: um pedido tem no maximo uma\navaliacao (`uq_order_reviews_order_id`), e mandar de novo TROCA a que\nestava la em vez de criar uma segunda. Quem apertou uma estrela por engano\nmanda de novo; quem tem rede ruim e reenviou nao cria duas notas.\n\n**Sem login, de proposito.** Pedido de convidado e caso normal, e exigir\nconta aqui cortaria justamente quem mais tem o que dizer. Quem autoriza e\no `tracking_token` desta URL — o mesmo que abre o acompanhamento do\npedido, com 256 bits e sem rota de reemissao.\n\n## Quando a rota aceita\n\n- o pedido esta em `completed` (409 nos outros, inclusive `cancelled` e\n  `rejected`: nao houve entrega para avaliar);\n- dentro de 14 dias da entrega (409 depois disso).\n\n## Os campos\n\n- `rating`: 1 a 5, obrigatorio. UMA nota geral — ver\n  `CreateOrderReviewRequest` para por que nao ha nota separada de comida,\n  entrega e embalagem.\n- `problem_tag`: opcional, e **so aceito com `rating` ate 3**. Mandar com\n  nota 4 ou 5 responde 422.\n- `comment`: opcional, ate 500 caracteres.",
+        "operationId": "review_order_restaurants__restaurant_slug__orders_track__tracking_token__review_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "restaurant_slug",
+            "required": true,
+            "schema": {
+              "title": "Restaurant Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tracking_token",
+            "required": true,
+            "schema": {
+              "title": "Tracking Token",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOrderReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderReviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "Pedido nao encontrado, ou token invalido"
+          },
+          "409": {
+            "description": "Pedido ainda nao entregue, ou prazo de avaliacao encerrado"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Review Order",
         "tags": [
           "orders"
         ]

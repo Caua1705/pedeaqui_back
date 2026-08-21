@@ -6,11 +6,17 @@ from src.api.dependencies.database import get_db
 from src.api.rate_limit import (
     CREATE_ORDER_RATE_LIMIT,
     PUBLIC_ORDER_LOOKUP_RATE_LIMIT,
+    REVIEW_ORDER_RATE_LIMIT,
     limiter,
 )
 from src.models.customer_model import Customer
+from src.schemas.order_review_schema import (
+    CreateOrderReviewRequest,
+    OrderReviewResponse,
+)
 from src.schemas.order_schema import CreateOrderRequest, CreateOrderResponse, OrderDetailResponse
 from src.services.idempotency_service import normalize_idempotency_key
+from src.services.order_review_service import OrderReviewService
 from src.services.order_service import OrderService
 
 
@@ -60,3 +66,49 @@ def track_order(
     db: Session = Depends(get_db),
 ) -> OrderDetailResponse:
     return OrderService(db).get_order_by_tracking_token(restaurant_slug, tracking_token)
+
+
+@router.put(
+    "/{restaurant_slug}/orders/track/{tracking_token}/review",
+    response_model=OrderReviewResponse,
+    responses={
+        404: {"description": "Pedido nao encontrado, ou token invalido"},
+        409: {"description": "Pedido ainda nao entregue, ou prazo de avaliacao encerrado"},
+    },
+)
+@limiter.limit(REVIEW_ORDER_RATE_LIMIT)
+def review_order(
+    request: Request,
+    restaurant_slug: str,
+    tracking_token: str,
+    payload: CreateOrderReviewRequest,
+    db: Session = Depends(get_db),
+) -> OrderReviewResponse:
+    """A nota do cliente sobre um pedido entregue.
+
+    **PUT e nao POST**, e a escolha e o contrato: um pedido tem no maximo uma
+    avaliacao (`uq_order_reviews_order_id`), e mandar de novo TROCA a que
+    estava la em vez de criar uma segunda. Quem apertou uma estrela por engano
+    manda de novo; quem tem rede ruim e reenviou nao cria duas notas.
+
+    **Sem login, de proposito.** Pedido de convidado e caso normal, e exigir
+    conta aqui cortaria justamente quem mais tem o que dizer. Quem autoriza e
+    o `tracking_token` desta URL — o mesmo que abre o acompanhamento do
+    pedido, com 256 bits e sem rota de reemissao.
+
+    ## Quando a rota aceita
+
+    - o pedido esta em `completed` (409 nos outros, inclusive `cancelled` e
+      `rejected`: nao houve entrega para avaliar);
+    - dentro de 14 dias da entrega (409 depois disso).
+
+    ## Os campos
+
+    - `rating`: 1 a 5, obrigatorio. UMA nota geral — ver
+      `CreateOrderReviewRequest` para por que nao ha nota separada de comida,
+      entrega e embalagem.
+    - `problem_tag`: opcional, e **so aceito com `rating` ate 3**. Mandar com
+      nota 4 ou 5 responde 422.
+    - `comment`: opcional, ate 500 caracteres.
+    """
+    return OrderReviewService(db).submit(restaurant_slug, tracking_token, payload)

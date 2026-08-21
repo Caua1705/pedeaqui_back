@@ -1729,6 +1729,67 @@
         "title": "AdminOrderListResponse",
         "type": "object"
       },
+      "AdminOrderReviewItem": {
+        "description": "Uma avaliacao, como o lojista a ve.\n\nNAO leva nome nem telefone do cliente. O `order_number` e o suficiente\npara ele achar o pedido, e `GET /admin/orders/{id}` ja mostra a pessoa —\nrepetir dado pessoal numa segunda tela e superficie a mais sem leitor\nnovo.",
+        "properties": {
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "order_number": {
+            "title": "Order Number",
+            "type": "integer"
+          },
+          "problem_tag": {
+            "anyOf": [
+              {
+                "enum": [
+                  "atrasou",
+                  "veio_errado",
+                  "veio_frio",
+                  "faltou_item",
+                  "qualidade",
+                  "outro"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem Tag"
+          },
+          "rating": {
+            "title": "Rating",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "order_number",
+          "branch_id",
+          "rating",
+          "created_at"
+        ],
+        "title": "AdminOrderReviewItem",
+        "type": "object"
+      },
       "AdminOrderStatusCount": {
         "properties": {
           "count": {
@@ -2807,6 +2868,67 @@
           }
         },
         "title": "AdminRestaurantSettingsUpdate",
+        "type": "object"
+      },
+      "AdminReviewSummary": {
+        "description": "O agregado do periodo, e a razao de a etiqueta de problema existir.\n\n`average` e `float`, e a regra do `Decimal` (armadilha 34) NAO se aplica:\nmedia de nota nao e dinheiro, nao tem centavo e nao precisa de casa fixa.\n\n`by_rating` traz as CINCO chaves sempre, inclusive as zeradas. Histograma\ncom buraco obriga o front a preencher o que falta, e cada front preenche\nde um jeito.\n\n`by_problem_tag` traz so as etiquetas que apareceram. Ao contrario das\nnotas, a lista pode crescer (`REVIEW_PROBLEM_TAGS`), e devolver zeros de\netiquetas novas nao ajudaria ninguem.",
+        "properties": {
+          "average": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average"
+          },
+          "by_problem_tag": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Problem Tag",
+            "type": "object"
+          },
+          "by_rating": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Rating",
+            "type": "object"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "by_rating",
+          "by_problem_tag"
+        ],
+        "title": "AdminReviewSummary",
+        "type": "object"
+      },
+      "AdminReviewsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AdminOrderReviewItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/AdminReviewSummary"
+          }
+        },
+        "required": [
+          "summary",
+          "items"
+        ],
+        "title": "AdminReviewsResponse",
         "type": "object"
       },
       "AdminStreamTicketResponse": {
@@ -13697,6 +13819,131 @@
         "summary": "Sales Summary",
         "tags": [
           "admin reports"
+        ]
+      }
+    },
+    "/admin/reviews": {
+      "get": {
+        "description": "O que os clientes disseram no periodo, com o agregado junto.\n\nO periodo recorta a data da AVALIACAO, nao a do pedido: a pergunta e \"o\nque os clientes disseram esta semana\", e uma nota escrita hoje sobre um\npedido de terca pertence a hoje.\n\n**`max_rating` nao mexe no `summary`.** Filtrar a lista para as notas\nbaixas nao pode fazer a media do periodo desabar na mesma tela — o\nagregado sempre fala do periodo inteiro.",
+        "operationId": "list_reviews_admin_reviews_get",
+        "parameters": [
+          {
+            "description": "Primeiro dia do periodo (inclusive)",
+            "in": "query",
+            "name": "start_date",
+            "required": true,
+            "schema": {
+              "description": "Primeiro dia do periodo (inclusive)",
+              "format": "date",
+              "title": "Start Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Ultimo dia do periodo (inclusive)",
+            "in": "query",
+            "name": "end_date",
+            "required": true,
+            "schema": {
+              "description": "Ultimo dia do periodo (inclusive)",
+              "format": "date",
+              "title": "End Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Recorte por filial. Omitido, traz o restaurante inteiro. So restringe.",
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por filial. Omitido, traz o restaurante inteiro. So restringe.",
+              "title": "Branch Id"
+            }
+          },
+          {
+            "description": "Traz somente notas ATE este valor. O uso real e max_rating=3.",
+            "in": "query",
+            "name": "max_rating",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Traz somente notas ATE este valor. O uso real e max_rating=3.",
+              "title": "Max Rating"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminReviewsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Reviews",
+        "tags": [
+          "admin reviews"
         ]
       }
     },

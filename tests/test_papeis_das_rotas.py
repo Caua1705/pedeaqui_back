@@ -116,6 +116,13 @@ PAPEL_ESPERADO = {
     ("GET", "/admin/reports/payment-methods"): GERENCIA,
     ("GET", "/admin/reports/products"): GERENCIA,
     ("GET", "/admin/reports/cancellations"): GERENCIA,
+    # --- avaliacao de pedido
+    #
+    # GERENCIA, e nao SOMENTE_DONO. A divisao dos relatorios acima e "dinheiro
+    # do restaurante inteiro e do dono"; avaliacao nao diz quanto entrou.
+    # Quem conserta atraso e pedido errado e quem toca a loja, e nota que so o
+    # dono ve nao vira conserto no balcao.
+    ("GET", "/admin/reviews"): GERENCIA,
     # --- cupom: desconto e preco por outra porta
     ("GET", "/admin/coupons"): GERENCIA,
     ("POST", "/admin/coupons"): SOMENTE_DONO,

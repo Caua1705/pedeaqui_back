@@ -42,6 +42,41 @@ class SessionState(TypedDict):
 _SESSION_HISTORY: dict[str, SessionState] = {}
 
 
+# Por quanto tempo o voto do cliente sobre uma resposta do Rapi continua no
+# banco. Ver `feedback_retention_cutoff`.
+FEEDBACK_RETENTION_DAYS = 90
+
+
+def feedback_retention_cutoff(now: datetime) -> datetime:
+    """Antes deste instante, a linha de `ai_feedback` tem que sair.
+
+    O QUE ISTO FECHA. `ai_feedback.user_message` guarda **em texto puro** o
+    que a pessoa digitou para o Rapi, e ela digita coisas como "moro na rua
+    X, 200, meu telefone e ...". A tabela nao tem `customer_id`, entao a
+    exclusao de conta (`CustomerAnonymizationService`) nunca alcancou essas
+    linhas: a pessoa pedia exclusao, o sistema anonimizava tudo, e o texto
+    dela ficava. Era o maior residuo nomeado em
+    `docs/lgpd-fase2-exclusao-de-conta.md`, secao 6.
+
+    POR QUE RETENCAO E NAO `customer_id`. `POST /chat` e `POST /chat/feedback`
+    **nao tem autenticacao nenhuma**, nem opcional — o Rapi existe para quem
+    ainda nao tem conta. Nao ha cliente na requisicao para gravar na coluna,
+    entao ela nasceria sempre NULL e a anonimizacao continuaria sem alcancar
+    nada, so que agora com uma coluna que parece resolver. Autenticar o chat
+    para preenche-la seria fechar a porta que o produto quer aberta.
+
+    E a retencao alcanca MAIS: o texto de quem nunca criou conta some
+    tambem, e esse a anonimizacao por definicao jamais cobriria.
+
+    POR QUE 90 DIAS. E o que a linha serve para depois de gravada: amostra
+    de qualidade das respostas ("o Rapi piorou desde a mudanca do prompt?").
+    Nenhuma rota le esta tabela hoje, entao o custo de encurtar e baixo e o
+    de esticar e dado pessoal parado. Um trimestre cobre a comparacao
+    antes/depois de um deploy sem guardar a conversa do ano passado.
+    """
+    return now - timedelta(days=FEEDBACK_RETENTION_DAYS)
+
+
 class ChatService:
     def __init__(self, db: Session, agent: str = "/chat"):
         """`agent` so existe para o LOG — ver `RetrievalService`.

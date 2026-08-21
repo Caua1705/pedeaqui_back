@@ -1,4 +1,6 @@
-from sqlalchemy import select
+from datetime import datetime
+
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from src.models.ai_feedback_model import AIFeedback
@@ -47,3 +49,15 @@ class AIFeedbackRepository:
             )
         )
         self.db.flush()
+
+    def delete_created_before(self, cutoff: datetime) -> int:
+        """Apaga o feedback velho. Devolve quantos sairam.
+
+        Corta por `created_at` e nao por vencimento porque a linha nao tem
+        vencimento: ela vale enquanto servir de amostra de qualidade das
+        respostas do Rapi. Quem sabe ate quando e
+        `chat_service.feedback_retention_cutoff`, e e de la que o `cutoff`
+        tem que vir — o repositorio so consulta.
+        """
+        resultado = self.db.execute(delete(AIFeedback).where(AIFeedback.created_at < cutoff))
+        return resultado.rowcount or 0

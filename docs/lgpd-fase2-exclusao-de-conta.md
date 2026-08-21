@@ -340,12 +340,24 @@ Sem ele, a transação única é uma afirmação do docstring e não um fato.
 Nomear os resíduos aqui é o que impede que "a conta foi apagada" seja lido
 como mais forte do que é.
 
-**`ai_feedback.user_message` guarda a conversa em texto puro e não tem
-`customer_id`.** É a mensagem que a pessoa digitou para o Rapi, e ela pode
-conter nome, telefone e endereço — não há como alcançá-la a partir da conta,
-porque a tabela só tem `session_id`. Fechar isso é outro trabalho: ou
-`customer_id` na tabela, ou retenção curta por `created_at`. **É o maior
-buraco que sobra**, e vale decidir junto.
+**~~`ai_feedback.user_message`~~ — FECHADO em 20/08/2026, por retenção.**
+Era o maior buraco que sobrava: a mensagem que a pessoa digitou para o Rapi,
+em texto puro, com nome, telefone e endereço dentro, inalcançável a partir da
+conta porque a tabela só tem `session_id`.
+
+Das duas saídas levantadas aqui, **`customer_id` na tabela não funcionaria** —
+e vale registrar por quê, porque era a opção que parecia mais forte.
+`POST /chat` e `POST /chat/feedback` não têm autenticação nenhuma, nem
+opcional: o Rapi existe para quem ainda não tem conta. Não há cliente na
+requisição para gravar na coluna, então ela nasceria sempre `NULL` e a
+anonimização continuaria sem alcançar nada — só que agora atrás de uma coluna
+que parece resolver, que é pior que o buraco declarado.
+
+A retenção por `created_at` (90 dias, `chat_service.feedback_retention_cutoff`,
+expurgo no container `limpeza`) alcança **mais** que a coluna alcançaria: o
+texto de quem nunca criou conta some junto, e esse a anonimização por
+definição jamais cobriria. Não precisou de migração — o índice
+`idx_ai_feedback_created` já existia no baseline.
 
 **`idempotency_keys.response_body` guarda a resposta de criação do pedido por
 até 24h**, incluindo o `tracking_token` em claro. A janela é curta e a
@@ -382,6 +394,8 @@ como consciente.
 4. **`ai_feedback` entra nesta frente ou em outra?** Eu proponho **outra**, e
    proponho que seja a próxima: ela é o maior resíduo (6) e o conserto não
    depende de nada daqui.
+   → **Respondida em 20/08/2026: outra frente, e já feita.** Virou retenção
+   por data e não `customer_id`; o porquê está na seção 6.
 
 Com essas quatro respondidas, isto vira: uma revisão do Alembic de uma coluna,
 um service de ~120 linhas, uma rota, e os 21 testes da seção 5.

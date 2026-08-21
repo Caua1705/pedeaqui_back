@@ -357,6 +357,7 @@ um worker o Rapi "esquece" a conversa. Não há caminho de Redis para ele.
 | [entrega-e-horarios.md](entrega-e-horarios.md) | estimativa, taxa por km, horário de funcionamento, reaproveitamento de estimativa |
 | [autenticacao-e-escopo.md](autenticacao-e-escopo.md) | token de cliente, token de lojista, escopo por restaurante e por filial |
 | [impressao.md](impressao.md) | setores, montagem das comandas, o print-agent |
+| [avaliacao-de-pedido.md](avaliacao-de-pedido.md) | nota do cliente pelo link de acompanhamento, aba do painel, LGPD do texto livre, e por que o QR na comanda ficou para depois |
 | [operacao.md](operacao.md) | subir local, deploy, migrações, logs, o que fazer quando não sobe |
 | [onboarding-de-restaurante.md](onboarding-de-restaurante.md) | pôr um restaurante novo no ar, do zero ao primeiro pedido pago e impresso; os cinco passos que quebram em silêncio; os fluxos em linguagem de lojista |
 

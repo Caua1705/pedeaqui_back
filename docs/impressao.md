@@ -162,6 +162,17 @@ Projeto Python **separado**, com `pytest.ini` e `requirements.txt` próprios. Ro
 numa máquina Windows na loja, instalado à mão. Não sobe em container com a API, e
 os testes dele não rodam no CI da API — ver a nota em `pytest.ini` da raiz.
 
+> **Pendência que bloqueia outra: não existe atualização remota do agente.**
+> Ele é um `.exe` instalado à mão, com exclusão de antivírus e instalador, e
+> `INSTALACAO.md` não descreve nenhum caminho de update. Toda mudança no agente
+> é uma visita por loja.
+>
+> Isso já segurou uma feature: o **QR de avaliação no rodapé da comanda**, que
+> precisa do comando `GS ( k` (o agente implementa cinco comandos ESC/POS, e
+> nenhum é QR) e de um campo novo no contrato de impressão. A ordem correta é
+> **primeiro a atualização remota, depois o QR** — o raciocínio inteiro está em
+> [avaliacao-de-pedido.md](avaliacao-de-pedido.md), seção 6.
+
 ```bash
 cd print-agent && pytest      # 65 testes
 ```

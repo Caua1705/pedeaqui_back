@@ -14,6 +14,7 @@ from src.models.idempotency_key_model import IdempotencyKey
 from src.models.order_item_model import OrderItem
 from src.models.order_item_option_model import OrderItemOption
 from src.models.order_model import Order
+from src.models.order_review_model import OrderReview
 from src.models.order_status_history_model import OrderStatusHistory
 from src.models.print_agent_model import PrintAgent, PrintAgentCommand, PrintAgentPrinter
 from src.models.printing_sector_model import PrintingSector
@@ -44,6 +45,7 @@ __all__ = [
     "Order",
     "OrderItem",
     "OrderItemOption",
+    "OrderReview",
     "OrderStatusHistory",
     "PrintAgent",
     "PrintAgentCommand",

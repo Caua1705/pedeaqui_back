@@ -64,6 +64,28 @@ PAYMENT_METHODS = (
 # refunded     Foi pago e depois estornado. Nao conta para comissao.
 PAYMENT_STATUSES = ("on_delivery", "pending", "paid", "failed", "refunded")
 
+# O que o cliente aponta quando a nota e baixa. ESPELHA o CHECK
+# `ck_order_reviews_problem_tag` e muda JUNTO com ele — e o mesmo par de
+# listas da armadilha 15 (PAYMENT_METHODS x o CHECK de
+# branch_payment_methods), e erra do mesmo jeito: etiqueta que exista so aqui
+# passa pela validacao do schema e morre no INSERT; etiqueta que exista so no
+# banco nunca chega a ser oferecida.
+#
+# Lista FECHADA e nao texto livre porque o painel a AGREGA: "7 de 12 notas
+# baixas desta semana foram atraso" e a frase que faz o lojista consertar
+# alguma coisa. Texto livre nao soma.
+#
+# `outro` existe para a etiqueta que falta nao virar nota baixa sem motivo —
+# e a frequencia dele e o sinal de que a lista precisa crescer.
+REVIEW_PROBLEM_TAGS = (
+    "atrasou",
+    "veio_errado",
+    "veio_frio",
+    "faltou_item",
+    "qualidade",
+    "outro",
+)
+
 # Percentual de comissao usado quando o restaurante nao tem
 # restaurant_settings.platform_commission_percent preenchido. Existe porque
 # restaurant_settings e uma linha opcional: sem esse piso, um restaurante sem

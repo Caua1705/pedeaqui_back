@@ -37,6 +37,7 @@ from src.models.customer_model import Customer
 from src.models.order_model import Order
 from src.repositories.cashback_repository import CashbackRepository
 from src.repositories.customer_repository import CustomerRepository
+from src.repositories.order_review_repository import OrderReviewRepository
 from src.repositories.delivery_estimate_repository import DeliveryEstimateRepository
 from src.repositories.order_repository import OrderRepository
 from src.services.order_state_machine import TERMINAL_ORDER_STATUSES
@@ -83,6 +84,7 @@ class CustomerAnonymizationService:
         self.order_repository = OrderRepository(db)
         self.delivery_estimate_repository = DeliveryEstimateRepository(db)
         self.cashback_repository = CashbackRepository(db)
+        self.order_review_repository = OrderReviewRepository(db)
 
     def anonymize(self, customer: Customer, password: str) -> None:
         """Apaga a pessoa e mantem a venda. Uma transacao, um commit.
@@ -102,6 +104,7 @@ class CustomerAnonymizationService:
 
         try:
             self._anonymize_orders(customer)
+            self._clear_review_comments(customer)
             self._delete_addresses(customer)
             self._delete_delivery_estimates(customer)
             self._delete_verification_codes(customer)
@@ -228,6 +231,23 @@ class CustomerAnonymizationService:
         # Explicito, e nao pelo `ON DELETE SET NULL` do passo seguinte: o
         # vinculo tem que sumir mesmo que a FK mude um dia.
         order.customer_address_id = None
+
+    def _clear_review_comments(self, customer: Customer) -> None:
+        """O texto que a pessoa escreveu avaliando os pedidos dela. A NOTA FICA.
+
+        Mesma linha que decide o resto deste service — fica o que e da
+        VENDA, sai o que e da PESSOA. A nota e numero, nao identifica
+        ninguem e e o historico de qualidade do restaurante: apaga-la
+        reescreveria a media do lojista a cada exclusao de conta. O
+        comentario e campo livre, e mistura "demorou" com "moro no 302,
+        falar com a Maria" — exatamente como `order.notes`, logo acima.
+
+        Alcanca por `orders.customer_id`, que e o que o `ai_feedback` nao
+        tinha. Mas alcanca SO quem tem conta: o comentario do pedido de
+        convidado tem `customer_id` nulo e sai pela retencao
+        (`order_review_service.review_retention_cutoff`).
+        """
+        self.order_review_repository.clear_comments_of_customer(customer.id)
 
     def _delete_addresses(self, customer: Customer) -> None:
         self.customer_repository.delete_addresses_of(customer.id)

@@ -32,6 +32,7 @@ from src.models.coupon_redemption_model import CouponRedemption
 from src.models.customer_model import Customer, EmailVerificationCode
 from src.models.delivery_estimate_model import DeliveryEstimate
 from src.models.order_model import Order
+from src.models.order_review_model import OrderReview
 from src.repositories.customer_repository import CustomerRepository
 from src.services.auth_service import AuthService
 from src.services.customer_anonymization_service import (
@@ -736,3 +737,81 @@ def test_a_falha_no_meio_nao_deixa_o_warning_no_log(db, cenario, caplog, monkeyp
         if "cashback perdido" in registro.getMessage()
     ]
     assert perdas == []
+
+
+# ---------------------------------------------------------------------------
+# Avaliação de pedido: o texto sai, a nota fica
+# ---------------------------------------------------------------------------
+#
+# É a mesma linha que decide o resto deste arquivo — fica o que é da VENDA,
+# sai o que é da PESSOA. A nota é número, não identifica ninguém e é o
+# histórico de qualidade do restaurante: apagá-la reescreveria a média do
+# lojista a cada exclusão de conta. O comentário é campo livre, e mistura
+# "demorou" com "moro no 302, falar com a Maria", exatamente como
+# `order.notes`.
+#
+# E isto alcança porque a avaliação chega por `orders.customer_id` — o que o
+# `ai_feedback` não tinha. Só que alcança SÓ quem tem conta: o comentário do
+# pedido de convidado tem `customer_id` nulo e sai pela retenção, coberta em
+# `tests/test_retencao_de_avaliacao_db.py`.
+
+
+def _avaliar(db, pedido, rating, comment):
+    avaliacao = OrderReview(order_id=pedido.id, rating=rating, comment=comment)
+    db.add(avaliacao)
+    db.flush()
+    return avaliacao
+
+
+def test_o_comentario_da_avaliacao_some(db, cenario):
+    avaliacao = _avaliar(
+        db,
+        cenario.pedido_com_cupom,
+        rating=2,
+        comment="moro no apartamento 302, falar com a Maria",
+    )
+
+    anonimizar(db, cenario.cliente)
+
+    db.refresh(avaliacao)
+    assert avaliacao.comment is None
+
+
+def test_a_nota_da_avaliacao_fica(db, cenario):
+    """O que o lojista não pode perder quando um cliente sai."""
+    avaliacao = _avaliar(db, cenario.pedido_com_cupom, rating=2, comment="demorou")
+
+    anonimizar(db, cenario.cliente)
+
+    db.refresh(avaliacao)
+    assert avaliacao.rating == 2
+    assert db.get(OrderReview, avaliacao.id) is not None
+
+
+def test_a_avaliacao_de_outra_pessoa_nao_e_tocada(db, cenario):
+    """O `UPDATE` é escopado por `orders.customer_id`.
+
+    Sem o escopo, uma exclusão de conta apagaria o comentário da base
+    inteira — e ninguém veria erro nenhum.
+    """
+    vizinho = criar_cliente(db)
+    pedido_do_vizinho = criar_pedido(
+        db, cenario.restaurante, cenario.filial, cliente=vizinho, status="completed"
+    )
+    db.flush()
+    alheia = _avaliar(db, pedido_do_vizinho, rating=5, comment="tudo certo")
+
+    anonimizar(db, cenario.cliente)
+
+    db.refresh(alheia)
+    assert alheia.comment == "tudo certo"
+
+
+def test_avaliacao_sem_comentario_nao_atrapalha(db, cenario):
+    """O caso comum: nota alta, sem texto. Não pode virar erro."""
+    avaliacao = _avaliar(db, cenario.pedido_com_cupom, rating=5, comment=None)
+
+    anonimizar(db, cenario.cliente)
+
+    db.refresh(avaliacao)
+    assert avaliacao.rating == 5

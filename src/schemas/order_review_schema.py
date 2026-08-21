@@ -81,3 +81,18 @@ class OrderReviewResponse(BaseModel):
     comment: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class CustomerReviewItem(BaseModel):
+    """Uma avaliacao do titular, na exportacao de dados dele.
+
+    Leva `order_number` e nao `order_id` pelo mesmo motivo do resto da
+    exportacao: o pacote e para a PESSOA ler, e o numero e o que ela
+    reconhece.
+    """
+
+    order_number: int
+    rating: int
+    problem_tag: ReviewProblemTag | None = None
+    comment: str | None = None
+    created_at: datetime

@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.schemas.cashback_schema import CashbackTransactionsResponse
+from src.schemas.order_review_schema import CustomerReviewItem
 from src.schemas.common_schema import BaseResponse
 from src.schemas.order_schema import OrderItemResponse
 from src.utils.normalization import (
@@ -280,3 +281,7 @@ class CustomerDataExportResponse(BaseModel):
     addresses: list[CustomerAddressResponse]
     orders: list[CustomerOrderHistoryItem]
     cashback: CashbackTransactionsResponse
+    # As avaliacoes que a pessoa escreveu. Entram porque sao dado DELA: sem
+    # isto o direito de acesso ficaria incompleto justamente no campo de
+    # texto livre, que e o que a exclusao de conta depois apaga.
+    reviews: list[CustomerReviewItem]

@@ -1,6 +1,6 @@
-"""Remove chaves, estimativas, codigos de verificacao e feedback vencidos.
+"""Remove chaves, estimativas, codigos, feedback e comentario de avaliacao.
 
-O nome do arquivo ficou para tras: ele cuida de QUATRO tabelas hoje, nao so
+O nome do arquivo ficou para tras: ele cuida de CINCO tabelas hoje, nao so
 de `idempotency_keys`. Nao foi renomeado de proposito — o nome aparece no
 `command` do container `limpeza` em `docker-compose.yml`, na secao "Uso"
 abaixo e em `docs/`, e trocar tres referencias para ganhar um nome melhor nao
@@ -22,6 +22,14 @@ pessoal sem prazo.
 formato: `user_message` guarda em texto puro o que a pessoa digitou para o
 Rapi, e a tabela nao tem `customer_id` — a exclusao de conta nunca alcancou
 aquelas linhas. Quem sabe ate quando e `chat_service.feedback_retention_cutoff`.
+
+`order_reviews` e a QUINTA, e a UNICA que nao apaga linha: ela apaga so o
+`comment`, e a nota fica. Apagar a linha levaria a nota junto e reescreveria
+a media historica do lojista todo mes. Ela tambem e a unica com duas defesas
+— a exclusao de conta ja limpa o comentario de quem TEM conta, e este
+expurgo cobre o que sobra, que e o pedido de convidado (`customer_id` nulo,
+inalcancavel a partir de conta nenhuma). Quem sabe ate quando e
+`order_review_service.review_retention_cutoff`.
 
 E os codigos NAO sao cortados pelo `expires_at`, ao contrario dos outros dois. A
 linha continua valendo depois de o codigo vencer — para o teto de reenvios e
@@ -52,19 +60,22 @@ from src.db.session import SessionLocal
 from src.models.ai_feedback_model import AIFeedback
 from src.models.customer_model import EmailVerificationCode, PasswordResetCode
 from src.models.delivery_estimate_model import DeliveryEstimate
+from src.models.order_review_model import OrderReview
 from src.models.idempotency_key_model import IdempotencyKey
 from src.repositories.ai_feedback_repository import AIFeedbackRepository
 from src.repositories.delivery_estimate_repository import DeliveryEstimateRepository
 from src.repositories.customer_repository import CustomerRepository
 from src.repositories.idempotency_repository import IdempotencyRepository
+from src.repositories.order_review_repository import OrderReviewRepository
 from src.services.auth_service import codes_retention_cutoff
 from src.services.chat_service import feedback_retention_cutoff
+from src.services.order_review_service import review_retention_cutoff
 from src.utils.security import utcnow
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Remove chaves, estimativas, codigos e feedback vencidos."
+        description="Remove chaves, estimativas, codigos, feedback e comentarios vencidos."
     )
     parser.add_argument(
         "--dry-run",
@@ -76,6 +87,7 @@ def main() -> int:
     now = utcnow()
     cutoff = codes_retention_cutoff(now)
     feedback_cutoff = feedback_retention_cutoff(now)
+    review_cutoff = review_retention_cutoff(now)
     with SessionLocal() as db:
         if args.dry_run:
             keys = db.scalar(
@@ -99,9 +111,18 @@ def main() -> int:
                 .select_from(AIFeedback)
                 .where(AIFeedback.created_at < feedback_cutoff)
             )
+            comentarios = db.scalar(
+                select(func.count())
+                .select_from(OrderReview)
+                .where(
+                    OrderReview.created_at < review_cutoff,
+                    OrderReview.comment.is_not(None),
+                )
+            )
             print(
                 f"[dry-run] {keys} chave(s), {estimates} estimativa(s), "
-                f"{codes} codigo(s) e {feedback} feedback(s) seriam removidos."
+                f"{codes} codigo(s), {feedback} feedback(s) seriam removidos e "
+                f"{comentarios} comentario(s) de avaliacao seriam limpos."
             )
             return 0
 
@@ -109,10 +130,12 @@ def main() -> int:
         removed_estimates = DeliveryEstimateRepository(db).delete_expired(now)
         removed_codes = CustomerRepository(db).delete_codes_created_before(cutoff)
         removed_feedback = AIFeedbackRepository(db).delete_created_before(feedback_cutoff)
+        cleared_comments = OrderReviewRepository(db).clear_comments_created_before(review_cutoff)
         db.commit()
         print(
             f"{removed_keys} chave(s), {removed_estimates} estimativa(s), "
-            f"{removed_codes} codigo(s) e {removed_feedback} feedback(s) removidos."
+            f"{removed_codes} codigo(s) e {removed_feedback} feedback(s) removidos; "
+            f"{cleared_comments} comentario(s) de avaliacao limpos."
         )
     return 0
 

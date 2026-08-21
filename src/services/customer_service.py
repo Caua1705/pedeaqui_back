@@ -11,6 +11,7 @@ from src.models.order_item_model import OrderItem
 from src.models.order_model import Order
 from src.repositories.customer_repository import CustomerRepository
 from src.repositories.order_repository import OrderRepository
+from src.repositories.order_review_repository import OrderReviewRepository
 from src.schemas.auth_schema import MessageResponse
 from src.schemas.customer_schema import (
     ChangeCustomerPasswordRequest,
@@ -25,6 +26,7 @@ from src.schemas.customer_schema import (
     UpdateCurrentCustomerRequest,
     UpdateCustomerAddressRequest,
 )
+from src.schemas.order_review_schema import CustomerReviewItem
 from src.schemas.order_schema import OrderItemResponse
 from src.services.cashback_service import CashbackService
 from src.utils.money import money_to_float, quantize_money
@@ -69,6 +71,7 @@ class CustomerService:
         self.db = db
         self.customer_repository = CustomerRepository(db)
         self.order_repository = OrderRepository(db)
+        self.order_review_repository = OrderReviewRepository(db)
 
     def get_me(self, customer: Customer) -> CurrentCustomerResponse:
         return CurrentCustomerResponse(
@@ -105,7 +108,28 @@ class CustomerService:
             cashback=CashbackService(self.db).list_transactions(
                 customer, limit=MAX_EXPORT_CASHBACK_ROWS, offset=0
             ),
+            reviews=self._export_reviews(customer),
         )
+
+    def _export_reviews(self, customer: Customer) -> list[CustomerReviewItem]:
+        """As avaliacoes escritas por esta pessoa.
+
+        Sem paginacao, como o cashback e pelo mesmo motivo: exportacao pela
+        metade nao serve para o que ela existe. O teto natural aqui e o
+        numero de pedidos entregues da pessoa, que e pequeno.
+        """
+        return [
+            CustomerReviewItem(
+                order_number=order_number,
+                rating=avaliacao.rating,
+                problem_tag=avaliacao.problem_tag,
+                comment=avaliacao.comment,
+                created_at=avaliacao.created_at,
+            )
+            for avaliacao, order_number in self.order_review_repository.list_by_customer(
+                customer.id
+            )
+        ]
 
     def update_me(
         self,

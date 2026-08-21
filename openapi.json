@@ -5995,6 +5995,13 @@
           },
           "profile": {
             "$ref": "#/components/schemas/CurrentCustomerResponse"
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/CustomerReviewItem"
+            },
+            "title": "Reviews",
+            "type": "array"
           }
         },
         "required": [
@@ -6002,7 +6009,8 @@
           "profile",
           "addresses",
           "orders",
-          "cashback"
+          "cashback",
+          "reviews"
         ],
         "title": "CustomerDataExportResponse",
         "type": "object"
@@ -6132,6 +6140,61 @@
           "items"
         ],
         "title": "CustomerOrderHistoryItem",
+        "type": "object"
+      },
+      "CustomerReviewItem": {
+        "description": "Uma avaliacao do titular, na exportacao de dados dele.\n\nLeva `order_number` e nao `order_id` pelo mesmo motivo do resto da\nexportacao: o pacote e para a PESSOA ler, e o numero e o que ela\nreconhece.",
+        "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "order_number": {
+            "title": "Order Number",
+            "type": "integer"
+          },
+          "problem_tag": {
+            "anyOf": [
+              {
+                "enum": [
+                  "atrasou",
+                  "veio_errado",
+                  "veio_frio",
+                  "faltou_item",
+                  "qualidade",
+                  "outro"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem Tag"
+          },
+          "rating": {
+            "title": "Rating",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "order_number",
+          "rating",
+          "created_at"
+        ],
+        "title": "CustomerReviewItem",
         "type": "object"
       },
       "CustomerSegment": {

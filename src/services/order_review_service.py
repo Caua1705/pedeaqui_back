@@ -44,6 +44,35 @@ REVIEW_WINDOW_DAYS = 14
 # O unico status que abre a avaliacao. Ver `_ensure_order_can_be_reviewed`.
 REVIEWABLE_ORDER_STATUS = "completed"
 
+# Por quantos meses o COMENTARIO fica no banco. Ver `review_retention_cutoff`.
+REVIEW_COMMENT_RETENTION_DAYS = 365
+
+
+def review_retention_cutoff(now: datetime) -> datetime:
+    """Antes deste instante, o comentario da avaliacao tem que sair.
+
+    **So o comentario. A nota fica**, e essa e a diferenca em relacao as
+    outras quatro tabelas do expurgo, que apagam a linha inteira. Nota e
+    numero, nao identifica ninguem e e o historico de qualidade do
+    restaurante: apagar a linha reescreveria a media do lojista todo mes,
+    sem nada no painel explicando por que o ano passado mudou.
+
+    POR QUE ISTO E PRECISO, SE A ANONIMIZACAO JA ALCANCA. Ela alcanca **so
+    quem tem conta**. `orders.customer_id` e NULO no pedido de convidado, e
+    o comentario daquele pedido nao e alcancavel a partir de conta nenhuma —
+    e exatamente a situacao do `ai_feedback` (ver
+    `chat_service.feedback_retention_cutoff`), e nenhuma exclusao de conta
+    vai cobri-lo, hoje ou nunca.
+
+    POR QUE 12 MESES, E NAO OS 90 DIAS DO ai_feedback. La o texto nao tem
+    nenhuma rota que o leia, entao encurtar era de graca. Aqui ele tem
+    leitor de verdade — o lojista, na aba de avaliacoes — e valor
+    operacional: "o que os clientes reclamaram no ano passado" e a
+    comparacao que justifica ter guardado. Um ano cobre a sazonalidade
+    inteira sem virar arquivo permanente de texto de gente.
+    """
+    return now - timedelta(days=REVIEW_COMMENT_RETENTION_DAYS)
+
 
 def review_window_closes_at(completed_at: datetime) -> datetime:
     """Ate quando este pedido aceita avaliacao.

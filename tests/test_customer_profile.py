@@ -114,6 +114,16 @@ class FakeOrderRepository:
         return self.rows
 
 
+class FakeOrderReviewRepository:
+    def __init__(self, rows=()):
+        self.rows = list(rows)
+        self.pedido_para = None
+
+    def list_by_customer(self, customer_id):
+        self.pedido_para = customer_id
+        return self.rows
+
+
 def make_customer(password=SENHA_ATUAL, **overrides):
     valores = {
         "id": uuid.uuid4(),
@@ -130,11 +140,19 @@ def make_customer(password=SENHA_ATUAL, **overrides):
     return SimpleNamespace(**valores)
 
 
-def make_service(db=None, customer_repository=None, order_repository=None):
+def make_service(
+    db=None,
+    customer_repository=None,
+    order_repository=None,
+    order_review_repository=None,
+):
     service = CustomerService.__new__(CustomerService)
     service.db = db or FakeDb()
     service.customer_repository = customer_repository or FakeCustomerRepository()
     service.order_repository = order_repository or FakeOrderRepository()
+    service.order_review_repository = (
+        order_review_repository or FakeOrderReviewRepository()
+    )
     return service
 
 
@@ -184,9 +202,13 @@ class TestExportMe:
         monkeypatch.setattr(modulo, "CashbackService", FakeCashbackService)
         return make_service(**kwargs)
 
-    def test_it_gathers_the_four_blocks(self, monkeypatch):
+    def test_it_gathers_the_five_blocks(self, monkeypatch):
         """Direito de acesso e portabilidade (Art. 18, II e V). O pacote e
-        montagem do que ja saia em quatro rotas separadas."""
+        montagem do que ja saia em rotas separadas.
+
+        As avaliacoes entraram como quinto bloco: sao dado DELA, e sem elas
+        o direito de acesso ficaria incompleto justamente no campo de texto
+        livre — que e o que a exclusao de conta depois apaga."""
         service = self._service(monkeypatch)
         service.list_addresses = lambda customer: []
         service.list_orders = lambda customer: []
@@ -197,6 +219,7 @@ class TestExportMe:
         assert export.addresses == []
         assert export.orders == []
         assert export.cashback.transactions == []
+        assert export.reviews == []
         assert export.exported_at is not None
 
     def test_it_exports_only_the_holder_of_the_token(self, monkeypatch):
@@ -214,6 +237,7 @@ class TestExportMe:
 
         assert pedidos_para == [("addresses", customer.id), ("orders", customer.id)]
         assert FakeCashbackService.chamado_com[0] is customer
+        assert service.order_review_repository.pedido_para == customer.id
 
     def test_the_password_hash_never_leaves(self):
         """Credencial nao e dado do titular, e exportar hash de senha e

@@ -90,6 +90,23 @@ def delete_me(
     liberados para recadastro, e o token desta propria chamada morre junto.
     Os campos exatos estao em `CustomerAnonymizationService`.
 
+    ## O SALDO DE CASHBACK E PERDIDO. Avise antes de chamar esta rota.
+
+    O recadastro nasce com **id novo** — e o que libera o e-mail e o telefone
+    e justamente a saida deles da tabela. O cashback continua ligado ao id
+    velho, e nao ha caminho de volta: a pessoa volta como desconhecida.
+
+    **Chame `GET /customers/me/cashback` na tela de confirmacao** e mostre o
+    saldo junto do aviso. Nao ha como esta rota avisar: quando ela responde,
+    a conta ja foi anonimizada, e nao ha desfazer.
+
+    O saldo NAO vem no corpo da resposta, e nao e esquecimento: um numero
+    entregue depois do fato nao evita a perda, e publicar um corpo aqui
+    trocaria o `204` por `200` — mudanca de contrato para um app que ja
+    consome esta rota. Quando o resgate de cashback existir (hoje o saldo e
+    sempre zero — ver a armadilha 26), o campo entra junto com a mudanca do
+    app, de uma vez so.
+
     O corpo leva a senha atual: `DELETE` com corpo e incomum mas legal, e a
     alternativa a colocaria na querystring, ou seja, no log do proxy.
     """

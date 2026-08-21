@@ -28,12 +28,14 @@ import logging
 import secrets
 import uuid
 from datetime import date
+from decimal import Decimal
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.models.customer_model import Customer
 from src.models.order_model import Order
+from src.repositories.cashback_repository import CashbackRepository
 from src.repositories.customer_repository import CustomerRepository
 from src.repositories.delivery_estimate_repository import DeliveryEstimateRepository
 from src.repositories.order_repository import OrderRepository
@@ -80,6 +82,7 @@ class CustomerAnonymizationService:
         self.customer_repository = CustomerRepository(db)
         self.order_repository = OrderRepository(db)
         self.delivery_estimate_repository = DeliveryEstimateRepository(db)
+        self.cashback_repository = CashbackRepository(db)
 
     def anonymize(self, customer: Customer, password: str) -> None:
         """Apaga a pessoa e mantem a venda. Uma transacao, um commit.
@@ -91,6 +94,11 @@ class CustomerAnonymizationService:
         """
         self._ensure_password_matches(customer, password)
         self._ensure_no_order_in_flight(customer)
+
+        # Lido ANTES de anonimizar, e nao depois: e o saldo que a pessoa
+        # esta perdendo neste instante, e depois do commit ele passa a ser o
+        # saldo de um fantasma.
+        cashback_perdido = self.cashback_repository.get_available_balance(customer.id)
 
         try:
             self._anonymize_orders(customer)
@@ -110,6 +118,37 @@ class CustomerAnonymizationService:
         # de uma requisicao. Depois desta funcao ele e um pseudonimo que nao
         # resolve mais para pessoa nenhuma.
         logger.info("[LGPD] conta anonimizada customer_id=%s", customer.id)
+        self._log_forfeited_cashback(customer.id, cashback_perdido)
+
+    @staticmethod
+    def _log_forfeited_cashback(customer_id: uuid.UUID, balance: Decimal) -> None:
+        """O rastro do saldo que a pessoa perdeu ao excluir a conta.
+
+        POR QUE EXISTE. A anonimizacao nao toca em `cashback_transactions` —
+        e a decisao certa, e esta em `docs/lgpd-fase2-exclusao-de-conta.md`:
+        o extrato e financeiro e nao e dado de identificacao. Mas o efeito
+        pratico e que o saldo fica inalcancavel: `_registration_conflicts`
+        procura por e-mail e telefone, os dois deixaram de existir na tabela,
+        e a pessoa volta com **id novo**. O cashback continua ligado ao id
+        velho, e nao ha caminho de volta.
+
+        Fora do `try`, DEPOIS do commit, pelo mesmo motivo da linha acima:
+        log e efeito colateral, e nao pode fazer parte da transacao unica.
+
+        LINHA PROPRIA e so quando ha saldo, em vez de um campo na linha de
+        cima. Um campo obrigaria a filtrar os zeros para achar o caso que
+        importa — e o que se quer aqui e o mesmo que o
+        `[Pagamento] pedido pago foi cancelled sem estorno` da armadilha 25:
+        um grep que devolve DINHEIRO PARADO, nao todo evento do tipo.
+        """
+        if balance <= 0:
+            return
+        logger.warning(
+            "[LGPD] conta anonimizada com saldo de cashback perdido "
+            "customer_id=%s saldo=%s",
+            customer_id,
+            balance,
+        )
 
     def _ensure_password_matches(self, customer: Customer, password: str) -> None:
         """A mesma exigencia de qualquer operacao irreversivel de conta.

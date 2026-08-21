@@ -164,6 +164,32 @@ A pessoa volta como desconhecida: sem histórico, sem cashback, sem endereços.
 Os pedidos antigos continuam com o restaurante, ligados ao fantasma. É
 exatamente o que a decisão pediu.
 
+**"Sem cashback" merece uma frase inteira, porque é dinheiro.** Os lançamentos
+não são apagados (§2.1: extrato financeiro), e continuam `available` — só que
+ligados ao id VELHO. Ninguém alcança aquele saldo nunca mais. É perda real, e
+é irreversível junto com o resto.
+
+**Quem avisa é o app, e não esta rota.** Quando o `DELETE /customers/me`
+responde, a anonimização já aconteceu; um número no corpo da resposta chegaria
+tarde demais para servir de aviso. O app tem que chamar
+`GET /customers/me/cashback` na tela de confirmação e mostrar o saldo junto do
+"não tem desfazer" — o docstring da rota diz isso, e é por lá que sai no
+OpenAPI, que é o que o front lê (armadilha 16).
+
+O `204 No Content` fica como está. Publicar um corpo aqui trocaria o status
+por `200`, que é mudança de contrato num app que já consome a rota, e hoje o
+número seria sempre zero (o resgate de cashback não está ligado — armadilha
+26). Quando o cashback existir de verdade, o campo entra junto com a mudança
+do app, de uma vez só.
+
+**Do lado do servidor fica o rastro:** exclusão com saldo maior que zero emite
+
+    [LGPD] conta anonimizada com saldo de cashback perdido customer_id=... saldo=...
+
+em `WARNING`, e só quando há saldo. É o mesmo desenho do
+`[Pagamento] pedido pago foi cancelled sem estorno` (armadilha 25): um grep
+que devolve dinheiro parado, não todo evento do tipo.
+
 ---
 
 ## 3. A migração

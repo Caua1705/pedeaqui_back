@@ -12,6 +12,7 @@ igualdade** — do lado do lojista — e **exigir diferença** do lado da pessoa
 Desenho em `docs/lgpd-fase2-exclusao-de-conta.md`.
 """
 
+import logging
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -636,3 +637,102 @@ def test_a_rota_responde_409_com_pedido_em_andamento(db, cenario):
     # `OrdersInFlightResponse` anuncia no OpenAPI (armadilha 16).
     corpo = resposta.json()["detail"]
     assert em_curso.order_number in corpo["orders_in_flight"]
+
+
+# ---------------------------------------------------------------------------
+# O cashback perdido: o aviso e o rastro
+# ---------------------------------------------------------------------------
+#
+# O saldo é perdido de verdade, e o teste logo acima
+# (`test_o_extrato_de_cashback_sobrevive`) é o que o prova pelo outro lado: o
+# lançamento continua `available`, mas ligado ao id VELHO. O recadastro nasce
+# com id novo, então ninguém alcança aquele saldo nunca mais.
+#
+# Não há como a rota avisar antes — quando ela responde, já aconteceu, e não
+# há desfazer. Quem avisa é o app, com `GET /customers/me/cashback` na tela de
+# confirmação; o contrato diz isso no docstring da rota, que é o que sai no
+# OpenAPI. O que fica DO LADO DE CÁ é o rastro no log, no mesmo espírito do
+# `[Pagamento] pedido pago foi cancelled sem estorno` (armadilha 25).
+
+
+def test_saldo_perdido_vira_warning_no_log(db, cenario, caplog):
+    """O cenário tem R$ 7,50 `available`, e eles somem do alcance da pessoa."""
+    with caplog.at_level(logging.WARNING, logger="uvicorn.error"):
+        anonimizar(db, cenario.cliente)
+
+    perdas = [
+        registro.getMessage()
+        for registro in caplog.records
+        if "cashback perdido" in registro.getMessage()
+    ]
+    assert len(perdas) == 1
+    assert "7.50" in perdas[0]
+    assert str(cenario.id_antigo) in perdas[0]
+
+
+def test_conta_sem_saldo_nao_gera_warning(db, cenario, caplog):
+    """Só dinheiro parado entra no log.
+
+    É a propriedade que faz o grep servir: um campo em toda exclusão
+    obrigaria a filtrar os zeros para achar o caso que importa, e a exclusão
+    sem saldo é o caso comum.
+    """
+    db.delete(cenario.cashback)
+    db.flush()
+
+    with caplog.at_level(logging.WARNING, logger="uvicorn.error"):
+        anonimizar(db, cenario.cliente)
+
+    perdas = [
+        registro
+        for registro in caplog.records
+        if "cashback perdido" in registro.getMessage()
+    ]
+    assert perdas == []
+
+
+def test_o_log_nao_leva_dado_pessoal(db, cenario, caplog):
+    """`customer_id` é pseudônimo; nome, e-mail e telefone não entram.
+
+    Mesma regra do resto do projeto, e ela vale COM MAIS FORÇA aqui: esta é
+    a linha escrita no exato momento em que a pessoa pediu para sumir.
+    """
+    email_antigo = cenario.email_antigo
+    telefone_antigo = cenario.telefone_antigo
+
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        anonimizar(db, cenario.cliente)
+
+    lgpd = " ".join(
+        registro.getMessage()
+        for registro in caplog.records
+        if "[LGPD]" in registro.getMessage()
+    )
+    assert email_antigo not in lgpd
+    assert telefone_antigo not in lgpd
+    assert "Maria" not in lgpd
+
+
+def test_a_falha_no_meio_nao_deixa_o_warning_no_log(db, cenario, caplog, monkeypatch):
+    """O saldo é lido ANTES da transação, mas só é logado DEPOIS do commit.
+
+    Sem essa ordem, uma exclusão que falhou no meio deixaria no log a linha
+    dizendo que a pessoa perdeu o cashback — e ela não perdeu, porque o
+    rollback desfez tudo.
+    """
+    monkeypatch.setattr(
+        CustomerAnonymizationService,
+        "_delete_addresses",
+        lambda self, cliente: (_ for _ in ()).throw(RuntimeError("falha forçada")),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="uvicorn.error"):
+        with pytest.raises(RuntimeError):
+            anonimizar(db, cenario.cliente)
+
+    perdas = [
+        registro
+        for registro in caplog.records
+        if "cashback perdido" in registro.getMessage()
+    ]
+    assert perdas == []

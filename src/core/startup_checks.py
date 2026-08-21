@@ -6,6 +6,9 @@ com configuracao incompleta falhe alto e na hora.
 """
 
 import logging
+import os
+import sys
+from collections.abc import Mapping
 
 from src.core.config import Settings
 
@@ -15,6 +18,90 @@ logger = logging.getLogger("uvicorn.error")
 
 class StartupConfigurationError(RuntimeError):
     pass
+
+
+def detect_worker_count(argv: list[str], env: Mapping[str, str]) -> int:
+    """Quantos workers este processo foi mandado subir. 1 quando nao da para saber.
+
+    As duas fontes sao as que uvicorn e gunicorn de fato leem:
+
+    - `--workers N` / `--workers=N` (os dois) e `-w N` (gunicorn);
+    - `WEB_CONCURRENCY`, que os dois honram quando a opcao nao vem na linha.
+
+    A PRECEDENCIA copia a do uvicorn (`config.py`: `if workers is None and
+    "WEB_CONCURRENCY" in os.environ`) — a opcao ganha do ambiente. Inverter
+    faria o aviso mentir na maquina que tem a variavel exportada do jeito
+    antigo e passou a mandar `--workers` na linha.
+
+    Valor que nao e inteiro devolve 1, e nao levanta: isto e um aviso de boot,
+    e derrubar a API por causa de um `--workers abc` que o proprio uvicorn ja
+    vai recusar seria trocar um problema por outro maior.
+
+    ISTO SO FUNCIONA PORQUE `sys.argv` SOBREVIVE AO WORKER. O uvicorn nao
+    forka: `uvicorn/_subprocess.py` usa `multiprocessing.get_context("spawn")`
+    em toda plataforma. O que salva e o `multiprocessing.spawn.prepare()`, que
+    restaura `sys.argv` no filho a partir do pai — conferido. Se um dia o
+    uvicorn parar de passar por `multiprocessing`, este guard vira uma funcao
+    que devolve 1 para sempre e ninguem percebe; e a razao de
+    `tests/test_startup_checks.py` cobrir o caso do argv de worker.
+    """
+    workers = _worker_count_from_argv(argv)
+    if workers is not None:
+        return workers
+    return _positive_int(env.get("WEB_CONCURRENCY")) or 1
+
+
+def _worker_count_from_argv(argv: list[str]) -> int | None:
+    """O valor de `--workers`/`-w` na linha de comando, se houver."""
+    for position, argument in enumerate(argv):
+        if argument in ("--workers", "-w"):
+            following = argv[position + 1] if position + 1 < len(argv) else None
+            return _positive_int(following)
+        if argument.startswith("--workers="):
+            return _positive_int(argument.split("=", 1)[1])
+    return None
+
+
+def _positive_int(raw: str | None) -> int | None:
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def collect_runtime_warnings(argv: list[str], env: Mapping[str, str]) -> list[str]:
+    """Avisos sobre COMO o processo subiu, e nao sobre o que esta no `.env`.
+
+    Separado de `collect_configuration_warnings` de proposito: aquele recebe
+    `Settings` e responde "a configuracao esta certa?"; este olha a linha de
+    comando e responde "este jeito de subir combina com o que o codigo
+    assume?". Juntar os dois obrigaria a passar argv e env para uma funcao
+    que hoje so precisa de settings.
+    """
+    warnings: list[str] = []
+
+    workers = detect_worker_count(argv, env)
+    if workers > 1:
+        # Sai UMA VEZ POR WORKER, porque o lifespan roda em cada um. E ruido
+        # aceitavel: N linhas iguais no boot sao mais faceis de notar que
+        # uma, e o numero em cada uma delas ja diz quantos processos ha.
+        warnings.append(
+            f"a API subiu com {workers} workers e o historico de conversa do "
+            "/chat vive em MEMORIA DO PROCESSO. Cada worker guarda as proprias "
+            "sessoes, entao a conversa se perde entre requisicoes: um turno so "
+            f"encontra o historico se cair no mesmo processo do anterior (1 em "
+            f"{workers}). O Rapi responde sem contexto, SEM erro e SEM log: a "
+            "pessoa so ve o assistente esquecendo o que ela acabou de dizer. "
+            "REDIS_URL NAO resolve este caso, ao contrario do rate limit e do "
+            "cache de entrega: o historico do chat nao tem caminho de Redis. "
+            "Preco e cardapio nao sao afetados (saem do banco); o que se perde "
+            "e referencia do tipo 'quanto custa esse?'."
+        )
+
+    return warnings
 
 
 def collect_configuration_errors(settings: Settings) -> list[str]:
@@ -150,6 +237,12 @@ def collect_configuration_warnings(settings: Settings) -> list[str]:
 
 
 def validate_settings(settings: Settings) -> None:
+    # A unica linha impura das checagens: ler o processo. O que decide fica
+    # em `detect_worker_count`/`collect_runtime_warnings`, que recebem argv e
+    # env de fora e por isso se testam sem mexer em global nenhum.
+    for warning in collect_runtime_warnings(sys.argv, os.environ):
+        logger.warning("[Startup] %s", warning)
+
     for warning in collect_configuration_warnings(settings):
         logger.warning("[Startup] %s", warning)
 

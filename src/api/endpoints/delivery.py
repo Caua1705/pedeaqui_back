@@ -1,10 +1,11 @@
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.customer_auth import get_optional_current_customer
 from src.api.dependencies.database import get_db
+from src.api.rate_limit import DELIVERY_ESTIMATE_RATE_LIMIT, limiter
 from src.models.customer_model import Customer
 from src.schemas.delivery_schema import DeliveryEstimateRequest, DeliveryEstimateResponse
 from src.services.delivery_estimate_service import DeliveryEstimateService
@@ -18,7 +19,12 @@ logger = logging.getLogger("uvicorn.error")
     "/{restaurant_slug}/delivery/estimate",
     response_model=DeliveryEstimateResponse,
 )
+# Cada chamada pode virar geocode + rota no Google, que sao pagos, e grava uma
+# linha em `delivery_estimates`. Rota publica: login e OPCIONAL aqui, entao
+# nao ha conta para responsabilizar — o limite por IP e a unica barreira.
+@limiter.limit(DELIVERY_ESTIMATE_RATE_LIMIT)
 def estimate_delivery(
+    request: Request,
     restaurant_slug: str,
     payload: DeliveryEstimateRequest,
     current_customer: Customer | None = Depends(get_optional_current_customer),

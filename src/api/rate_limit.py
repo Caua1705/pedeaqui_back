@@ -89,11 +89,25 @@ VOICE_SESSION_RATE_LIMIT = "3/minute;20/hour"
 # Mais folgado que o pedido porque a tela e legitimamente reaberta — o cliente
 # troca de endereco, volta, compara. Vinte por minuto cobre navegacao humana
 # e fecha a porta do laco automatico.
-#
-# NOTA: `POST /restaurants/{slug}/delivery/estimate`, que chama o mesmo Google
-# para UMA filial, continua sem limite nenhum. Isto aqui nao fecha aquele
-# buraco; so evita que o buraco novo seja N vezes maior.
 BRANCH_AVAILABILITY_RATE_LIMIT = "20/minute;200/hour"
+
+# Estimativa de entrega para UMA filial. Mesmo Google, mesmo dinheiro, e ate
+# 20/08/2026 estava sem limite nenhum — o buraco que a nota do limite acima
+# apontava e que este fecha.
+#
+# MESMO NUMERO da tela de escolha de filial, e nao um mais folgado, apesar de
+# custar menos por chamada. O motivo e o balde: os dois limites sao por IP e
+# CONTAM SEPARADO, entao um numero maior aqui daria a quem varre endereco uma
+# segunda cota, maior que a primeira, para o mesmo gasto no Google. Alem
+# disso o custo por chamada nao e o que fecha a porta — quem varre nao paga
+# por chamada, nos e que pagamos.
+#
+# Vinte por minuto cobre com folga o uso legitimo, que e mais estreito que o
+# da tela de filiais: aqui a filial ja esta escolhida, e o cliente so refaz a
+# conta quando troca de endereco. E `estimate_and_store` GRAVA uma linha em
+# `delivery_estimates` por chamada, entao sem limite o laco automatico enche
+# uma tabela alem de gastar a cota do Google.
+DELIVERY_ESTIMATE_RATE_LIMIT = "20/minute;200/hour"
 
 # Cadastro. Uma pessoa cria uma conta; um IP compartilhado (wi-fi do salao,
 # CGNAT de operadora movel) pode legitimamente criar algumas. Vinte por hora

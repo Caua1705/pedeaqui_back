@@ -270,6 +270,10 @@ def test_o_comentario_nao_vai_para_o_log(db, cenario, caplog):
         avaliar(db, cenario, rating=2, problem_tag="atrasou", comment=segredo)
 
     linhas = " ".join(registro.getMessage() for registro in caplog.records)
-    assert "302" not in linhas
+    # O trecho conferido leva a palavra junto, e não só o número: a linha do
+    # log traz o `order_id`, que é um UUID em hexadecimal — e "302" aparece
+    # dentro de um UUID aleatório com alguma frequência. Sozinho, o número
+    # fazia este teste falhar sem ninguém ter vazado nada.
+    assert "apartamento 302" not in linhas
     assert "Maria" not in linhas
     assert "rating=2" in linhas

@@ -582,6 +582,10 @@ class OrderCouponIntegrationTests(unittest.TestCase):
             status="pending",
             order_type="delivery",
             payment_status="on_delivery",
+            # Lido por `CashbackService.refund_redemption`, que roda no mesmo
+            # ponto do estorno de cupom. Zero e o caminho de quase todo
+            # pedido, e e o que faz o cancelamento nao ir ao razao.
+            cashback_redeemed_amount=Decimal("0"),
         )
 
         class Repo:

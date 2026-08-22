@@ -26,6 +26,7 @@ from src.services.order_state_machine import (
     ensure_order_transition_allowed,
     ensure_payment_allows_order_status,
 )
+from src.services.cashback_service import CashbackService
 from src.services.coupon_service import CouponService
 from src.utils.money import money_to_float
 
@@ -38,6 +39,10 @@ CANCEL_ROUTE = "PATCH /admin/orders/{order_id}/cancel"
 # O unico destino da rota de cancelamento. Constante para nao aparecer como
 # string solta ao lado das outras regras de status.
 CANCELLED_STATUS = "cancelled"
+
+# O estado em que o cashback do pedido e creditado. Constante pelo mesmo
+# motivo do de cima, e porque agora ele decide dinheiro.
+COMPLETED_STATUS = "completed"
 
 PANEL_TIMEZONE = ZoneInfo(PLATFORM_TIMEZONE)
 
@@ -57,6 +62,7 @@ class AdminOrderService:
         self.db = db
         self.order_repository = OrderRepository(db)
         self.coupon_service = CouponService(db)
+        self.cashback_service = CashbackService(db)
         self.idempotency_service = IdempotencyService(db)
 
     def list_orders(
@@ -246,6 +252,15 @@ class AdminOrderService:
             self.order_repository.update_status(order, new_status)
             if new_status in {"cancelled", "rejected"}:
                 self.coupon_service.reverse_for_order(order.id)
+                # O cashback resgatado volta para o saldo pelo mesmo motivo
+                # do cupom: sem isto o cliente cancela e PERDE o dinheiro.
+                self.cashback_service.refund_redemption(order)
+            if new_status == COMPLETED_STATUS:
+                # O credito acontece AQUI, e nao no pago nem no aceite:
+                # `completed` e o unico estado terminal em que houve venda, e
+                # e o que faz o estorno de credito ser excecao em vez de
+                # rotina. Ver `docs/cashback.md`, secao 1.
+                self.cashback_service.credit_for_order(order)
             self.order_repository.create_status_history(
                 OrderStatusHistory(
                     order_id=order.id,

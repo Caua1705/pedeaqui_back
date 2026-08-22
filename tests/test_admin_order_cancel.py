@@ -12,6 +12,7 @@ O que estes testes protegem:
 """
 
 import unittest
+from decimal import Decimal
 import uuid
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -74,6 +75,10 @@ def make_order(restaurant_id, *, status="preparing", payment_status="on_delivery
         order_type="delivery",
         payment_status=payment_status,
         order_number=99,
+        # Lido por `CashbackService.refund_redemption` no cancelamento: zero
+        # e o caminho de quase todo pedido, e e o que faz o estorno sair sem
+        # ir ao razao.
+        cashback_redeemed_amount=Decimal("0"),
     )
 
 

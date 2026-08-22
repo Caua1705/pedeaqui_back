@@ -6,6 +6,7 @@ confirmado e a autoria do historico saindo do token.
 """
 
 import unittest
+from decimal import Decimal
 import uuid
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -63,6 +64,10 @@ def make_order(restaurant_id, *, status="pending", payment_status="on_delivery",
         order_type=order_type,
         payment_status=payment_status,
         order_number=99,
+        # Lido por `CashbackService.refund_redemption` no cancelamento: zero
+        # e o caminho de quase todo pedido, e e o que faz o estorno sair sem
+        # ir ao razao.
+        cashback_redeemed_amount=Decimal("0"),
     )
 
 

@@ -92,6 +92,17 @@ class CreateOrderRequest(BaseModel):
     items: list[OrderItemInput] = Field(min_length=1, max_length=MAX_ITEMS_PER_ORDER)
     coupon_id: UUID | None = None
     coupon_code: str | None = Field(default=None, min_length=1, max_length=100)
+    # "Usar meu saldo neste pedido". Booleano, e nao valor: nenhum preco vem
+    # do cliente, e um `Decimal` enviado aqui teria que ser conferido
+    # refazendo a conta inteira do resgate — que e a propria conta. Quanto
+    # entra sai de `CashbackService.amount_to_redeem`, limitado ao saldo e ao
+    # subtotal ja descontado o cupom.
+    #
+    # ENTRA no fingerprint da idempotencia, ao contrario de `source`: ele
+    # muda o total do pedido, entao a mesma chave com este campo diferente e
+    # conflito de verdade, e 409 e a resposta certa. O preco disso e 24h de
+    # 409 para chaves em voo no deploy — ver `_idempotency_fingerprint`.
+    use_cashback: bool = False
 
     @model_validator(mode="after")
     def validate_single_coupon(self):

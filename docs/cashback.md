@@ -1,9 +1,14 @@
 # Cashback
 
 > **Estado: em construção.** A revisão `20260822_0032` (22/08/2026) põe o
-> schema de pé — configuração, integridade do razão. O crédito, o resgate e a
-> expiração **ainda não existem em código**: até eles entrarem, vale a
-> armadilha 26 (o saldo continua zero e ninguém escreve no razão).
+> schema de pé, e o crédito, o resgate e a devolução já existem em código.
+>
+> **Ainda faltam duas coisas, e as duas são bloqueantes para anunciar:** a
+> **expiração** (seção 3) e o **saldo por restaurante na API**
+> (`GET /customers/me/cashback` ainda soma todos os restaurantes — seção 4).
+>
+> Nada disso está ligado em produção: `cashback_rules.enabled` nasce falso em
+> todo restaurante, e enquanto for falso o razão continua sem escritor.
 
 Este documento é o desenho combinado, e existe para que as decisões não
 precisem ser retomadas do zero quando o código chegar.
@@ -61,6 +66,12 @@ congelado no `metadata` da transação, do mesmo jeito que
 **Pedido de convidado não gera nada**: sem `customer_id` não há a quem
 creditar. O app precisa dizer isso na tela, senão vira reclamação.
 
+**Forma de pagamento sem linha na filial não gera**, e a falta vai para o log
+(`[Cashback] forma de pagamento sem linha na filial`). Acontece quando o
+lojista remove o método depois do pedido. A configuração é quem diz o que
+gera; ausência de configuração não é permissão para gastar o dinheiro dele — e
+o log é o que torna diagnosticável um cashback que parou de sair.
+
 ### Medição PENDENTE — reabrir quando houver operação real
 
 Em 22/08/2026 a base tinha 35 pedidos desde 06/08, **todos de teste do
@@ -112,6 +123,15 @@ Toda linha inversa é linha NOVA no razão (`type="cancelled"`), com
 `min(saldo, subtotal - desconto_de_cupom)`, respeitando o saldo mínimo. Um
 `Decimal` vindo do app seria preço escolhido pelo cliente, e conferir exigiria
 refazer o cálculo inteiro.
+
+**Convidado com `use_cashback` recebe 401**, e não um resgate silencioso de
+zero — a mesma resposta que o cupom dá em `lock_and_validate_for_order`. As
+duas mecânicas de desconto não podem divergir em nada que o app precise
+explicar.
+
+**Saldo abaixo do mínimo, loja sem campanha e teto zerado devolvem zero sem
+erro nenhum.** Nada disso é culpa de quem está pedindo, e o valor efetivo volta
+na resposta em `cashback_redeemed_amount`.
 
 **O lock.** `CustomerRepository.lock_customer` (`SELECT ... FOR UPDATE` na
 linha do cliente) já existe e nunca foi chamado. O resgate o chama **antes de

@@ -39,6 +39,7 @@ from src.services.delivery_estimate_service import (
     DeliveryEstimateService,
     build_address_fingerprint,
 )
+from src.services.cashback_service import CashbackService
 from src.services.coupon_service import CouponService
 from src.services.idempotency_service import IdempotencyService
 from src.services.restaurant_service import RestaurantService
@@ -64,6 +65,7 @@ class OrderService:
         self.customer_repository = CustomerRepository(db)
         self.order_repository = OrderRepository(db)
         self.coupon_service = CouponService(db)
+        self.cashback_service = CashbackService(db)
         self.idempotency_service = IdempotencyService(db)
 
     def create_order(
@@ -138,6 +140,16 @@ class OrderService:
         discount_total = ZERO
 
         try:
+            # A ORDEM DOS DOIS LOCKS E FIXA: cliente primeiro, cupom depois,
+            # em todo caminho. Duas transacoes que peguem os mesmos dois
+            # recursos em ordens opostas fecham ciclo, e o Postgres mata uma
+            # por deadlock — no checkout, no horario de pico.
+            #
+            # O lock e tomado ANTES de ler o saldo (que so acontece depois do
+            # cupom, porque o teto do resgate depende dele): sem ele, dois
+            # pedidos simultaneos do mesmo cliente leem o mesmo saldo e
+            # gastam o dinheiro duas vezes.
+            self._lock_customer_for_cashback(payload, current_customer)
             if payload.coupon_id is not None or payload.coupon_code is not None:
                 coupon, coupon_discount = self.coupon_service.lock_and_validate_for_order(
                     restaurant_id=restaurant.id,
@@ -147,7 +159,13 @@ class OrderService:
                     delivery_fee=delivery_fee,
                     customer=current_customer,
                 )
-            cashback_redeemed = ZERO
+            cashback_redeemed = self._redeem_cashback(
+                payload,
+                current_customer,
+                restaurant_id=restaurant.id,
+                branch_id=branch.id,
+                teto=quantize_money(subtotal - coupon_discount),
+            )
             discount_total = quantize_money(coupon_discount + cashback_redeemed)
             total = quantize_money(subtotal + service_fee + delivery_fee - discount_total)
             commission_percent, commission_base, commission_amount = self._calculate_commission(
@@ -225,6 +243,10 @@ class OrderService:
             self.order_repository.create_order(order)
             if coupon is not None:
                 self.coupon_service.create_redemption(coupon, current_customer, order.id, coupon_discount)
+            # Depois do INSERT do pedido porque a linha do razao aponta para
+            # ele, e na mesma transacao pelo mesmo motivo: ou o pedido e o
+            # debito existem os dois, ou nenhum dos dois.
+            self.cashback_service.register_redemption(order, cashback_redeemed)
 
             order_items = [
                 self._build_order_item(
@@ -739,6 +761,57 @@ class OrderService:
             )
             subtotal += (to_decimal(product.price) + options_total) * item.quantity
         return quantize_money(subtotal)
+
+    def _lock_customer_for_cashback(
+        self,
+        payload: CreateOrderRequest,
+        current_customer: Customer | None,
+    ) -> None:
+        """Trava a linha do cliente antes de qualquer leitura de saldo.
+
+        So quando o pedido vai mesmo mexer no saldo: travar a linha de todo
+        cliente em todo pedido serializaria pedidos que nao disputam nada.
+        """
+        if not payload.use_cashback:
+            return
+        if current_customer is None:
+            return
+        self.customer_repository.lock_customer(current_customer.id)
+
+    def _redeem_cashback(
+        self,
+        payload: CreateOrderRequest,
+        current_customer: Customer | None,
+        *,
+        restaurant_id: UUID,
+        branch_id: UUID,
+        teto: Decimal,
+    ) -> Decimal:
+        """Quanto de cashback este pedido resgata.
+
+        Convidado com `use_cashback` recebe 401, e nao um resgate silencioso
+        de zero: e a mesma resposta que o cupom da (`lock_and_validate_for_order`),
+        e as duas mecanicas de desconto nao podem divergir em nada que o
+        lojista ou o app precisem explicar. Sem conta nao ha saldo.
+
+        Saldo abaixo do minimo, loja sem campanha e teto zerado devolvem ZERO
+        sem erro nenhum: nada disso e culpa de quem esta pedindo, e o valor
+        efetivo volta na resposta em `cashback_redeemed_amount`.
+        """
+        if not payload.use_cashback:
+            return ZERO
+        if current_customer is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Cliente autenticado obrigatorio para usar cashback",
+            )
+        return self.cashback_service.amount_to_redeem(
+            customer=current_customer,
+            restaurant_id=restaurant_id,
+            branch_id=branch_id,
+            momento=utcnow(),
+            teto=teto,
+        )
 
     @staticmethod
     def _coupon_discount_on_products(coupon, coupon_discount: Decimal) -> Decimal:

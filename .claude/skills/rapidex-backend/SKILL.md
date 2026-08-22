@@ -802,16 +802,33 @@ Cancelamento de pedido `paid` sai como:
 
 ---
 
-## 26. Cashback está pela metade — não confie no saldo
+## 26. O cashback está ligado no código, e desligado nos dados
 
-`cashback_redeemed` é literalmente `ZERO` no cálculo do pedido, e
-`cashback_redeemed_amount` sempre grava zero. A tabela existe, o saldo é lido e
-listado, e `CustomerRepository.lock_customer` já está escrito para o resgate —
-**mas ninguém o chama.** O crédito ao completar pedido também não existe.
+**Isto aqui era o oposto até 22/08/2026** ("cashback está pela metade, não
+confie no saldo"). O crédito na conclusão, o resgate no `create_order` com lock
+e a devolução no cancelamento existem, e `cashback_redeemed_amount` deixou de
+gravar zero sempre. Desenho inteiro em `docs/cashback.md`.
 
-O saldo que o cliente vê só muda se alguém escrever na tabela por fora. Ele
-aparece na base de cálculo da comissão como subtração, então ligar o resgate mexe
-em comissão junto.
+**O que segura tudo é um dado, não o código: `cashback_rules.enabled` nasce
+FALSO em todo restaurante.** Enquanto for falso, `resolve_cashback_terms`
+devolve `SEM_CASHBACK` e o razão continua sem escritor. Ligar a chave de um
+restaurante liga o crédito e o resgate ao mesmo tempo — e o resgate entra como
+subtração na base da comissão, então **ligar cashback mexe em faturamento no
+mesmo minuto.** Não é botão de teste.
+
+**Duas coisas que continuam valendo:**
+
+- **O saldo é por (cliente, restaurante), nunca da plataforma.**
+  `get_available_balance` soma tudo e serve para duas coisas só: o campo
+  `balance` (o *acumulado*) e o que se perde ao excluir a conta. Para decidir
+  quanto entra num pedido é `get_available_balance_for_restaurant` — usar a
+  soma ali seria gastar no Varjota o dinheiro que o Júnior concedeu.
+- **A EXPIRAÇÃO AINDA NÃO EXISTE.** `GET /customers/me/cashback` já publica
+  `expires_at` por restaurante (último pedido + `expiry_days`), mas nada zera o
+  saldo quando a data passa: `scripts/expire_cashback.py` é o passo seguinte.
+  Até ele existir, **a API promete um vencimento que ninguém cumpre** — o que é
+  seguro na direção do cliente (ninguém perde saldo) e é chamado na direção do
+  lojista (o passivo não vence). Não anuncie a campanha antes disso.
 
 ---
 
@@ -1202,7 +1219,7 @@ misturados. Rollback de imagem exige downgrade junto.
 
 ---
 
-## 37. Campo novo em `CreateOrderRequest` custa 24h de 409 — mesmo sendo opcional
+## 37. Campo novo em `CreateOrderRequest` custa 24h de 422 — mesmo sendo opcional
 
 A armadilha 7 registrou o custo de acrescentar campo **obrigatório** numa
 resposta gravada em `idempotency_keys.response_body`. Este é o **mesmo problema
@@ -1217,12 +1234,25 @@ O estrago:
 ```
 antes do deploy   chave X reservada, fingerprint gravado = A
 depois do deploy  MESMO corpo, MESMA chave  ->  fingerprint = B
-                  B != A  ->  409 "corpo diferente"
+                  B != A  ->  422 "Idempotency-Key ja utilizada com um corpo diferente"
 ```
 
-**Por 24h, um retry legítimo de um pedido idêntico recebe conflito.** Nada no
+**Por 24h, um retry legítimo de um pedido idêntico é recusado.** Nada no
 código parece errado, o campo é opcional, e o sintoma aparece só em produção e
 só para quem estava no meio de uma tentativa no minuto do deploy.
+
+**E o código é 422, não 409** — este item dizia 409 até 22/08/2026, e a
+diferença não é acadêmica: quem escrever o tratamento do app contra 409 não
+pega este caso. Os dois convivem na mesma rota e querem coisas diferentes:
+
+| Código | Quando | O que o app faz |
+|---|---|---|
+| **422** `Idempotency-Key ja utilizada com um corpo diferente` | fingerprint diferente do gravado — inclusive o campo novo do deploy | **gera chave nova** e refaz |
+| **409** `Requisicao em andamento` | reserva ainda aberta | espera e tenta a MESMA chave |
+| **409** `A resposta original ... versao anterior da API` | resposta gravada não valida mais (armadilha 7) | **gera chave nova** |
+
+`tests/test_idempotency.py::test_same_key_with_different_body_is_rejected_with_422`
+e `::test_in_progress_is_rejected_with_409` travam os dois.
 
 `source` (revisão `20260822_0031`) sai do fingerprint por
 `_idempotency_fingerprint`, e por dois motivos que valem sozinhos:
@@ -1236,7 +1266,7 @@ só para quem estava no meio de uma tentativa no minuto do deploy.
 
 **A regra que fica:** campo novo em `CreateOrderRequest` que **não muda o que
 foi pedido** entra na lista de exclusão de `_idempotency_fingerprint`. Campo que
-muda o pedido fica de fora dela — aí o 409 é a resposta certa.
+muda o pedido fica de fora dela — aí a recusa é a resposta certa.
 
 `tests/test_origem_e_funil_schema.py::ImpressaoDigitalTests` trava as duas
 metades.

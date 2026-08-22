@@ -44,3 +44,30 @@ class CashbackRuleRepository:
         da_filial = next((regra for regra in regras if regra.branch_id is not None), None)
         do_restaurante = next((regra for regra in regras if regra.branch_id is None), None)
         return da_filial, do_restaurante
+
+    def list_restaurant_rules(
+        self,
+        restaurant_ids: list[uuid.UUID],
+    ) -> dict[uuid.UUID, CashbackRule]:
+        """A regra do RESTAURANTE (`branch_id IS NULL`) de cada um deles.
+
+        Sem regra de filial nenhuma, e nao e esquecimento: quem chama isto e
+        a tela de saldo, e o saldo e do restaurante inteiro. A validade dele
+        so pode sair de uma regra que valha para o restaurante inteiro —
+        duas filiais com prazos diferentes dariam duas respostas para
+        "quando este saldo vence", e o saldo e um so.
+
+        Uma consulta para a lista toda; o `selectinload` esta aqui pelo mesmo
+        motivo de `get_rules_for_branch`.
+        """
+        if not restaurant_ids:
+            return {}
+        stmt = (
+            select(CashbackRule)
+            .options(selectinload(CashbackRule.weekdays))
+            .where(
+                CashbackRule.restaurant_id.in_(restaurant_ids),
+                CashbackRule.branch_id.is_(None),
+            )
+        )
+        return {regra.restaurant_id: regra for regra in self.db.scalars(stmt)}

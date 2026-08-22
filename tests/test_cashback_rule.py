@@ -16,6 +16,7 @@ from src.models.cashback_rule_model import CashbackRule, CashbackRuleWeekday
 from src.services.cashback_rule import (
     SEM_CASHBACK,
     CashbackTerms,
+    expires_at_from_last_order,
     resolve_cashback_terms,
 )
 
@@ -231,3 +232,66 @@ def test_desligado_nao_carrega_numero_nenhum():
     assert terms.percent == Decimal("0")
     assert terms.min_redeem_balance == Decimal("0")
     assert terms.expiry_days == 0
+
+
+# ---------------------------------------------------------------------------
+# A validade — o relógio é o último pedido
+# ---------------------------------------------------------------------------
+
+
+def termos(expiry_days=60):
+    return resolve_cashback_terms(None, regra(expiry_days=expiry_days), SEGUNDA)
+
+
+def test_a_validade_conta_do_ultimo_pedido_e_nao_da_data_do_credito():
+    """É a peça que dispensa expiração por lote.
+
+    Um saldo, uma data. Sem isso voltariam FIFO, crédito partido ao meio e
+    linhas vencendo em dias diferentes — tudo para responder a mesma
+    pergunta.
+    """
+    assert expires_at_from_last_order(SEGUNDA, termos(expiry_days=60)) == datetime(
+        2026, 10, 23, 12, 0, tzinfo=timezone.utc
+    )
+
+
+def test_pedido_mais_novo_empurra_a_data_para_frente():
+    """O ponto inteiro do mecanismo: pedir de novo renova o saldo TODO.
+
+    E é por isso que a data precisa aparecer na tela — o cliente não tem como
+    descobrir sozinho que um pedido devolve o prazo.
+    """
+    antes = expires_at_from_last_order(SEGUNDA, termos())
+    depois = expires_at_from_last_order(TERCA, termos())
+
+    assert depois > antes
+    assert (depois - antes).days == 1
+
+
+def test_sem_pedido_nenhum_o_saldo_nao_vence():
+    """Saldo sem pedido não tem de quando contar.
+
+    Hoje só chega aqui o ajuste manual por SQL. Usar a data do crédito seria
+    criar o segundo relógio que este desenho existe para não ter.
+    """
+    assert expires_at_from_last_order(None, termos()) is None
+
+
+def test_restaurante_sem_campanha_nao_expira_saldo():
+    """`SEM_CASHBACK` tem `expiry_days = 0`, e zero não é "vence hoje".
+
+    Ninguém configurou prazo nenhum; apagar dinheiro de cliente por ausência
+    de configuração é o lado errado do erro.
+    """
+    assert expires_at_from_last_order(SEGUNDA, SEM_CASHBACK) is None
+
+
+def test_pedido_com_data_ingenua_e_lido_como_utc():
+    """Mesmo motivo do dia da semana: o container é UTC e a suíte roda no
+    Windows de quem escreve. Sem isso o mesmo teste daria horas diferentes
+    nos dois lugares."""
+    vencimento = expires_at_from_last_order(
+        datetime(2026, 8, 24, 12, 0), termos(expiry_days=1)
+    )
+
+    assert vencimento == datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)

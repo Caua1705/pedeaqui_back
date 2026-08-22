@@ -2,10 +2,13 @@
 
 > **Estado: em construção.** A revisão `20260822_0032` (22/08/2026) põe o
 > schema de pé, e o crédito, o resgate e a devolução já existem em código.
+> O **saldo por restaurante na API** entrou em 22/08/2026 (seção 4):
+> `GET /customers/me/cashback` publica `by_restaurant[]` com `expires_at`.
 >
-> **Ainda faltam duas coisas, e as duas são bloqueantes para anunciar:** a
-> **expiração** (seção 3) e o **saldo por restaurante na API**
-> (`GET /customers/me/cashback` ainda soma todos os restaurantes — seção 4).
+> **Falta uma coisa, e ela é bloqueante para anunciar:** a **expiração**
+> (seção 3). A data já sai na resposta; o que ainda não existe é quem zera o
+> saldo quando ela passa — ou seja, hoje a API promete um vencimento que
+> ninguém cumpre. É o próximo passo, e é `scripts/expire_cashback.py`.
 >
 > Nada disso está ligado em produção: `cashback_rules.enabled` nasce falso em
 > todo restaurante, e enquanto for falso o razão continua sem escritor.
@@ -143,10 +146,15 @@ reduzido. O saldo mostrado no checkout nunca é fonte de verdade.
 caminho.** Duas transações pegando os mesmos dois recursos em ordens opostas
 fecham ciclo, e o Postgres mata uma por deadlock — no checkout, no pico.
 
-**Campo novo em `CreateOrderRequest` custa 24h de 409 (armadilha 37).**
+**Campo novo em `CreateOrderRequest` custa 24h de 422 (armadilha 37).**
 `use_cashback` muda o que foi pedido, então fica **dentro** do
 `_idempotency_fingerprint`, ao contrário do `source`. Deploy de madrugada, e o
-app precisa tratar 409 pedindo chave nova.
+app precisa tratar a recusa gerando chave nova.
+
+**O código é 422, e não 409** — a armadilha 37 dizia 409 e estava errada nisso
+(o 409 daquela rota é "requisição em andamento", que quer o oposto: tentar de
+novo com a MESMA chave). O corpo é
+`{"detail": "Idempotency-Key ja utilizada com um corpo diferente. Gere uma nova chave para uma nova requisicao."}`.
 
 Do lado da resposta não há custo: `cashback_redeemed_amount` já existe em
 `CreateOrderResponse` e em `OrderDetailResponse`, e a comanda já imprime a
@@ -203,16 +211,64 @@ presos por loja é o oposto do cashback concentrado.
 restaurante seria o Júnior pagando o marketing do concorrente, e não existe
 mecanismo de compensação entre eles. O saldo é dinheiro de quem o concedeu.
 
-### O que isso obriga na API
+### O que isso obriga na API — feito em 22/08/2026
 
-`CashbackRepository.get_available_balance` hoje soma **tudo, de todos os
-restaurantes**, e `GET /customers/me/cashback` devolve um número só — que é o
-que o app já mostra na tela.
+**A v1 não sai com o total somado.** Publicar "R$ 40" com R$ 5 gastáveis
+naquela loja é criar a reclamação com as próprias mãos. Como hoje só existe um
+restaurante, a divergência ainda não existe — e foi por isso que saiu barato
+acertar agora. A tela do app muda junto com o backend.
 
-**Combinado: a v1 não sai com o total somado.** Publicar "R$ 40" com R$ 5
-gastáveis naquela loja é criar a reclamação com as próprias mãos. Como hoje só
-existe um restaurante, a divergência ainda não existe — e é agora que sai
-barato acertar. A tela do app muda junto com o backend.
+`GET /customers/me/cashback` ficou assim:
+
+```json
+{
+  "balance": 42.50,
+  "currency": "BRL",
+  "by_restaurant": [
+    {
+      "restaurant_id": "…",
+      "restaurant_name": "Júnior da Picanha",
+      "restaurant_slug": "junior-da-picanha",
+      "balance": 40.00,
+      "expires_at": "2026-10-23T12:00:00Z"
+    }
+  ]
+}
+```
+
+**`balance` continua sendo o acumulado, e continua não sendo gastável.** Ele
+fica por dois motivos: tirá-lo quebraria o app que já o consome, e ele é a
+resposta certa para a única pergunta que a soma responde — quanto a pessoa
+perde ao excluir a conta (seção 5). A tela mostra a lista; o total, se
+aparecer, é "acumulado", nunca "disponível para usar".
+
+Três decisões que foram tomadas aqui e não estavam no desenho original:
+
+- **`restaurant_slug` vai junto.** É por ele que o app chega no cardápio. Sem
+  ele a tela mostra um saldo sem botão para gastá-lo.
+- **`expires_at` sai da regra do RESTAURANTE (`branch_id IS NULL`), nunca da
+  filial.** O saldo é do restaurante inteiro; duas filiais com `expiry_days`
+  diferentes dariam duas respostas para "quando este saldo vence", e o saldo é
+  um só. Restaurante sem regra própria (ou com ela desligada) responde
+  `expires_at: null` — "não vence". Apagar dinheiro por ausência de
+  configuração é o lado errado do erro, e é o mesmo critério pelo qual falta de
+  regra também não gera cashback.
+- **`min_redeem_balance` NÃO entra na lista.** Ele é termo do resgate, e o
+  resgate acontece numa FILIAL, que pode ter regra própria — publicá-lo sob uma
+  chave por restaurante mostraria um piso que não vale na loja onde a pessoa
+  está pedindo. A linha é essa: `by_restaurant[]` carrega o que é verdade por
+  restaurante (saldo, validade), e nada que seja verdade por filial.
+
+**O que fica pendente por causa dessa última decisão:** o checkout não tem como
+explicar "por que não descontou". Saldo abaixo do mínimo devolve zero sem erro
+(seção 2), e o app só descobre isso lendo `cashback_redeemed_amount = 0` na
+resposta do pedido. O lugar de resolver, quando doer, é uma resposta de termos
+por filial ao lado do cardápio — que é quem conhece a filial —, e não este
+campo aqui.
+
+Saldo órfão (`restaurant_id` nulo, de restaurante apagado — a coluna é
+`ON DELETE SET NULL`) conta no total e fica de fora da lista: não tem nome para
+mostrar nem cardápio onde gastar. Continua aparecendo no extrato.
 
 ---
 
@@ -231,10 +287,14 @@ caminho de volta.
 O `DELETE` continua impossível (`coupon_redemptions.customer_id` é NOT NULL
 sem `ON DELETE`), e o `CASCADE` do razão é argumento **contra** o DELETE.
 
-**O que muda quando o resgate existir:** o aviso deixa de ser hipotético.
-Chamar `GET /customers/me/cashback` na tela de confirmação da exclusão passa a
-ser requisito de produto, e o `logger.warning` passa a ser um grep que devolve
-dinheiro real.
+**Com o resgate de pé, o aviso deixou de ser hipotético.** Chamar
+`GET /customers/me/cashback` na tela de confirmação da exclusão é requisito de
+produto, e o `logger.warning` é um grep que devolve dinheiro real.
+
+O número a mostrar é o `balance` — o acumulado em todos os restaurantes é
+exatamente o que se perde aqui, e é o mesmo `get_available_balance` que a
+anonimização lê. O `by_restaurant[]` serve para nomear as lojas no aviso ("R$
+40 no Júnior da Picanha"), o que torna a perda concreta em vez de abstrata.
 
 ---
 

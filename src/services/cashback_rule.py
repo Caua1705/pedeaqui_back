@@ -32,7 +32,7 @@ no mesmo `SEM_CASHBACK`, e quem chama confere um campo so.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -112,6 +112,48 @@ def resolve_cashback_terms(
         min_redeem_balance=to_decimal(regra.min_redeem_balance),
         expiry_days=regra.expiry_days,
     )
+
+
+def expires_at_from_last_order(
+    last_order_at: datetime | None,
+    terms: CashbackTerms,
+) -> datetime | None:
+    """Quando o saldo daquele restaurante vence, dado o ultimo pedido.
+
+    **O relogio e o ultimo pedido, e nao a data do credito.** E isso que faz
+    a validade andar para frente a cada pedido novo, e e o que dispensa
+    expiracao por lote: nao ha credito vencendo em datas diferentes, ha um
+    saldo com uma data.
+
+    Nulo significa "nao vence", e sao dois casos:
+
+    - **quem nunca pediu** naquele restaurante e tem saldo (ajuste manual por
+      SQL, hoje o unico caminho). Sem pedido nao ha de quando contar, e
+      escolher a data do credito seria inventar o segundo relogio que este
+      desenho existe para nao ter;
+    - **restaurante sem regra de campanha propria**, ou com ela desligada.
+      Sem `expiry_days` configurado ninguem pediu para apagar saldo nenhum, e
+      o lado seguro do erro e o dinheiro do cliente continuar la.
+
+    **Quem chama passa os termos do RESTAURANTE** (`branch_id IS NULL`), e
+    nao os da filial: o saldo e do restaurante inteiro, entao a validade
+    dele tambem tem que ser.
+
+    A mesma funcao responde a tela e o `scripts/expire_cashback.py` quando
+    ele existir. Duas contas de vencimento discordariam no dia em que uma
+    delas fosse ajustada, e a divergencia seria saldo apagado antes da data
+    que o app mostrou.
+    """
+    if last_order_at is None:
+        return None
+    if terms.expiry_days <= 0:
+        return None
+    # Datetime ingenuo vira UTC pelo mesmo motivo de `_dia_da_semana_local`:
+    # o processo roda em container UTC e a suite roda no Windows de quem
+    # escreve.
+    if last_order_at.tzinfo is None:
+        last_order_at = last_order_at.replace(tzinfo=timezone.utc)
+    return last_order_at + timedelta(days=terms.expiry_days)
 
 
 def _percentual_do_dia(regra: CashbackRule, dia_da_semana: int) -> Decimal:

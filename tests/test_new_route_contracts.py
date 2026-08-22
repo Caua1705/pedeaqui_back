@@ -189,6 +189,74 @@ class AddressImportContractTests(unittest.TestCase):
         self.assertEqual(parameters["offset"]["schema"]["default"], 0)
 
 
+
+class SaldoDeCashbackContractTests(unittest.TestCase):
+    """O saldo por restaurante tem que estar PUBLICADO, nao so implementado.
+
+    O app do cliente gera o cliente dele a partir do `/openapi.json`. Um
+    `by_restaurant[]` que existe no service e nao no documento e uma tela que
+    continua somando restaurantes que nao se somam.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.schema = app.openapi()
+
+    def test_a_rota_de_saldo_publica_a_quebra_por_restaurante(self):
+        operation = self.schema["paths"]["/customers/me/cashback"]["get"]
+        ref = operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+        self.assertEqual(ref, "#/components/schemas/CashbackBalanceResponse")
+
+        corpo = self.schema["components"]["schemas"]["CashbackBalanceResponse"]
+        self.assertEqual(
+            corpo["properties"]["by_restaurant"]["items"]["$ref"],
+            "#/components/schemas/RestaurantCashbackBalance",
+        )
+        # Obrigatorio na resposta: e o que faz o cliente gerado tipa-lo como
+        # sempre presente, em vez de opcional que a tela precisa checar.
+        self.assertIn("by_restaurant", corpo["required"])
+        self.assertIn("balance", corpo["required"])
+
+    def test_cada_loja_publica_o_saldo_a_identidade_e_a_validade(self):
+        """`restaurant_slug` e por onde o app chega no cardapio, e
+        `expires_at` e a data que faz a validade andar para frente a cada
+        pedido. Sem os dois publicados, a tela mostra um numero sem botao e
+        sem prazo."""
+        loja = self.schema["components"]["schemas"]["RestaurantCashbackBalance"]
+
+        self.assertEqual(
+            sorted(loja["required"]),
+            ["balance", "expires_at", "restaurant_id", "restaurant_name", "restaurant_slug"],
+        )
+        # Nulo e resposta normal: loja sem campanha configurada nao vence.
+        self.assertIn({"type": "null"}, loja["properties"]["expires_at"]["anyOf"])
+
+    def test_o_extrato_continua_com_os_campos_de_sempre(self):
+        """Ele deixou de herdar de `CashbackBalanceResponse`, e quem consome
+        nao pode ter percebido: os campos publicados sao os mesmos."""
+        extrato = self.schema["components"]["schemas"]["CashbackTransactionsResponse"]
+
+        self.assertEqual(
+            sorted(extrato["properties"]),
+            ["balance", "currency", "transactions"],
+        )
+        self.assertNotIn("by_restaurant", extrato["properties"])
+
+    def test_o_pedido_publica_o_use_cashback(self):
+        """O app so manda `true`; quanto entra e o servidor que decide.
+
+        Publicado com `default: false` — o pedido que nao o mandar continua
+        valendo. Mas ele entra no fingerprint da idempotencia (armadilha 37),
+        e o custo disso e 24h de 409 para retry de pedido em voo no minuto do
+        deploy.
+        """
+        corpo = self.schema["components"]["schemas"]["CreateOrderRequest"]
+
+        self.assertEqual(corpo["properties"]["use_cashback"]["type"], "boolean")
+        self.assertIs(corpo["properties"]["use_cashback"]["default"], False)
+        self.assertNotIn("use_cashback", corpo.get("required", []))
+
+
 # As rotas do agente de impressao, do jeito que o /openapi.json as publica.
 #
 # Duas sao chamadas PELO agente e tres sao lidas pelo PAINEL. Os prefixos

@@ -531,6 +531,40 @@ class OrderRepository:
         )
         return list(self.db.scalars(stmt).all())
 
+    def last_order_at_by_restaurant(
+        self,
+        customer_id: uuid.UUID,
+        statuses: tuple[str, ...],
+    ) -> dict[uuid.UUID, datetime]:
+        """Quando foi o ultimo pedido da pessoa em cada restaurante.
+
+        E o relogio da validade do cashback: a validade conta a partir do
+        ULTIMO PEDIDO, nao da data do credito, e por isso ela anda para
+        frente a cada pedido novo (`docs/cashback.md`, secao 3).
+
+        `statuses` entra por PARAMETRO pelo mesmo motivo de
+        `list_orders_in_flight`: quem sabe quais pedidos contam e a maquina
+        de estados. Quem chama passa `KITCHEN_ORDER_STATUSES` — pedido que
+        chegou a cozinha —, e nao ha uma quarta definicao de "quais pedidos"
+        neste projeto.
+
+        A leitura e do status ATUAL, e nao do historico. Consequencia que
+        vale saber: o pedido aceito e cancelado depois deixa de contar, e o
+        relogio volta para o pedido bom anterior. Ler
+        `order_status_history` para descobrir que um dia ele passou por
+        `accepted` custaria uma consulta a mais na tela de saldo para
+        estender a validade de um pedido que nao aconteceu.
+        """
+        stmt = (
+            select(Order.restaurant_id, func.max(Order.created_at))
+            .where(
+                Order.customer_id == customer_id,
+                Order.status.in_(statuses),
+            )
+            .group_by(Order.restaurant_id)
+        )
+        return {row[0]: row[1] for row in self.db.execute(stmt).all()}
+
     def list_all_by_customer(self, customer_id: uuid.UUID) -> list[Order]:
         """Todos os pedidos da pessoa, sem join nem ordem.
 

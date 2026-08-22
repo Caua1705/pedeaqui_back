@@ -4502,10 +4502,18 @@
         "type": "object"
       },
       "CashbackBalanceResponse": {
+        "description": "O saldo do cliente, com o total e a quebra por restaurante.",
         "properties": {
           "balance": {
             "title": "Balance",
             "type": "number"
+          },
+          "by_restaurant": {
+            "items": {
+              "$ref": "#/components/schemas/RestaurantCashbackBalance"
+            },
+            "title": "By Restaurant",
+            "type": "array"
           },
           "currency": {
             "const": "BRL",
@@ -4515,7 +4523,8 @@
           }
         },
         "required": [
-          "balance"
+          "balance",
+          "by_restaurant"
         ],
         "title": "CashbackBalanceResponse",
         "type": "object"
@@ -4613,6 +4622,7 @@
         "type": "object"
       },
       "CashbackTransactionsResponse": {
+        "description": "O extrato. **Nao herda de `CashbackBalanceResponse` de proposito.**\n\nHerdando, a quebra por restaurante entraria aqui junto — e o extrato\npassaria a pagar as tres consultas do saldo por restaurante para exibir\numa lista que esta tela nao mostra. Os campos que ele publica sao os\nmesmos de antes; quem consome nao ve diferenca.",
         "properties": {
           "balance": {
             "title": "Balance",
@@ -5948,6 +5958,11 @@
               }
             ],
             "title": "Source"
+          },
+          "use_cashback": {
+            "default": false,
+            "title": "Use Cashback",
+            "type": "boolean"
           }
         },
         "required": [
@@ -9659,6 +9674,49 @@
           "confirm_password"
         ],
         "title": "ResetPasswordRequest",
+        "type": "object"
+      },
+      "RestaurantCashbackBalance": {
+        "description": "O saldo de UM restaurante — o unico numero que da para gastar.\n\nO `balance` da resposta de cima e a soma destes, e a soma nao e gastavel\nem lugar nenhum: cashback de um restaurante gasto em outro seria quem\nconcedeu pagando o marketing do concorrente. **A tela mostra esta lista;\no total, se aparecer, e \"acumulado\", nunca \"disponivel para usar\".**\n\n`restaurant_slug` vai junto porque e por ele que o app chega no cardapio:\nsem ele a tela mostra um saldo sem botao para gasta-lo.",
+        "properties": {
+          "balance": {
+            "title": "Balance",
+            "type": "number"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "restaurant_id": {
+            "format": "uuid",
+            "title": "Restaurant Id",
+            "type": "string"
+          },
+          "restaurant_name": {
+            "title": "Restaurant Name",
+            "type": "string"
+          },
+          "restaurant_slug": {
+            "title": "Restaurant Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "restaurant_id",
+          "restaurant_name",
+          "restaurant_slug",
+          "balance",
+          "expires_at"
+        ],
+        "title": "RestaurantCashbackBalance",
         "type": "object"
       },
       "RestaurantInfoBranchResponse": {
@@ -15766,7 +15824,7 @@
     },
     "/customers/me": {
       "delete": {
-        "description": "Exclusao da conta (LGPD, Art. 18, VI). NAO TEM DESFAZER.\n\nE o par natural de `GET /me/export`, que fica logo acima: **vejo o que\nvoces tem** e **apaguem**.\n\nA conta e ANONIMIZADA, nao apagada — o pedido continua existindo para o\nrestaurante, sem nada da pessoa dentro. O e-mail e o telefone sao\nliberados para recadastro, e o token desta propria chamada morre junto.\nOs campos exatos estao em `CustomerAnonymizationService`.\n\n## O SALDO DE CASHBACK E PERDIDO. Avise antes de chamar esta rota.\n\nO recadastro nasce com **id novo** — e o que libera o e-mail e o telefone\ne justamente a saida deles da tabela. O cashback continua ligado ao id\nvelho, e nao ha caminho de volta: a pessoa volta como desconhecida.\n\n**Chame `GET /customers/me/cashback` na tela de confirmacao** e mostre o\nsaldo junto do aviso. Nao ha como esta rota avisar: quando ela responde,\na conta ja foi anonimizada, e nao ha desfazer.\n\nO saldo NAO vem no corpo da resposta, e nao e esquecimento: um numero\nentregue depois do fato nao evita a perda, e publicar um corpo aqui\ntrocaria o `204` por `200` — mudanca de contrato para um app que ja\nconsome esta rota. Quando o resgate de cashback existir (hoje o saldo e\nsempre zero — ver a armadilha 26), o campo entra junto com a mudanca do\napp, de uma vez so.\n\nO corpo leva a senha atual: `DELETE` com corpo e incomum mas legal, e a\nalternativa a colocaria na querystring, ou seja, no log do proxy.",
+        "description": "Exclusao da conta (LGPD, Art. 18, VI). NAO TEM DESFAZER.\n\nE o par natural de `GET /me/export`, que fica logo acima: **vejo o que\nvoces tem** e **apaguem**.\n\nA conta e ANONIMIZADA, nao apagada — o pedido continua existindo para o\nrestaurante, sem nada da pessoa dentro. O e-mail e o telefone sao\nliberados para recadastro, e o token desta propria chamada morre junto.\nOs campos exatos estao em `CustomerAnonymizationService`.\n\n## O SALDO DE CASHBACK E PERDIDO. Avise antes de chamar esta rota.\n\nO recadastro nasce com **id novo** — e o que libera o e-mail e o telefone\ne justamente a saida deles da tabela. O cashback continua ligado ao id\nvelho, e nao ha caminho de volta: a pessoa volta como desconhecida.\n\n**Chame `GET /customers/me/cashback` na tela de confirmacao** e mostre o\n`balance` — que e o acumulado em TODOS os restaurantes, e e exatamente o\nque se perde aqui. A quebra de `by_restaurant[]` serve para nomear as\nlojas no aviso (\"R$ 40 no Junior da Picanha\"). Nao ha como esta rota\navisar: quando ela responde, a conta ja foi anonimizada, e nao ha\ndesfazer.\n\nDesde que o credito e o resgate existem, o aviso deixou de ser\nhipotetico: o saldo e dinheiro que a pessoa gastaria no proximo pedido.\n\nO saldo NAO vem no corpo da resposta, e nao e esquecimento: um numero\nentregue depois do fato nao evita a perda, e publicar um corpo aqui\ntrocaria o `204` por `200` — mudanca de contrato para um app que ja\nconsome esta rota.\n\nO corpo leva a senha atual: `DELETE` com corpo e incomum mas legal, e a\nalternativa a colocaria na querystring, ou seja, no log do proxy.",
         "operationId": "delete_me_customers_me_delete",
         "requestBody": {
           "content": {
@@ -16158,6 +16216,7 @@
     },
     "/customers/me/cashback": {
       "get": {
+        "description": "O saldo de cashback: o acumulado, e o que da para gastar em cada loja.\n\n## `balance` e o ACUMULADO. O gastavel e `by_restaurant[]`\n\nCashback e dinheiro de quem o concedeu: o que acumulou no Junior da\nPicanha so se gasta la, e nao ha compensacao entre restaurantes. **A tela\nmostra a lista.** Um \"R$ 40\" com R$ 5 gastaveis na loja aberta e a\nreclamacao pronta.\n\nO total continua na resposta porque nao quebra o app que ja o consome, e\nporque ele e a resposta certa para uma pergunta que existe: quanto a\npessoa acumulou no total — que e exatamente o que ela perde ao excluir a\nconta.\n\n## `expires_at` anda para frente a cada pedido\n\nA validade conta a partir do ULTIMO PEDIDO naquele restaurante, e nao da\ndata do credito: pedir de novo renova o saldo inteiro. **Se a tela nao\nmostrar a data, o mecanismo perde metade do valor** — o cliente nao tem\ncomo saber que um pedido novo devolve o prazo.\n\nNulo significa \"nao vence\": restaurante sem campanha configurada, ou\nsaldo de quem nunca pediu ali.\n\n## O checkout nao manda numero\n\nO corpo do pedido leva `use_cashback: true` e o servidor resolve quanto\nentra, com a linha do cliente travada. O saldo desta rota e para MOSTRAR;\nele pode estar velho no minuto do checkout, e quem decide e o servidor.",
         "operationId": "get_cashback_balance_customers_me_cashback_get",
         "responses": {
           "200": {

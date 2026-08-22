@@ -97,15 +97,19 @@ def delete_me(
     velho, e nao ha caminho de volta: a pessoa volta como desconhecida.
 
     **Chame `GET /customers/me/cashback` na tela de confirmacao** e mostre o
-    saldo junto do aviso. Nao ha como esta rota avisar: quando ela responde,
-    a conta ja foi anonimizada, e nao ha desfazer.
+    `balance` — que e o acumulado em TODOS os restaurantes, e e exatamente o
+    que se perde aqui. A quebra de `by_restaurant[]` serve para nomear as
+    lojas no aviso ("R$ 40 no Junior da Picanha"). Nao ha como esta rota
+    avisar: quando ela responde, a conta ja foi anonimizada, e nao ha
+    desfazer.
+
+    Desde que o credito e o resgate existem, o aviso deixou de ser
+    hipotetico: o saldo e dinheiro que a pessoa gastaria no proximo pedido.
 
     O saldo NAO vem no corpo da resposta, e nao e esquecimento: um numero
     entregue depois do fato nao evita a perda, e publicar um corpo aqui
     trocaria o `204` por `200` — mudanca de contrato para um app que ja
-    consome esta rota. Quando o resgate de cashback existir (hoje o saldo e
-    sempre zero — ver a armadilha 26), o campo entra junto com a mudanca do
-    app, de uma vez so.
+    consome esta rota.
 
     O corpo leva a senha atual: `DELETE` com corpo e incomum mas legal, e a
     alternativa a colocaria na querystring, ou seja, no log do proxy.
@@ -123,6 +127,36 @@ def get_cashback_balance(
     current_customer: Customer = Depends(get_current_customer),
     db: Session = Depends(get_db),
 ) -> CashbackBalanceResponse:
+    """O saldo de cashback: o acumulado, e o que da para gastar em cada loja.
+
+    ## `balance` e o ACUMULADO. O gastavel e `by_restaurant[]`
+
+    Cashback e dinheiro de quem o concedeu: o que acumulou no Junior da
+    Picanha so se gasta la, e nao ha compensacao entre restaurantes. **A tela
+    mostra a lista.** Um "R$ 40" com R$ 5 gastaveis na loja aberta e a
+    reclamacao pronta.
+
+    O total continua na resposta porque nao quebra o app que ja o consome, e
+    porque ele e a resposta certa para uma pergunta que existe: quanto a
+    pessoa acumulou no total — que e exatamente o que ela perde ao excluir a
+    conta.
+
+    ## `expires_at` anda para frente a cada pedido
+
+    A validade conta a partir do ULTIMO PEDIDO naquele restaurante, e nao da
+    data do credito: pedir de novo renova o saldo inteiro. **Se a tela nao
+    mostrar a data, o mecanismo perde metade do valor** — o cliente nao tem
+    como saber que um pedido novo devolve o prazo.
+
+    Nulo significa "nao vence": restaurante sem campanha configurada, ou
+    saldo de quem nunca pediu ali.
+
+    ## O checkout nao manda numero
+
+    O corpo do pedido leva `use_cashback: true` e o servidor resolve quanto
+    entra, com a linha do cliente travada. O saldo desta rota e para MOSTRAR;
+    ele pode estar velho no minuto do checkout, e quem decide e o servidor.
+    """
     return CashbackService(db).get_balance(current_customer)
 
 

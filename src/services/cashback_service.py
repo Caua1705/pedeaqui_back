@@ -42,12 +42,19 @@ from src.models.customer_model import Customer
 from src.repositories.branch_repository import BranchRepository
 from src.repositories.cashback_repository import CashbackRepository
 from src.repositories.cashback_rule_repository import CashbackRuleRepository
+from src.repositories.order_repository import OrderRepository
 from src.schemas.cashback_schema import (
     CashbackBalanceResponse,
     CashbackTransactionResponse,
     CashbackTransactionsResponse,
+    RestaurantCashbackBalance,
 )
-from src.services.cashback_rule import CashbackTerms, resolve_cashback_terms
+from src.services.cashback_rule import (
+    CashbackTerms,
+    expires_at_from_last_order,
+    resolve_cashback_terms,
+)
+from src.services.order_state_machine import KITCHEN_ORDER_STATUSES
 from src.utils.money import ZERO, money_to_float, quantize_money, to_decimal
 
 
@@ -68,10 +75,73 @@ class CashbackService:
         self.cashback_repository = CashbackRepository(db)
         self.cashback_rule_repository = CashbackRuleRepository(db)
         self.branch_repository = BranchRepository(db)
+        self.order_repository = OrderRepository(db)
 
     def get_balance(self, customer: Customer) -> CashbackBalanceResponse:
+        """O acumulado e a quebra por restaurante.
+
+        **`balance` continua sendo a SOMA de todos os restaurantes**, e ele
+        nao e gastavel em lugar nenhum: o saldo pertence a quem o concedeu.
+        O que da para usar numa loja esta em `by_restaurant[]`, e a tela
+        mostra essa lista — publicar "R$ 40" com R$ 5 gastaveis naquela loja
+        e criar a reclamacao com as proprias maos.
+
+        O total fica porque tira-lo quebraria o app que ja consome esta rota,
+        e porque ele continua respondendo uma pergunta legitima: quanto a
+        pessoa acumulou — que e exatamente o que ela PERDE ao excluir a
+        conta.
+        """
         balance = self.cashback_repository.get_available_balance(customer.id)
-        return CashbackBalanceResponse(balance=money_to_float(balance))
+        return CashbackBalanceResponse(
+            balance=money_to_float(balance),
+            by_restaurant=self._balances_by_restaurant(customer),
+        )
+
+    def _balances_by_restaurant(
+        self,
+        customer: Customer,
+    ) -> list[RestaurantCashbackBalance]:
+        """Uma linha por restaurante em que ainda ha saldo, com a validade.
+
+        Tres consultas de tamanho fixo, nunca uma por restaurante: os saldos,
+        o ultimo pedido de cada loja e as regras. O N+1 aqui apareceria
+        justamente na tela que o cliente abre para olhar o dinheiro dele.
+
+        **`min_redeem_balance` NAO entra nesta lista, e a ausencia e
+        deliberada.** Ele e termo do resgate, e o resgate acontece numa
+        FILIAL, que pode ter regra propria — publica-lo sob uma chave por
+        restaurante seria mostrar um piso que nao vale na loja em que a
+        pessoa esta pedindo. A validade nao tem esse problema: ela e
+        propriedade do saldo, e o saldo e do restaurante.
+        """
+        saldos = self.cashback_repository.list_available_balances_by_restaurant(
+            customer.id
+        )
+        if not saldos:
+            return []
+
+        ultimo_pedido = self.order_repository.last_order_at_by_restaurant(
+            customer.id, KITCHEN_ORDER_STATUSES
+        )
+        regras = self.cashback_rule_repository.list_restaurant_rules(
+            [restaurante.id for restaurante, _ in saldos]
+        )
+
+        linhas = []
+        for restaurante, saldo in saldos:
+            terms = resolve_cashback_terms(None, regras.get(restaurante.id))
+            linhas.append(
+                RestaurantCashbackBalance(
+                    restaurant_id=restaurante.id,
+                    restaurant_name=restaurante.name,
+                    restaurant_slug=restaurante.slug,
+                    balance=money_to_float(saldo),
+                    expires_at=expires_at_from_last_order(
+                        ultimo_pedido.get(restaurante.id), terms
+                    ),
+                )
+            )
+        return linhas
 
     def list_transactions(
         self,

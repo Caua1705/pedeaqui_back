@@ -41,6 +41,7 @@ restaurante ativo
 filial (a informada, ou a padrão — BranchRepository.get_default_branch)
    └─ sem NENHUMA filial ativa → 400
 filial.accepts_delivery == false                   → não atende ("delivery_disabled")
+filial pausada (delivery_paused_until > agora)     → não atende ("delivery_paused")
 filial.is_open == false (o "fechar agora")         → não atende ("branch_closed")
 endereço (address_id do cliente, ou inline)
    └─ address_id sem login → 401;  address_id de outro cliente → 404
@@ -54,8 +55,8 @@ Google Routes: compute_route (chamada PAGA)
 taxa de entrega = base + km × valor/km, com piso e teto
    └─ filial sem base/por-km configurados → cai para o fallback (ver §3)
 distância > delivery_max_distance_km → fora da área
-eta_min = prep_time_min + tempo de viagem
-eta_max = prep_time_max + tempo de viagem
+eta_min = prep_time_min + deslocamento   ← faixa de distância, se houver
+eta_max = prep_time_max + deslocamento     (senão, o tempo do Google)
 grava no cache
 ────────────────────────────────────────────────────────
 GRAVA em delivery_estimates e devolve `estimate_token`
@@ -66,6 +67,52 @@ Dentro do fluxo de pedido, qualquer `serviceable=false` vira **400** com a
 mensagem do motivo.
 
 Latitude e longitude têm que vir **juntas** — uma sem a outra é 422.
+
+---
+
+## 1.1 Pausar a entrega sem apagar configuração
+
+`PATCH /admin/branches/{branch_id}/delivery-pause` →
+`{"minutes": 40, "reason": "chuva forte"}`. `{"minutes": 0}` retoma na hora.
+Teto de **24 horas**.
+
+**Por que não bastava `accepts_delivery`.** Aquele já resolve "desligar sem
+apagar configuração" — o que ele não resolve é o *temporariamente*. Uma chave
+manual precisa de alguém que lembre de desligá-la, e o dia em que ela é usada
+(chuva às 19h, entregador que sumiu, avenida em obra) é exatamente o dia em
+que ninguém lembra. A loja amanhece aberta sem aceitar entrega, e o único
+sintoma é a ausência de pedido — que não acende alarme nenhum.
+
+Por isso a pausa é um **prazo**, e não uma chave: ela se desfaz sozinha
+(`_delivery_esta_pausada` compara com o relógio, não lê um booleano).
+
+| | `accepts_delivery` | `delivery_paused_until` |
+|---|---|---|
+| Natureza | estrutural: "este quiosque não entrega" | o dia: chuva, sem motoboy |
+| Volta | quando alguém religa | sozinha, no prazo |
+| Rota | `PATCH .../order-types` (GERÊNCIA) | `PATCH .../delivery-pause` (PESSOAS) |
+| Teto | — | 24h |
+
+As duas se somam em **`accepts_delivery_now`**, e é ele que decide pedido.
+Ler `accepts_delivery` sozinho aceita pedido de uma filial pausada.
+
+**A recusa acontece em DOIS lugares, e os dois são necessários.** A estimativa
+recusa com `reason = "delivery_paused"`; `OrderService._validate_branch_accepts_order`
+recusa de novo. O segundo não é redundante: pedido que chega com
+`delivery_estimate_token` válido reaproveita a estimativa guardada e **não
+passa** por `DeliveryEstimateService.estimate()`. Sem ele, quem estimou às
+18h55 fecharia o pedido às 19h05 com a entrega pausada desde as 19h.
+
+O `reason` é próprio, e não o `delivery_disabled` de quem não entrega: "esta
+loja não entrega" manda o cliente escolher outra filial, "voltamos às 20h30" é
+um convite a esperar — e o app só consegue mostrar telas diferentes se souber
+distinguir. (É o contrário da decisão de `branch_closed`, onde juntar os dois
+casos foi o certo: lá o cliente faz a mesma coisa nos dois.)
+
+A mensagem sai pronta com prazo e motivo: *"A entrega está pausada no
+momento. Motivo: chuva forte. Voltamos a entregar às 20:30."* — pausa sem
+prazo faz o cliente fechar o app; com prazo, ele volta. O horário sai no fuso
+da operação.
 
 ---
 
@@ -84,6 +131,54 @@ eles a taxa é a bruta.
 Para depurar taxa errada, o grep é `event=delivery_fee_algorithm` — ele imprime
 distância, base, valor por km, piso, teto, raio máximo, taxa bruta e taxa final
 numa linha só.
+
+### Frete grátis acima de X
+
+Dois campos, os dois no regime de **termo comercial** da revisão
+`20260818_0025` (nulo na filial = herda do restaurante):
+`free_delivery_enabled` e `free_delivery_min_order_value`.
+
+**Por que são dois campos e não só o valor.** Sem o booleano, a filial não
+teria como recusar a campanha da marca: `NULL` significa "herda" e não existe
+número que signifique "desligado" — `0` seria "grátis sempre", o oposto. É a
+mesma forma do par `service_fee_enabled` + `service_fee_amount`, que existe
+por essa razão. A loja de Messejana, a 12 km de tudo, manda
+`free_delivery_enabled: false` e continua herdando o resto.
+
+**O ligado resolvido é `false` por omissão**, ao contrário da taxa de serviço
+(que `resolve_branch_operation` resolve como ligada quando os dois lados são
+nulos). A assimetria é a armadilha 11 de novo: taxa de serviço ligada sem
+valor cobra zero e não machuca ninguém; frete grátis ligado por omissão **dá a
+entrega de graça em nome de um lojista que não pediu**.
+
+**A regra é aplicada no PEDIDO, nunca na estimativa** — e isso não é detalhe
+de implementação:
+
+- a estimativa acontece **antes de existir carrinho fechado**; ela não sabe o
+  subtotal;
+- uma rota que recebesse o subtotal do cliente para responder "grátis ou não"
+  seria **preço vindo do cliente** por outra porta.
+
+O que a estimativa e o `/menu` publicam é o **teto**, e o app calcula o
+"faltam R$ 12" com o próprio subtotal. Quem decide o valor cobrado é
+`OrderService._apply_free_delivery`, com o subtotal que o servidor calculou.
+
+Três detalhes dessa função que já têm teste:
+
+- **compara com o SUBTOTAL, não com o total.** Incluir a própria taxa faria o
+  frete grátis se autoconceder: um pedido de R$ 55 com taxa de R$ 7 alcançaria
+  o teto de R$ 60 por causa da taxa que ele está tentando não pagar;
+- **`>=`, não `>`**: "acima de R$ 60" na tela do lojista é lido por todo
+  cliente como "60 fecha o pedido com entrega grátis";
+- **roda ANTES do cupom.** Um cupom `free_delivery` desconta o valor da taxa;
+  com a ordem invertida, o cliente ganharia o desconto sobre uma taxa que não
+  ia pagar — dinheiro de volta do nada.
+
+`orders.delivery_fee_waived` grava quanto foi perdoado. Nenhum relatório lê
+essa coluna hoje, e ela existe assim mesmo: **dado não capturado na escrita
+não se recupera depois.** Com só `delivery_fee = 0` gravado, "quanto essa
+campanha me custou em agosto" não tem resposta — não dá para saber quanto a
+rota teria cobrado num pedido que já passou.
 
 ---
 
@@ -119,6 +214,82 @@ disso, a API subia e recusava todo pedido de entrega em silêncio.
 Endereço não localizado (`ZERO_RESULTS`) é outro caso: vira `route_not_found`,
 não atende, e é cacheado como negativo por `DELIVERY_ESTIMATE_NEGATIVE_CACHE_TTL_SECONDS`
 (120s por padrão).
+
+---
+
+## 3.1 Prazo por faixa de distância
+
+`branch_delivery_time_bands`, por filial, **sem herança nenhuma**: a faixa
+mede o tempo entre a porta *daquela* loja e a porta do cliente, e duas lojas
+da mesma marca em pontas opostas da cidade não têm faixa em comum.
+
+`GET`/`PUT /admin/branches/{branch_id}/delivery-time-bands` (leitura PESSOAS,
+escrita GERÊNCIA). PUT substitui todas — a tela é uma tabelinha salva junta,
+como o horário da semana. **`{"bands": []}` apaga tudo**, e o resultado não é
+"sem entrega": é o prazo voltando a sair do tempo do Google.
+
+### Onde a faixa entra na conta
+
+```
+                    ANTES              DEPOIS (com faixa que alcance)
+eta_min   prep_min + travel(Google)    prep_min + faixa.delivery_time_min
+eta_max   prep_max + travel(Google)    prep_max + faixa.delivery_time_max
+```
+
+**A faixa substitui o tempo de DESLOCAMENTO, não o ETA inteiro**, e as duas
+metades dessa frase têm motivo:
+
+- *substitui o deslocamento* porque o tempo do Google é tempo de **dirigir**.
+  Ele não inclui ensacar o pedido, a segunda entrega da mesma corrida,
+  estacionar e subir escada — e é por isso que o prazo saía curto justamente
+  no bairro longe, que é onde o cliente já desconfia. O lojista sabe esse
+  número; a API não;
+- *o preparo continua somando* porque é ele que o botão de **"+10 minutos"** do
+  almoço (`PATCH /admin/branches/{id}/prep-time`) ajusta. Uma faixa que
+  respondesse pelo prazo todo desligaria aquele botão para entrega e o
+  deixaria valendo só para retirada — bem no horário em que ele existe para
+  ser usado.
+
+O `travel_time_min` do Google **continua na resposta**, como informação: é o
+que permite comparar o prazo prometido com o que a rota diz.
+
+### As faixas são TETOS, não intervalos
+
+Só `max_distance_km` é gravado. Vale a **primeira faixa, em ordem crescente,
+cujo teto alcança a distância** (`<=`, então a distância exata do teto cai na
+própria faixa).
+
+Guardar também o piso permitiria cadastrar `0–5` e `6–10` e deixar o endereço
+de 5,4 km **sem faixa nenhuma** — um buraco que aparece no endereço de um
+cliente específico e some quando alguém vai conferir. Com teto, a cobertura
+sai de graça, e o UNIQUE `(branch_id, max_distance_km)` fecha o resto: dois
+tetos iguais não são ambiguidade de apresentação, são duas respostas para a
+mesma distância, e a que vale mudaria entre duas consultas idênticas.
+
+Endereço **além do último teto** não cai em faixa nenhuma, e isso é um estado
+válido: vale o tempo do Google, como antes desta tabela existir. Não confundir
+com `delivery_max_distance_km`, que é até onde a filial **atende** — são
+perguntas diferentes e não se misturam.
+
+### O que NÃO mudou
+
+`estimated_delivery_time_min/max` (do restaurante/filial, herdado) continua
+sendo o **rótulo de vitrine** publicado em `/menu`, digitado pelo lojista, e
+**não é recalculado a partir das faixas**: o campo mudaria de significado sem
+mudar de nome, e o lojista que digitou "30 a 60" veria outro número sem ter
+editado nada. Ele nunca entrou no ETA real — quem sempre respondeu por isso é
+`prep_time` (da faixa de horário) + deslocamento.
+
+O app recebe as faixas em `/menu` (`settings.delivery_time_bands`) e decide o
+que mostrar antes de existir endereço.
+
+### As faixas entram na chave do cache
+
+`_bands_fingerprint` entra em `_cache_key`. Sem isso, editar uma faixa no
+painel continuaria servindo o prazo antigo por até
+`DELIVERY_ESTIMATE_CACHE_TTL_SECONDS` — e o lojista que acabou de corrigir um
+prazo desonesto veria a correção não surtir efeito, sem nada no log. O cache
+existe para poupar chamada paga ao Google, não para congelar configuração.
 
 ---
 
@@ -232,6 +403,18 @@ A estimativa é **descartada** (e o Google chamado de novo) quando:
 
 O grep para quando a conta do Maps subir:
 `[Delivery estimate] estimativa nao reaproveitada motivo=`.
+
+**O que o token NÃO carrega, e por que isso importa desde a revisão 0030.** A
+linha guardada tem taxa, distância e prazo — e mais nada. Frete grátis e a
+pausa da entrega são decididos no PEDIDO, com a configuração viva da filial:
+
+- o token de uma estimativa feita antes de a campanha ser ligada **ganha** o
+  frete grátis, porque a regra roda depois com o subtotal real;
+- o token de uma estimativa feita antes da pausa **é recusado**, porque
+  `_validate_branch_accepts_order` roda antes de o token ser lido.
+
+Congelar qualquer uma das duas no token seria o mesmo defeito da armadilha 12
+com outro nome: valor de estimativa velha decidindo o pedido de agora.
 
 O motivo legítimo e frequente é o cliente demorar mais de 15 minutos para fechar
 o pedido. Aumentar esse TTL reduz custo e aumenta a chance de cobrar uma taxa

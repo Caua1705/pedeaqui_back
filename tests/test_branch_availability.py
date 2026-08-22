@@ -121,12 +121,16 @@ def filial(
         is_open=is_open,
         accepts_delivery=True,
         accepts_pickup=True,
+        delivery_paused_until=None,
+        delivery_pause_reason=None,
         min_order_value=None,
         service_fee_enabled=None,
         service_fee_amount=None,
         estimated_delivery_time_min=None,
         estimated_delivery_time_max=None,
         default_delivery_fee=None,
+        free_delivery_enabled=None,
+        free_delivery_min_order_value=None,
     )
 
 
@@ -152,6 +156,7 @@ class BranchAvailabilityTests(unittest.TestCase):
                 (b for b in self.filiais if b.id == branch_id), None
             ),
             list_business_hours_by_weekday=lambda branch_id, weekday: self.horarios.get(branch_id, []),
+            list_delivery_time_bands=lambda branch_id: [],
         )
         hours_service = BranchHoursService.__new__(BranchHoursService)
         hours_service.branch_repository = branch_repository
@@ -171,6 +176,8 @@ class BranchAvailabilityTests(unittest.TestCase):
                 estimated_delivery_time_min=None,
                 estimated_delivery_time_max=None,
                 default_delivery_fee=None,
+                free_delivery_enabled=None,
+                free_delivery_min_order_value=None,
             )
         )
         delivery.menu_repository = menu_repository

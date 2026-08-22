@@ -78,6 +78,15 @@ class Order(Base):
     delivery_prep_time_max: Mapped[int | None] = mapped_column(Integer)
     delivery_eta_min: Mapped[int | None] = mapped_column(Integer)
     delivery_eta_max: Mapped[int | None] = mapped_column(Integer)
+    # Quanto a regra de frete gratis deixou de cobrar NESTE pedido.
+    #
+    # Nenhum relatorio le esta coluna hoje. Ela existe porque dado nao
+    # capturado na escrita nao se recupera depois: com so `delivery_fee = 0`
+    # gravado, "quanto essa campanha me custou em agosto" nao tem resposta —
+    # nao da para saber quanto a rota teria cobrado num pedido que ja passou.
+    delivery_fee_waived: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, default=Decimal("0")
+    )
     delivery_estimate_provider: Mapped[str | None] = mapped_column(Text)
     delivery_estimated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)

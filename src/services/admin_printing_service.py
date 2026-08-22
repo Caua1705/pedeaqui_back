@@ -9,6 +9,11 @@ Duas responsabilidades que andam juntas:
    com quais itens, em que ordem. O DESENHO de cada via nao esta aqui — fica
    em `src/services/print_layout.py`, sem banco, para poder ser testado
    linha a linha.
+3. **Como a comanda daquela filial e personalizada** (revisao
+   `20260821_0029`): a mensagem do rodape e quantas vias saem por tipo de
+   pedido. Mora aqui, e nao em `AdminSettingsService`, porque e a mesma tela
+   do painel dos setores e das impressoras — e porque quem le essas colunas
+   e a montagem das vias, logo acima.
 
 Tres regras deste arquivo merecem ser lidas antes de mexer:
 
@@ -51,8 +56,10 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.admin_scope import AdminScope
+from src.models.branch_model import Branch
 from src.models.printing_sector_model import PrintingSector
 from src.repositories.admin_menu_repository import AdminMenuRepository
+from src.repositories.admin_settings_repository import AdminSettingsRepository
 from src.repositories.branch_repository import BranchRepository
 from src.repositories.printing_sector_repository import PrintingSectorRepository
 from src.schemas.admin_printing_schema import (
@@ -60,6 +67,8 @@ from src.schemas.admin_printing_schema import (
     FONT_NORMAL,
     PRINT_JOB_CUSTOMER,
     PRINT_JOB_PRODUCTION,
+    BranchPrintSettingsResponse,
+    BranchPrintSettingsUpdate,
     CategoryPrintingSectorResponse,
     OrderPrintJobsResponse,
     PrintingSectorCreate,
@@ -71,6 +80,7 @@ from src.schemas.admin_printing_schema import (
 )
 from src.schemas.order_schema import OrderDetailResponse, OrderItemResponse
 from src.services.admin_order_service import AdminOrderService
+from src.services.branch_operation import resolve_receipt_footer
 from src.services.order_state_machine import PAYMENT_STATUSES_THAT_RELEASE_ORDER
 from src.services.print_layout import (
     PRODUCTION_WIDTH,
@@ -92,6 +102,12 @@ CUSTOMER_JOB_NAME = "Via do cliente"
 # para que nenhum item saia da comanda sem alguem ter mandado.
 UNASSIGNED_SECTOR_NAME = "SEM SETOR"
 
+# Quantas vias saem quando nao ha filial para consultar. E o comportamento
+# anterior a revisao 20260821_0029 — uma do cliente, uma de cada setor —, e
+# nao zero: a comanda que nao sai por causa de uma leitura que falhou e um
+# pedido que a cozinha nunca ve.
+DEFAULT_COPIES = (1, 1)
+
 
 class AdminPrintingService:
     def __init__(self, db: Session):
@@ -99,6 +115,9 @@ class AdminPrintingService:
         self.repository = PrintingSectorRepository(db)
         self.branch_repository = BranchRepository(db)
         self.menu_repository = AdminMenuRepository(db)
+        # So para ler o padrao do restaurante na heranca do rodape. A
+        # escrita dele e de `AdminSettingsService`, e continua la.
+        self.settings_repository = AdminSettingsRepository(db)
         # Reusado inteiro, e nao so o repositorio de pedidos: e ele que
         # decide o que este lojista pode ler (restaurante E filial, mesmo
         # 404 para os tres motivos). Uma segunda conferencia de escopo aqui
@@ -227,6 +246,53 @@ class AdminPrintingService:
             updated_products=updated,
         )
 
+    def get_print_settings(
+        self,
+        scope: AdminScope,
+        branch_id: uuid.UUID,
+    ) -> BranchPrintSettingsResponse:
+        return self._print_settings_response(self._get_branch(scope, branch_id))
+
+    def update_print_settings(
+        self,
+        scope: AdminScope,
+        branch_id: uuid.UUID,
+        payload: BranchPrintSettingsUpdate,
+    ) -> BranchPrintSettingsResponse:
+        """Rodape e contagem de vias desta filial.
+
+        `exclude_unset` e o que separa os tres estados de
+        `receipt_footer_message`: ausente nao mexe, `null` volta a herdar a
+        mensagem do restaurante e `""` desliga o rodape nesta loja. Trocar
+        por `exclude_none` numa limpeza futura apagaria os dois ultimos um
+        contra o outro — e a filial perderia o unico jeito de recusar a
+        campanha da rede.
+        """
+        branch = self._get_branch(scope, branch_id)
+        changes = payload.model_dump(exclude_unset=True)
+
+        for field, value in changes.items():
+            setattr(branch, field, value)
+        self._commit()
+        return self._print_settings_response(branch)
+
+    def _print_settings_response(self, branch: Branch) -> BranchPrintSettingsResponse:
+        """A sobrescrita e o efetivo, como na tela de operacao.
+
+        Os dois porque a tela precisa dos dois: o campo de edicao mostra o
+        que ESTA FILIAL gravou (vazio = herdando) e o texto ao lado mostra o
+        que o cliente vai ler na bobina.
+        """
+        return BranchPrintSettingsResponse(
+            branch_id=branch.id,
+            receipt_footer_message=branch.receipt_footer_message,
+            effective_receipt_footer_message=self._footer_of(branch),
+            print_customer_copies_delivery=branch.print_customer_copies_delivery,
+            print_production_copies_delivery=branch.print_production_copies_delivery,
+            print_customer_copies_pickup=branch.print_customer_copies_pickup,
+            print_production_copies_pickup=branch.print_production_copies_pickup,
+        )
+
     def build_print_jobs(
         self,
         order_id: uuid.UUID,
@@ -239,24 +305,22 @@ class AdminPrintingService:
         mesmo `OrderDetailResponse` que o painel ja mostra — inclusive os
         adicionais agrupados por grupo de complemento, que sao o que faz a
         troca de acompanhamento aparecer na comanda da cozinha.
+
+        **Copia e entrada repetida na lista**, e nao um campo `copies`: nao
+        existe atualizacao remota do agente, e um campo novo so valeria nas
+        lojas que alguem fosse visitar. Repetindo a entrada, a configuracao
+        de vias funciona hoje em toda instalacao ja em campo.
         """
         order = self.order_service.get_order_detail(order_id, scope)
+        # A filial do PEDIDO, ativa ou nao: reimprimir pedido de uma loja
+        # desativada tem que sair com a configuracao daquela loja.
+        branch = self.branch_repository.get_by_id_and_restaurant(
+            order.branch_id, scope.restaurant_id
+        )
+        customer_copies, production_copies = _copies_for(branch, order.order_type)
 
-        jobs = [
-            PrintJobResponse(
-                type=PRINT_JOB_CUSTOMER,
-                sector_id=None,
-                sector_name=CUSTOMER_JOB_NAME,
-                # A via do cliente nao pertence a setor nenhum, entao nao
-                # tem impressora escolhida: ela cai na padrao do agente. Foi
-                # sempre assim; a coluna nova nao muda isso.
-                printer_name=None,
-                columns=RECEIPT_WIDTH,
-                font_size=FONT_NORMAL,
-                content=build_customer_receipt(order, RECEIPT_WIDTH),
-            )
-        ]
-        jobs.extend(self._production_jobs(order, scope))
+        jobs = self._customer_jobs(order, branch, customer_copies)
+        jobs.extend(self._production_jobs(order, scope, production_copies))
 
         return OrderPrintJobsResponse(
             order_id=order.id,
@@ -265,24 +329,82 @@ class AdminPrintingService:
             jobs=jobs,
         )
 
+    def _customer_jobs(
+        self,
+        order: OrderDetailResponse,
+        branch: Branch | None,
+        copies: int,
+    ) -> list[PrintJobResponse]:
+        """A via do cliente, repetida quantas vezes a filial pediu.
+
+        Vazia quando a filial zerou a contagem daquele tipo de pedido — o
+        caso que motivou a feature e a RETIRADA, onde a via que iria
+        grampeada na sacola nao tem sacola em que ser grampeada.
+        """
+        if copies < 1:
+            return []
+
+        job = PrintJobResponse(
+            type=PRINT_JOB_CUSTOMER,
+            sector_id=None,
+            sector_name=CUSTOMER_JOB_NAME,
+            # A via do cliente nao pertence a setor nenhum, entao nao
+            # tem impressora escolhida: ela cai na padrao do agente. Foi
+            # sempre assim; a coluna nova nao muda isso.
+            printer_name=None,
+            columns=RECEIPT_WIDTH,
+            font_size=FONT_NORMAL,
+            content=build_customer_receipt(order, RECEIPT_WIDTH, self._footer_of(branch)),
+        )
+        return [job] * copies
+
+    def _footer_of(self, branch: Branch | None) -> str | None:
+        """A mensagem do rodape que vale NESTA filial.
+
+        Custa uma consulta a `restaurant_settings` por pedido impresso, e
+        ela e o preco da heranca: a coluna da filial responde "o que esta
+        sobrescrito", que aqui quase nunca e a pergunta — a maioria das
+        lojas herda a mensagem da marca e tem a propria coluna nula.
+
+        Quem combina as duas fontes e `resolve_receipt_footer`, e nao uma
+        conta local: duas implementacoes da mesma heranca discordam sem
+        erro (armadilha 35), e esta discordaria imprimindo a campanha na
+        loja que a recusou.
+        """
+        if branch is None:
+            return None
+        settings_row = self.settings_repository.get_settings(branch.restaurant_id)
+        return resolve_receipt_footer(branch, settings_row)
+
     def _production_jobs(
         self,
         order: OrderDetailResponse,
         scope: AdminScope,
+        copies: int,
     ) -> list[PrintJobResponse]:
-        """Uma via por setor que tenha item neste pedido.
+        """Uma via por setor que tenha item neste pedido, repetida `copies`.
 
-        Vazio quando o pagamento online ainda nao foi confirmado: comanda
-        impressa e ordem de producao, e a regra do "aguardando pagamento,
-        nao preparar" nao pode valer so para quem esta olhando a tela.
+        Vazio em dois casos, e eles sao diferentes:
+
+        - **pagamento online nao confirmado** — comanda impressa e ordem de
+          producao, e a regra do "aguardando pagamento, nao preparar" nao
+          pode valer so para quem esta olhando a tela;
+        - **a filial zerou a contagem** deste tipo de pedido. Aqui o retorno
+          e antecipado de proposito: sem via para imprimir, nao ha por que
+          separar os itens por setor — e nem por que avisar no log que um
+          setor esta desativado, aviso que so faz sentido para quem esperava
+          uma bobina.
         """
+        if copies < 1:
+            return []
         if order.payment_status not in PAYMENT_STATUSES_THAT_RELEASE_ORDER:
             return []
 
         items_by_sector, unassigned = self._split_items_by_sector(order, scope)
 
-        jobs = [
-            PrintJobResponse(
+        jobs: list[PrintJobResponse] = []
+        for sector, items in items_by_sector:
+            job = PrintJobResponse(
                 type=PRINT_JOB_PRODUCTION,
                 sector_id=sector.id,
                 sector_name=sector.name,
@@ -295,24 +417,23 @@ class AdminPrintingService:
                 font_size=FONT_LARGE,
                 content=build_production_ticket(order, sector.name, items, PRODUCTION_WIDTH),
             )
-            for sector, items in items_by_sector
-        ]
+            jobs += [job] * copies
+
         if unassigned:
-            jobs.append(
-                PrintJobResponse(
-                    type=PRINT_JOB_PRODUCTION,
-                    sector_id=None,
-                    sector_name=UNASSIGNED_SECTOR_NAME,
-                    # A via de resgate nao tem setor, logo nao tem impressora
-                    # escolhida: cai na padrao, que e onde alguem a encontra.
-                    printer_name=None,
-                    columns=PRODUCTION_WIDTH,
-                    font_size=FONT_LARGE,
-                    content=build_production_ticket(
-                        order, UNASSIGNED_SECTOR_NAME, unassigned, PRODUCTION_WIDTH
-                    ),
-                )
+            rescue = PrintJobResponse(
+                type=PRINT_JOB_PRODUCTION,
+                sector_id=None,
+                sector_name=UNASSIGNED_SECTOR_NAME,
+                # A via de resgate nao tem setor, logo nao tem impressora
+                # escolhida: cai na padrao, que e onde alguem a encontra.
+                printer_name=None,
+                columns=PRODUCTION_WIDTH,
+                font_size=FONT_LARGE,
+                content=build_production_ticket(
+                    order, UNASSIGNED_SECTOR_NAME, unassigned, PRODUCTION_WIDTH
+                ),
             )
+            jobs += [rescue] * copies
         return jobs
 
     def _split_items_by_sector(
@@ -514,3 +635,29 @@ class AdminPrintingService:
         except Exception:
             self.db.rollback()
             raise
+
+
+def _copies_for(branch: Branch | None, order_type: str) -> tuple[int, int]:
+    """Quantas vias do cliente e quantas de CADA setor, neste tipo de pedido.
+
+    Escrito nos dois casos por extenso, e nao com o nome da coluna montado a
+    partir do `order_type`: sao quatro colunas, e a versao montada nao
+    aparece numa busca por `print_customer_copies_pickup` — que e como
+    alguem chega ate aqui vindo do painel.
+
+    Tipo de pedido desconhecido cai em entrega, que e a configuracao mais
+    completa (as duas vias). Um `ORDER_TYPES` novo imprimindo demais e um
+    lojista que ajusta a tela; imprimindo de menos, e uma comanda que a
+    cozinha nunca recebe e ninguem procura.
+    """
+    if branch is None:
+        return DEFAULT_COPIES
+    if order_type == "pickup":
+        return (
+            branch.print_customer_copies_pickup,
+            branch.print_production_copies_pickup,
+        )
+    return (
+        branch.print_customer_copies_delivery,
+        branch.print_production_copies_delivery,
+    )

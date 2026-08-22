@@ -32,6 +32,7 @@ from src.models.order_item_model import OrderItem
 from src.models.order_item_option_model import OrderItemOption
 from src.models.order_model import Order
 from src.services.order_service import OrderService
+from src.schemas.admin_printing_schema import clean_footer_message
 from src.services.print_layout import (
     PRODUCTION_WIDTH,
     RECEIPT_WIDTH,
@@ -300,6 +301,86 @@ class ProductionTicketTests(unittest.TestCase):
         order = detail_of([make_item(observation="ao ponto")])
 
         self.assertIn("ao ponto", build_production_ticket(order, "Chapa", order.items))
+
+
+class FooterMessageTests(unittest.TestCase):
+    """A mensagem que o lojista escreve para o fim da via do cliente.
+
+    E o unico texto da comanda que uma pessoa escreve MIRANDO a bobina — e
+    por isso o unico que pode chegar com quebra de linha, com emoji e com
+    coisa que nao e texto. Cada teste aqui guarda uma dessas.
+    """
+
+    def test_it_comes_out_at_the_end_of_the_customer_copy(self):
+        order = detail_of()
+
+        content = build_customer_receipt(order, RECEIPT_WIDTH, "Peca direto e ganhe 5%")
+
+        self.assertIn("Peca direto e ganhe 5%", content)
+        # Depois do total e do pagamento: e rodape, nao mais um campo do
+        # pedido no meio da conferencia do balcao.
+        self.assertGreater(content.index("Peca direto"), content.index("TOTAL"))
+
+    def test_the_line_break_the_shopkeeper_typed_survives(self):
+        """`textwrap` trata quebra de linha como espaco. Sem partir o texto
+        antes de embrulhar, "Peca no site" e "@nossaloja" sairiam grudados
+        na mesma linha, e o campo de edicao mentiria sobre o resultado."""
+        order = detail_of()
+
+        content = build_customer_receipt(
+            order, RECEIPT_WIDTH, "Peca no site\n@nossaloja"
+        )
+
+        linhas = [line.strip() for line in content.splitlines()]
+        self.assertIn("Peca no site", linhas)
+        self.assertIn("@nossaloja", linhas)
+
+    def test_a_long_message_never_exceeds_the_width(self):
+        # Mesma regra do resto do arquivo, e aqui ela morde mais: o texto e
+        # do lojista, nao nosso.
+        order = detail_of()
+        recado = "Acompanhe o pedido pelo nosso Instagram @juniordapicanha e peca direto"
+
+        content = build_customer_receipt(order, RECEIPT_WIDTH, recado)
+
+        for line in content.splitlines():
+            self.assertLessEqual(len(line), RECEIPT_WIDTH, line)
+
+    def test_without_a_message_the_receipt_is_exactly_what_it_was(self):
+        # Filial que nao configurou nada nao ganha linha nenhuma a mais: o
+        # rodape e espaco de graca so enquanto ninguem o gasta a toa.
+        order = detail_of()
+
+        self.assertEqual(
+            build_customer_receipt(order, RECEIPT_WIDTH, None),
+            build_customer_receipt(order, RECEIPT_WIDTH, ""),
+        )
+
+    def test_no_control_byte_survives_into_the_receipt(self):
+        """O teste que protege a impressora, e nao o layout.
+
+        O agente escreve `content` direto no fluxo ESC/POS e a codepage
+        passa `0x1B` adiante intacto: um ESC colado no meio da mensagem
+        deixaria de ser texto e viraria comando, reprogramando a impressora
+        no meio da comanda. `encode_text` nao defende contra isso — o
+        trabalho dele e o que a TABELA nao tem (acento, emoji), e `0x1B` a
+        tabela tem.
+
+        Por isso a assercao e sobre o caminho inteiro: o que o validador
+        aceita, desenhado na via, nao pode ter byte de controle nenhum alem
+        da propria quebra de linha.
+        """
+        sujo = "Peca\x1b|8@ direto\x00 no site\x07"
+        order = detail_of()
+
+        content = build_customer_receipt(
+            order, RECEIPT_WIDTH, clean_footer_message(sujo)
+        )
+
+        for character in content:
+            if character == "\n":
+                continue
+            self.assertGreaterEqual(ord(character), 32, repr(character))
 
 
 class TestTicketTests(unittest.TestCase):

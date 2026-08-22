@@ -10,7 +10,7 @@ Se a formatacao vivesse no agente, cada loja com uma versao instalada
 imprimiria uma comanda diferente, e corrigir um bug de layout viraria uma
 operacao de campo em vez de um deploy.
 
-Tres decisoes valem para o arquivo inteiro:
+Quatro decisoes valem para o arquivo inteiro:
 
 1. **A entrada e o `OrderDetailResponse`**, o mesmo objeto que o painel
    recebe em `GET /admin/orders/{id}`. Nao e economia de codigo: e a
@@ -29,6 +29,15 @@ Tres decisoes valem para o arquivo inteiro:
    `PRODUCTION_WIDTH`, e nao com `RECEIPT_WIDTH` — texto quebrado em 48
    colunas sairia dobrando linha sozinho na impressora, e "1x FILE COM
    FRITAS" viraria duas linhas cortadas no meio da palavra.
+
+4. **Texto do lojista chega aqui ja limpo.** A mensagem do rodape e o unico
+   campo que uma pessoa escreve MIRANDO a bobina, e quem tira dela o
+   caractere de controle e `normalize_receipt_text`, na escrita. A razao de
+   nao ser aqui: o agente escreve `content` direto no fluxo ESC/POS, entao
+   um `0x1B` que sobrevivesse ate este modulo ja teria sido gravado no
+   banco, e toda comanda daquela filial sairia reprogramando a impressora.
+   Este arquivo decide LARGURA e QUEBRA; o que pode existir no texto e
+   decidido antes.
 """
 
 import textwrap
@@ -194,12 +203,20 @@ def field(label: str, value: str, width: int, label_width: int) -> list[str]:
 def build_customer_receipt(
     order: OrderDetailResponse,
     width: int = RECEIPT_WIDTH,
+    footer_message: str | None = None,
 ) -> str:
     """A via do cliente: quem pediu, o que pediu e quanto deu.
 
     E a unica via com dinheiro. A de producao nao tem preco nenhum — quem
     esta na chapa nao precisa saber quanto custa e, se souber, tem mais uma
     linha para ler no meio do aperto.
+
+    `footer_message` e o texto livre do lojista, e so aparece AQUI: a via de
+    producao vai para a cozinha, em 24 colunas de fonte dupla, e propaganda
+    nela seria papel gasto e mais uma linha para quem esta no aperto ler. Ele
+    chega ja limpo de `normalize_receipt_text` (que e quem tira o caractere
+    de controle antes de a mensagem ser GRAVADA); aqui sobra decidir como ele
+    e quebrado.
     """
     # Coluna onde o valor comeca em todo o bloco de cabecalho. Sai do rotulo
     # MAIS LONGO ("PAGAMENTO:") mais o espaco: calculado no menor rotulo, o
@@ -238,6 +255,8 @@ def build_customer_receipt(
         lines.append(rule(width))
         lines.append("OBS. DO PEDIDO:")
         lines += wrap(order.notes, width)
+
+    lines += _footer_block(footer_message, width)
 
     lines.append(rule(width, "="))
     return "\n".join(lines)
@@ -309,6 +328,36 @@ def build_test_ticket(
     lines += wrap("Acentos: ÇÃÕÉÜ ção não é", width)
     lines.append(rule(width, "="))
     return "\n".join(lines)
+
+
+def _footer_block(message: str | None, width: int) -> list[str]:
+    """A mensagem do lojista no fim da via. Vazia nao imprime nada.
+
+    Centralizada porque e o que ela e: um carimbo no rodape, e nao mais um
+    campo do pedido. Alinhada a esquerda, ela se confundiria com a ultima
+    observacao impressa logo acima.
+
+    **A quebra do lojista e respeitada, e por isso o texto e partido na
+    quebra de linha ANTES de ser embrulhado.** `textwrap` trata quebra como
+    espaco: passado o texto inteiro de uma vez, "Peca no site" e "@nossaloja"
+    sairiam grudados na mesma linha, e o lojista que apertou Enter entre os
+    dois nao teria como conseguir o que viu no campo de edicao.
+
+    Linha em branco no meio continua em branco (o `""`, que cabe em qualquer
+    largura). O teto de linhas nao esta aqui: quem o aplica e o validador do
+    corpo, na ESCRITA, para o lojista receber 422 com a explicacao em vez de
+    descobrir o corte na bobina.
+    """
+    if not message:
+        return []
+
+    lines = [rule(width)]
+    for paragraph in message.splitlines():
+        if not paragraph.strip():
+            lines.append("")
+            continue
+        lines += center(paragraph, width)
+    return lines
 
 
 def _address_block(order: OrderDetailResponse, width: int, label_width: int) -> list[str]:

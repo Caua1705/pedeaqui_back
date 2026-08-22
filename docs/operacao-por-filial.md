@@ -49,6 +49,7 @@ Esta é a decisão de desenho do passo, e ela explica por que alguns campos têm
 | `is_open` | o "fechar agora": acabou o gás, a fila cresceu |
 | `accepts_delivery` | esta loja está entregando hoje |
 | `accepts_pickup` | esta loja está atendendo retirada |
+| `delivery_paused_until` | a pausa temporária da entrega (revisão `0030`) |
 
 São o que **alguém no balcão aperta durante o expediente**. Um padrão do
 restaurante para eles não responderia pergunta nenhuma: "o restaurante está
@@ -64,6 +65,8 @@ loja.
 | `service_fee_enabled` / `service_fee_amount` | taxa de serviço |
 | `estimated_delivery_time_min` / `_max` | prazo mostrado na vitrine |
 | `default_delivery_fee` | taxa de contingência quando o Google cai |
+| `free_delivery_enabled` / `free_delivery_min_order_value` | frete grátis acima de X (revisão `0030`) |
+| `receipt_footer_message` | mensagem no rodapé da comanda (revisão `0029`) |
 
 São **preço negociado da marca**. Aqui `null` na filial significa **"herda o
 padrão do restaurante"**, e é o estado em que toda filial existente nasceu.
@@ -76,6 +79,32 @@ para ligar** e os seis preços já chegam certos.
 
 **Por que não "tudo herdado".** Porque `is_open` compartilhado é exatamente o
 defeito que este passo fecha.
+
+### Dois campos herdados precisam de um SEGUNDO estado para "desligado"
+
+`NULL` significa "herda". Para a filial poder **recusar** o que a marca
+configurou, é preciso um valor que signifique "desligado nesta loja" — e nem
+todo tipo tem um:
+
+| Campo | Como a filial recusa |
+|---|---|
+| `service_fee_enabled` | `false` (booleano ao lado do valor) |
+| `free_delivery_enabled` | `false` — idem, e é por isso que a campanha são **dois** campos: não existe número que diga "desligado", já que `0` seria "grátis sempre" |
+| `receipt_footer_message` | `""` — a string vazia é "esta loja não imprime rodapé" |
+
+O `_ou_herdado` testa `is not None` justamente por isso. Um `or` no lugar dele
+colapsaria os três: a taxa que o lojista desligou voltaria a ser cobrada, a
+campanha voltaria a valer na loja que a recusou, e o rodapé da marca voltaria
+a sair — os três sem uma linha no log.
+
+### A pausa da entrega é estado do dia, mas com uma diferença
+
+`accepts_delivery` espera alguém religar; `delivery_paused_until` vence
+sozinho. É a única chave da operação que se desfaz sem intervenção, e ela
+existe por isso: o dia em que se pausa a entrega é o dia em que ninguém lembra
+de despausá-la. As duas se combinam em **`accepts_delivery_now`** — o campo
+que decide pedido. Detalhes em
+[entrega-e-horarios.md](entrega-e-horarios.md), §1.1.
 
 ### `default_delivery_fee` entrou por estar na mesma situação
 

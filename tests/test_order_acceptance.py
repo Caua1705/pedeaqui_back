@@ -14,6 +14,7 @@ olharia para elas.
 
 import unittest
 import uuid
+from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -21,6 +22,7 @@ from fastapi import HTTPException
 
 from src.schemas.order_schema import CreateOrderRequest
 from src.services.order_service import OrderService
+from src.utils.security import utcnow
 
 
 class FakeDb:
@@ -70,6 +72,8 @@ def build_service(
         is_open=is_open,
         accepts_delivery=accepts_delivery,
         accepts_pickup=accepts_pickup,
+        delivery_paused_until=None,
+        delivery_pause_reason=None,
         # Nulos: esta filial nao sobrescreve nada e herda os padroes do
         # restaurante, que e o estado em que toda filial nasce.
         min_order_value=None,
@@ -78,6 +82,8 @@ def build_service(
         estimated_delivery_time_min=None,
         estimated_delivery_time_max=None,
         default_delivery_fee=None,
+        free_delivery_enabled=None,
+        free_delivery_min_order_value=None,
     )
     product_id = uuid.uuid4()
     product = SimpleNamespace(
@@ -112,6 +118,8 @@ def build_service(
             estimated_delivery_time_min=None,
             estimated_delivery_time_max=None,
             default_delivery_fee=None,
+            free_delivery_enabled=None,
+            free_delivery_min_order_value=None,
             platform_commission_percent=Decimal("10.00"),
         )
     )
@@ -200,12 +208,16 @@ class StoreAvailabilityTests(unittest.TestCase):
             is_open=True,
             accepts_delivery=True,
             accepts_pickup=True,
+            delivery_paused_until=None,
+            delivery_pause_reason=None,
             min_order_value=None,
             service_fee_enabled=None,
             service_fee_amount=None,
             estimated_delivery_time_min=None,
             estimated_delivery_time_max=None,
             default_delivery_fee=None,
+            free_delivery_enabled=None,
+            free_delivery_min_order_value=None,
         )
         filiais = {pausada.id: pausada, aberta.id: aberta}
         service.branch_repository.get_active_by_id_and_restaurant = (
@@ -216,6 +228,185 @@ class StoreAvailabilityTests(unittest.TestCase):
             service.create_order("junior", build_payload(pausada, product_id))
 
         service.create_order("junior", build_payload(aberta, product_id))
+        self.assertEqual(len(service.order_repository.orders), 1)
+
+
+def delivery_payload(branch, product_id, **kwargs):
+    payload = build_payload(branch, product_id, order_type="delivery", **kwargs)
+    payload.address = SimpleNamespace(
+        street="Rua A", number="1", neighborhood="Centro",
+        complement=None, reference=None, city="Fortaleza", state="CE", zipcode=None,
+    )
+    return payload
+
+
+def with_estimate(service, delivery_fee):
+    """Substitui a estimativa por uma taxa fixa.
+
+    O que se testa aqui e a regra de frete gratis, que roda DEPOIS de a taxa
+    existir. De onde a taxa veio (rota do Google, contingencia, token
+    reaproveitado) e assunto de test_delivery_estimate.
+    """
+    service._estimate_delivery = lambda *args, **kwargs: SimpleNamespace(
+        delivery_fee=delivery_fee,
+        latitude=None,
+        longitude=None,
+        distance_km=4.2,
+        travel_time_min=18,
+        prep_time_min=20,
+        prep_time_max=30,
+        eta_min=38,
+        eta_max=48,
+        provider="google_routes",
+    )
+
+
+class FreteGratisTests(unittest.TestCase):
+    """A campanha aplicada no PEDIDO, que e o unico lugar onde ela decide.
+
+    A estimativa nao sabe o subtotal — ela e feita antes de existir carrinho
+    fechado —, entao ela publica o TETO e o servidor decide aqui, com o
+    subtotal que ele mesmo calculou. Uma rota que recebesse o subtotal do
+    cliente para responder "gratis ou nao" seria preco vindo do cliente por
+    outra porta.
+
+    O produto deste arquivo custa R$ 50,00.
+    """
+
+    def _service(self, teto, **kwargs):
+        service, branch, product_id = build_service(**kwargs)
+        branch.free_delivery_enabled = True
+        branch.free_delivery_min_order_value = teto
+        with_estimate(service, 7.0)
+        return service, branch, product_id
+
+    def test_acima_do_teto_a_taxa_e_zerada(self):
+        service, branch, product_id = self._service(Decimal("40.00"))
+
+        service.create_order("junior", delivery_payload(branch, product_id))
+
+        pedido = service.order_repository.orders[0]
+        self.assertEqual(pedido.delivery_fee, Decimal("0.00"))
+        # Quanto foi perdoado fica gravado: sem capturar na escrita, "quanto
+        # essa campanha me custou em agosto" nao tem resposta depois.
+        self.assertEqual(pedido.delivery_fee_waived, Decimal("7.00"))
+        self.assertEqual(pedido.total, Decimal("50.00"))
+
+    def test_no_teto_exato_a_entrega_ja_e_gratis(self):
+        # ">=", e nao ">": "acima de R$ 50" na tela do lojista e lido por
+        # todo cliente como "50 fecha o pedido com entrega gratis".
+        service, branch, product_id = self._service(Decimal("50.00"))
+
+        service.create_order("junior", delivery_payload(branch, product_id))
+
+        self.assertEqual(service.order_repository.orders[0].delivery_fee, Decimal("0.00"))
+
+    def test_abaixo_do_teto_a_taxa_continua_cheia(self):
+        service, branch, product_id = self._service(Decimal("60.00"))
+
+        service.create_order("junior", delivery_payload(branch, product_id))
+
+        pedido = service.order_repository.orders[0]
+        self.assertEqual(pedido.delivery_fee, Decimal("7.00"))
+        self.assertEqual(pedido.delivery_fee_waived, Decimal("0.00"))
+
+    def test_a_campanha_desligada_nao_zera_nada(self):
+        service, branch, product_id = self._service(Decimal("40.00"))
+        branch.free_delivery_enabled = False
+
+        service.create_order("junior", delivery_payload(branch, product_id))
+
+        self.assertEqual(service.order_repository.orders[0].delivery_fee, Decimal("7.00"))
+
+    def test_ligada_sem_teto_cadastrado_nao_da_entrega_de_graca(self):
+        """`enabled` sem valor nao e "gratis sempre": nao ha o que comparar.
+
+        E a armadilha 11 escrita de outro jeito — na duvida, o lado que nao
+        gasta o dinheiro do lojista.
+        """
+        service, branch, product_id = self._service(None)
+
+        service.create_order("junior", delivery_payload(branch, product_id))
+
+        self.assertEqual(service.order_repository.orders[0].delivery_fee, Decimal("7.00"))
+
+    def test_a_comparacao_e_com_o_subtotal_e_nao_com_o_total(self):
+        """Incluir a propria taxa faria o frete gratis se autoconceder.
+
+        Com teto de R$ 55 e produto de R$ 50, o pedido so alcanca 57 SOMANDO
+        a taxa de 7 que ele esta tentando nao pagar.
+        """
+        service, branch, product_id = self._service(Decimal("55.00"))
+
+        service.create_order("junior", delivery_payload(branch, product_id))
+
+        self.assertEqual(service.order_repository.orders[0].delivery_fee, Decimal("7.00"))
+
+    def test_na_retirada_nao_ha_taxa_a_perdoar(self):
+        service, branch, product_id = self._service(Decimal("40.00"))
+        service._estimate_delivery = lambda *args, **kwargs: None
+
+        service.create_order("junior", build_payload(branch, product_id))
+
+        pedido = service.order_repository.orders[0]
+        self.assertEqual(pedido.delivery_fee, Decimal("0.00"))
+        # Zero perdoado, e nao zero perdoado "de sete": a retirada nunca teve
+        # taxa, e registrar perdao aqui poluiria o relatorio da campanha.
+        self.assertEqual(pedido.delivery_fee_waived, Decimal("0.00"))
+
+
+class PausaDaEntregaTests(unittest.TestCase):
+    def test_pedido_de_entrega_e_recusado_enquanto_a_pausa_vale(self):
+        service, branch, product_id = build_service()
+        branch.delivery_paused_until = utcnow() + timedelta(minutes=40)
+        with_estimate(service, 7.0)
+
+        with self.assertRaises(HTTPException) as raised:
+            service.create_order("junior", delivery_payload(branch, product_id))
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertEqual(service.order_repository.orders, [])
+
+    def test_a_pausa_nao_atrapalha_a_retirada(self):
+        # Pausar a entrega nao fecha a loja: quem esta no balcao continua
+        # vendendo.
+        service, branch, product_id = build_service()
+        branch.delivery_paused_until = utcnow() + timedelta(minutes=40)
+
+        service.create_order("junior", build_payload(branch, product_id))
+
+        self.assertEqual(len(service.order_repository.orders), 1)
+
+    def test_a_recusa_acontece_antes_da_estimativa(self):
+        """O buraco que esta checagem fecha.
+
+        Pedido que chega com `delivery_estimate_token` valido reaproveita a
+        estimativa guardada e NAO passa por `DeliveryEstimateService.estimate()`
+        — onde a pausa tambem e conferida. Sem a checagem no proprio pedido, o
+        cliente que estimou as 18h55 fecharia as 19h05 com a entrega pausada
+        desde as 19h, e a loja receberia justamente o pedido que pausou para
+        nao receber.
+
+        O dublê levanta se for chamado: a recusa tem que vir antes.
+        """
+        service, branch, product_id = build_service()
+        branch.delivery_paused_until = utcnow() + timedelta(minutes=40)
+
+        def nao_deveria_ser_chamado(*args, **kwargs):
+            raise AssertionError("a pausa tinha que recusar antes da estimativa")
+
+        service._estimate_delivery = nao_deveria_ser_chamado
+
+        with self.assertRaises(HTTPException):
+            service.create_order("junior", delivery_payload(branch, product_id))
+
+    def test_pausa_vencida_volta_a_aceitar_pedido_sozinha(self):
+        service, branch, product_id = build_service()
+        branch.delivery_paused_until = utcnow() - timedelta(minutes=1)
+        with_estimate(service, 7.0)
+
+        service.create_order("junior", delivery_payload(branch, product_id))
+
         self.assertEqual(len(service.order_repository.orders), 1)
 
 

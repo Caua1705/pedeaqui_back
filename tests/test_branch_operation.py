@@ -12,10 +12,16 @@ do restaurante.
 """
 
 import unittest
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
 from src.services.branch_operation import resolve_branch_operation
+
+
+# Instante fixo para a pausa da entrega: `resolve_branch_operation` aceita
+# `agora` justamente para o teste nao depender do relogio da maquina.
+AGORA = datetime(2026, 8, 21, 22, 0, tzinfo=timezone.utc)
 
 
 def filial(**sobrescritas):
@@ -23,12 +29,16 @@ def filial(**sobrescritas):
         "is_open": True,
         "accepts_delivery": True,
         "accepts_pickup": True,
+        "delivery_paused_until": None,
+        "delivery_pause_reason": None,
         "min_order_value": None,
         "service_fee_enabled": None,
         "service_fee_amount": None,
         "estimated_delivery_time_min": None,
         "estimated_delivery_time_max": None,
         "default_delivery_fee": None,
+        "free_delivery_enabled": None,
+        "free_delivery_min_order_value": None,
     }
     campos.update(sobrescritas)
     return SimpleNamespace(**campos)
@@ -42,6 +52,8 @@ def restaurante(**sobrescritas):
         "estimated_delivery_time_min": 30,
         "estimated_delivery_time_max": 60,
         "default_delivery_fee": Decimal("9.00"),
+        "free_delivery_enabled": None,
+        "free_delivery_min_order_value": None,
     }
     campos.update(sobrescritas)
     return SimpleNamespace(**campos)
@@ -124,6 +136,126 @@ class EstadoDoDiaTests(unittest.TestCase):
 
         self.assertFalse(operacao.accepts_delivery)
         self.assertTrue(operacao.accepts_pickup)
+
+
+class FreteGratisTests(unittest.TestCase):
+    """A campanha da marca, e o direito de a filial recusa-la.
+
+    Herda como termo comercial, com uma diferenca que vale ler: o ligado
+    default e FALSO, ao contrario da taxa de servico. Taxa de servico ligada
+    sem valor cobra zero e nao machuca ninguem; frete gratis ligado por
+    omissao da a entrega de graca em nome de um lojista que nao pediu.
+    """
+
+    def test_sem_ninguem_configurar_a_campanha_esta_desligada(self):
+        operacao = resolve_branch_operation(filial(), restaurante())
+
+        self.assertFalse(operacao.free_delivery_enabled)
+        self.assertIsNone(operacao.free_delivery_min_order_value)
+
+    def test_a_filial_herda_a_campanha_da_marca(self):
+        operacao = resolve_branch_operation(
+            filial(),
+            restaurante(
+                free_delivery_enabled=True,
+                free_delivery_min_order_value=Decimal("60.00"),
+            ),
+        )
+
+        self.assertTrue(operacao.free_delivery_enabled)
+        self.assertEqual(operacao.free_delivery_min_order_value, Decimal("60.00"))
+
+    def test_a_filial_recusa_a_campanha_da_marca_com_false(self):
+        """O caso que exige o booleano ao lado do valor: a loja de 12 km que
+        nao aguenta a campanha da rede. Sem ele, `NULL` significaria "herda" e
+        nao existiria numero que dissesse "desligado" — `0` seria "gratis
+        sempre", o oposto."""
+        operacao = resolve_branch_operation(
+            filial(free_delivery_enabled=False),
+            restaurante(
+                free_delivery_enabled=True,
+                free_delivery_min_order_value=Decimal("60.00"),
+            ),
+        )
+
+        self.assertFalse(operacao.free_delivery_enabled)
+
+    def test_a_filial_pode_ter_o_proprio_teto(self):
+        operacao = resolve_branch_operation(
+            filial(free_delivery_min_order_value=Decimal("90.00")),
+            restaurante(
+                free_delivery_enabled=True,
+                free_delivery_min_order_value=Decimal("60.00"),
+            ),
+        )
+
+        self.assertTrue(operacao.free_delivery_enabled)
+        self.assertEqual(operacao.free_delivery_min_order_value, Decimal("90.00"))
+
+
+class PausaDaEntregaTests(unittest.TestCase):
+    """A pausa temporaria, que e um PRAZO e nao uma chave.
+
+    `accepts_delivery` continua respondendo "esta filial entrega?";
+    `accepts_delivery_now` desconta a pausa. Quem le so o primeiro aceita
+    pedido de uma filial pausada.
+    """
+
+    def test_sem_pausa_a_entrega_esta_valendo(self):
+        operacao = resolve_branch_operation(filial(), restaurante())
+
+        self.assertTrue(operacao.accepts_delivery)
+        self.assertTrue(operacao.accepts_delivery_now)
+
+    def test_a_pausa_no_futuro_desliga_a_entrega_de_agora(self):
+        operacao = resolve_branch_operation(
+            filial(
+                delivery_paused_until=AGORA + timedelta(minutes=40),
+                delivery_pause_reason="chuva forte",
+            ),
+            restaurante(),
+            agora=AGORA,
+        )
+
+        # A chave estrutural NAO foi tocada: a entrega volta sozinha.
+        self.assertTrue(operacao.accepts_delivery)
+        self.assertFalse(operacao.accepts_delivery_now)
+        self.assertEqual(operacao.delivery_pause_reason, "chuva forte")
+
+    def test_a_pausa_vencida_devolve_a_entrega_sozinha(self):
+        """A propriedade inteira pela qual a pausa existe: ninguem precisa
+        lembrar de reabrir. Um booleano no banco pediria esse alguem, e o dia
+        em que a pausa e usada e o dia em que ninguem lembra."""
+        operacao = resolve_branch_operation(
+            filial(delivery_paused_until=AGORA - timedelta(minutes=1)),
+            restaurante(),
+            agora=AGORA,
+        )
+
+        self.assertTrue(operacao.accepts_delivery_now)
+
+    def test_a_pausa_nao_reabre_a_entrega_desligada_na_chave(self):
+        # As duas se somam: pausa vencida nao religa o que `order-types`
+        # desligou.
+        operacao = resolve_branch_operation(
+            filial(accepts_delivery=False, delivery_paused_until=None),
+            restaurante(),
+            agora=AGORA,
+        )
+
+        self.assertFalse(operacao.accepts_delivery_now)
+
+    def test_coluna_sem_fuso_nao_derruba_o_checkout(self):
+        """Linha gravada por script ou corrigida a mao pode chegar ingenua, e
+        comparar ingenuo com consciente levanta TypeError — que aqui viraria
+        500 no checkout de todo cliente daquela filial."""
+        operacao = resolve_branch_operation(
+            filial(delivery_paused_until=(AGORA + timedelta(minutes=40)).replace(tzinfo=None)),
+            restaurante(),
+            agora=AGORA,
+        )
+
+        self.assertFalse(operacao.accepts_delivery_now)
 
 
 class DinheiroTests(unittest.TestCase):

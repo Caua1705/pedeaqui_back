@@ -15,7 +15,12 @@ from src.schemas.banner_schema import BannerResponse
 from src.schemas.coupon_schema import PublicCouponResponse
 from src.schemas.menu_schema import RestaurantMenuResponse
 from src.schemas.product_schema import ProductOptionGroupResponse, ProductOptionResponse, ProductResponse
-from src.schemas.restaurant_schema import BranchResponse, CategoryResponse, RestaurantSettingsResponse
+from src.schemas.restaurant_schema import (
+    BranchResponse,
+    CategoryResponse,
+    DeliveryTimeBandResponse,
+    RestaurantSettingsResponse,
+)
 from src.services.branch_operation import BranchOperation, resolve_branch_operation
 from src.services.menu_rules import blocking_required_group
 from src.services.restaurant_service import RestaurantService
@@ -64,7 +69,11 @@ class MenuService:
             restaurant=self.restaurant_service.to_public_response(restaurant),
             branch_id=branch.id if branch else None,
             settings_branch_id=branch.id if branch else None,
-            settings=self._settings_response(operation) if operation else None,
+            settings=(
+                self._settings_response(operation, self._delivery_time_bands(branch))
+                if operation
+                else None
+            ),
             branches=[BranchResponse.model_validate(branch) for branch in self.menu_repository.get_active_branches(restaurant.id)],
             banners=[self._banner_response(banner) for banner in self.menu_repository.get_banners_by_type(restaurant.id, "hero")],
             highlight_banners=[
@@ -192,8 +201,30 @@ class MenuService:
             self.menu_repository.get_active_products(branch.id)
         )
 
+    def _delivery_time_bands(self, branch: Branch | None) -> list[DeliveryTimeBandResponse]:
+        """As faixas de prazo desta filial, na ordem que a regra usa.
+
+        Uma consulta a mais no cardapio, e ela e paga com o que evita: sem as
+        faixas aqui, a tela de cardapio (que ainda nao tem endereco) so tem o
+        par unico de `estimated_delivery_time_*` para mostrar — o mesmo "30 a
+        60 min" para o bairro da esquina e para o do outro lado da cidade.
+        """
+        if branch is None:
+            return []
+        return [
+            DeliveryTimeBandResponse(
+                max_distance_km=float(band.max_distance_km),
+                delivery_time_min=band.delivery_time_min,
+                delivery_time_max=band.delivery_time_max,
+            )
+            for band in self.branch_repository.list_delivery_time_bands(branch.id)
+        ]
+
     @staticmethod
-    def _settings_response(operation: BranchOperation) -> RestaurantSettingsResponse:
+    def _settings_response(
+        operation: BranchOperation,
+        delivery_time_bands: list[DeliveryTimeBandResponse],
+    ) -> RestaurantSettingsResponse:
         """O bloco de operacao, ja resolvido para a filial.
 
         `payment_methods` saiu daqui na revisao 20260820_0027, junto com a
@@ -212,6 +243,14 @@ class MenuService:
             accepts_delivery=operation.accepts_delivery,
             accepts_pickup=operation.accepts_pickup,
             is_open=operation.is_open,
+            accepts_delivery_now=operation.accepts_delivery_now,
+            delivery_paused_until=operation.delivery_paused_until,
+            delivery_pause_reason=operation.delivery_pause_reason,
+            free_delivery_enabled=operation.free_delivery_enabled,
+            free_delivery_min_order_value=_optional_money(
+                operation.free_delivery_min_order_value
+            ),
+            delivery_time_bands=delivery_time_bands,
         )
 
     @staticmethod
@@ -370,3 +409,13 @@ class MenuService:
             sort_order=coupon.sort_order or 0,
             is_active=bool(coupon.is_active),
         )
+
+
+def _optional_money(value) -> float | None:
+    """Nulo continua nulo.
+
+    `money_to_float(None)` devolveria 0.00, e aqui isso nao seria so feio: o
+    app leria "frete gratis acima de R$ 0" — ou seja, sempre gratis — onde a
+    verdade e "esta filial nao tem campanha de frete gratis".
+    """
+    return money_to_float(value) if value is not None else None

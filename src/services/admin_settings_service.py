@@ -26,7 +26,7 @@ teto menor que o piso.
 """
 
 import uuid
-from datetime import time
+from datetime import time, timedelta
 
 from fastapi import HTTPException, status
 from pydantic import ValidationError
@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 
 from src.api.dependencies.admin_scope import AdminScope
 from src.models.branch_business_hour_model import BranchBusinessHour
+from src.models.branch_delivery_time_band_model import BranchDeliveryTimeBand
 from src.models.branch_model import Branch
 from src.models.branch_payment_method_model import BranchPaymentMethod
 from src.models.restaurant_setting_model import RestaurantSetting
@@ -42,6 +43,7 @@ from src.repositories.branch_repository import BranchRepository
 from src.schemas.admin_settings_schema import (
     MAX_PERIODS_PER_WEEKDAY,
     MAX_PREP_TIME_MINUTES,
+    AdminBranchDeliveryPauseRequest,
     AdminBranchDeliveryRules,
     AdminBranchOperationEffective,
     AdminBranchOperationOverrides,
@@ -59,14 +61,28 @@ from src.schemas.admin_settings_schema import (
     BusinessHourInput,
     BusinessHourResponse,
     BusinessHoursReplaceRequest,
+    DeliveryTimeBandResponse,
+    DeliveryTimeBandsReplaceRequest,
     StoreStatusRequest,
 )
 from src.services.branch_hours_service import BranchHoursService
 from src.services.branch_operation import BranchOperation, resolve_branch_operation
 from src.utils.money import money_to_float, quantize_money
+from src.utils.security import utcnow
 
 
 MINUTES_IN_A_DAY = 24 * 60
+
+# Campos de dinheiro que passam por `quantize_money` antes de gravar, nos
+# DOIS lados da heranca. Lista unica de proposito: eram duas copias identicas
+# (padrao do restaurante e sobrescrita da filial), e um campo novo entrava
+# numa e nao na outra — gravando 12.345 numa ponta e 12.35 na outra.
+MONEY_FIELDS = (
+    "min_order_value",
+    "default_delivery_fee",
+    "service_fee_amount",
+    "free_delivery_min_order_value",
+)
 
 
 class AdminSettingsService:
@@ -95,7 +111,7 @@ class AdminSettingsService:
             changes.get("estimated_delivery_time_min", settings_row.estimated_delivery_time_min),
             changes.get("estimated_delivery_time_max", settings_row.estimated_delivery_time_max),
         )
-        for field in ("min_order_value", "default_delivery_fee", "service_fee_amount"):
+        for field in MONEY_FIELDS:
             if changes.get(field) is not None:
                 changes[field] = quantize_money(changes[field])
 
@@ -146,6 +162,90 @@ class AdminSettingsService:
         self._commit()
         return self._branch_operation_response(branch)
 
+    def pause_branch_delivery(
+        self,
+        scope: AdminScope,
+        branch_id: uuid.UUID,
+        payload: AdminBranchDeliveryPauseRequest,
+    ) -> AdminBranchOperationResponse:
+        """Pausa (ou retoma) a entrega desta filial.
+
+        `minutes = 0` retoma na hora, e por isso nao ha rota de DELETE: "pare
+        por 40 minutos" e "volte agora" sao o mesmo gesto na mesma tela, e
+        dois verbos para um botao so seriam dois lugares para o painel errar.
+
+        **Nao mexe em `accepts_delivery`, de proposito.** A pausa e o dia; a
+        chave e o negocio. Desligar a chave aqui faria a entrega NAO voltar
+        quando o prazo vencesse, que e justamente a propriedade pela qual
+        esta rota existe.
+
+        O motivo e apagado junto ao retomar: motivo de uma pausa que acabou
+        so tem como confundir quem abrir a tela depois.
+        """
+        branch = self._get_branch(scope, branch_id)
+        if payload.minutes == 0:
+            branch.delivery_paused_until = None
+            branch.delivery_pause_reason = None
+        else:
+            branch.delivery_paused_until = utcnow() + timedelta(minutes=payload.minutes)
+            branch.delivery_pause_reason = payload.reason
+        self._commit()
+        return self._branch_operation_response(branch)
+
+    def list_delivery_time_bands(
+        self,
+        scope: AdminScope,
+        branch_id: uuid.UUID,
+    ) -> list[DeliveryTimeBandResponse]:
+        self._get_branch(scope, branch_id)
+        return [
+            DeliveryTimeBandResponse(
+                id=band.id,
+                branch_id=band.branch_id,
+                max_distance_km=float(band.max_distance_km),
+                delivery_time_min=band.delivery_time_min,
+                delivery_time_max=band.delivery_time_max,
+            )
+            for band in self.branch_repository.list_delivery_time_bands(branch_id)
+        ]
+
+    def replace_delivery_time_bands(
+        self,
+        scope: AdminScope,
+        branch_id: uuid.UUID,
+        payload: DeliveryTimeBandsReplaceRequest,
+    ) -> list[DeliveryTimeBandResponse]:
+        """Substitui TODAS as faixas da filial pelas do corpo.
+
+        Substitui, e nao edita faixa a faixa, pelo mesmo motivo do
+        `PUT /business-hours`: a tela e uma tabelinha salva junta. E com a
+        mesma armadilha do outro lado — **lista vazia apaga tudo**, e o
+        resultado nao e "sem entrega": e o prazo voltando a sair do tempo do
+        Google, que e o comportamento de quem nunca configurou faixa.
+
+        O flush entre o DELETE e o INSERT e obrigatorio pela mesma razao da
+        lista de impressoras: sem ele, o UNIQUE `(branch_id, max_distance_km)`
+        bate contra as linhas que estao sendo apagadas na mesma transacao.
+        """
+        self._get_branch(scope, branch_id)
+        novas = [
+            BranchDeliveryTimeBand(
+                branch_id=branch_id,
+                max_distance_km=band.max_distance_km,
+                delivery_time_min=band.delivery_time_min,
+                delivery_time_max=band.delivery_time_max,
+            )
+            for band in payload.bands
+        ]
+
+        def replace() -> None:
+            self.branch_repository.delete_delivery_time_bands(branch_id)
+            self.db.flush()
+            self.branch_repository.add_delivery_time_bands(novas)
+
+        self._commit(replace)
+        return self.list_delivery_time_bands(scope, branch_id)
+
     def list_branch_operation(
         self,
         scope: AdminScope,
@@ -188,7 +288,7 @@ class AdminSettingsService:
             changes.get("estimated_delivery_time_min", branch.estimated_delivery_time_min),
             changes.get("estimated_delivery_time_max", branch.estimated_delivery_time_max),
         )
-        for field in ("min_order_value", "default_delivery_fee", "service_fee_amount"):
+        for field in MONEY_FIELDS:
             if changes.get(field) is not None:
                 changes[field] = quantize_money(changes[field])
 
@@ -556,6 +656,15 @@ class AdminSettingsService:
             default_delivery_fee=money_to_float(settings_row.default_delivery_fee),
             service_fee_enabled=settings_row.service_fee_enabled,
             service_fee_amount=money_to_float(settings_row.service_fee_amount),
+            free_delivery_enabled=settings_row.free_delivery_enabled,
+            free_delivery_min_order_value=_optional_money(
+                settings_row.free_delivery_min_order_value
+            ),
+            # O PADRAO da marca. A filial que gravou a propria mensagem nao
+            # le esta — quem resolve as duas e `resolve_branch_operation`, e
+            # quem a mostra ja resolvida e
+            # `GET /admin/branches/{id}/print-settings`.
+            receipt_footer_message=settings_row.receipt_footer_message,
         )
 
     def _branch_operation_response(self, branch: Branch) -> AdminBranchOperationResponse:
@@ -575,6 +684,9 @@ class AdminSettingsService:
             is_open_now=period is not None and operation.is_open,
             accepts_delivery=operation.accepts_delivery,
             accepts_pickup=operation.accepts_pickup,
+            accepts_delivery_now=operation.accepts_delivery_now,
+            delivery_paused_until=operation.delivery_paused_until,
+            delivery_pause_reason=operation.delivery_pause_reason,
             overrides=AdminBranchOperationOverrides(
                 min_order_value=_optional_money(branch.min_order_value),
                 estimated_delivery_time_min=branch.estimated_delivery_time_min,
@@ -582,6 +694,10 @@ class AdminSettingsService:
                 default_delivery_fee=_optional_money(branch.default_delivery_fee),
                 service_fee_enabled=branch.service_fee_enabled,
                 service_fee_amount=_optional_money(branch.service_fee_amount),
+                free_delivery_enabled=branch.free_delivery_enabled,
+                free_delivery_min_order_value=_optional_money(
+                    branch.free_delivery_min_order_value
+                ),
             ),
             effective=self._effective_response(operation),
         )
@@ -598,6 +714,10 @@ class AdminSettingsService:
             default_delivery_fee=_optional_money(operation.default_delivery_fee),
             service_fee_enabled=operation.service_fee_enabled,
             service_fee_amount=money_to_float(operation.service_fee_amount),
+            free_delivery_enabled=operation.free_delivery_enabled,
+            free_delivery_min_order_value=_optional_money(
+                operation.free_delivery_min_order_value
+            ),
         )
 
     @staticmethod

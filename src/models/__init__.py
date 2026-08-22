@@ -4,6 +4,7 @@ from src.models.ai_product_embedding_model import AIProductEmbedding
 from src.models.ai_voice_session_model import AIVoiceSession
 from src.models.branch_model import Branch
 from src.models.branch_business_hour_model import BranchBusinessHour
+from src.models.branch_delivery_time_band_model import BranchDeliveryTimeBand
 from src.models.branch_payment_method_model import BranchPaymentMethod
 from src.models.cashback_transaction_model import CashbackTransaction
 from src.models.category_model import Category
@@ -32,6 +33,7 @@ __all__ = [
     "AIVoiceSession",
     "Branch",
     "BranchBusinessHour",
+    "BranchDeliveryTimeBand",
     "BranchPaymentMethod",
     "CashbackTransaction",
     "Category",

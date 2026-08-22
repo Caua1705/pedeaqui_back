@@ -82,6 +82,10 @@ A resposta é uma lista de vias:
 [ via de produção       columns=24  font_size=large   sector_name="SEM SETOR"     ]
 ```
 
+Uma entrada por via — e a mesma via **repetida** quando a filial pediu mais de
+uma cópia, que é como a configuração da seção 3.1 chega ao agente sem ele
+precisar aprender nada.
+
 ### Três regras que precisam ser lidas antes de mexer
 
 **1. Pedido não pago não gera via de produção.**
@@ -129,6 +133,127 @@ comanda sairia com os adicionais embaralhados a cada requisição.
 
 ---
 
+## 3.1 Personalização por filial (revisão `20260821_0029`)
+
+Duas configurações, uma tela: `GET` e `PATCH
+/admin/branches/{branch_id}/print-settings`. Leitura é **PESSOAS** (quem está
+em pé na impressora pergunta "por que saíram duas vias?"), escrita é
+**GERÊNCIA** — não é dinheiro. A mensagem **padrão da marca** fica em `PATCH
+/admin/settings`, que é do dono.
+
+### A mensagem do rodapé
+
+Texto livre do lojista impresso no fim da **via do cliente**. É espaço grátis
+no papel que já sai e já chega na mão de quem pediu: o Instagram da loja,
+"peça direto e ganhe 5% de volta".
+
+**Só na via do cliente.** A de produção sai em 24 colunas de fonte dupla para
+quem está com as mãos ocupadas — propaganda ali é papel gasto e mais uma
+linha para ler no aperto.
+
+**Herda do restaurante, e o vazio é uma escolha.** Mesmo regime dos termos
+comerciais da revisão `20260818_0025`, porque é da mesma natureza: texto de
+marca, escrito uma vez para a rede inteira. Com um terceiro estado que
+`min_order_value` não precisa ter:
+
+| `branches.receipt_footer_message` | O que sai |
+|---|---|
+| `NULL` | a mensagem do restaurante (herda) |
+| `''` | **nada** — esta loja recusou a campanha da rede |
+| texto | o texto desta loja |
+
+Sem o `''` não haveria como uma filial recusar a mensagem da marca. É o mesmo
+caso do `service_fee_enabled = false` da armadilha 35, escrito com texto: um
+`or` no lugar do `is not None` faria a campanha voltar a sair justamente na
+loja que a desligou. Quem combina os dois é `resolve_receipt_footer`
+(`services/branch_operation.py`), no mesmo módulo e no mesmo `_ou_herdado` de
+todo o resto — mas **fora** do `BranchOperation`, que é "o que o PEDIDO usa",
+e o rodapé não entra em cálculo de pedido nenhum.
+
+**O texto é limpo na ESCRITA, não na impressão.** `normalize_receipt_text`
+(`utils/normalization.py`) roda no validador do corpo e é o que separa esta
+mensagem de qualquer outro texto do painel:
+
+- **caractere de controle é comando de impressora, não caractere.** O agente
+  escreve `content` direto no fluxo ESC/POS e a codepage passa `0x1B` adiante
+  intacto — um ESC colado no meio da mensagem deixaria de ser texto e viraria
+  `ESC ...`, reprogramando a impressora no meio da comanda. `encode_text` não
+  defende contra isso: o trabalho dele é a queda de qualidade do que a
+  **tabela** não tem (acento, emoji), e `0x1B` a tabela tem;
+- `\t` vira espaço (a tabulação conta 1 caractere e imprime vários, o que
+  estoura a coluna sem a conta perceber), `\r\n` vira `\n`, espaço no fim da
+  linha some e linha em branco repetida colapsa;
+- NFC pelo motivo da armadilha 28: a forma decomposta **não existe na CP850**,
+  e a mensagem sairia sem um acento.
+
+Tetos: **240 caracteres** (cinco linhas cheias da bobina) e **6 linhas**. O de
+linhas é conferido depois da limpeza, e na escrita — `"a\nb\nc..."` cabe em
+240 caracteres e sairia com 120 linhas. Cortar na hora de imprimir faria o
+lojista descobrir o limite pela bobina, com o texto já gravado e a tela
+mostrando o que ele digitou.
+
+**A quebra de linha do lojista é respeitada**, e por isso `_footer_block`
+parte o texto em `\n` **antes** de embrulhar: `textwrap` trata quebra como
+espaço, e "Peça no site" + "@nossaloja" sairiam grudados na mesma linha.
+
+### Quantas vias saem, por tipo de pedido
+
+Quatro colunas em `branches`, `NOT NULL DEFAULT 1`, `CHECK BETWEEN 0 AND 5`:
+
+```
+print_customer_copies_delivery      print_customer_copies_pickup
+print_production_copies_delivery    print_production_copies_pickup
+```
+
+**Só da filial, sem herança nenhuma** — ao contrário do rodapé. Elas
+descrevem o balcão (quantas impressoras existem, se a comanda vai grampeada
+no pacote, se o motoboy leva uma via), não termo negociado pela marca. E todo
+o resto da configuração de impressão — setor, `printer_name`, o próprio
+agente — já pende de filial sem herdar nada: dar um regime próprio só a estas
+quatro colocaria **dois regimes na mesma tela**, que é o jeito mais barato de
+fazer alguém preencher o campo errado.
+
+`0` é válido e é o pedido que originou a feature: a retirada normalmente não
+precisa da via do cliente, que é a que iria grampeada na sacola. A de
+**produção** da retirada continua saindo — ela é a comanda da cozinha, e
+pedido de balcão também é preparado.
+
+> **A cópia é ENTRADA REPETIDA na lista de vias, e não um campo `copies`.**
+> Esta é a decisão que o resto depende. Duas vias do cliente chegam como dois
+> itens idênticos em `jobs`, um atrás do outro. Um campo novo seria mais
+> bonito e o agente **não saberia lê-lo**: não existe atualização remota do
+> agente (seção 5), e cada versão nova é uma visita por loja. Repetindo a
+> entrada, a configuração vale hoje em toda instalação já em campo,
+> **inclusive nas anteriores a esta revisão** — o agente sempre imprimiu
+> `for job in jobs`.
+
+Consequências que valem conhecer:
+
+- `jobs` pode vir **vazia** (a filial zerou as duas contagens daquele tipo).
+  Nada quebra, mas o agente instalado em campo lê lista vazia como
+  `"pagamento ainda nao confirmado?"` no log dele — mensagem errada para este
+  caso, e que não dá para corrigir sem visitar a loja.
+- A contagem **multiplica** o que as outras regras deixaram passar; ela não as
+  substitui. Pedido com pagamento online não confirmado continua sem via de
+  produção, por mais cópias que estejam configuradas.
+- A filial do pedido é lida **sem filtro de `is_active`**
+  (`BranchRepository.get_by_id_and_restaurant`): reimprimir o pedido de uma
+  loja desativada tem que sair com a configuração daquela loja, e não mudar
+  sozinho porque alguém desativou a filial depois.
+
+### A migração não muda operação
+
+As quatro colunas nascem em `1` — inclusive a produção da retirada, que é
+justamente o caso que motivou a feature. Nascer em `0` pararia a comanda da
+cozinha no deploy, sem uma linha de log: é o defeito do `UPDATE` que faltava
+na `20260818_0025`, de cabeça para baixo. **Migração abre a porta para o
+lojista mudar; quem muda é ele.**
+`tests/test_migracao_comanda_personalizada_db.py` trava isso contra um
+Postgres de verdade, inserindo a filial por SQL cru — o `default=1` do model
+faria o teste passar verde sobre uma migração sem `server_default`.
+
+---
+
 ## 4. O desenho (`print_layout.py`)
 
 Sem banco e sem HTTP, por isso dá para testar linha a linha
@@ -167,11 +292,23 @@ os testes dele não rodam no CI da API — ver a nota em `pytest.ini` da raiz.
 > `INSTALACAO.md` não descreve nenhum caminho de update. Toda mudança no agente
 > é uma visita por loja.
 >
-> Isso já segurou uma feature: o **QR de avaliação no rodapé da comanda**, que
-> precisa do comando `GS ( k` (o agente implementa cinco comandos ESC/POS, e
-> nenhum é QR) e de um campo novo no contrato de impressão. A ordem correta é
-> **primeiro a atualização remota, depois o QR** — o raciocínio inteiro está em
-> [avaliacao-de-pedido.md](avaliacao-de-pedido.md), seção 6.
+> Isso já segurou duas features, e as duas pelo mesmo motivo: **elas precisam
+> de um comando ESC/POS que o agente não conhece.**
+>
+> - o **QR de avaliação no rodapé da comanda**, que precisa de `GS ( k` (o
+>   agente implementa cinco comandos ESC/POS, e nenhum é QR) e de um campo
+>   novo no contrato de impressão. O raciocínio inteiro está em
+>   [avaliacao-de-pedido.md](avaliacao-de-pedido.md), seção 6;
+> - o **logo da loja na comanda**, que precisa de `GS v 0` (ou do upload de
+>   NV bitmap) e de bytes de imagem no contrato — hoje `content` é texto.
+>
+> A ordem correta é **primeiro a atualização remota, depois as duas.**
+>
+> A personalização da seção 3.1 escapou dessa fila de propósito: rodapé é
+> texto dentro de `content`, e cópia é entrada repetida em `jobs`. Nenhuma
+> das duas pede um byte novo ao agente, e por isso as duas valem hoje em toda
+> loja instalada. **É esse o teste para saber se uma ideia de comanda cabe
+> agora ou entra na fila:** ela precisa de um comando novo da impressora?
 
 ```bash
 cd print-agent && pytest      # 65 testes

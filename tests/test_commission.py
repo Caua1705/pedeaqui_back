@@ -74,12 +74,16 @@ def build_service(*, commission_percent=Decimal("10.00"), service_fee=Decimal("0
         is_open=True,
         accepts_delivery=True,
         accepts_pickup=True,
+        delivery_paused_until=None,
+        delivery_pause_reason=None,
         min_order_value=None,
         service_fee_enabled=None,
         service_fee_amount=None,
         estimated_delivery_time_min=None,
         estimated_delivery_time_max=None,
         default_delivery_fee=None,
+        free_delivery_enabled=None,
+        free_delivery_min_order_value=None,
     )
     product_id = uuid.uuid4()
     product = SimpleNamespace(
@@ -111,6 +115,8 @@ def build_service(*, commission_percent=Decimal("10.00"), service_fee=Decimal("0
             estimated_delivery_time_min=None,
             estimated_delivery_time_max=None,
             default_delivery_fee=None,
+            free_delivery_enabled=None,
+            free_delivery_min_order_value=None,
             platform_commission_percent=commission_percent,
         )
     )

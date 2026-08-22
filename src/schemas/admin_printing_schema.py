@@ -10,15 +10,41 @@ from datetime import datetime
 from enum import Enum
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from src.schemas.common_schema import BaseResponse
-from src.utils.normalization import normalize_text
+from src.utils.normalization import normalize_receipt_text, normalize_text
 
 
 # Mesmo teto de nome do cardapio. Setor com nome de paragrafo estoura a
 # largura da comanda e some da lista do painel.
 MAX_NAME_LENGTH = 120
+
+# Teto da mensagem do rodape, em caracteres: cinco linhas cheias da bobina de
+# 80mm (5 x RECEIPT_WIDTH). Nao e limite de banco — a coluna e `text` — e sim
+# de BOBINA: o rodape e espaco de graca no papel que ja sai, e deixa de ser
+# de graca quando vira meio metro de propaganda em todo pedido.
+MAX_FOOTER_MESSAGE_LENGTH = 240
+
+# Teto de linhas, contado DEPOIS da limpeza. O limite de caracteres sozinho
+# nao segura: "a\nb\nc\n..." cabe em 240 caracteres e sai com 120 linhas.
+MAX_FOOTER_MESSAGE_LINES = 6
+
+# Teto de copias de uma via. Espelha o CHECK `ck_branches_print_*` da revisao
+# 20260821_0029: aqui vira 422 com mensagem, la vira a garantia de que nada
+# escreve por fora. Cinco e generoso para o caso real (duas na sacola, uma
+# para o motoboy) e barato para o dedo que erra a tecla.
+MAX_PRINT_COPIES = 5
+
+# As quatro contagens, juntas onde a regra que vale para as quatro precisa
+# percorre-las. Nao herdam nada e sao NOT NULL — a lista existe para que
+# acrescentar uma quinta nao dependa de alguem lembrar de todos os lugares.
+COPY_FIELDS = (
+    "print_customer_copies_delivery",
+    "print_production_copies_delivery",
+    "print_customer_copies_pickup",
+    "print_production_copies_pickup",
+)
 
 # Os dois tipos de via. `customer` e a do cliente (com dinheiro);
 # `production` e a da praca (sem preco algum).
@@ -62,6 +88,31 @@ def _clean_printer_name(value: str | None) -> str | None:
         return None
     cleaned = value.strip()
     return cleaned or None
+
+
+def clean_footer_message(value: str | None) -> str | None:
+    """A mensagem do rodape pronta para gravar, ou 422 com o motivo.
+
+    `None` atravessa como `None` porque nos dois schemas que usam esta
+    funcao ele tem significado proprio: na filial e "volta a herdar", no
+    restaurante e "nao ha mensagem". Confundir os dois com string vazia
+    tiraria da filial o unico jeito de recusar o texto da marca.
+
+    A limpeza em si e de `normalize_receipt_text`, que e quem sabe o que uma
+    termica aceita (o caractere de controle e o motivo dela existir). Aqui
+    fica so o teto de LINHAS, e ele mora na escrita de proposito: cortar na
+    hora de imprimir faria o lojista descobrir o limite pela bobina, com o
+    texto ja gravado e a tela mostrando o que ele digitou.
+    """
+    if value is None:
+        return None
+
+    cleaned = normalize_receipt_text(value)
+    if cleaned.count("\n") + 1 > MAX_FOOTER_MESSAGE_LINES:
+        raise ValueError(
+            f"a mensagem do rodape pode ter no maximo {MAX_FOOTER_MESSAGE_LINES} linhas"
+        )
+    return cleaned
 
 
 class PrintingSectorResponse(BaseResponse):
@@ -156,6 +207,108 @@ class CategoryPrintingSectorResponse(BaseModel):
     updated_products: int
 
 
+class BranchPrintSettingsResponse(BaseResponse):
+    """Como a comanda desta filial e impressa (revisao 20260821_0029).
+
+    Duas coisas numa tela so porque sao a mesma pergunta do lojista — "como
+    a minha comanda sai?" —, e porque as duas so existem por filial.
+
+    **Os dois campos de mensagem nao sao redundantes**, pelo mesmo motivo do
+    par `overrides`/`effective` da tela de operacao: `receipt_footer_message`
+    e o que ESTA FILIAL gravou e alimenta o campo de edicao (nulo = herdando,
+    e o campo aparece vazio); `effective_receipt_footer_message` e o que vai
+    sair na bobina, ja resolvido com o padrao do restaurante. Publicar so o
+    efetivo faria toda filial parecer divergente; so a sobrescrita, faria a
+    tela nao ter como mostrar o que o cliente vai ler.
+
+    As quatro contagens nao tem par: elas nao herdam nada.
+    """
+
+    branch_id: UUID
+    # Nulo = herda de `restaurant_settings`. Vazio = esta filial escolheu
+    # nao imprimir rodape. Sao estados diferentes; ver `BranchPrintSettingsUpdate`.
+    receipt_footer_message: str | None = None
+    effective_receipt_footer_message: str | None = None
+    print_customer_copies_delivery: int
+    print_production_copies_delivery: int
+    print_customer_copies_pickup: int
+    print_production_copies_pickup: int
+
+
+class BranchPrintSettingsUpdate(BaseModel):
+    """Edicao parcial: so o que vier no corpo e alterado.
+
+    `receipt_footer_message` tem TRES estados, e os tres sao usados:
+
+    - **ausente do corpo** — nao mexe;
+    - **`null`** — esta filial volta a HERDAR a mensagem do restaurante;
+    - **`""`** — esta filial NAO imprime rodape, nem o dela nem o da marca.
+
+    Sem o terceiro, a loja que nao quer a campanha da rede nao teria como
+    recusa-la: qualquer valor que ela gravasse sairia impresso. E por isso o
+    service usa `exclude_unset` e nao `exclude_none` — o segundo apagaria a
+    diferenca entre o primeiro e o segundo estado.
+
+    **Zero copias e valido, e e o pedido que originou a feature**: a
+    retirada normalmente nao precisa da via do cliente (a que vai grampeada
+    na sacola). Zero na via de PRODUCAO tambem passa — e a loja de um
+    quiosque so, onde quem monta o pedido e quem o vende — mas vale saber
+    que ela desliga a comanda da cozinha daquele tipo de pedido.
+
+    Zerar as DUAS do mesmo tipo e permitido e nao e recusado aqui, mas tem
+    um efeito de segunda ordem que vale conhecer: a lista de vias sai vazia,
+    e o agente instalado em campo trata lista vazia como "pagamento ainda
+    nao confirmado?" no log dele — mensagem errada para este caso, que nao
+    da para corrigir sem visitar a loja. Nada quebra (o pedido so nao e
+    marcado como impresso, e o replay para em uma hora); a linha do log e
+    que mente.
+    """
+
+    receipt_footer_message: str | None = Field(
+        default=None, max_length=MAX_FOOTER_MESSAGE_LENGTH
+    )
+    print_customer_copies_delivery: int | None = Field(
+        default=None, ge=0, le=MAX_PRINT_COPIES
+    )
+    print_production_copies_delivery: int | None = Field(
+        default=None, ge=0, le=MAX_PRINT_COPIES
+    )
+    print_customer_copies_pickup: int | None = Field(
+        default=None, ge=0, le=MAX_PRINT_COPIES
+    )
+    print_production_copies_pickup: int | None = Field(
+        default=None, ge=0, le=MAX_PRINT_COPIES
+    )
+
+    @field_validator("receipt_footer_message")
+    @classmethod
+    def clean_message(cls, value: str | None) -> str | None:
+        return clean_footer_message(value)
+
+    @model_validator(mode="after")
+    def validate_copies_are_not_null(self):
+        """`null` numa contagem e 422, e nao 500.
+
+        As quatro colunas sao `NOT NULL` e nao herdam nada: `null` nelas nao
+        significa coisa nenhuma. Sem esta conferencia o valor atravessaria o
+        `exclude_unset` ate o `setattr`, e o `IntegrityError` do Postgres
+        viraria 500 numa tela de configuracao — com uma mensagem sobre
+        restricao de coluna, que nao diz ao lojista o que fazer.
+
+        O tipo continua `int | None` porque e assim que "campo ausente" se
+        declara num corpo parcial. O que se recusa aqui e o `null`
+        ESCRITO — `model_fields_set` e o que separa os dois, o mesmo
+        mecanismo que o `exclude_unset` do service usa do outro lado.
+        """
+        for field in COPY_FIELDS:
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(
+                    f"{field} nao aceita null: a contagem de vias nao herda "
+                    "nada do restaurante. Para nao imprimir esta via, mande 0."
+                )
+        return self
+
+
 class PrintJobResponse(BaseModel):
     """Uma bobina a imprimir, ja pronta.
 
@@ -191,6 +344,18 @@ class OrderPrintJobsResponse(BaseModel):
     ainda nao confirmado nao gera via de producao — a mesma regra do
     "aguardando pagamento, nao preparar" que ja barra o pedido de entrar na
     cozinha (`ensure_payment_allows_order_status`).
+
+    **Copia e ENTRADA REPETIDA nesta lista, e nao um campo `copies`.** A
+    filial que pediu duas vias do cliente recebe dois itens identicos, um
+    atras do outro. Um campo novo seria mais bonito e o agente nao saberia
+    le-lo: **nao existe atualizacao remota do agente** — ele e um `.exe`
+    instalado a mao, e cada versao nova e uma visita por loja. Repetindo a
+    entrada, a feature vale hoje em toda instalacao ja em campo, inclusive
+    nas anteriores a esta revisao.
+
+    `jobs` tambem pode vir VAZIA: a filial que zerou as duas contagens
+    daquele tipo de pedido nao imprime nada. O agente ja trata a lista vazia
+    (ele avisa no log e nao marca o pedido como impresso).
     """
 
     order_id: UUID

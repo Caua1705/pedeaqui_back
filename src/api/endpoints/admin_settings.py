@@ -13,6 +13,7 @@ from src.api.dependencies.admin_scope import (
 )
 from src.api.dependencies.database import get_db
 from src.schemas.admin_settings_schema import (
+    AdminBranchDeliveryPauseRequest,
     AdminBranchOperationResponse,
     AdminBranchOrderTypesRequest,
     AdminBranchResponse,
@@ -26,6 +27,8 @@ from src.schemas.admin_settings_schema import (
     BranchPrepTimeAdjustRequest,
     BusinessHourResponse,
     BusinessHoursReplaceRequest,
+    DeliveryTimeBandResponse,
+    DeliveryTimeBandsReplaceRequest,
     StoreStatusRequest,
 )
 from src.services.admin_settings_service import AdminSettingsService
@@ -195,6 +198,85 @@ def update_branch(
 ) -> AdminBranchResponse:
     """Endereco, contato e regras de entrega da filial (BLOCO C3)."""
     return AdminSettingsService(db).update_branch(scope, branch_id, payload)
+
+
+@router.patch(
+    "/branches/{branch_id}/delivery-pause",
+    response_model=AdminBranchOperationResponse,
+    # PESSOAS, e nao GERENCIA como `order-types`: e o gesto do balcao numa
+    # tarde de chuva, e ele se desfaz sozinho. `order-types` fica na gerencia
+    # porque desliga a entrega por tempo INDETERMINADO — a diferenca entre as
+    # duas rotas e exatamente o prazo, e o papel acompanha essa diferenca.
+    dependencies=[Depends(exigir_papel(PESSOAS))],
+)
+def pause_branch_delivery(
+    branch_id: UUID,
+    payload: AdminBranchDeliveryPauseRequest,
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> AdminBranchOperationResponse:
+    """Pausa a entrega desta filial por ate 24 horas — e so por um tempo.
+
+    `{"minutes": 40, "reason": "chuva forte"}` pausa; `{"minutes": 0}`
+    retoma na hora. Nao ha DELETE porque "pare por 40 minutos" e "volte
+    agora" sao o mesmo botao na mesma tela.
+
+    **Isto nao substitui `order-types`.** Aquele desliga a entrega por tempo
+    indeterminado e espera alguem religar; este vence sozinho. A distincao
+    importa porque o dia em que a pausa e usada — chuva as 19h, entregador
+    que sumiu — e exatamente o dia em que ninguem lembra de desfaze-la, e a
+    loja amanheceria aberta sem aceitar entrega, com a ausencia de pedido
+    como unico sintoma.
+
+    O motivo sai para o CLIENTE junto do horario de volta ("A entrega esta
+    pausada. Motivo: chuva forte. Voltamos a entregar as 20:30."): pausa sem
+    prazo faz o cliente fechar o app, com prazo ele volta.
+    """
+    return AdminSettingsService(db).pause_branch_delivery(scope, branch_id, payload)
+
+
+@router.get(
+    "/branches/{branch_id}/delivery-time-bands",
+    response_model=list[DeliveryTimeBandResponse],
+    dependencies=[Depends(exigir_papel(PESSOAS))],
+)
+def list_delivery_time_bands(
+    branch_id: UUID,
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> list[DeliveryTimeBandResponse]:
+    """As faixas de prazo desta filial, do teto menor para o maior.
+
+    Lista vazia significa "esta filial nao configurou faixas", e o prazo
+    continua saindo do tempo de rota do Google — nao e erro nem falta.
+    """
+    return AdminSettingsService(db).list_delivery_time_bands(scope, branch_id)
+
+
+@router.put(
+    "/branches/{branch_id}/delivery-time-bands",
+    response_model=list[DeliveryTimeBandResponse],
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
+def replace_delivery_time_bands(
+    branch_id: UUID,
+    payload: DeliveryTimeBandsReplaceRequest,
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> list[DeliveryTimeBandResponse]:
+    """Substitui TODAS as faixas da filial pelas do corpo.
+
+    PUT e nao PATCH pela mesma razao do horario de funcionamento: a tela e
+    uma tabelinha que o lojista salva junta. E com a mesma armadilha —
+    **`{"bands": []}` apaga tudo**, e o resultado nao e "sem entrega": e o
+    prazo voltando a sair do tempo do Google.
+
+    `max_distance_km` e um TETO. Vale a primeira faixa, em ordem crescente,
+    cujo teto alcanca a distancia do endereco; nao ha piso, e por isso nao ha
+    buraco entre faixas. Os minutos sao o DESLOCAMENTO — o tempo de preparo
+    da filial soma por cima.
+    """
+    return AdminSettingsService(db).replace_delivery_time_bands(scope, branch_id, payload)
 
 
 @router.patch(

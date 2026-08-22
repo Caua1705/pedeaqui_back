@@ -126,6 +126,13 @@ class OrderService:
             if delivery_estimate is not None
             else ZERO
         )
+        # O frete gratis e aplicado AQUI — depois do subtotal (que e o que a
+        # regra compara) e ANTES do cupom (que pode ser do tipo
+        # `free_delivery` e descontaria a taxa de novo, devolvendo dinheiro
+        # sobre uma taxa que ninguem ia pagar).
+        delivery_fee, delivery_fee_waived = self._apply_free_delivery(
+            delivery_fee, subtotal, operation
+        )
         coupon = None
         coupon_discount = ZERO
         discount_total = ZERO
@@ -181,6 +188,7 @@ class OrderService:
                 payment_status="pending" if payment_flow == "online" else "on_delivery",
                 subtotal=subtotal,
                 delivery_fee=delivery_fee,
+                delivery_fee_waived=delivery_fee_waived,
                 service_fee=service_fee,
                 coupon_id=coupon.id if coupon else None,
                 coupon_code_snapshot=coupon.code if coupon else None,
@@ -318,6 +326,43 @@ class OrderService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido não encontrado")
         return self.to_order_detail_response(order)
 
+    @staticmethod
+    def _apply_free_delivery(
+        delivery_fee: Decimal,
+        subtotal: Decimal,
+        operation: BranchOperation,
+    ) -> tuple[Decimal, Decimal]:
+        """Zera a taxa quando o pedido alcanca o valor da campanha.
+
+        Devolve a taxa a cobrar e QUANTO foi perdoado — o segundo so existe
+        para ser gravado. Ver `orders.delivery_fee_waived`: sem capturar isso
+        na escrita, "quanto essa campanha me custou em agosto" fica sem
+        resposta para sempre, porque nao da para recalcular a rota de um
+        pedido que ja passou.
+
+        A comparacao e com o SUBTOTAL (produtos), e nao com o total: incluir a
+        propria taxa faria o frete gratis se autoconceder — um pedido de
+        R$ 55 com taxa de R$ 7 alcancaria o teto de R$ 60 por causa da taxa
+        que ele esta tentando nao pagar. E o mesmo motivo pelo qual
+        `min_order_value` tambem olha o subtotal.
+
+        `>=` e nao `>`: "acima de R$ 60" na tela do lojista significa "60
+        fecha o pedido com entrega gratis" para todo cliente que le a frase.
+
+        Nao faz nada quando a filial nao aderiu a campanha, quando ela esta
+        ligada sem valor cadastrado (nao ha o que comparar) e na retirada,
+        onde a taxa ja e zero e perdoar zero nao e informacao nenhuma.
+        """
+        if not operation.free_delivery_enabled:
+            return delivery_fee, ZERO
+        if operation.free_delivery_min_order_value is None:
+            return delivery_fee, ZERO
+        if delivery_fee <= ZERO:
+            return delivery_fee, ZERO
+        if subtotal < quantize_money(to_decimal(operation.free_delivery_min_order_value)):
+            return delivery_fee, ZERO
+        return ZERO, delivery_fee
+
     def _validate_order_type(self, order_type: str) -> None:
         if order_type not in ORDER_TYPES:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de pedido inválido")
@@ -351,6 +396,18 @@ class OrderService:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Esta loja nao esta aceitando entrega",
+            )
+        if order_type == "delivery" and not operation.accepts_delivery_now:
+            # A pausa temporaria precisa ser conferida AQUI, e nao so na
+            # estimativa: o pedido que chega com `delivery_estimate_token`
+            # valido reaproveita a estimativa guardada e nao passa por
+            # `DeliveryEstimateService.estimate()`. Sem esta linha, o cliente
+            # que estimou as 18h55 fecharia o pedido as 19h05, com a entrega
+            # pausada desde as 19h — e a loja receberia justamente o pedido
+            # que pausou para nao receber.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A entrega esta pausada no momento",
             )
         if order_type == "pickup" and not operation.accepts_pickup:
             raise HTTPException(

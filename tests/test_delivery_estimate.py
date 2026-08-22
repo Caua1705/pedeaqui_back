@@ -1,6 +1,6 @@
 import unittest
 import uuid
-from datetime import time
+from datetime import time, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -11,12 +11,16 @@ from src.integrations.google_maps_routes_client import (
     GoogleMapsUnavailableError,
     RouteMetrics,
 )
+from src.utils.security import utcnow
 from src.schemas.delivery_schema import (
     DeliveryAddressInput,
     DeliveryEstimateRequest,
 )
 from src.services.branch_hours_service import BranchHoursService
-from src.services.delivery_estimate_service import DeliveryEstimateService
+from src.services.delivery_estimate_service import (
+    DELIVERY_TIMEZONE,
+    DeliveryEstimateService,
+)
 
 
 def open_period(prep_time_min, prep_time_max, opens_at=time(0, 0), closes_at=time(23, 59)):
@@ -85,12 +89,16 @@ class DeliveryEstimateTests(unittest.TestCase):
             is_open=True,
             accepts_delivery=True,
             accepts_pickup=True,
+            delivery_paused_until=None,
+            delivery_pause_reason=None,
             min_order_value=None,
             service_fee_enabled=None,
             service_fee_amount=None,
             estimated_delivery_time_min=None,
             estimated_delivery_time_max=None,
             default_delivery_fee=None,
+            free_delivery_enabled=None,
+            free_delivery_min_order_value=None,
         )
         self.settings = SimpleNamespace(
             min_order_value=None,
@@ -99,10 +107,13 @@ class DeliveryEstimateTests(unittest.TestCase):
             estimated_delivery_time_min=60,
             estimated_delivery_time_max=75,
             default_delivery_fee=None,
+            free_delivery_enabled=None,
+            free_delivery_min_order_value=None,
         )
         self.maps = FakeMapsClient()
         self.cache = FakeCache()
         self.business_hours = []
+        self.delivery_time_bands = []
         self.service = DeliveryEstimateService.__new__(DeliveryEstimateService)
         self.service.restaurant_service = SimpleNamespace(
             get_active_restaurant=lambda slug: self.restaurant
@@ -117,6 +128,9 @@ class DeliveryEstimateTests(unittest.TestCase):
             # regra de la: a primeira da listagem ja ordenada por is_main.
             get_default_branch=lambda restaurant_id: self.branch,
             list_business_hours_by_weekday=lambda branch_id, weekday: self.business_hours,
+            # Sem faixa de prazo: o ETA continua saindo do tempo do
+            # Google, que e o caminho de quem nao configurou nada.
+            list_delivery_time_bands=lambda branch_id: self.delivery_time_bands,
         )
         # Servico real de horario apontando para o mesmo repositorio fake: a
         # escolha da faixa e regra de negocio e nao deve ser mockada.
@@ -374,3 +388,156 @@ class DefaultDeliveryFeeFallbackTests(DeliveryEstimateTests):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def band(max_distance_km, delivery_time_min, delivery_time_max):
+    return SimpleNamespace(
+        max_distance_km=Decimal(str(max_distance_km)),
+        delivery_time_min=delivery_time_min,
+        delivery_time_max=delivery_time_max,
+    )
+
+
+class FaixaDePrazoTests(DeliveryEstimateTests):
+    """O prazo por faixa de distancia (revisao 20260821_0030).
+
+    A faixa substitui o TEMPO DE DESLOCAMENTO do Google, e nao o ETA inteiro:
+    o preparo continua somando. O tempo do Google e tempo de DIRIGIR — nao
+    inclui ensacar, a segunda entrega da mesma corrida, estacionar e subir
+    escada — e por isso o prazo saia curto justamente no bairro longe, que e
+    onde o cliente ja desconfia.
+
+    A rota deste arquivo devolve 4.2 km e 18 minutos de deslocamento.
+    """
+
+    def test_a_faixa_substitui_o_tempo_do_google(self):
+        self.business_hours = [open_period(40, 60)]
+        self.delivery_time_bands = [band(5, 15, 25)]
+
+        result = self.service.estimate("restaurante", self.request(), None)
+
+        # 40+15 e 60+25, e nao 40+18 e 60+18.
+        self.assertEqual(result.eta_min, 55)
+        self.assertEqual(result.eta_max, 85)
+        # O tempo do Google continua na resposta, como informacao: e o que
+        # permite ao lojista comparar o prazo que ele prometeu com o que a
+        # rota diz.
+        self.assertEqual(result.travel_time_min, 18)
+
+    def test_o_preparo_continua_somando(self):
+        """A faixa NAO substitui o ETA inteiro, e o motivo e operacional: o
+        botao de "+10 minutos" do almoco mexe no tempo de preparo. Se a faixa
+        respondesse pelo prazo todo, aquele botao pararia de valer para
+        entrega justamente no horario em que ele existe para ser usado."""
+        self.business_hours = [open_period(10, 20)]
+        self.delivery_time_bands = [band(5, 15, 25)]
+
+        apertado = self.service.estimate("restaurante", self.request(), None)
+
+        self.cache = FakeCache()
+        self.service.cache = self.cache
+        self.business_hours = [open_period(30, 40)]
+        corrido = self.service.estimate("restaurante", self.request(), None)
+
+        self.assertEqual(apertado.eta_min, 25)
+        self.assertEqual(corrido.eta_min, 45)
+
+    def test_vale_a_primeira_faixa_que_alcanca_a_distancia(self):
+        self.business_hours = [open_period(40, 60)]
+        self.delivery_time_bands = [band(3, 10, 15), band(5, 20, 30), band(15, 40, 55)]
+
+        result = self.service.estimate("restaurante", self.request(), None)
+
+        # 4.2 km: a de 3 km nao alcanca, a de 5 km sim, e a de 15 nao chega a
+        # ser consultada.
+        self.assertEqual(result.eta_min, 60)
+        self.assertEqual(result.eta_max, 90)
+
+    def test_a_faixa_com_teto_exato_alcanca_a_distancia(self):
+        # `<=`, e nao `<`: uma faixa "ate 5 km" que recusasse 5.00 km deixaria
+        # a distancia exata do teto cair na faixa seguinte, que e o contrario
+        # do que a tela do lojista diz.
+        self.business_hours = [open_period(40, 60)]
+        self.maps.distance_km = 5.0
+        self.delivery_time_bands = [band(5, 20, 30), band(15, 40, 55)]
+
+        result = self.service.estimate("restaurante", self.request(), None)
+
+        self.assertEqual(result.eta_min, 60)
+
+    def test_alem_da_ultima_faixa_vale_o_tempo_do_google(self):
+        """Endereco que nao cai em faixa nenhuma nao e erro: e o
+        comportamento anterior a revisao, que continua certo para quem nao
+        configurou (ou nao previu) aquela distancia."""
+        self.business_hours = [open_period(40, 60)]
+        self.delivery_time_bands = [band(3, 10, 15)]
+
+        result = self.service.estimate("restaurante", self.request(), None)
+
+        self.assertEqual(result.eta_min, 58)
+        self.assertEqual(result.eta_max, 78)
+
+    def test_filial_sem_faixa_nenhuma_imprime_o_prazo_de_sempre(self):
+        self.business_hours = [open_period(40, 60)]
+        self.delivery_time_bands = []
+
+        result = self.service.estimate("restaurante", self.request(), None)
+
+        self.assertEqual(result.eta_min, 58)
+        self.assertEqual(result.eta_max, 78)
+
+    def test_editar_a_faixa_nao_espera_o_cache_vencer(self):
+        """As faixas entram na CHAVE do cache.
+
+        Sem isso, o lojista que acabou de corrigir um prazo desonesto veria a
+        correcao nao surtir efeito por ate 20 minutos, sem nada no log — e o
+        cache de estimativa existe para poupar chamada paga ao Google, nao
+        para congelar configuracao.
+        """
+        self.business_hours = [open_period(40, 60)]
+        self.delivery_time_bands = [band(5, 15, 25)]
+        antes = self.service.estimate("restaurante", self.request(), None)
+
+        self.delivery_time_bands = [band(5, 35, 45)]
+        depois = self.service.estimate("restaurante", self.request(), None)
+
+        self.assertEqual(antes.eta_min, 55)
+        self.assertEqual(depois.eta_min, 75)
+
+
+class PausaDaEntregaTests(DeliveryEstimateTests):
+    """A pausa temporaria recusa a entrega — com prazo e com motivo."""
+
+    def test_pausada_a_estimativa_recusa_com_reason_proprio(self):
+        self.business_hours = [open_period(40, 60)]
+        self.branch.delivery_paused_until = utcnow() + timedelta(minutes=40)
+        self.branch.delivery_pause_reason = "chuva forte"
+
+        result = self.service.estimate("restaurante", self.request(), None)
+
+        self.assertFalse(result.serviceable)
+        # `reason` PROPRIO, e nao o `delivery_disabled` de quem nao entrega:
+        # "esta loja nao entrega" manda o cliente escolher outra filial,
+        # "voltamos as 20h30" e um convite a esperar. O app so consegue
+        # mostrar telas diferentes se souber distinguir.
+        self.assertEqual(result.reason, "delivery_paused")
+        self.assertIn("chuva forte", result.message)
+
+    def test_a_mensagem_diz_a_que_horas_a_entrega_volta(self):
+        # Pausa sem prazo faz o cliente fechar o app; com prazo, ele volta.
+        self.business_hours = [open_period(40, 60)]
+        volta = utcnow() + timedelta(minutes=40)
+        self.branch.delivery_paused_until = volta
+
+        result = self.service.estimate("restaurante", self.request(), None)
+
+        esperado = volta.astimezone(DELIVERY_TIMEZONE).strftime("%H:%M")
+        self.assertIn(esperado, result.message)
+
+    def test_pausa_vencida_volta_a_entregar_sozinha(self):
+        self.business_hours = [open_period(40, 60)]
+        self.branch.delivery_paused_until = utcnow() - timedelta(minutes=1)
+
+        result = self.service.estimate("restaurante", self.request(), None)
+
+        self.assertTrue(result.serviceable)

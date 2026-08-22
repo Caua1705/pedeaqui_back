@@ -1,10 +1,11 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from src.models.branch_model import Branch
 from src.models.branch_business_hour_model import BranchBusinessHour
+from src.models.branch_delivery_time_band_model import BranchDeliveryTimeBand
 from src.models.branch_payment_method_model import BranchPaymentMethod
 
 
@@ -17,6 +18,27 @@ class BranchRepository:
             Branch.id == branch_id,
             Branch.restaurant_id == restaurant_id,
             Branch.is_active.is_(True),
+        )
+        return self.db.scalar(stmt)
+
+    def get_by_id_and_restaurant(self, branch_id: uuid.UUID, restaurant_id: uuid.UUID) -> Branch | None:
+        """A filial, ATIVA OU NAO, dentro do restaurante.
+
+        Existe ao lado de `get_active_by_id_and_restaurant` por causa da
+        impressao: reimprimir a comanda de um pedido e a operacao mais comum
+        do balcao (papel picotou, comanda molhou), e ela nao pode parar de
+        funcionar porque a loja foi desativada depois. Com o filtro de
+        ativa, a via daquele pedido voltaria a sair com o rodape e a
+        contagem de vias de ANTES de as colunas existirem — mudando sozinha,
+        sem ninguem ter editado nada.
+
+        Nao serve para configurar nem para vender: quem escreve continua
+        passando pela versao ativa, que e onde a filial desativada tem que
+        sumir mesmo.
+        """
+        stmt = select(Branch).where(
+            Branch.id == branch_id,
+            Branch.restaurant_id == restaurant_id,
         )
         return self.db.scalar(stmt)
 
@@ -48,6 +70,36 @@ class BranchRepository:
         """
         branches = self.list_active_by_restaurant(restaurant_id)
         return branches[0] if branches else None
+
+    def list_delivery_time_bands(self, branch_id: uuid.UUID) -> list[BranchDeliveryTimeBand]:
+        """As faixas de prazo da filial, do teto menor para o maior.
+
+        A ORDEM e a regra, e nao apresentacao: vale a primeira faixa cujo
+        teto alcanca a distancia. Uma listagem sem `ORDER BY` faria a faixa
+        vigente mudar entre duas consultas identicas — o Postgres nao promete
+        ordem nenhuma sem ele.
+        """
+        stmt = (
+            select(BranchDeliveryTimeBand)
+            .where(BranchDeliveryTimeBand.branch_id == branch_id)
+            .order_by(BranchDeliveryTimeBand.max_distance_km.asc())
+        )
+        return list(self.db.scalars(stmt).all())
+
+    def delete_delivery_time_bands(self, branch_id: uuid.UUID) -> None:
+        self.db.execute(
+            delete(BranchDeliveryTimeBand).where(
+                BranchDeliveryTimeBand.branch_id == branch_id
+            )
+        )
+
+    def add_delivery_time_bands(
+        self,
+        bands: list[BranchDeliveryTimeBand],
+    ) -> list[BranchDeliveryTimeBand]:
+        self.db.add_all(bands)
+        self.db.flush()
+        return bands
 
     def list_business_hours(self, branch_id: uuid.UUID) -> list[BranchBusinessHour]:
         stmt = (

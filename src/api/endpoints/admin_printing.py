@@ -13,6 +13,8 @@ from src.api.dependencies.admin_scope import (
 )
 from src.api.dependencies.database import get_db
 from src.schemas.admin_printing_schema import (
+    BranchPrintSettingsResponse,
+    BranchPrintSettingsUpdate,
     CategoryPrintingSectorResponse,
     PrintAgentHeartbeatRequest,
     PrintAgentPrintersRequest,
@@ -93,6 +95,56 @@ def update_printing_sector(
     e o que o painel chama de excluir — mesma regra do cardapio.
     """
     return AdminPrintingService(db).update_sector(scope, sector_id, payload)
+
+
+@router.get(
+    "/branches/{branch_id}/print-settings",
+    response_model=BranchPrintSettingsResponse,
+    # PESSOAS: e a mesma tela do balcao que ja lista setores e testa
+    # impressora, e "por que sairam duas vias?" e pergunta de quem esta em pe
+    # na maquina.
+    dependencies=[Depends(exigir_papel(PESSOAS))],
+)
+def get_branch_print_settings(
+    branch_id: UUID,
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> BranchPrintSettingsResponse:
+    """Rodape e contagem de vias desta filial.
+
+    `receipt_footer_message` e o que ESTA FILIAL gravou (nulo = herdando a
+    mensagem do restaurante); `effective_receipt_footer_message` e o que vai
+    sair impresso. A tela precisa dos dois — um preenche o campo de edicao, o
+    outro mostra o que o cliente vai ler.
+    """
+    return AdminPrintingService(db).get_print_settings(scope, branch_id)
+
+
+@router.patch(
+    "/branches/{branch_id}/print-settings",
+    response_model=BranchPrintSettingsResponse,
+    # GERENCIA, e nao SOMENTE_DONO: nao e dinheiro. O que o dono controla
+    # sozinho e a mensagem PADRAO da marca, que sai em
+    # `PATCH /admin/settings` — e essa continua sendo dele.
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
+def update_branch_print_settings(
+    branch_id: UUID,
+    payload: BranchPrintSettingsUpdate,
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> BranchPrintSettingsResponse:
+    """Edicao parcial. So o que vier no corpo e alterado.
+
+    `receipt_footer_message` tem tres estados e os tres sao usados: ausente
+    nao mexe, `null` volta a HERDAR a mensagem do restaurante e `""` desliga
+    o rodape NESTA loja — sem ele, a filial nao teria como recusar a campanha
+    da rede.
+
+    Zero copias e valido: a retirada normalmente nao precisa da via do
+    cliente, que e a que iria grampeada na sacola.
+    """
+    return AdminPrintingService(db).update_print_settings(scope, branch_id, payload)
 
 
 @router.patch(

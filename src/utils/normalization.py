@@ -182,3 +182,60 @@ def is_valid_cpf(cpf: str) -> bool:
     if _check_digit(digits[:9]) != int(digits[9]):
         return False
     return _check_digit(digits[:10]) == int(digits[10])
+
+
+# Categorias Unicode que NAO podem chegar a uma impressora termica: `Cc` sao
+# os caracteres de controle (0x00-0x1F, 0x7F), `Cf` os de formatacao
+# invisivel (zero-width, marcas de direcao) e `Zl`/`Zp` os separadores de
+# linha/paragrafo exoticos, que nenhuma codepage de balcao conhece.
+_CONTROL_CATEGORIES = ("Cc", "Cf", "Zl", "Zp")
+# Tres ou mais quebras viram uma linha em branco. Quem cola texto de um
+# editor traz sequencias de \n\n\n\n sem perceber, e cada uma vira
+# centimetro de bobina.
+_BLANK_LINES_RE = re.compile(r"\n{3,}")
+
+
+def normalize_receipt_text(value: str) -> str:
+    """Texto livre do lojista pronto para ir a uma impressora termica.
+
+    Aplica-se so ao que o lojista escreve PARA a bobina — hoje a mensagem do
+    rodape da via do cliente. Nome de produto e observacao do cliente seguem
+    com `normalize_text`; a diferenca esta no unico ponto abaixo que nao e
+    cosmetico.
+
+    **Caractere de controle e comando de impressora, nao caractere.** O
+    agente escreve `content` direto no fluxo ESC/POS
+    (`print_agent/escpos.py`), e a codepage passa `0x1B` adiante intacto —
+    entao um ESC colado no meio da mensagem (de um copiar-e-colar, ou de
+    alguem tentando) deixa de ser texto e vira `ESC ...`, reprogramando a
+    impressora no meio da comanda. `encode_text` nao defende contra isso: o
+    trabalho dele e a queda de qualidade do que a TABELA nao tem (acento,
+    emoji), e `0x1B` a tabela tem.
+
+    O resto e o que faz o texto caber num layout de largura fixa: `\t`
+    vira espaco (a tabulacao conta 1 caractere e imprime varios, o que
+    estoura a coluna sem a conta perceber), `\r\n` vira `\n` (a quebra de
+    linha da impressora e responsabilidade do agente, nao do lojista),
+    espaco no fim de linha some e linha em branco repetida colapsa.
+
+    NFC pelo mesmo motivo de `normalize_text`, com um agravante: aqui a
+    forma decomposta nao so atrapalha a busca — ela nao EXISTE na CP850, e
+    a mensagem sairia sem um acento (armadilha 28).
+    """
+    unified = value.replace("\r\n", "\n").replace("\r", "\n")
+
+    kept: list[str] = []
+    for character in unified:
+        if character == "\n":
+            kept.append("\n")
+            continue
+        if character == "\t":
+            kept.append(" ")
+            continue
+        if unicodedata.category(character) in _CONTROL_CATEGORIES:
+            continue
+        kept.append(character)
+
+    lines = [line.rstrip() for line in "".join(kept).split("\n")]
+    collapsed = _BLANK_LINES_RE.sub("\n\n", "\n".join(lines))
+    return unicodedata.normalize("NFC", collapsed).strip()

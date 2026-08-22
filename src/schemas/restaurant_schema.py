@@ -1,7 +1,8 @@
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.schemas.common_schema import BaseResponse
 
@@ -48,6 +49,52 @@ class RestaurantSettingsResponse(BaseResponse):
     accepts_delivery: bool | None = True
     accepts_pickup: bool | None = True
     is_open: bool | None = True
+
+    # A entrega esta acontecendo NESTE minuto. `accepts_delivery` continua
+    # dizendo se a filial entrega em geral; este desconta a pausa temporaria
+    # (chuva, entregador que sumiu). O app precisa dos dois: o primeiro
+    # decide se o botao de entrega existe, o segundo se ele esta ativo agora.
+    accepts_delivery_now: bool = True
+    delivery_paused_until: datetime | None = None
+    delivery_pause_reason: str | None = None
+
+    # A campanha de frete gratis JA RESOLVIDA para esta filial. E o que
+    # permite ao carrinho mostrar "faltam R$ 12 para frete gratis" — o app
+    # compara com o proprio subtotal.
+    #
+    # Publicar o VALOR, e nao a decisao, e deliberado: quem decide a taxa e o
+    # servidor na criacao do pedido, com o subtotal que ele mesmo calculou.
+    # Uma rota que recebesse o subtotal do cliente para responder "gratis ou
+    # nao" seria preco vindo do cliente por outra porta.
+    free_delivery_enabled: bool = False
+    free_delivery_min_order_value: float | None = None
+
+    # As faixas de prazo por distancia, se a filial configurou. Servem a tela
+    # que ainda NAO tem endereco: com elas o app diz "25 a 80 min conforme o
+    # bairro" em vez de um par unico que mente para metade da cidade.
+    #
+    # `estimated_delivery_time_min/max` acima continua sendo o rotulo que o
+    # lojista digitou, e NAO e recalculado a partir daqui: o campo mudaria de
+    # significado sem mudar de nome.
+    delivery_time_bands: list["DeliveryTimeBandResponse"] = Field(default_factory=list)
+
+
+class DeliveryTimeBandResponse(BaseResponse):
+    """Uma faixa de prazo por distancia.
+
+    `max_distance_km` e um TETO: vale a primeira faixa, em ordem crescente,
+    cujo teto alcanca a distancia do endereco. Nao ha piso porque nao ha
+    buraco — a faixa anterior cobre tudo abaixo dela.
+
+    Os minutos sao o DESLOCAMENTO, e nao o prazo total: o preparo da filial
+    soma por cima, e e o servidor que faz essa conta em
+    `POST /delivery/estimate`. Somar aqui, no app, daria dois numeros
+    diferentes para o mesmo pedido.
+    """
+
+    max_distance_km: float
+    delivery_time_min: int
+    delivery_time_max: int
 
 
 class BranchResponse(BaseResponse):

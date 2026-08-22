@@ -14,6 +14,11 @@ O que estes testes protegem, em ordem de gravidade:
    categoria sao alcancados sempre com o restaurante do token, e o setor
    ainda passa pelo escopo de filial: um manager preso a uma loja nao
    aponta produto para a impressora da loja vizinha.
+4. **A personalizacao da filial nao pode virar comanda a menos** (revisao
+   20260821_0029). Copia e entrada REPETIDA na lista, porque o agente nao
+   tem atualizacao remota; a contagem multiplica o que as outras regras
+   deixaram passar, sem substituir nenhuma; e o rodape so existe na via do
+   cliente.
 
 O repositorio e fake — ele prova que o parametro chegou, nao que o SQL esta
 certo. O que fica para o teste de integracao e que o WHERE de fato filtra.
@@ -26,6 +31,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from main import app
 from src.api.dependencies.admin_scope import AdminScope
@@ -35,6 +41,7 @@ from src.models.printing_sector_model import PrintingSector
 from src.schemas.admin_printing_schema import (
     PRINT_JOB_CUSTOMER,
     PRINT_JOB_PRODUCTION,
+    BranchPrintSettingsUpdate,
     PrintingSectorCreate,
     PrintingSectorUpdate,
     ProductPrintingSectorRequest,
@@ -150,14 +157,37 @@ class FakeMenuRepository:
 
 
 class FakeBranchRepository:
+    """As duas leituras de filial, e a diferenca entre elas importa aqui.
+
+    A de configuracao exige filial ATIVA; a da impressao nao — reimprimir o
+    pedido de uma loja desativada precisa continuar saindo com a
+    configuracao daquela loja. O fake nao guarda `is_active` porque nenhum
+    teste deste arquivo desativa filial; o que ele guarda e a distincao dos
+    dois metodos, para o service nao passar a chamar o errado sem ninguem
+    ver.
+    """
+
     def __init__(self, branches=()):
         self.branches = list(branches)
 
     def get_active_by_id_and_restaurant(self, branch_id, restaurant_id):
+        return self.get_by_id_and_restaurant(branch_id, restaurant_id)
+
+    def get_by_id_and_restaurant(self, branch_id, restaurant_id):
         for branch in self.branches:
             if branch.id == branch_id and branch.restaurant_id == restaurant_id:
                 return branch
         return None
+
+
+class FakeSettingsRepository:
+    """So o padrao do restaurante, que e a outra ponta da heranca do rodape."""
+
+    def __init__(self, settings=None):
+        self.settings = settings
+
+    def get_settings(self, restaurant_id):
+        return self.settings
 
 
 class FakeOrderService:
@@ -175,6 +205,26 @@ class FakeOrderService:
     def get_order_detail(self, order_id, scope):
         self.calls.append((order_id, scope))
         return self.detail
+
+
+def make_branch(branch_id=BRANCH_ID, **overrides):
+    """Uma filial com a configuracao de impressao que o banco cria sozinho.
+
+    Os quatro `1` sao o default da revisao 20260821_0029, e sao o
+    comportamento anterior a ela: uma via do cliente e uma de cada setor,
+    tanto na entrega quanto na retirada.
+    """
+    values = {
+        "id": branch_id,
+        "restaurant_id": RESTAURANT_ID,
+        "receipt_footer_message": None,
+        "print_customer_copies_delivery": 1,
+        "print_production_copies_delivery": 1,
+        "print_customer_copies_pickup": 1,
+        "print_production_copies_pickup": 1,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
 
 
 def make_scope(branch_id=None):
@@ -216,7 +266,12 @@ def make_product(
     )
 
 
-def make_order_detail(items, payment_status="on_delivery", branch_id=BRANCH_ID):
+def make_order_detail(
+    items,
+    payment_status="on_delivery",
+    branch_id=BRANCH_ID,
+    order_type="delivery",
+):
     order = Order(
         id=uuid.uuid4(),
         order_number=1234,
@@ -224,7 +279,7 @@ def make_order_detail(items, payment_status="on_delivery", branch_id=BRANCH_ID):
         branch_id=branch_id,
         customer_name_snapshot="Dona Maria",
         customer_phone_snapshot="85999998888",
-        order_type="delivery",
+        order_type=order_type,
         status="preparing",
         payment_method="cash",
         payment_status=payment_status,
@@ -259,13 +314,18 @@ def make_item(product_id, name="Prato feito"):
     return item
 
 
-def build_service(sector_repository=None, menu_repository=None, branches=(), order_detail=None):
+def build_service(
+    sector_repository=None,
+    menu_repository=None,
+    branches=(),
+    order_detail=None,
+    settings=None,
+):
     service = AdminPrintingService(FakeDb())
     service.repository = sector_repository or FakeSectorRepository()
     service.menu_repository = menu_repository or FakeMenuRepository()
-    service.branch_repository = FakeBranchRepository(
-        branches or [SimpleNamespace(id=BRANCH_ID, restaurant_id=RESTAURANT_ID)]
-    )
+    service.branch_repository = FakeBranchRepository(branches or [make_branch()])
+    service.settings_repository = FakeSettingsRepository(settings)
     if order_detail is not None:
         service.order_service = FakeOrderService(order_detail)
     return service
@@ -414,6 +474,291 @@ class PrintJobTests(unittest.TestCase):
         service.build_print_jobs(detail.id, scope)
 
         self.assertEqual(service.order_service.calls, [(detail.id, scope)])
+
+
+class PrintCopiesTests(unittest.TestCase):
+    """Quantas vias saem, por tipo de pedido (revisao 20260821_0029).
+
+    A regra que estes testes protegem e a que nao aparece em revisao de
+    codigo: **copia e ENTRADA REPETIDA na lista**, e nao um campo `copies`.
+    Nao existe atualizacao remota do agente — um campo novo so valeria nas
+    lojas que alguem fosse visitar, e a feature nasceria sem valer para
+    ninguem.
+    """
+
+    def _service_com(self, branch, order_type="delivery", **kwargs):
+        kitchen = make_sector("Cozinha")
+        product = make_product(kitchen.id)
+        detail = make_order_detail(
+            [make_item(product.id)], order_type=order_type, **kwargs
+        )
+        service = build_service(
+            FakeSectorRepository([kitchen], [product]),
+            branches=[branch],
+            order_detail=detail,
+        )
+        return service, detail
+
+    def test_by_default_one_of_each_comes_out_as_it_always_did(self):
+        service, detail = self._service_com(make_branch())
+
+        response = service.build_print_jobs(detail.id, make_scope())
+
+        self.assertEqual(
+            jobs_of(response),
+            [(PRINT_JOB_CUSTOMER, "Via do cliente"), (PRINT_JOB_PRODUCTION, "Cozinha")],
+        )
+
+    def test_two_customer_copies_come_out_as_two_identical_entries(self):
+        # A loja que grampeia uma via no pacote e entrega a outra em maos.
+        branch = make_branch(print_customer_copies_delivery=2)
+        service, detail = self._service_com(branch)
+
+        response = service.build_print_jobs(detail.id, make_scope())
+
+        vias_do_cliente = [job for job in response.jobs if job.type == PRINT_JOB_CUSTOMER]
+        self.assertEqual(len(vias_do_cliente), 2)
+        # Identicas byte a byte: o agente imprime `content` como recebe, e
+        # duas bobinas diferentes para o mesmo pedido confundem a conferencia
+        # do balcao.
+        self.assertEqual(vias_do_cliente[0].content, vias_do_cliente[1].content)
+
+    def test_the_pickup_counts_are_the_ones_read_on_a_pickup_order(self):
+        # O caso que motivou a feature: na retirada nao ha sacola em que
+        # grampear a via do cliente, e a cozinha continua precisando da dela.
+        branch = make_branch(
+            print_customer_copies_pickup=0,
+            print_production_copies_pickup=1,
+            print_customer_copies_delivery=2,
+        )
+        service, detail = self._service_com(branch, order_type="pickup")
+
+        response = service.build_print_jobs(detail.id, make_scope())
+
+        self.assertEqual(jobs_of(response), [(PRINT_JOB_PRODUCTION, "Cozinha")])
+
+    def test_the_delivery_counts_do_not_leak_into_pickup(self):
+        branch = make_branch(print_production_copies_delivery=3)
+        service, detail = self._service_com(branch, order_type="pickup")
+
+        response = service.build_print_jobs(detail.id, make_scope())
+
+        producao = [job for job in response.jobs if job.type == PRINT_JOB_PRODUCTION]
+        self.assertEqual(len(producao), 1)
+
+    def test_each_sector_is_repeated_not_just_the_first(self):
+        kitchen = make_sector("Cozinha", sort_order=0)
+        bar = make_sector("Bar", sort_order=1)
+        steak = make_product(kitchen.id)
+        drink = make_product(bar.id)
+        detail = make_order_detail([make_item(steak.id), make_item(drink.id)])
+        service = build_service(
+            FakeSectorRepository([kitchen, bar], [steak, drink]),
+            branches=[make_branch(print_production_copies_delivery=2)],
+            order_detail=detail,
+        )
+
+        response = service.build_print_jobs(detail.id, make_scope())
+
+        self.assertEqual(
+            [job.sector_name for job in response.jobs if job.type == PRINT_JOB_PRODUCTION],
+            ["Cozinha", "Cozinha", "Bar", "Bar"],
+        )
+
+    def test_zeroing_both_prints_nothing(self):
+        branch = make_branch(
+            print_customer_copies_delivery=0, print_production_copies_delivery=0
+        )
+        service, detail = self._service_com(branch)
+
+        response = service.build_print_jobs(detail.id, make_scope())
+
+        self.assertEqual(response.jobs, [])
+
+    def test_an_unpaid_order_gets_no_production_copy_however_many_are_configured(self):
+        # A contagem multiplica o que a regra de pagamento deixou passar; ela
+        # nao a substitui. Comanda impressa e ordem de producao.
+        branch = make_branch(print_production_copies_delivery=3)
+        service, detail = self._service_com(branch, payment_status="pending")
+
+        response = service.build_print_jobs(detail.id, make_scope())
+
+        self.assertEqual(jobs_of(response), [(PRINT_JOB_CUSTOMER, "Via do cliente")])
+
+    def test_a_branch_that_cannot_be_read_prints_one_of_each(self):
+        """Filial que sumiu entre a leitura do pedido e esta consulta.
+
+        Uma via de cada e o comportamento anterior a revisao; zero seria uma
+        comanda que a cozinha nunca ve por causa de uma leitura que falhou.
+        """
+        kitchen = make_sector("Cozinha")
+        product = make_product(kitchen.id)
+        detail = make_order_detail([make_item(product.id)])
+        service = build_service(
+            FakeSectorRepository([kitchen], [product]),
+            branches=[make_branch(branch_id=OTHER_BRANCH_ID)],
+            order_detail=detail,
+        )
+
+        response = service.build_print_jobs(detail.id, make_scope())
+
+        self.assertEqual(
+            jobs_of(response),
+            [(PRINT_JOB_CUSTOMER, "Via do cliente"), (PRINT_JOB_PRODUCTION, "Cozinha")],
+        )
+
+
+class FooterMessageOnTheJobTests(unittest.TestCase):
+    """De onde sai o texto do rodape que chega na bobina.
+
+    A heranca e a mesma dos termos comerciais (armadilha 35): nulo na filial
+    significa herdar o padrao do restaurante, e a string VAZIA e uma escolha.
+    """
+
+    def _vias(self, branch, settings=None):
+        kitchen = make_sector("Cozinha")
+        product = make_product(kitchen.id)
+        detail = make_order_detail([make_item(product.id)])
+        service = build_service(
+            FakeSectorRepository([kitchen], [product]),
+            branches=[branch],
+            order_detail=detail,
+            settings=settings,
+        )
+        return service.build_print_jobs(detail.id, make_scope()).jobs
+
+    def test_the_branch_message_reaches_the_customer_copy(self):
+        jobs = self._vias(make_branch(receipt_footer_message="Siga @loja"))
+
+        self.assertIn("Siga @loja", jobs[0].content)
+
+    def test_a_branch_without_its_own_message_prints_the_brand_one(self):
+        jobs = self._vias(
+            make_branch(receipt_footer_message=None),
+            settings=SimpleNamespace(receipt_footer_message="Peca direto e ganhe 5%"),
+        )
+
+        self.assertIn("Peca direto e ganhe 5%", jobs[0].content)
+
+    def test_an_empty_message_in_the_branch_refuses_the_brand_one(self):
+        """O terceiro estado, e o unico jeito de a loja recusar a campanha da
+        rede. Um `or` no lugar do `is not None` faria a mensagem voltar a
+        sair justamente aqui."""
+        jobs = self._vias(
+            make_branch(receipt_footer_message=""),
+            settings=SimpleNamespace(receipt_footer_message="Peca direto"),
+        )
+
+        self.assertNotIn("Peca direto", jobs[0].content)
+
+    def test_the_kitchen_copy_never_carries_the_message(self):
+        # 24 colunas em fonte dupla, para quem esta com as maos ocupadas:
+        # propaganda ali e papel gasto e mais uma linha para ler no aperto.
+        jobs = self._vias(make_branch(receipt_footer_message="Siga @loja"))
+
+        producao = [job for job in jobs if job.type == PRINT_JOB_PRODUCTION]
+        self.assertTrue(producao)
+        for job in producao:
+            self.assertNotIn("Siga @loja", job.content)
+
+
+class PrintSettingsTests(unittest.TestCase):
+    """A tela do painel que edita as duas coisas."""
+
+    def test_it_shows_the_override_and_what_will_be_printed(self):
+        # Os dois campos, como na tela de operacao: um preenche a caixa de
+        # edicao (vazia = herdando), o outro diz o que o cliente vai ler.
+        service = build_service(
+            branches=[make_branch(receipt_footer_message=None)],
+            settings=SimpleNamespace(receipt_footer_message="Peca direto"),
+        )
+
+        response = service.get_print_settings(make_scope(), BRANCH_ID)
+
+        self.assertIsNone(response.receipt_footer_message)
+        self.assertEqual(response.effective_receipt_footer_message, "Peca direto")
+
+    def test_writing_null_goes_back_to_inheriting(self):
+        branch = make_branch(receipt_footer_message="Da filial")
+        service = build_service(
+            branches=[branch],
+            settings=SimpleNamespace(receipt_footer_message="Da marca"),
+        )
+
+        response = service.update_print_settings(
+            make_scope(),
+            BRANCH_ID,
+            BranchPrintSettingsUpdate(receipt_footer_message=None),
+        )
+
+        self.assertIsNone(branch.receipt_footer_message)
+        self.assertEqual(response.effective_receipt_footer_message, "Da marca")
+
+    def test_a_field_absent_from_the_body_is_not_touched(self):
+        """`exclude_unset`, e nao `exclude_none`: e ele que separa "nao mexa"
+        de "volte a herdar". Trocar um pelo outro tiraria da filial o unico
+        jeito de recusar a mensagem da marca."""
+        branch = make_branch(receipt_footer_message="Da filial")
+        service = build_service(branches=[branch])
+
+        service.update_print_settings(
+            make_scope(),
+            BRANCH_ID,
+            BranchPrintSettingsUpdate(print_customer_copies_pickup=0),
+        )
+
+        self.assertEqual(branch.receipt_footer_message, "Da filial")
+        self.assertEqual(branch.print_customer_copies_pickup, 0)
+
+    def test_a_null_copy_count_is_refused_by_the_body(self):
+        """422 na borda, e nao 500 do Postgres la dentro.
+
+        As quatro colunas sao NOT NULL e nao herdam nada — `null` nelas nao
+        significa coisa nenhuma. Sem a conferencia no schema, o valor
+        atravessaria o `exclude_unset` ate o `setattr` e o lojista veria um
+        erro sobre restricao de coluna numa tela de configuracao.
+        """
+        with self.assertRaises(ValidationError):
+            BranchPrintSettingsUpdate.model_validate(
+                {"print_customer_copies_delivery": None}
+            )
+
+    def test_a_null_footer_is_accepted_because_it_means_inherit(self):
+        # O contraste do teste acima: aqui o `null` E o pedido.
+        payload = BranchPrintSettingsUpdate.model_validate(
+            {"receipt_footer_message": None}
+        )
+
+        self.assertEqual(
+            payload.model_dump(exclude_unset=True), {"receipt_footer_message": None}
+        )
+
+    def test_a_message_with_too_many_lines_is_refused(self):
+        # O teto de linhas mora na ESCRITA: cortar na impressao faria o
+        # lojista descobrir o limite pela bobina, com o texto ja gravado.
+        with self.assertRaises(ValidationError):
+            BranchPrintSettingsUpdate.model_validate(
+                {"receipt_footer_message": "a\nb\nc\nd\ne\nf\ng"}
+            )
+
+    def test_a_branch_of_another_restaurant_is_not_found(self):
+        # Mesmo 404 de "nao existe": um 403 confirmaria que aquela filial
+        # existe em algum lugar da plataforma.
+        service = build_service(branches=[make_branch(restaurant_id=uuid.uuid4())])
+
+        with self.assertRaises(HTTPException) as caught:
+            service.get_print_settings(make_scope(), BRANCH_ID)
+
+        self.assertEqual(caught.exception.status_code, 404)
+
+    def test_a_branch_outside_the_scope_of_the_token_is_not_found(self):
+        # Manager preso a uma loja nao configura a impressao da vizinha.
+        service = build_service(branches=[make_branch()])
+
+        with self.assertRaises(HTTPException) as caught:
+            service.get_print_settings(make_scope(branch_id=OTHER_BRANCH_ID), BRANCH_ID)
+
+        self.assertEqual(caught.exception.status_code, 404)
 
 
 class SectorCrudTests(unittest.TestCase):

@@ -60,9 +60,12 @@ def make_settings(**overrides):
         "estimated_delivery_time_min": 30,
         "estimated_delivery_time_max": 60,
         "default_delivery_fee": Decimal("5.00"),
+        "free_delivery_enabled": None,
+        "free_delivery_min_order_value": None,
         "service_fee_enabled": True,
         "service_fee_amount": Decimal("0.99"),
         "platform_commission_percent": Decimal("10.00"),
+        "receipt_footer_message": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -98,12 +101,16 @@ def make_branch(**overrides):
         "is_open": True,
         "accepts_delivery": True,
         "accepts_pickup": True,
+        "delivery_paused_until": None,
+        "delivery_pause_reason": None,
         "min_order_value": None,
         "service_fee_enabled": None,
         "service_fee_amount": None,
         "estimated_delivery_time_min": None,
         "estimated_delivery_time_max": None,
         "default_delivery_fee": None,
+        "free_delivery_enabled": None,
+        "free_delivery_min_order_value": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)

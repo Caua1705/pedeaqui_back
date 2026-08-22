@@ -79,6 +79,25 @@ def build_address_fingerprint(payload: DeliveryEstimateRequest) -> str:
     return "address:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _mensagem_da_pausa(operation: BranchOperation) -> str:
+    """"Sem entrega agora" com PRAZO e, quando houver, com motivo.
+
+    A frase existe inteira por uma razao de negocio: pausa sem prazo faz o
+    cliente fechar o app, e pausa com prazo faz ele voltar as 20h30. O motivo
+    e opcional porque "chuva forte" ajuda e a ausencia dele nao atrapalha.
+
+    O horario sai no fuso da operacao, e nao em UTC: "voltamos as 23:30" para
+    uma pausa que acaba as 20h30 e pior que nao dizer nada.
+    """
+    partes = ["A entrega esta pausada no momento."]
+    if operation.delivery_pause_reason:
+        partes.append(f"Motivo: {operation.delivery_pause_reason}.")
+    if operation.delivery_paused_until is not None:
+        volta = operation.delivery_paused_until.astimezone(DELIVERY_TIMEZONE)
+        partes.append(f"Voltamos a entregar as {volta.strftime('%H:%M')}.")
+    return " ".join(partes)
+
+
 def _normalized(value: str | None) -> str:
     return (value or "").strip().casefold()
 
@@ -274,6 +293,20 @@ class DeliveryEstimateService:
             result = self._not_serviceable("delivery_disabled", "Esta filial nao aceita entrega.")
             self._log_final_result(result)
             return result
+        if not operation.accepts_delivery_now:
+            # `reason` PROPRIO, e nao o `delivery_disabled` acima: as duas
+            # situacoes pedem telas diferentes. "Esta loja nao entrega" e
+            # definitivo e manda o cliente escolher outra filial; "voltamos as
+            # 20h30" e um convite a esperar, e o app so consegue mostrar isso
+            # se souber distinguir. Foi a licao contraria a de `branch_closed`,
+            # onde juntar os dois casos foi o certo — la o cliente faz a mesma
+            # coisa nos dois; aqui, nao.
+            result = self._not_serviceable(
+                "delivery_paused",
+                _mensagem_da_pausa(operation),
+            )
+            self._log_final_result(result)
+            return result
         if not operation.is_open:
             # Mesmo `reason` do fechado-por-horario, de proposito: para o
             # cliente as duas coisas sao a mesma ("esta loja nao esta
@@ -353,6 +386,7 @@ class DeliveryEstimateService:
                 prep_time_min,
                 prep_time_max,
                 branch,
+                self._bands_fingerprint(branch.id),
             )
             cached = self.cache.get(cache_key)
             if cached is not None:
@@ -467,8 +501,13 @@ class DeliveryEstimateService:
                 self._log_final_result(result)
                 return result
             travel_time_min = route.travel_time_min
-            eta_min = prep_time_min + travel_time_min
-            eta_max = prep_time_max + travel_time_min
+            eta_min, eta_max = self._eta_from_bands(
+                branch.id,
+                route.distance_km,
+                prep_time_min,
+                prep_time_max,
+                travel_time_min,
+            )
             result = DeliveryEstimateResult(
                 serviceable=True,
                 reason=None,
@@ -708,6 +747,64 @@ class DeliveryEstimateService:
             )
         return self.maps_client.geocode(address)
 
+    def _eta_from_bands(
+        self,
+        branch_id,
+        distance_km: float,
+        prep_time_min: int,
+        prep_time_max: int,
+        travel_time_min: int,
+    ) -> tuple[int, int]:
+        """O prazo prometido ao cliente: preparo + deslocamento.
+
+        Quem responde pelo DESLOCAMENTO e a faixa da filial, quando existe
+        uma que alcance esta distancia. O tempo do Google e tempo de DIRIGIR:
+        ele nao inclui ensacar o pedido, a segunda entrega da mesma corrida,
+        estacionar e subir escada — e e por isso que o prazo saia curto
+        justamente no bairro longe, que e onde o cliente ja desconfia.
+
+        Sem faixa que alcance (filial sem faixas, ou endereco alem do ultimo
+        teto), vale o tempo do Google, que e o comportamento anterior a
+        revisao 20260821_0030. Nao e degradacao: e a resposta certa para quem
+        nao configurou nada.
+
+        O PREPARO continua somando nos dois caminhos, e isso e o que mantem o
+        botao de "+10 minutos" do almoco (`PATCH /branches/{id}/prep-time`)
+        mexendo no prazo de quem pede entrega. Uma faixa que substituisse o
+        ETA inteiro desligaria aquele botao para entrega e o deixaria valendo
+        so para retirada — bem no horario em que ele existe para ser usado.
+        """
+        band = self._band_for(branch_id, distance_km)
+        if band is None:
+            return prep_time_min + travel_time_min, prep_time_max + travel_time_min
+        return (
+            prep_time_min + int(band.delivery_time_min),
+            prep_time_max + int(band.delivery_time_max),
+        )
+
+    def _band_for(self, branch_id, distance_km: float):
+        """A primeira faixa cujo teto alcanca esta distancia, ou None.
+
+        As faixas sao TETOS em ordem crescente, entao a primeira que couber e
+        a certa e nao ha buraco possivel entre elas — ver o docstring de
+        `BranchDeliveryTimeBand`.
+        """
+        distancia = to_decimal(distance_km)
+        for band in self.branch_repository.list_delivery_time_bands(branch_id):
+            if distancia <= to_decimal(band.max_distance_km):
+                return band
+        return None
+
+    def _bands_fingerprint(self, branch_id) -> str:
+        bands = self.branch_repository.list_delivery_time_bands(branch_id)
+        if not bands:
+            return "none"
+        partes = [
+            f"{band.max_distance_km}-{band.delivery_time_min}-{band.delivery_time_max}"
+            for band in bands
+        ]
+        return hashlib.sha256("|".join(partes).encode("utf-8")).hexdigest()[:12]
+
     def _resolve_prep_time(self, branch_id) -> tuple[int | None, int | None, str, int]:
         now = datetime.now(DELIVERY_TIMEZONE)
         weekday = now.weekday()
@@ -892,7 +989,16 @@ class DeliveryEstimateService:
         prep_time_min: int | None,
         prep_time_max: int | None,
         branch,
+        bands_fingerprint: str,
     ) -> str:
+        """A chave carrega TUDO que muda o resultado guardado.
+
+        As faixas de prazo entraram na chave junto com a feature, e nao
+        depois: sem elas, editar a faixa no painel continuaria servindo o
+        prazo antigo por ate 20 minutos (DELIVERY_ESTIMATE_CACHE_TTL_SECONDS)
+        — e o lojista que acabou de corrigir um prazo desonesto veria a
+        correcao nao surtir efeito, sem nada no log.
+        """
         ttl = max(1, settings.DELIVERY_ESTIMATE_CACHE_TTL_SECONDS)
         bucket = int(time() // ttl)
         return (
@@ -904,5 +1010,6 @@ class DeliveryEstimateService:
             f"{getattr(branch, 'delivery_min_fee', None) or 'none'}:"
             f"{getattr(branch, 'delivery_max_fee', None) or 'none'}:"
             f"{getattr(branch, 'delivery_max_distance_km', None) or 'none'}:"
+            f"{bands_fingerprint}:"
             f"{bucket}"
         )

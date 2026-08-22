@@ -79,6 +79,12 @@ PAPEL_ESPERADO = {
     ("PATCH", "/admin/branches/{branch_id}"): GERENCIA,
     ("PATCH", "/admin/branches/{branch_id}/store-status"): PESSOAS,
     ("PATCH", "/admin/branches/{branch_id}/order-types"): GERENCIA,
+    # A pausa da entrega e PESSOAS, e `order-types` e GERENCIA, e a diferenca
+    # entre as duas e o PRAZO: a pausa vence sozinha em ate 24h, o
+    # `accepts_delivery` espera alguem religar. Papel acompanha consequencia.
+    ("PATCH", "/admin/branches/{branch_id}/delivery-pause"): PESSOAS,
+    ("GET", "/admin/branches/{branch_id}/delivery-time-bands"): PESSOAS,
+    ("PUT", "/admin/branches/{branch_id}/delivery-time-bands"): GERENCIA,
     ("PATCH", "/admin/branches/{branch_id}/settings"): SOMENTE_DONO,
     ("GET", "/admin/branches/{branch_id}/business-hours"): PESSOAS,
     ("PUT", "/admin/branches/{branch_id}/business-hours"): GERENCIA,
@@ -91,6 +97,10 @@ PAPEL_ESPERADO = {
     ("GET", "/admin/branches/{branch_id}/printing-sectors"): PESSOAS,
     ("POST", "/admin/branches/{branch_id}/printing-sectors"): GERENCIA,
     ("PATCH", "/admin/printing-sectors/{sector_id}"): GERENCIA,
+    # Rodape e contagem de vias: leitura de balcao, escrita de gerencia. A
+    # mensagem PADRAO da marca fica em PATCH /admin/settings, que e do dono.
+    ("GET", "/admin/branches/{branch_id}/print-settings"): PESSOAS,
+    ("PATCH", "/admin/branches/{branch_id}/print-settings"): GERENCIA,
     ("PATCH", "/admin/products/{product_id}/printing-sector"): GERENCIA,
     ("PATCH", "/admin/categories/{category_id}/printing-sector"): GERENCIA,
     ("POST", "/admin/print-agent/heartbeat"): AGENTE_DE_IMPRESSAO,

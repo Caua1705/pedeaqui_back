@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, TIMESTAMP
+from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, Text, TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -21,6 +21,19 @@ class RestaurantSetting(Base):
     default_delivery_fee: Mapped[Decimal | None] = mapped_column(Numeric, default=0)
     service_fee_enabled: Mapped[bool | None] = mapped_column(Boolean, default=True)
     service_fee_amount: Mapped[Decimal | None] = mapped_column(Numeric, default=Decimal("0.99"))
+    # Frete gratis acima de um valor, para a rede inteira. Padrao como os
+    # campos acima: a filial que deixou as colunas homonimas nulas usa este.
+    # Sao DUAS colunas para a filial poder RECUSAR a campanha — ver o model
+    # da filial e `resolve_branch_operation`.
+    free_delivery_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    free_delivery_min_order_value: Mapped[Decimal | None] = mapped_column(Numeric)
+    # Mensagem da MARCA no rodape da via do cliente ("@juniordapicanha",
+    # "peca direto e ganhe 5% de volta"). Padrao como os campos acima: a
+    # filial que deixou a coluna homonima nula imprime esta.
+    #
+    # Nulo aqui e "nao ha mensagem" — nao existe o terceiro estado que a
+    # filial tem, porque nao ha de quem herdar acima do restaurante.
+    receipt_footer_message: Mapped[str | None] = mapped_column(Text)
     # `is_open`, `accepts_delivery` e `accepts_pickup` NAO estao mais aqui:
     # foram para `branches` na revisao 20260818_0025. Sao o estado do dia, e
     # o estado do dia e de UMA loja — compartilha-los fechava a rede inteira

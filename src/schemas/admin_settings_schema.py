@@ -8,14 +8,19 @@ quanto nos paga. Quem precisa dele e o relatorio de comissao
 (admin_report_schema), que so mostra o valor ja congelado em cada pedido.
 """
 
-from datetime import time
+from datetime import datetime, time
 from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from src.schemas.admin_printing_schema import (
+    MAX_FOOTER_MESSAGE_LENGTH,
+    clean_footer_message,
+)
 from src.schemas.common_schema import BaseResponse
 from src.schemas.restaurant_schema import PaymentFlow, PaymentMethodType
+from src.utils.normalization import normalize_text
 
 
 MAX_NAME_LENGTH = 120
@@ -28,6 +33,29 @@ MAX_PREP_TIME_MINUTES = 600
 # precisa somar duas horas ao prazo esta reconfigurando a semana, e isso e
 # PUT /business-hours.
 MAX_PREP_TIME_DELTA_MINUTES = 120
+
+# Teto de uma pausa de entrega, em minutos: 24 horas.
+#
+# O teto e a diferenca entre esta feature e `accepts_delivery`. Pausa de tres
+# dias e a chave estrutural com passos a mais, e deixar as duas fazerem a
+# mesma coisa apaga a distincao que faz a pausa se desfazer sozinha.
+MAX_DELIVERY_PAUSE_MINUTES = 24 * 60
+
+# Motivo da pausa, mostrado AO CLIENTE. Curto de proposito: e uma linha em
+# cima do botao de entrega, nao um comunicado.
+MAX_PAUSE_REASON_LENGTH = 120
+
+# Teto de faixas de prazo por filial. Cinco cobre a cidade inteira (centro,
+# perto, medio, longe, muito longe); mais que isso e uma tabela que ninguem
+# mantem atualizada.
+MAX_DELIVERY_TIME_BANDS = 5
+
+# Teto de minutos de uma faixa, o mesmo do tempo de preparo.
+MAX_BAND_MINUTES = MAX_PREP_TIME_MINUTES
+
+# Teto de distancia de uma faixa. Cem quilometros nao e area de entrega de
+# restaurante — e o dedo que digitou 1000 no lugar de 10.
+MAX_BAND_DISTANCE_KM = Decimal("100")
 
 
 class AdminRestaurantSettingsResponse(BaseResponse):
@@ -49,6 +77,16 @@ class AdminRestaurantSettingsResponse(BaseResponse):
     default_delivery_fee: float
     service_fee_enabled: bool | None = True
     service_fee_amount: float
+    # A campanha de frete gratis da marca. Sao dois campos porque a filial
+    # precisa poder RECUSAR a campanha, e nao existe numero que signifique
+    # "desligado" — `0` seria "gratis sempre".
+    free_delivery_enabled: bool | None = None
+    free_delivery_min_order_value: float | None = None
+    # A mensagem da MARCA no rodape da comanda. Sai neste schema, e nao no
+    # de impressao, porque e padrao de restaurante como os campos acima: a
+    # filial que nao gravou a propria imprime esta. Quem edita a da filial e
+    # `PATCH /admin/branches/{id}/print-settings`.
+    receipt_footer_message: str | None = None
 
 
 class AdminRestaurantSettingsUpdate(BaseModel):
@@ -73,6 +111,23 @@ class AdminRestaurantSettingsUpdate(BaseModel):
     default_delivery_fee: Decimal | None = Field(default=None, ge=0)
     service_fee_enabled: bool | None = None
     service_fee_amount: Decimal | None = Field(default=None, ge=0)
+    free_delivery_enabled: bool | None = None
+    # `gt=0`, e nao `ge=0`: "frete gratis acima de R$ 0" e entrega gratis
+    # para todo pedido, escrito de um jeito que ninguem le como tal. Quem
+    # quer entrega gratis sempre poe `delivery_base_fee = 0` na filial, que e
+    # onde essa decisao se ve.
+    free_delivery_min_order_value: Decimal | None = Field(default=None, gt=0)
+    # `null` aqui apaga a mensagem da marca — e nao ha um terceiro estado
+    # como na filial, porque acima do restaurante nao ha de quem herdar.
+    # Apagar aqui NAO cala as filiais que gravaram a propria mensagem.
+    receipt_footer_message: str | None = Field(
+        default=None, max_length=MAX_FOOTER_MESSAGE_LENGTH
+    )
+
+    @field_validator("receipt_footer_message")
+    @classmethod
+    def clean_message(cls, value: str | None) -> str | None:
+        return clean_footer_message(value)
 
 
 class StoreStatusRequest(BaseModel):
@@ -111,6 +166,101 @@ class AdminBranchOrderTypesRequest(BaseModel):
         return self
 
 
+class AdminBranchDeliveryPauseRequest(BaseModel):
+    """Pausa a entrega desta filial por um tempo, e so por um tempo.
+
+    `minutes` conta a partir de AGORA. `0` retoma a entrega na hora — e o
+    botao "voltamos" de quem parou por 60 minutos e resolveu em 20.
+
+    **Por que a pausa tem prazo, se `accepts_delivery` ja existe.** Aquele
+    resolve "desligar sem apagar configuracao"; o que ele nao resolve e o
+    *temporariamente*. Uma chave manual precisa de alguem que lembre de
+    desliga-la, e o dia em que ela e usada — chuva as 19h, entregador que
+    sumiu — e exatamente o dia em que ninguem lembra. A loja amanhece aberta
+    sem aceitar entrega, e o unico sintoma e a ausencia de pedido, que nao
+    acende alarme nenhum.
+
+    O teto de 24h e o que impede esta rota de virar um segundo
+    `accepts_delivery`: pausa de tres dias e a chave estrutural com passos a
+    mais, e ai a distincao acima deixa de existir.
+
+    `reason` e mostrado AO CLIENTE junto do horario de volta ("Voltamos a
+    entregar as 20:30"). Sem prazo, o cliente fecha o app; com prazo, ele
+    volta.
+    """
+
+    minutes: int = Field(ge=0, le=MAX_DELIVERY_PAUSE_MINUTES)
+    reason: str | None = Field(default=None, max_length=MAX_PAUSE_REASON_LENGTH)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = normalize_text(value)
+        return cleaned or None
+
+
+class DeliveryTimeBandInput(BaseModel):
+    """Uma faixa de prazo por distancia.
+
+    `max_distance_km` e um TETO, e nao um intervalo: vale a primeira faixa,
+    em ordem crescente, cujo teto alcanca a distancia. Nao ha campo de piso
+    de proposito — com piso daria para cadastrar `0-5` e `6-10` e deixar o
+    endereco de 5.4 km sem faixa nenhuma, um buraco que aparece no endereco
+    de um cliente especifico e some quando alguem vai conferir.
+
+    Os minutos sao o DESLOCAMENTO, e nao o prazo total: o preparo da filial
+    (o da faixa de horario, que o botao de "+10 min" do almoco ajusta)
+    continua somando por cima.
+    """
+
+    max_distance_km: Decimal = Field(gt=0, le=MAX_BAND_DISTANCE_KM)
+    delivery_time_min: int = Field(ge=0, le=MAX_BAND_MINUTES)
+    delivery_time_max: int = Field(ge=0, le=MAX_BAND_MINUTES)
+
+    @model_validator(mode="after")
+    def validate_range(self):
+        if self.delivery_time_max < self.delivery_time_min:
+            raise ValueError("delivery_time_max nao pode ser menor que delivery_time_min")
+        return self
+
+
+class DeliveryTimeBandsReplaceRequest(BaseModel):
+    """Todas as faixas da filial, de uma vez.
+
+    Substitui em vez de editar faixa a faixa pelo mesmo motivo do horario de
+    funcionamento: a tela e uma tabelinha que o lojista salva junto, e editar
+    linha a linha exigiria id de faixa no painel e deixaria a tabela pela
+    metade se uma das chamadas falhasse.
+
+    **Lista vazia e valido, e significa "volte a usar o tempo do Google"** —
+    nao "sem entrega". E como se desfaz a configuracao inteira.
+    """
+
+    bands: list[DeliveryTimeBandInput] = Field(
+        default_factory=list, max_length=MAX_DELIVERY_TIME_BANDS
+    )
+
+    @model_validator(mode="after")
+    def validate_distances_are_unique(self):
+        distancias = [band.max_distance_km for band in self.bands]
+        if len(set(distancias)) != len(distancias):
+            # Dois tetos iguais nao sao ambiguidade de apresentacao: sao duas
+            # respostas diferentes para a mesma distancia, e a que vale
+            # mudaria entre duas consultas identicas.
+            raise ValueError("nao pode haver duas faixas com o mesmo max_distance_km")
+        return self
+
+
+class DeliveryTimeBandResponse(BaseResponse):
+    id: UUID
+    branch_id: UUID
+    max_distance_km: float
+    delivery_time_min: int
+    delivery_time_max: int
+
+
 class AdminBranchSettingsUpdate(BaseModel):
     """As sobrescritas comerciais DESTA filial (revisao 20260818_0025).
 
@@ -136,6 +286,11 @@ class AdminBranchSettingsUpdate(BaseModel):
     default_delivery_fee: Decimal | None = Field(default=None, ge=0)
     service_fee_enabled: bool | None = None
     service_fee_amount: Decimal | None = Field(default=None, ge=0)
+    # `false` aqui e a filial RECUSANDO a campanha da marca — o unico jeito
+    # de a loja de 12 km ficar de fora sem tirar a campanha de todo mundo.
+    # `null` continua sendo "volta a herdar".
+    free_delivery_enabled: bool | None = None
+    free_delivery_min_order_value: Decimal | None = Field(default=None, gt=0)
 
 
 class AdminBranchOperationOverrides(BaseResponse):
@@ -153,6 +308,8 @@ class AdminBranchOperationOverrides(BaseResponse):
     default_delivery_fee: float | None = None
     service_fee_enabled: bool | None = None
     service_fee_amount: float | None = None
+    free_delivery_enabled: bool | None = None
+    free_delivery_min_order_value: float | None = None
 
 
 class AdminBranchOperationEffective(BaseResponse):
@@ -164,6 +321,8 @@ class AdminBranchOperationEffective(BaseResponse):
     default_delivery_fee: float | None = None
     service_fee_enabled: bool
     service_fee_amount: float
+    free_delivery_enabled: bool
+    free_delivery_min_order_value: float | None = None
 
 
 class AdminBranchOperationResponse(BaseResponse):
@@ -182,6 +341,12 @@ class AdminBranchOperationResponse(BaseResponse):
     is_open_now: bool
     accepts_delivery: bool
     accepts_pickup: bool
+    # `accepts_delivery` e a chave estrutural; este desconta a pausa
+    # temporaria. A tela precisa dos dois: um e o interruptor que o lojista
+    # ve, o outro e o que esta valendo agora.
+    accepts_delivery_now: bool = True
+    delivery_paused_until: datetime | None = None
+    delivery_pause_reason: str | None = None
     overrides: AdminBranchOperationOverrides
     effective: AdminBranchOperationEffective
 

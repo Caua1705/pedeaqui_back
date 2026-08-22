@@ -83,6 +83,8 @@ def make_branch(is_open=True, **sobrescritas):
         "estimated_delivery_time_min": None,
         "estimated_delivery_time_max": None,
         "default_delivery_fee": None,
+        "free_delivery_enabled": None,
+        "free_delivery_min_order_value": None,
     }
     campos.update(sobrescritas)
     return SimpleNamespace(
@@ -91,20 +93,26 @@ def make_branch(is_open=True, **sobrescritas):
         is_open=is_open,
         accepts_delivery=True,
         accepts_pickup=True,
+        delivery_paused_until=None,
+        delivery_pause_reason=None,
         **campos,
     )
 
 
 class FakeBranchRepository:
-    def __init__(self, default_branch=None, branches=()):
+    def __init__(self, default_branch=None, branches=(), delivery_time_bands=()):
         self.default_branch = default_branch
         self.branches = list(branches)
+        self.delivery_time_bands = list(delivery_time_bands)
 
     def get_default_branch(self, restaurant_id):
         return self.default_branch
 
     def get_active_by_id_and_restaurant(self, branch_id, restaurant_id):
         return next((b for b in self.branches if b.id == branch_id), None)
+
+    def list_delivery_time_bands(self, branch_id):
+        return list(self.delivery_time_bands)
 
 
 class FakeProductRepository:
@@ -581,6 +589,8 @@ class TestGetRestaurantMenu:
             estimated_delivery_time_min=30,
             estimated_delivery_time_max=50,
             default_delivery_fee=Decimal("7.00"),
+            free_delivery_enabled=None,
+            free_delivery_min_order_value=None,
             service_fee_enabled=False,
             service_fee_amount=Decimal("0.00"),
         )
@@ -611,6 +621,8 @@ class TestGetRestaurantMenu:
             estimated_delivery_time_min=30,
             estimated_delivery_time_max=50,
             default_delivery_fee=Decimal("7.00"),
+            free_delivery_enabled=None,
+            free_delivery_min_order_value=None,
             service_fee_enabled=True,
             service_fee_amount=Decimal("0.99"),
             payment_methods=["pix"],

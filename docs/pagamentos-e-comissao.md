@@ -302,7 +302,7 @@ Gravada **no pedido, na criação** (`OrderService._calculate_commission`), não
 apurada no fechamento do mês.
 
 ```
-base    = subtotal − desconto de cupom − cashback usado     (nunca negativa)
+base    = subtotal − desconto de cupom SOBRE PRODUTO − cashback usado
 percent = restaurant_settings.platform_commission_percent   (por restaurante)
 valor   = base × percent / 100                              (2 casas, HALF_UP)
 ```
@@ -316,9 +316,24 @@ Ficam **fora** da base:
 O desconto entra como subtração porque o restaurante recebeu menos: cobrar
 comissão sobre um valor que ninguém pagou seria cobrar sobre o próprio desconto.
 
-A base é limitada a zero: desconto maior que o subtotal é possível com cupom de
-frete grátis somado a cashback, e base negativa viraria a plataforma pagando o
-restaurante.
+### Cupom de frete grátis NÃO reduz a base
+
+É o que `_coupon_discount_on_products` separa, e a distinção não é sutileza
+contábil: o desconto de um cupom `free_delivery` vale exatamente a **taxa de
+entrega**, que já está fora da base. Subtraí-lo tirava comissão de mercadoria
+que o cliente pagou integralmente.
+
+E ficava incoerente com o frete grátis **por regra** (`free_delivery_enabled`,
+acima de um valor), que zera a mesma taxa e nunca mexeu na base: eram dois
+caminhos para o mesmo frete grátis cobrando comissões diferentes pelo mesmo
+pedido.
+
+Cupom `fixed` e `percent` continuam reduzindo a base inteira — esses derrubam o
+preço do produto.
+
+A base é limitada a zero de qualquer forma. Hoje nenhum caminho chega lá (o
+cupom de valor já é limitado ao subtotal, e o frete grátis saiu da conta), mas
+base negativa seria a plataforma pagando o restaurante, e o piso fica.
 
 Restaurante sem linha em `restaurant_settings` (ou com o campo nulo) cai no
 padrão `DEFAULT_PLATFORM_COMMISSION_PERCENT` = `"10.00"`. Devolver zero aqui

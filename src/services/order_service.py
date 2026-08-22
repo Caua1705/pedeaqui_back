@@ -152,7 +152,9 @@ class OrderService:
             total = quantize_money(subtotal + service_fee + delivery_fee - discount_total)
             commission_percent, commission_base, commission_amount = self._calculate_commission(
                 subtotal=subtotal,
-                coupon_discount=coupon_discount,
+                coupon_discount_on_products=self._coupon_discount_on_products(
+                    coupon, coupon_discount
+                ),
                 cashback_redeemed=cashback_redeemed,
                 settings=settings,
             )
@@ -738,17 +740,41 @@ class OrderService:
             subtotal += (to_decimal(product.price) + options_total) * item.quantity
         return quantize_money(subtotal)
 
+    @staticmethod
+    def _coupon_discount_on_products(coupon, coupon_discount: Decimal) -> Decimal:
+        """Quanto do desconto do cupom saiu da MERCADORIA.
+
+        Para cupom de valor (`fixed`, `percent`) e o desconto inteiro: ele
+        derruba o preco dos produtos, e o restaurante recebeu menos por eles.
+
+        Para `free_delivery` e ZERO, e essa e a razao desta funcao existir.
+        Aquele desconto vale exatamente a taxa de entrega — que NAO esta na
+        base da comissao, porque nao e receita da venda. Subtrai-lo da base
+        tirava comissao de mercadoria que o cliente pagou integralmente.
+
+        E ficava incoerente com o frete gratis por REGRA
+        (`_apply_free_delivery`), que zera a mesma taxa e nao mexe na base:
+        dois caminhos para o mesmo frete gratis, cobrando comissoes
+        diferentes pelo mesmo pedido.
+        """
+        if coupon is None:
+            return ZERO
+        if coupon.discount_type == "free_delivery":
+            return ZERO
+        return coupon_discount
+
     def _calculate_commission(
         self,
         *,
         subtotal: Decimal,
-        coupon_discount: Decimal,
+        coupon_discount_on_products: Decimal,
         cashback_redeemed: Decimal,
         settings,
     ) -> tuple[Decimal, Decimal, Decimal]:
         """Comissao da plataforma sobre este pedido.
 
-        Base = subtotal dos produtos - desconto de cupom - cashback usado.
+        Base = subtotal dos produtos - desconto de cupom SOBRE PRODUTO -
+        cashback usado.
 
         O que NAO entra na base, e por que:
         - taxa de entrega: e do entregador/da filial, nao e receita da venda;
@@ -757,17 +783,20 @@ class OrderService:
 
         O desconto entra como subtracao porque o restaurante recebeu menos:
         cobrar comissao sobre um valor que ninguem pagou seria cobrar sobre
-        o proprio desconto.
+        o proprio desconto. **Mas so o desconto que saiu do produto** — quem
+        separa os dois e `_coupon_discount_on_products`, e o parametro tem
+        esse nome para nao aceitar o desconto cru sem alguem reparar.
 
         Congelado no pedido de proposito. Se fosse calculado no fim do mes,
         mudar o percentual do restaurante hoje reescreveria a comissao de
         pedidos de tres semanas atras.
         """
         percent = self._commission_percent(settings)
-        base = quantize_money(subtotal - coupon_discount - cashback_redeemed)
-        # Desconto maior que o subtotal e possivel com cupom de frete
-        # gratis somado a cashback. Base negativa viraria comissao negativa,
-        # isto e, a plataforma pagando o restaurante.
+        base = quantize_money(subtotal - coupon_discount_on_products - cashback_redeemed)
+        # Piso em zero. Hoje nenhum caminho chega a base negativa — o cupom
+        # de valor ja e limitado ao subtotal e o frete gratis nao entra mais
+        # nesta conta —, mas base negativa seria comissao negativa, isto e, a
+        # plataforma pagando o restaurante. O piso fica.
         base = max(base, ZERO)
         amount = quantize_money(base * percent / Decimal("100"))
         return percent, base, amount

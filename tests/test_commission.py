@@ -3,8 +3,9 @@
 Duas metades: o que e gravado no pedido (na criacao, congelado) e o que o
 relatorio soma (nada e recalculado la).
 
-Base = subtotal - desconto de cupom - cashback usado. Taxa de entrega, taxa
-de servico e taxa do gateway NAO entram.
+Base = subtotal - desconto de cupom SOBRE PRODUTO - cashback usado. Taxa de
+entrega, taxa de servico e taxa do gateway NAO entram — e cupom de frete
+gratis nao entra junto com a taxa que ele desconta.
 """
 
 import unittest
@@ -52,11 +53,17 @@ class FakeOrderRepository:
 
 
 class FakeCouponService:
-    """Cupom ja validado: aqui so interessa o desconto que ele produz."""
+    """Cupom ja validado: aqui interessam o desconto e o TIPO dele.
 
-    def __init__(self, discount):
+    O tipo entrou junto com `_coupon_discount_on_products`: `free_delivery`
+    desconta a taxa de entrega, que nao esta na base da comissao.
+    """
+
+    def __init__(self, discount, discount_type="fixed"):
         self.discount = discount
-        self.coupon = SimpleNamespace(id=uuid.uuid4(), code="SAVE")
+        self.coupon = SimpleNamespace(
+            id=uuid.uuid4(), code="SAVE", discount_type=discount_type
+        )
 
     def lock_and_validate_for_order(self, **kwargs):
         return self.coupon, self.discount
@@ -65,7 +72,13 @@ class FakeCouponService:
         return None
 
 
-def build_service(*, commission_percent=Decimal("10.00"), service_fee=Decimal("0"), coupon_discount=None):
+def build_service(
+    *,
+    commission_percent=Decimal("10.00"),
+    service_fee=Decimal("0"),
+    coupon_discount=None,
+    coupon_discount_type="fixed",
+):
     branch = SimpleNamespace(
         id=uuid.uuid4(),
         # As tres chaves da operacao sao da FILIAL desde a revisao
@@ -125,7 +138,7 @@ def build_service(*, commission_percent=Decimal("10.00"), service_fee=Decimal("0
     )
     service.order_repository = FakeOrderRepository()
     if coupon_discount is not None:
-        service.coupon_service = FakeCouponService(coupon_discount)
+        service.coupon_service = FakeCouponService(coupon_discount, coupon_discount_type)
 
     body = {
         "branch_id": str(branch.id),
@@ -181,6 +194,55 @@ class CommissionOnCreationTests(unittest.TestCase):
         order = service.order_repository.orders[0]
         self.assertEqual(order.commission_base_amount, Decimal("80.00"))
         self.assertEqual(order.commission_amount, Decimal("8.00"))
+
+    def test_free_delivery_coupon_does_not_reduce_the_base(self):
+        """O cliente pagou os produtos INTEIROS; o cupom zerou foi a taxa.
+
+        Os R$ 8,00 abaixo sao a taxa de entrega que o cupom cobriu — e taxa
+        de entrega ja esta fora da base. Descontar dali cobraria comissao
+        menor sobre mercadoria paga integralmente, e faria o cupom de frete
+        gratis cobrar comissao diferente do frete gratis por regra, que zera
+        a mesma taxa e nunca mexeu na base.
+        """
+        service, payload = build_service(
+            coupon_discount=Decimal("8.00"),
+            coupon_discount_type="free_delivery",
+        )
+        customer = SimpleNamespace(id=uuid.uuid4(), name="Ana", phone="85999999999")
+
+        service.create_order("junior", payload, customer)
+
+        order = service.order_repository.orders[0]
+        self.assertEqual(order.commission_base_amount, Decimal("100.00"))
+        self.assertEqual(order.commission_amount, Decimal("10.00"))
+        # O desconto continua valendo para o CLIENTE: o que muda e so a base
+        # da comissao.
+        self.assertEqual(order.coupon_discount_amount, Decimal("8.00"))
+        self.assertEqual(order.discount_total, Decimal("8.00"))
+
+    def test_percent_coupon_reduces_the_base(self):
+        # Cupom de valor derruba o preco do PRODUTO, e ai a base cai mesmo.
+        service, payload = build_service(
+            coupon_discount=Decimal("15.00"),
+            coupon_discount_type="percent",
+        )
+        customer = SimpleNamespace(id=uuid.uuid4(), name="Ana", phone="85999999999")
+
+        service.create_order("junior", payload, customer)
+
+        order = service.order_repository.orders[0]
+        self.assertEqual(order.commission_base_amount, Decimal("85.00"))
+        self.assertEqual(order.commission_amount, Decimal("8.50"))
+
+    def test_order_without_coupon_has_the_full_subtotal_as_base(self):
+        # Sem cupom nao ha desconto a separar, e `_coupon_discount_on_products`
+        # devolve zero em vez de olhar o tipo de um cupom que nao existe.
+        service, payload = build_service()
+
+        service.create_order("junior", payload)
+
+        order = service.order_repository.orders[0]
+        self.assertEqual(order.commission_base_amount, Decimal("100.00"))
 
     def test_discount_bigger_than_the_subtotal_does_not_make_the_base_negative(self):
         service, payload = build_service(coupon_discount=Decimal("150.00"))

@@ -1179,3 +1179,106 @@ sem `alembic downgrade`: o código antigo consulta por `restaurant_id`, que
 continua preenchido, e `/menu` responde 200 com os produtos das duas lojas
 misturados. Rollback de imagem exige downgrade junto.
 
+---
+
+## 37. Campo novo em `CreateOrderRequest` custa 24h de 409 — mesmo sendo opcional
+
+A armadilha 7 registrou o custo de acrescentar campo **obrigatório** numa
+resposta gravada em `idempotency_keys.response_body`. Este é o **mesmo problema
+pelo lado do pedido**, e ele não perdoa nem campo opcional.
+
+`OrderService` assina o corpo com `payload.model_dump()`. Um campo novo aparece
+no dump de **todos** os pedidos — inclusive dos que não o mandaram, com o
+default — então o corpo canonicalizado muda, e com ele o `request_fingerprint`.
+
+O estrago:
+
+```
+antes do deploy   chave X reservada, fingerprint gravado = A
+depois do deploy  MESMO corpo, MESMA chave  ->  fingerprint = B
+                  B != A  ->  409 "corpo diferente"
+```
+
+**Por 24h, um retry legítimo de um pedido idêntico recebe conflito.** Nada no
+código parece errado, o campo é opcional, e o sintoma aparece só em produção e
+só para quem estava no meio de uma tentativa no minuto do deploy.
+
+`source` (revisão `20260822_0031`) sai do fingerprint por
+`_idempotency_fingerprint`, e por dois motivos que valem sozinhos:
+
+- **no mérito:** o fingerprint separa *retry* de *conflito*. Origem não muda
+  item, preço, endereço nem forma de pagamento — mesma chave com outra origem
+  deve devolver o pedido original;
+- **na janela de deploy:** com ele de fora, o corpo canonicalizado de um pedido
+  sem origem é byte a byte o mesmo de antes da revisão, e as chaves em voo
+  continuam valendo.
+
+**A regra que fica:** campo novo em `CreateOrderRequest` que **não muda o que
+foi pedido** entra na lista de exclusão de `_idempotency_fingerprint`. Campo que
+muda o pedido fica de fora dela — aí o 409 é a resposta certa.
+
+`tests/test_origem_e_funil_schema.py::ImpressaoDigitalTests` trava as duas
+metades.
+
+---
+
+## 38. O funil conta pedido cancelado. O resumo, não — e as duas telas ficam lado a lado
+
+`billable_order_conditions` é o predicado de "o que virou venda", e **todo**
+relatório do painel o usa. `funnel_order_conditions` (revisão `20260822_0031`) é
+a única exceção do projeto, e a exceção é o ponto inteiro dele.
+
+O funil pergunta se **a pessoa** terminou de pedir. Um pedido que a loja recusou
+meia hora depois converteu: ela entrou, montou o carrinho e fechou. Contá-lo
+como não-conversão faz o funil dizer *"o checkout está perdendo gente"* quando o
+que houve foi a loja recusando pedido — dois diagnósticos opostos, com soluções
+opostas, colapsados no mesmo número. É exatamente o colapso que o funil existe
+para desfazer.
+
+**A consequência é uma tela que discorda da outra, de propósito:**
+`/reports/funnel` e `/reports/summary` mostram números de pedido diferentes para
+o mesmo período, e a diferença são os cancelados.
+
+Por isso a ressalva viaja **na resposta** (`orders_note`), na mesma forma do
+`revenue_note` de `/reports/products`: quem consome precisa saber sem ler o
+backend. E por isso o predicado mora em `order_repository.py`, ao lado dos
+outros dois — escrevê-lo dentro do repositório de relatório seria a terceira
+definição de "conjunto de pedidos" no projeto.
+
+**Não "conserte" essa divergência trocando o predicado pelo billable.** O
+número passaria a bater com o resumo e o funil pararia de responder à pergunta
+que justifica sua existência.
+
+---
+
+## 39. `menu_events` vence em 90 dias; `orders.source_snapshot` fica para sempre
+
+São duas metades da mesma frente e têm prazos opostos **de propósito**:
+
+- **`orders.source_snapshot` é atributo da VENDA.** Fica, como todo snapshot do
+  pedido — o lojista pergunta em março quanto o ímã vendeu em janeiro.
+- **`menu_events` é TELEMETRIA de quem não comprou.** Vence.
+
+Com a origem vivendo só na tabela de evento, o relatório de origem morreria
+junto com o primeiro expurgo.
+
+**E a retenção não é faxina de disco: é o mecanismo de exclusão daquela
+tabela.** `menu_events` não tem `customer_id` — de propósito —, então
+`customer_anonymization_service` não alcança linha nenhuma dela, hoje ou nunca.
+É a terceira vez que este projeto chega nesse desenho (`ai_feedback`, comentário
+de `order_reviews`) e a resposta foi a mesma nas três: prazo curto **é** a
+defesa. Esticar o número "porque disco é barato" troca o mecanismo de exclusão
+por espaço em disco.
+
+Dois detalhes que andam juntos e quebram separados:
+
+- **90 dias de retenção × 92 de `MAX_REPORT_DAYS`.** Mexer num sem o outro cria
+  uma tela capaz de pedir um recorte que o banco já apagou.
+- **`orders` não tem `session_id`, e não pode ganhar.** Os quatro degraus se
+  contam por `(filial, dia, origem)` e o quinto sai de `orders` pelo mesmo
+  recorte: o funil **não precisa** desse vínculo. Criá-lo amarraria o rastro de
+  navegação inteiro a uma linha com nome, telefone e endereço, e a base legal
+  de legítimo interesse (que dispensa banner de consentimento) deixaria de se
+  sustentar.
+
+Desenho completo em `docs/funil-e-origem.md`.

@@ -16,6 +16,11 @@ restaurante inteiro" — o recorte de quem enxerga todas as lojas — e nunca
 `billable_order_conditions` / `excluded_order_conditions`, pelo motivo do
 paragrafo acima.
 
+`source` — o identificador de origem gravado no pedido — anda exatamente do
+mesmo jeito, e pelo mesmo motivo: nulo e "todas as origens", e ele entra pelos
+predicados, nunca por uma clausula escrita aqui. Foi acrescentado na revisao
+20260822_0031.
+
 Todas as consultas recebem `start_at`/`end_at` ja convertidos para instantes
 UTC pelo service; nenhuma delas conhece data solta. A unica excecao e o
 agrupamento por dia, que precisa saber o fuso para decidir a que dia local
@@ -34,6 +39,7 @@ from src.models.order_model import Order
 from src.repositories.order_repository import (
     billable_order_conditions,
     excluded_order_conditions,
+    funnel_order_conditions,
 )
 
 
@@ -88,6 +94,7 @@ class AdminReportRepository:
         start_at: datetime,
         end_at: datetime,
         branch_id: uuid.UUID | None = None,
+        source: str | None = None,
     ) -> dict:
         """Os numeros do topo da tela, em uma consulta so.
 
@@ -103,7 +110,9 @@ class AdminReportRepository:
             _money_sum(Order.service_fee),
             _money_sum(Order.discount_total),
             _money_sum(Order.commission_amount),
-        ).where(*billable_order_conditions(restaurant_id, start_at, end_at, branch_id))
+        ).where(
+            *billable_order_conditions(restaurant_id, start_at, end_at, branch_id, source)
+        )
         row = self.db.execute(stmt).one()
         return {
             "orders_count": row[0] or 0,
@@ -121,11 +130,14 @@ class AdminReportRepository:
         start_at: datetime,
         end_at: datetime,
         branch_id: uuid.UUID | None = None,
+        source: str | None = None,
     ) -> list[tuple[str, int, object]]:
         """Divisao entrega/retirada: (order_type, pedidos, faturamento)."""
         stmt = (
             select(Order.order_type, func.count(Order.id), _money_sum(Order.total))
-            .where(*billable_order_conditions(restaurant_id, start_at, end_at, branch_id))
+            .where(
+                *billable_order_conditions(restaurant_id, start_at, end_at, branch_id, source)
+            )
             .group_by(Order.order_type)
         )
         return [(row[0], row[1], row[2]) for row in self.db.execute(stmt).all()]
@@ -136,6 +148,7 @@ class AdminReportRepository:
         start_at: datetime,
         end_at: datetime,
         branch_id: uuid.UUID | None = None,
+        source: str | None = None,
     ) -> list[tuple[object, int, object]]:
         """Serie diaria: (dia local, pedidos, faturamento).
 
@@ -146,7 +159,9 @@ class AdminReportRepository:
         day = _local_day(Order.created_at).label("day")
         stmt = (
             select(day, func.count(Order.id), _money_sum(Order.total))
-            .where(*billable_order_conditions(restaurant_id, start_at, end_at, branch_id))
+            .where(
+                *billable_order_conditions(restaurant_id, start_at, end_at, branch_id, source)
+            )
             .group_by(day)
             .order_by(day)
         )
@@ -158,6 +173,7 @@ class AdminReportRepository:
         start_at: datetime,
         end_at: datetime,
         branch_id: uuid.UUID | None = None,
+        source: str | None = None,
     ) -> list[tuple[str | None, int, object]]:
         """Quebra por forma de pagamento: (metodo, pedidos, faturamento).
 
@@ -168,7 +184,9 @@ class AdminReportRepository:
         """
         stmt = (
             select(Order.payment_method, func.count(Order.id), _money_sum(Order.total))
-            .where(*billable_order_conditions(restaurant_id, start_at, end_at, branch_id))
+            .where(
+                *billable_order_conditions(restaurant_id, start_at, end_at, branch_id, source)
+            )
             .group_by(Order.payment_method)
             .order_by(desc(_money_sum(Order.total)))
         )
@@ -181,6 +199,7 @@ class AdminReportRepository:
         end_at: datetime,
         limit: int,
         branch_id: uuid.UUID | None = None,
+        source: str | None = None,
     ) -> list[tuple[uuid.UUID | None, str, str | None, int, int, object]]:
         """Mais vendidos: (product_id, nome, catalog_key, pedidos, unidades, receita).
 
@@ -229,7 +248,9 @@ class AdminReportRepository:
                 _money_sum(OrderItem.total),
             )
             .join(Order, Order.id == OrderItem.order_id)
-            .where(*billable_order_conditions(restaurant_id, start_at, end_at, branch_id))
+            .where(
+                *billable_order_conditions(restaurant_id, start_at, end_at, branch_id, source)
+            )
             .group_by(identidade, OrderItem.product_name_snapshot)
             .order_by(desc(func.coalesce(func.sum(OrderItem.quantity), 0)))
             .limit(limit)
@@ -239,12 +260,64 @@ class AdminReportRepository:
             for row in self.db.execute(stmt).all()
         ]
 
+    def count_orders_in_funnel(
+        self,
+        restaurant_id: uuid.UUID,
+        start_at: datetime,
+        end_at: datetime,
+        branch_id: uuid.UUID | None = None,
+        source: str | None = None,
+    ) -> int:
+        """O quinto degrau: quantos pedidos foram FEITOS no periodo.
+
+        **Nao usa `billable_order_conditions`, e essa e a unica consulta
+        deste arquivo que nao usa.** O funil pergunta se a pessoa terminou de
+        pedir; um pedido recusado pela loja meia hora depois converteu. O
+        porque inteiro esta em `funnel_order_conditions`, junto com a
+        consequencia: este numero nao bate com o `orders_count` do resumo.
+        """
+        stmt = (
+            select(func.count(Order.id))
+            .select_from(Order)
+            .where(
+                *funnel_order_conditions(restaurant_id, start_at, end_at, branch_id, source)
+            )
+        )
+        return self.db.scalar(stmt) or 0
+
+    def orders_by_source(
+        self,
+        restaurant_id: uuid.UUID,
+        start_at: datetime,
+        end_at: datetime,
+        branch_id: uuid.UUID | None = None,
+    ) -> dict[str, int]:
+        """Pedidos feitos no periodo, por origem.
+
+        Mesmo conjunto de `count_orders_in_funnel` (todo pedido criado,
+        cancelado inclusive) porque as duas linhas aparecem na MESMA tela: a
+        soma da divisao por origem tem que bater com o total do funil, e dois
+        predicados diferentes fariam a tela nao fechar consigo mesma.
+
+        Dicionario e nao lista porque quem chama junta estes numeros com as
+        sessoes por origem, que vem de outra tabela — e precisa perguntar
+        "quantos pedidos desta origem" para origens que podem nao ter
+        nenhum.
+        """
+        stmt = (
+            select(Order.source_snapshot, func.count(Order.id))
+            .where(*funnel_order_conditions(restaurant_id, start_at, end_at, branch_id))
+            .group_by(Order.source_snapshot)
+        )
+        return {row[0]: row[1] for row in self.db.execute(stmt).all()}
+
     def cancellation_totals(
         self,
         restaurant_id: uuid.UUID,
         start_at: datetime,
         end_at: datetime,
         branch_id: uuid.UUID | None = None,
+        source: str | None = None,
     ) -> dict:
         """Quantos pedidos ficaram de fora do faturamento, e quanto somavam.
 
@@ -255,7 +328,9 @@ class AdminReportRepository:
         stmt = select(
             func.count(Order.id),
             _money_sum(Order.total),
-        ).where(*excluded_order_conditions(restaurant_id, start_at, end_at, branch_id))
+        ).where(
+            *excluded_order_conditions(restaurant_id, start_at, end_at, branch_id, source)
+        )
         row = self.db.execute(stmt).one()
         return {"orders_count": row[0] or 0, "amount_total": row[1]}
 
@@ -265,6 +340,7 @@ class AdminReportRepository:
         start_at: datetime,
         end_at: datetime,
         branch_id: uuid.UUID | None = None,
+        source: str | None = None,
     ) -> list[tuple[str, str, int, object]]:
         """Quebra por (status, payment_status) dos pedidos que nao viraram venda.
 
@@ -280,7 +356,9 @@ class AdminReportRepository:
                 func.count(Order.id),
                 _money_sum(Order.total),
             )
-            .where(*excluded_order_conditions(restaurant_id, start_at, end_at, branch_id))
+            .where(
+                *excluded_order_conditions(restaurant_id, start_at, end_at, branch_id, source)
+            )
             .group_by(Order.status, Order.payment_status)
             .order_by(desc(func.count(Order.id)))
         )

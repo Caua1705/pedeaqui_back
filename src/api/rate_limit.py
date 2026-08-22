@@ -145,6 +145,21 @@ RESET_PASSWORD_RATE_LIMIT = "10/minute;60/hour"
 DELETE_ACCOUNT_RATE_LIMIT = "5/minute;20/hour"
 
 
+# Funil do cardapio. Rota PUBLICA e sem autenticacao nenhuma — o cardapio e
+# publico, entao nao ha login para responsabilizar e este limite e a unica
+# barreira.
+#
+# MAIS FOLGADO que as outras publicas de proposito, e o motivo e o formato: o
+# front acumula os eventos em memoria e manda em LOTE (a cada ~10s ou 20
+# eventos), entao uma sessao inteira cabe em duas a quatro requisicoes. Um
+# limite apertado aqui nao economizaria nada e cortaria a cauda de quem
+# navega muito — que e justamente a sessao mais interessante do funil.
+#
+# E fecha a porta que importa: sem limite, o numero que decide onde o lojista
+# gasta em divulgacao passa a ser escrito por qualquer um com `curl`.
+MENU_EVENT_RATE_LIMIT = "60/minute;600/hour"
+
+
 # Balde unico usado quando o cabecalho confiavel nao chega. Nao e um IP de
 # proposito: nenhum cliente consegue cair nele por acidente, e ele aparece
 # inteiro no log.

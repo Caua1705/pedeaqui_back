@@ -1,7 +1,8 @@
 # Modelo de dados
 
-29 tabelas. Este documento cobre o que cada uma guarda, como se ligam e por que
-o isolamento entre restaurantes funciona do jeito que funciona.
+35 tabelas mapeadas pelo ORM. Este documento cobre o que cada uma guarda, como
+se ligam e por que o isolamento entre restaurantes funciona do jeito que
+funciona.
 
 A fonte da verdade do schema é `alembic/versions/`. A pasta `migrations/` tem os
 12 `.sql` aplicados a mão antes do Alembic entrar — é arquivo histórico
@@ -159,6 +160,7 @@ tabela por fora.**
 | `idempotency_keys` | `scope`, `key`, `request_fingerprint`, `status`, `response_body` (JSONB), `expires_at` | UNIQUE `(scope, key)`. É esse índice que serializa as requisições concorrentes |
 | `delivery_estimates` | `token` (UNIQUE), `address_fingerprint`, taxa/distância/ETA, `expires_at` | Reaproveitada na criação do pedido |
 | `restaurant_payment_credentials` | `public_key`, `access_token_encrypted`, `webhook_secret_encrypted`, `environment` | Cifrados com Fernet. Uma linha por `(restaurant_id, environment)` |
+| `menu_events` | `restaurant_id`, `branch_id`, `session_id`, `event_type`, `source`, `product_id`, `occurred_at` | O funil do cardápio. **Sem `customer_id` de propósito** — a retenção de 90 dias é o mecanismo de exclusão dela. Ver [funil-e-origem.md](funil-e-origem.md) |
 
 ---
 

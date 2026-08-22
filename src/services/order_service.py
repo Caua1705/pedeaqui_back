@@ -43,7 +43,7 @@ from src.services.coupon_service import CouponService
 from src.services.idempotency_service import IdempotencyService
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import ZERO, money_to_float, quantize_money, to_decimal
-from src.utils.normalization import normalize_digits
+from src.utils.normalization import normalize_digits, normalize_traffic_source
 from src.utils.security import generate_tracking_token, hash_tracking_token, utcnow
 
 
@@ -99,7 +99,7 @@ class OrderService:
         replayed = self.idempotency_service.begin(
             scope=self._idempotency_scope(restaurant.id, payload, current_customer),
             key=idempotency_key,
-            request_fingerprint=IdempotencyService.fingerprint(payload.model_dump(mode="json")),
+            request_fingerprint=self._idempotency_fingerprint(payload),
         )
         if replayed is not None:
             return IdempotencyService.parse_stored_response(CreateOrderResponse, replayed)
@@ -218,6 +218,7 @@ class OrderService:
                 delivery_estimate_provider=delivery_estimate.provider if delivery_estimate else None,
                 delivery_estimated_at=datetime.now(timezone.utc) if delivery_estimate else None,
                 notes=payload.notes,
+                source_snapshot=normalize_traffic_source(payload.source),
             )
             self.order_repository.create_order(order)
             if coupon is not None:
@@ -280,6 +281,36 @@ class OrderService:
             raise
 
         return response
+
+    @staticmethod
+    def _idempotency_fingerprint(payload: CreateOrderRequest) -> str:
+        """sha256 do corpo do pedido, MENOS o rotulo de origem.
+
+        O fingerprint existe para distinguir retry ("mesma chave, mesmo
+        corpo": devolve a resposta gravada) de conflito ("mesma chave, corpo
+        diferente": 409). `source` nao pertence a nenhum dos dois lados dessa
+        pergunta — ele nao muda item, preco, endereco nem forma de pagamento.
+        Se a mesma chave voltar com outra origem, o certo e devolver o pedido
+        original, e nao recusar.
+
+        **E o exclude tambem e o que evita 24h de 409 no deploy desta
+        revisao.** O fingerprint sai de `model_dump()`, entao um campo novo
+        muda o hash de TODO corpo — e uma chave reservada antes do deploy,
+        retentada depois, calcularia um hash diferente do gravado e receberia
+        conflito por um pedido identico. E a armadilha 7 pelo outro lado: la
+        o custo estava em acrescentar campo obrigatorio na RESPOSTA gravada,
+        aqui em acrescentar qualquer campo ao CORPO que a assina.
+
+        Com `source` de fora, o corpo canonicalizado de um pedido sem origem
+        e byte a byte o mesmo de antes da revisao, e as chaves em voo no
+        deploy continuam valendo.
+
+        A regra que fica: **campo novo em `CreateOrderRequest` que nao mude o
+        que foi pedido entra nesta lista de exclusao.** Campo que mude o
+        pedido fica de fora dela, porque ai o conflito e a resposta certa.
+        """
+        corpo = payload.model_dump(mode="json", exclude={"source"})
+        return IdempotencyService.fingerprint(corpo)
 
     def _idempotency_scope(
         self,

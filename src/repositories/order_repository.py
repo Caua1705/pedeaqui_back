@@ -25,6 +25,7 @@ def billable_order_conditions(
     start_at: datetime,
     end_at: datetime,
     branch_id: uuid.UUID | None = None,
+    source: str | None = None,
 ) -> list:
     """WHERE de "o que virou venda neste periodo".
 
@@ -43,6 +44,11 @@ def billable_order_conditions(
     nao em cada consulta de relatorio, pelo mesmo motivo do paragrafo acima —
     um relatorio que filtrasse a filial por conta propria seria a chance de o
     faturamento da tela e a base do extrato falarem de conjuntos diferentes.
+
+    `source` entra pela mesma porta e pelo mesmo motivo. Nulo significa
+    "todas as origens", nunca "sem origem" — pedido sem origem tem
+    `source_snapshot = 'direct'` gravado, e quem quiser SO esses passa
+    `source="direct"`. Nao ha valor de entrada que signifique "nenhuma".
     """
     conditions = [
         Order.restaurant_id == restaurant_id,
@@ -53,6 +59,8 @@ def billable_order_conditions(
     ]
     if branch_id is not None:
         conditions.append(Order.branch_id == branch_id)
+    if source is not None:
+        conditions.append(Order.source_snapshot == source)
     return conditions
 
 
@@ -61,6 +69,7 @@ def excluded_order_conditions(
     start_at: datetime,
     end_at: datetime,
     branch_id: uuid.UUID | None = None,
+    source: str | None = None,
 ) -> list:
     """O complemento exato de `billable_order_conditions` no mesmo periodo.
 
@@ -72,7 +81,8 @@ def excluded_order_conditions(
 
     `branch_id` entra do mesmo jeito que no billable, e tem que entrar: com o
     recorte valendo so num dos dois, a taxa de cancelamento sairia com os
-    cancelados de UMA loja sobre os faturados da rede.
+    cancelados de UMA loja sobre os faturados da rede. `source` idem — e o
+    mesmo erro com outro nome.
     """
     conditions = [
         Order.restaurant_id == restaurant_id,
@@ -85,6 +95,48 @@ def excluded_order_conditions(
     ]
     if branch_id is not None:
         conditions.append(Order.branch_id == branch_id)
+    if source is not None:
+        conditions.append(Order.source_snapshot == source)
+    return conditions
+
+
+def funnel_order_conditions(
+    restaurant_id: uuid.UUID,
+    start_at: datetime,
+    end_at: datetime,
+    branch_id: uuid.UUID | None = None,
+    source: str | None = None,
+) -> list:
+    """TODO pedido criado no periodo — o quinto degrau do funil.
+
+    **E o unico recorte do projeto que NAO exclui cancelado, recusado e
+    estornado, e a excecao e o ponto inteiro desta funcao.**
+
+    O funil mede se a PESSOA terminou de pedir. Um pedido que a loja recusou
+    meia hora depois converteu: a pessoa entrou, montou o carrinho e fechou.
+    Conta-lo como nao-conversao faria o funil dizer "o checkout esta
+    perdendo gente" quando o que aconteceu foi a loja recusando pedido —
+    dois diagnosticos opostos, com solucoes opostas, colapsados no mesmo
+    numero. E exatamente o colapso que o funil existe para desfazer.
+
+    A consequencia e real e precisa ser dita a quem le: **o numero de pedidos
+    do funil NAO bate com o de `/reports/summary`**, e a diferenca sao os
+    cancelados. A resposta carrega essa ressalva em `orders_note`, na mesma
+    forma do `revenue_note` de `/reports/products`.
+
+    Mora aqui, ao lado das outras duas, para o predicado de "quais pedidos"
+    continuar tendo UM dono. Escreve-lo dentro do repositorio de relatorio
+    seria a terceira definicao de conjunto de pedidos no projeto.
+    """
+    conditions = [
+        Order.restaurant_id == restaurant_id,
+        Order.created_at >= start_at,
+        Order.created_at < end_at,
+    ]
+    if branch_id is not None:
+        conditions.append(Order.branch_id == branch_id)
+    if source is not None:
+        conditions.append(Order.source_snapshot == source)
     return conditions
 
 # Tudo o que `OrderService.to_order_detail_response` le, carregado de uma
@@ -390,6 +442,7 @@ class OrderRepository:
         start_at: datetime,
         end_at: datetime,
         branch_id: uuid.UUID | None = None,
+        source: str | None = None,
     ) -> list[Order]:
         """Pedidos que geram comissao no periodo.
 
@@ -400,7 +453,11 @@ class OrderRepository:
         """
         stmt = (
             select(Order)
-            .where(*billable_order_conditions(restaurant_id, start_at, end_at, branch_id))
+            .where(
+                *billable_order_conditions(
+                    restaurant_id, start_at, end_at, branch_id, source
+                )
+            )
             .order_by(Order.created_at.asc())
         )
         return list(self.db.scalars(stmt).all())
@@ -411,6 +468,7 @@ class OrderRepository:
         start_at: datetime,
         end_at: datetime,
         branch_id: uuid.UUID | None = None,
+        source: str | None = None,
     ) -> int:
         """Quantos pedidos do periodo ficaram de fora do relatorio.
 
@@ -421,7 +479,11 @@ class OrderRepository:
         stmt = (
             select(func.count())
             .select_from(Order)
-            .where(*excluded_order_conditions(restaurant_id, start_at, end_at, branch_id))
+            .where(
+                *excluded_order_conditions(
+                    restaurant_id, start_at, end_at, branch_id, source
+                )
+            )
         )
         return self.db.scalar(stmt) or 0
 

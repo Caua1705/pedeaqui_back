@@ -243,3 +243,61 @@ class CancellationsResponse(BaseModel):
     billable_orders_count: int
     cancellation_rate_percent: Decimal | None = None
     breakdown: list[CancellationBreakdownItem]
+
+
+class FunnelStepItem(BaseModel):
+    """Um degrau do funil.
+
+    `count` conta SESSOES nos quatro degraus do cardapio e PEDIDOS no ultimo.
+    A troca de unidade e dita aqui em vez de escondida atras de uma palavra
+    unica porque ela e real: uma sessao que fecha dois pedidos vira dois no
+    ultimo degrau e um em todos os anteriores. E raro e nao atrapalha a
+    leitura de tendencia, mas quem for somar as colunas precisa saber.
+
+    `conversion_from_previous_percent` e nulo no primeiro degrau — nao ha
+    anterior — e tambem quando o anterior foi zero, pela mesma regra de todo
+    o resto do painel: nao existe variacao percentual a partir de zero.
+    """
+
+    step: str
+    count: int
+    conversion_from_previous_percent: Decimal | None = None
+
+
+class FunnelSourceItem(BaseModel):
+    """Uma origem, com o que ela trouxe e o que ela converteu.
+
+    `sessions_count` conta so quem VISITOU o cardapio (o primeiro degrau).
+    Somar os quatro degraus aqui contaria a mesma sessao uma vez por degrau
+    alcancado, e a origem que converte melhor apareceria com mais "sessoes" —
+    inflando justamente o numero que serve de denominador.
+    """
+
+    source: str
+    sessions_count: int
+    orders_count: int
+    conversion_percent: Decimal | None = None
+
+
+class FunnelResponse(BaseModel):
+    """O funil do cardapio no periodo, e a divisao por origem.
+
+    Responde a pergunta que o resto do painel nao alcanca: poucos pedidos
+    porque ninguem entrou, ou porque quem entrou nao comprou? Sao
+    diagnosticos opostos, com solucoes opostas.
+
+    `source` nulo significa "todas as origens" — o mesmo formato de
+    `branch_id`, e nunca "sem origem". Pedido e evento sem identificador tem
+    `direct` gravado, e quem quiser so esses passa `source=direct`.
+    """
+
+    restaurant_id: UUID
+    branch_id: UUID | None = None
+    source: str | None = None
+    period: ReportPeriod
+    steps: list[FunnelStepItem]
+    orders_count: int
+    sources: list[FunnelSourceItem]
+    # Ressalva de contrato, na mesma forma do `revenue_note` de
+    # /reports/products: o numero genuinamente nao fecha com o do resumo.
+    orders_note: str

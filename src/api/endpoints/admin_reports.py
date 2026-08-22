@@ -16,6 +16,7 @@ from src.api.dependencies.database import get_db
 from src.schemas.admin_report_schema import (
     CancellationsResponse,
     CommissionReportResponse,
+    FunnelResponse,
     PaymentMethodsResponse,
     ProductSalesResponse,
     SalesByDayResponse,
@@ -71,6 +72,21 @@ _BRANCH_ID = Query(
     default=None,
     description="Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
 )
+# Recorte por identificador de origem (revisao 20260822_0031). Omitido, soma
+# TODAS as origens — nunca "as sem origem": pedido que chegou sem
+# identificador tem `direct` gravado, e quem quiser so esses passa
+# `source=direct`.
+#
+# Nao ha lista fechada de origens: o rotulo vem de um QR impresso ou de um
+# link, e `/reports/funnel` e que devolve quais existem no periodo.
+_SOURCE = Query(
+    default=None,
+    description=(
+        "Recorte por origem (o identificador da URL do cardapio, ex.: "
+        "'qr-mesa-04'). Omitido, soma todas. 'direct' e quem chegou sem "
+        "identificador."
+    ),
+)
 
 
 @router.get(
@@ -82,6 +98,7 @@ def commission_report(
     start_date: date = Query(..., description="Primeiro dia do periodo (inclusive)"),
     end_date: date = Query(..., description="Ultimo dia do periodo (inclusive)"),
     branch_id: UUID | None = _BRANCH_ID,
+    source: str | None = _SOURCE,
     scope: AdminScope = Depends(get_admin_scope),
     db: Session = Depends(get_db),
 ) -> CommissionReportResponse:
@@ -99,6 +116,7 @@ def commission_report(
         start_date=start_date,
         end_date=end_date,
         branch_id=scope.resolve_branch_filter(branch_id),
+        source=source,
     )
 
 
@@ -111,6 +129,7 @@ def sales_summary(
     start_date: date = _START_DATE,
     end_date: date = _END_DATE,
     branch_id: UUID | None = _BRANCH_ID,
+    source: str | None = _SOURCE,
     scope: AdminScope = Depends(get_admin_scope),
     db: Session = Depends(get_db),
 ) -> SalesSummaryResponse:
@@ -135,6 +154,7 @@ def sales_summary(
         start_date=start_date,
         end_date=end_date,
         branch_id=branch_filter,
+        source=source,
     )
 
 
@@ -147,6 +167,7 @@ def sales_by_day(
     start_date: date = _START_DATE,
     end_date: date = _END_DATE,
     branch_id: UUID | None = _BRANCH_ID,
+    source: str | None = _SOURCE,
     scope: AdminScope = Depends(get_admin_scope),
     db: Session = Depends(get_db),
 ) -> SalesByDayResponse:
@@ -165,6 +186,7 @@ def sales_by_day(
         start_date=start_date,
         end_date=end_date,
         branch_id=branch_filter,
+        source=source,
     )
 
 
@@ -177,6 +199,7 @@ def payment_methods_report(
     start_date: date = _START_DATE,
     end_date: date = _END_DATE,
     branch_id: UUID | None = _BRANCH_ID,
+    source: str | None = _SOURCE,
     scope: AdminScope = Depends(get_admin_scope),
     db: Session = Depends(get_db),
 ) -> PaymentMethodsResponse:
@@ -197,6 +220,7 @@ def payment_methods_report(
         start_date=start_date,
         end_date=end_date,
         branch_id=branch_filter,
+        source=source,
     )
 
 
@@ -209,6 +233,7 @@ def product_sales_report(
     start_date: date = _START_DATE,
     end_date: date = _END_DATE,
     branch_id: UUID | None = _BRANCH_ID,
+    source: str | None = _SOURCE,
     limit: int = Query(
         default=DEFAULT_PRODUCT_LIMIT,
         ge=1,
@@ -240,6 +265,7 @@ def product_sales_report(
         end_date=end_date,
         limit=limit,
         branch_id=scope.resolve_branch_filter(branch_id),
+        source=source,
     )
 
 
@@ -252,6 +278,7 @@ def cancellations_report(
     start_date: date = _START_DATE,
     end_date: date = _END_DATE,
     branch_id: UUID | None = _BRANCH_ID,
+    source: str | None = _SOURCE,
     scope: AdminScope = Depends(get_admin_scope),
     db: Session = Depends(get_db),
 ) -> CancellationsResponse:
@@ -267,4 +294,52 @@ def cancellations_report(
         start_date=start_date,
         end_date=end_date,
         branch_id=scope.resolve_branch_filter(branch_id),
+        source=source,
+    )
+
+
+@router.get(
+    "/funnel",
+    response_model=FunnelResponse,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
+def funnel_report(
+    start_date: date = _START_DATE,
+    end_date: date = _END_DATE,
+    branch_id: UUID | None = _BRANCH_ID,
+    source: str | None = _SOURCE,
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> FunnelResponse:
+    """Visita, produto aberto, item no carrinho, checkout e pedido.
+
+    O unico relatorio que enxerga quem NAO comprou. Sem ele, poucos pedidos
+    tem dois diagnosticos opostos — ninguem entrou no cardapio, ou entrou e
+    desistiu — e nenhuma forma de distinguir os dois.
+
+    Os quatro primeiros degraus contam SESSOES; o quinto conta PEDIDOS, e
+    conta todos, cancelados e recusados inclusive: o funil mede se a pessoa
+    terminou de pedir, e a loja recusar depois e outro problema, com outra
+    solucao. **Por isso este numero nao fecha com o `orders_count` de
+    `/reports/summary`**, e a resposta carrega a ressalva em `orders_note`.
+
+    `sources` lista TODAS as origens do periodo mesmo quando `source` esta
+    preenchido: filtrada, ela teria uma linha so e nao responderia nada. O
+    filtro recorta os degraus.
+
+    GERENCIA e nao SOMENTE_DONO: nao ha um numero de dinheiro nesta resposta,
+    e quem toca o balcao de uma loja e quem consegue agir sobre o que ela
+    mostra.
+
+    **O periodo util e menor que o dos outros relatorios.** O evento de funil
+    vence em 90 dias — o teto de 92 dias vale igual, mas um recorte que
+    comece antes disso devolve degraus vazios com o quinto cheio, porque o
+    pedido fica para sempre e o funil nao.
+    """
+    return AdminReportService(db).funnel_report(
+        restaurant_id=scope.restaurant_id,
+        start_date=start_date,
+        end_date=end_date,
+        branch_id=scope.resolve_branch_filter(branch_id),
+        source=source,
     )

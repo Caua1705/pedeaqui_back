@@ -5936,6 +5936,18 @@
               }
             ],
             "title": "Payment Method"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
           }
         },
         "required": [
@@ -6892,6 +6904,139 @@
         "title": "ForgotPasswordRequest",
         "type": "object"
       },
+      "FunnelResponse": {
+        "description": "O funil do cardapio no periodo, e a divisao por origem.\n\nResponde a pergunta que o resto do painel nao alcanca: poucos pedidos\nporque ninguem entrou, ou porque quem entrou nao comprou? Sao\ndiagnosticos opostos, com solucoes opostas.\n\n`source` nulo significa \"todas as origens\" — o mesmo formato de\n`branch_id`, e nunca \"sem origem\". Pedido e evento sem identificador tem\n`direct` gravado, e quem quiser so esses passa `source=direct`.",
+        "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "orders_count": {
+            "title": "Orders Count",
+            "type": "integer"
+          },
+          "orders_note": {
+            "title": "Orders Note",
+            "type": "string"
+          },
+          "period": {
+            "$ref": "#/components/schemas/ReportPeriod"
+          },
+          "restaurant_id": {
+            "format": "uuid",
+            "title": "Restaurant Id",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/FunnelSourceItem"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/FunnelStepItem"
+            },
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "restaurant_id",
+          "period",
+          "steps",
+          "orders_count",
+          "sources",
+          "orders_note"
+        ],
+        "title": "FunnelResponse",
+        "type": "object"
+      },
+      "FunnelSourceItem": {
+        "description": "Uma origem, com o que ela trouxe e o que ela converteu.\n\n`sessions_count` conta so quem VISITOU o cardapio (o primeiro degrau).\nSomar os quatro degraus aqui contaria a mesma sessao uma vez por degrau\nalcancado, e a origem que converte melhor apareceria com mais \"sessoes\" —\ninflando justamente o numero que serve de denominador.",
+        "properties": {
+          "conversion_percent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversion Percent"
+          },
+          "orders_count": {
+            "title": "Orders Count",
+            "type": "integer"
+          },
+          "sessions_count": {
+            "title": "Sessions Count",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "sessions_count",
+          "orders_count"
+        ],
+        "title": "FunnelSourceItem",
+        "type": "object"
+      },
+      "FunnelStepItem": {
+        "description": "Um degrau do funil.\n\n`count` conta SESSOES nos quatro degraus do cardapio e PEDIDOS no ultimo.\nA troca de unidade e dita aqui em vez de escondida atras de uma palavra\nunica porque ela e real: uma sessao que fecha dois pedidos vira dois no\nultimo degrau e um em todos os anteriores. E raro e nao atrapalha a\nleitura de tendencia, mas quem for somar as colunas precisa saber.\n\n`conversion_from_previous_percent` e nulo no primeiro degrau — nao ha\nanterior — e tambem quando o anterior foi zero, pela mesma regra de todo\no resto do painel: nao existe variacao percentual a partir de zero.",
+        "properties": {
+          "conversion_from_previous_percent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversion From Previous Percent"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "step": {
+            "title": "Step",
+            "type": "string"
+          }
+        },
+        "required": [
+          "step",
+          "count"
+        ],
+        "title": "FunnelStepItem",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -7250,6 +7395,102 @@
           }
         },
         "title": "LoginResponse",
+        "type": "object"
+      },
+      "MenuEventBatchRequest": {
+        "description": "O lote que o cardapio manda.\n\n`extra=\"ignore\"` e nao `\"forbid\"`, ao contrario da avaliacao: esta rota e\ndisparada por `navigator.sendBeacon` no fechamento da aba, onde nao ha\nninguem para ler um 422. Campo desconhecido vindo de uma versao mais nova\ndo front nao pode custar o lote inteiro.",
+        "properties": {
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/MenuEventInput"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Events",
+            "type": "array"
+          },
+          "restaurant_id": {
+            "format": "uuid",
+            "title": "Restaurant Id",
+            "type": "string"
+          },
+          "session_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "required": [
+          "restaurant_id",
+          "branch_id",
+          "session_id",
+          "events"
+        ],
+        "title": "MenuEventBatchRequest",
+        "type": "object"
+      },
+      "MenuEventBatchResponse": {
+        "description": "Quantos eventos entraram.\n\nExiste para o front conseguir distinguir \"gravei\" de \"engoli\" durante o\ndesenvolvimento. Em producao ninguem le: o `sendBeacon` nem entrega a\nresposta a pagina.",
+        "properties": {
+          "recorded": {
+            "title": "Recorded",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "recorded"
+        ],
+        "title": "MenuEventBatchResponse",
+        "type": "object"
+      },
+      "MenuEventInput": {
+        "description": "Um degrau, sem quem nem quando.\n\n**Nao tem instante.** O `occurred_at` e do SERVIDOR: relogio de celular\nerra, as vezes por meses, e um evento datado em 2027 nao apareceria em\nerro nenhum — ele sumiria da janela do relatorio e o numero ficaria\nerrado para sempre, sem nada no log.\n\nA consequencia assumida e que o lote inteiro chega com o instante da\nrequisicao, e nao o de cada toque. Para contar quantas sessoes chegaram a\ncada degrau, a diferenca de segundos nao muda nada.",
+        "properties": {
+          "event_type": {
+            "enum": [
+              "menu_view",
+              "product_view",
+              "cart_add",
+              "checkout_start"
+            ],
+            "title": "Event Type",
+            "type": "string"
+          },
+          "product_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Id"
+          }
+        },
+        "required": [
+          "event_type"
+        ],
+        "title": "MenuEventInput",
         "type": "object"
       },
       "MessageResponse": {
@@ -14291,6 +14532,24 @@
               "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
               "title": "Branch Id"
             }
+          },
+          {
+            "description": "Recorte por origem (o identificador da URL do cardapio, ex.: 'qr-mesa-04'). Omitido, soma todas. 'direct' e quem chegou sem identificador.",
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por origem (o identificador da URL do cardapio, ex.: 'qr-mesa-04'). Omitido, soma todas. 'direct' e quem chegou sem identificador.",
+              "title": "Source"
+            }
           }
         ],
         "responses": {
@@ -14373,6 +14632,24 @@
               "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
               "title": "Branch Id"
             }
+          },
+          {
+            "description": "Recorte por origem (o identificador da URL do cardapio, ex.: 'qr-mesa-04'). Omitido, soma todas. 'direct' e quem chegou sem identificador.",
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por origem (o identificador da URL do cardapio, ex.: 'qr-mesa-04'). Omitido, soma todas. 'direct' e quem chegou sem identificador.",
+              "title": "Source"
+            }
           }
         ],
         "responses": {
@@ -14403,6 +14680,106 @@
           }
         ],
         "summary": "Commission Report",
+        "tags": [
+          "admin reports"
+        ]
+      }
+    },
+    "/admin/reports/funnel": {
+      "get": {
+        "description": "Visita, produto aberto, item no carrinho, checkout e pedido.\n\nO unico relatorio que enxerga quem NAO comprou. Sem ele, poucos pedidos\ntem dois diagnosticos opostos — ninguem entrou no cardapio, ou entrou e\ndesistiu — e nenhuma forma de distinguir os dois.\n\nOs quatro primeiros degraus contam SESSOES; o quinto conta PEDIDOS, e\nconta todos, cancelados e recusados inclusive: o funil mede se a pessoa\nterminou de pedir, e a loja recusar depois e outro problema, com outra\nsolucao. **Por isso este numero nao fecha com o `orders_count` de\n`/reports/summary`**, e a resposta carrega a ressalva em `orders_note`.\n\n`sources` lista TODAS as origens do periodo mesmo quando `source` esta\npreenchido: filtrada, ela teria uma linha so e nao responderia nada. O\nfiltro recorta os degraus.\n\nGERENCIA e nao SOMENTE_DONO: nao ha um numero de dinheiro nesta resposta,\ne quem toca o balcao de uma loja e quem consegue agir sobre o que ela\nmostra.\n\n**O periodo util e menor que o dos outros relatorios.** O evento de funil\nvence em 90 dias — o teto de 92 dias vale igual, mas um recorte que\ncomece antes disso devolve degraus vazios com o quinto cheio, porque o\npedido fica para sempre e o funil nao.",
+        "operationId": "funnel_report_admin_reports_funnel_get",
+        "parameters": [
+          {
+            "description": "Primeiro dia do periodo (inclusive)",
+            "in": "query",
+            "name": "start_date",
+            "required": true,
+            "schema": {
+              "description": "Primeiro dia do periodo (inclusive)",
+              "format": "date",
+              "title": "Start Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Ultimo dia do periodo (inclusive)",
+            "in": "query",
+            "name": "end_date",
+            "required": true,
+            "schema": {
+              "description": "Ultimo dia do periodo (inclusive)",
+              "format": "date",
+              "title": "End Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+              "title": "Branch Id"
+            }
+          },
+          {
+            "description": "Recorte por origem (o identificador da URL do cardapio, ex.: 'qr-mesa-04'). Omitido, soma todas. 'direct' e quem chegou sem identificador.",
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por origem (o identificador da URL do cardapio, ex.: 'qr-mesa-04'). Omitido, soma todas. 'direct' e quem chegou sem identificador.",
+              "title": "Source"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FunnelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Funnel Report",
         "tags": [
           "admin reports"
         ]
@@ -14454,6 +14831,24 @@
               ],
               "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
               "title": "Branch Id"
+            }
+          },
+          {
+            "description": "Recorte por origem (o identificador da URL do cardapio, ex.: 'qr-mesa-04'). Omitido, soma todas. 'direct' e quem chegou sem identificador.",
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por origem (o identificador da URL do cardapio, ex.: 'qr-mesa-04'). Omitido, soma todas. 'direct' e quem chegou sem identificador.",
+              "title": "Source"
             }
           }
         ],
@@ -14536,6 +14931,24 @@
               ],
               "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
               "title": "Branch Id"
+            }
+          },
+          {
+            "description": "Recorte por origem (o identificador da URL do cardapio, ex.: 'qr-mesa-04'). Omitido, soma todas. 'direct' e quem chegou sem identificador.",
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por origem (o identificador da URL do cardapio, ex.: 'qr-mesa-04'). Omitido, soma todas. 'direct' e quem chegou sem identificador.",
+              "title": "Source"
             }
           },
           {
@@ -14633,6 +15046,24 @@
               "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
               "title": "Branch Id"
             }
+          },
+          {
+            "description": "Recorte por origem (o identificador da URL do cardapio, ex.: 'qr-mesa-04'). Omitido, soma todas. 'direct' e quem chegou sem identificador.",
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por origem (o identificador da URL do cardapio, ex.: 'qr-mesa-04'). Omitido, soma todas. 'direct' e quem chegou sem identificador.",
+              "title": "Source"
+            }
           }
         ],
         "responses": {
@@ -14714,6 +15145,24 @@
               ],
               "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
               "title": "Branch Id"
+            }
+          },
+          {
+            "description": "Recorte por origem (o identificador da URL do cardapio, ex.: 'qr-mesa-04'). Omitido, soma todas. 'direct' e quem chegou sem identificador.",
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por origem (o identificador da URL do cardapio, ex.: 'qr-mesa-04'). Omitido, soma todas. 'direct' e quem chegou sem identificador.",
+              "title": "Source"
             }
           }
         ],
@@ -15973,6 +16422,48 @@
         "summary": "Health Check",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/menu-events": {
+      "post": {
+        "description": "Registra um lote de eventos do funil.\n\nO corpo leva `restaurant_id`, `branch_id`, `session_id` e `source` UMA\nvez, e a lista de eventos dentro. Ate 50 por lote; acima disso o corpo\ninteiro e recusado com 422, nunca truncado — um lote cortado pela metade\nentregaria um funil silenciosamente errado.\n\n**Nao ha campo de instante.** O horario e o do servidor, para o funil nao\ndepender do relogio do celular de quem navega.\n\n**Nao ha campo de cliente.** Nem quando a pessoa esta logada: ligar sessao\na pessoa transformaria a contagem em historico comportamental\nidentificado, e nenhum relatorio precisa disso. Ver a secao 5 do\ndocumento.\n\n`source` desconhecido nao e erro: vira `direct`. Recusar aqui nao\nconsertaria o QR impresso com defeito — so apagaria o dado que se quer\ncoletar.",
+        "operationId": "record_menu_events_menu_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MenuEventBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MenuEventBatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record Menu Events",
+        "tags": [
+          "menu events"
         ]
       }
     },

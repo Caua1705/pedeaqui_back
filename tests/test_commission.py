@@ -217,13 +217,22 @@ class FakeReportRepository:
         self.excluded = excluded
         self.bounds = None
         self.branch_id = None
+        # O recorte de origem que chegou. Mesma ideia do `branch_id` acima:
+        # prova sem Postgres que o filtro ATRAVESSOU o service em vez de
+        # parar nele.
+        self.source = None
 
-    def list_orders_for_commission(self, restaurant_id, start_at, end_at, branch_id=None):
+    def list_orders_for_commission(
+        self, restaurant_id, start_at, end_at, branch_id=None, source=None
+    ):
         self.bounds = (start_at, end_at)
         self.branch_id = branch_id
+        self.source = source
         return self.orders
 
-    def count_excluded_from_commission(self, restaurant_id, start_at, end_at, branch_id=None):
+    def count_excluded_from_commission(
+        self, restaurant_id, start_at, end_at, branch_id=None, source=None
+    ):
         return self.excluded
 
 

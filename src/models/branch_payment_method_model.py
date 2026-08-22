@@ -35,6 +35,14 @@ class BranchPaymentMethod(Base):
     label: Mapped[str] = mapped_column(Text, nullable=False)
     icon_key: Mapped[str | None] = mapped_column(Text)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Esta forma de pagamento gera cashback? A pergunta mora AQUI, e nao numa
+    # lista propria da configuracao de cashback, porque esta ja e a tabela
+    # que manda em forma de pagamento por filial — uma terceira lista de
+    # metodos seria a armadilha 15 pela terceira vez.
+    #
+    # Verdadeiro por default: quem decide se ha cashback e
+    # `cashback_rules.enabled`. Com ela desligada este campo nao faz nada.
+    earns_cashback: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     requires_gateway: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     notes: Mapped[str | None] = mapped_column(Text)

@@ -70,7 +70,7 @@ business_     payment_   sectors ◄──┐     │           │
 | `restaurant_settings` | `min_order_value`, `service_fee_enabled/amount`, `estimated_delivery_time_min/max`, `default_delivery_fee`, `platform_commission_percent`, `voice_enabled` | **1:1 opcional.** Os seis primeiros são só o **padrão** que a filial herda — nenhum pedido os lê direto (ver `operacao-por-filial.md`) |
 | `branches` | endereço, lat/lng, regras de entrega da loja (base, por km, piso, teto, raio), **`is_open` / `accepts_delivery` / `accepts_pickup`** e as sobrescritas comerciais | A taxa de entrega e a **operação do dia** são por filial. Nas colunas comerciais homônimas de `restaurant_settings`, **NULL significa "herda"** |
 | `branch_business_hours` | uma linha por faixa de horário: `weekday`, `opens_at`, `closes_at`, `prep_time_min/max`, `is_closed` | **`weekday` 0 = segunda** (é o `datetime.weekday()` do Python) |
-| `branch_payment_methods` | `payment_flow` (`online`/`delivery`), `method_type`, `label`, `enabled` | É a fonte da verdade das formas de pagamento aceitas |
+| `branch_payment_methods` | `payment_flow` (`online`/`delivery`), `method_type`, `label`, `enabled`, `earns_cashback` | É a fonte da verdade das formas de pagamento aceitas — e por isso "quais formas geram cashback" é coluna daqui, não lista nova |
 | `printing_sectors` | `branch_id`, nome, `sort_order`, `is_active` | Pende de **filial**, porque impressora é objeto físico dentro de uma loja |
 | `admin_users` | `restaurant_id`, `branch_id` (nullable), `role`, e-mail UNIQUE global | `role` ∈ owner, manager, attendant, print_agent |
 
@@ -145,6 +145,8 @@ o endereço textual fica em colunas próprias do pedido.
 | `restaurant_coupons` | `code`, `discount_type`, `discount_value`, `max_discount_amount`, limites e janelas | UNIQUE `(restaurant_id, code)` |
 | `coupon_redemptions` | `coupon_id`, `customer_id`, `order_id`, `discount_amount`, `status` | UNIQUE em `order_id` **e** em `idempotency_key` |
 | `cashback_transactions` | `customer_id`, `amount`, `type`, `status` | Ver o aviso abaixo |
+| `cashback_rules` | `restaurant_id`, `branch_id` (NULL = padrão da rede), `enabled`, `default_percent`, `min_redeem_balance`, `expiry_days` | Herança por **linha**: a filial tem a regra inteira ou herda a inteira. Ver [cashback.md](cashback.md) |
+| `cashback_rule_weekdays` | `rule_id`, `weekday` (0 = segunda), `percent` | O percentual do dia fraco. **Dia ausente herda `default_percent`**, nunca zero |
 
 **O resgate de cashback está pela metade.** `cashback_redeemed` é literalmente
 `ZERO` no cálculo do pedido, e `cashback_redeemed_amount` sempre grava zero. A
@@ -152,6 +154,11 @@ tabela existe, o saldo é lido e listado, e `CustomerRepository.lock_customer` j
 está escrito para o resgate — mas ninguém o chama. O crédito ao completar pedido
 também não existe. **O saldo que o cliente vê só muda se alguém escrever na
 tabela por fora.**
+
+A revisão `20260822_0032` põe o schema de pé (configuração, CHECK e índices do
+razão) mas **não liga nada**: `cashback_rules.enabled` nasce falso em todo
+restaurante. O desenho combinado — quando credita, como o resgate trava, como
+expira — está em [cashback.md](cashback.md).
 
 ### Infraestrutura
 

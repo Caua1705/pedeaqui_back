@@ -6,6 +6,7 @@ from src.models.branch_model import Branch
 from src.models.branch_business_hour_model import BranchBusinessHour
 from src.models.branch_delivery_time_band_model import BranchDeliveryTimeBand
 from src.models.branch_payment_method_model import BranchPaymentMethod
+from src.models.cashback_rule_model import CashbackRule, CashbackRuleWeekday
 from src.models.cashback_transaction_model import CashbackTransaction
 from src.models.category_model import Category
 from src.models.coupon_model import CouponTemplate, RestaurantCoupon
@@ -36,6 +37,8 @@ __all__ = [
     "BranchBusinessHour",
     "BranchDeliveryTimeBand",
     "BranchPaymentMethod",
+    "CashbackRule",
+    "CashbackRuleWeekday",
     "CashbackTransaction",
     "Category",
     "CouponTemplate",

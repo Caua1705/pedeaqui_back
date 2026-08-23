@@ -239,6 +239,10 @@ class AdminAuthService:
             ) from exc
 
         admin_user.password_changed_at = utcnow()
+        # A senha agora e escolha da PESSOA, que e exatamente o que este campo
+        # responde. Sem esta linha, quem trocasse a temporaria continuaria
+        # trancado na propria tela de troca de senha, para sempre.
+        admin_user.must_change_password = False
         try:
             self.db.add(admin_user)
             self.db.commit()

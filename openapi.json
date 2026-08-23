@@ -3560,6 +3560,7 @@
         "type": "object"
       },
       "AdminUserResponse": {
+        "description": "Quem entrou. E o que o painel usa para desenhar a tela.\n\n`must_change_password` e o sinal que o painel OBEDECE: com ele verdadeiro,\na unica tela que abre e a de troca de senha. Sai no login e no `/me` de\nproposito — o painel precisa saber disso antes de tentar qualquer outra\nrota, e nao descobrindo por 403.\n\nObrigatorio e nao opcional: e uma coluna, sempre presente, e um default\ndeixaria o painel tratar `null` como \"pode entrar\" no dia em que o campo\nsumisse da resposta por engano.",
         "properties": {
           "branch_id": {
             "anyOf": [
@@ -3586,6 +3587,10 @@
             "title": "Is Active",
             "type": "boolean"
           },
+          "must_change_password": {
+            "title": "Must Change Password",
+            "type": "boolean"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -3607,7 +3612,8 @@
           "name",
           "email",
           "role",
-          "is_active"
+          "is_active",
+          "must_change_password"
         ],
         "title": "AdminUserResponse",
         "type": "object"

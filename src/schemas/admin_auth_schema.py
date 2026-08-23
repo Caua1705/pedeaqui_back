@@ -26,6 +26,18 @@ class ChangeAdminPasswordRequest(BaseModel):
 
 
 class AdminUserResponse(BaseModel):
+    """Quem entrou. E o que o painel usa para desenhar a tela.
+
+    `must_change_password` e o sinal que o painel OBEDECE: com ele verdadeiro,
+    a unica tela que abre e a de troca de senha. Sai no login e no `/me` de
+    proposito — o painel precisa saber disso antes de tentar qualquer outra
+    rota, e nao descobrindo por 403.
+
+    Obrigatorio e nao opcional: e uma coluna, sempre presente, e um default
+    deixaria o painel tratar `null` como "pode entrar" no dia em que o campo
+    sumisse da resposta por engano.
+    """
+
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
@@ -35,6 +47,7 @@ class AdminUserResponse(BaseModel):
     email: str
     role: str
     is_active: bool
+    must_change_password: bool
 
 
 class AdminLoginResponse(BaseModel):

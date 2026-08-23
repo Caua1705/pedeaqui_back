@@ -40,6 +40,10 @@ def make_admin(**overrides):
         # do campo porque `_load_admin_from_token` o lê para decidir se o
         # token e anterior a troca — ver test_admin_password_e_revogacao.py.
         "password_changed_at": None,
+        # Falso = a senha foi escolhida pela propria pessoa, que e o estado de
+        # todo lojista existente. `AdminUserResponse` o exige, e e o sinal que
+        # o painel obedece para mandar (ou nao) a pessoa trocar a senha.
+        "must_change_password": False,
     }
     values.update(overrides)
     return SimpleNamespace(**values)

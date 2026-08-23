@@ -307,7 +307,8 @@ class CouponService:
 
     def create_admin(self, restaurant_id: UUID, payload: CouponCreate) -> CouponAdminResponse:
         self._get_restaurant(restaurant_id)
-        self._validate_template(payload.coupon_template_id)
+        template = self._load_active_template(payload.coupon_template_id)
+        self._ensure_template_agrees(template, payload.discount_type)
         if self.repository.get_by_code_and_restaurant(payload.code, restaurant_id):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codigo de cupom ja existe neste restaurante")
         coupon = RestaurantCoupon(restaurant_id=restaurant_id, **payload.model_dump())
@@ -324,6 +325,21 @@ class CouponService:
         return CouponAdminResponse.model_validate(coupon)
 
     def update_admin(self, restaurant_id: UUID, coupon_id: UUID, payload: CouponUpdate) -> CouponAdminResponse:
+        """PATCH parcial, validado sobre o cupom INTEIRO depois do merge.
+
+        Consequencia que vale saber antes de procurar bug: a concordancia com o
+        template e conferida no resultado do merge, nao no que veio no corpo.
+        Um cupom que ja esteja gravado divergente (so existe se alguem escrever
+        por SQL — nenhuma rota grava assim desde este commit) recusa QUALQUER
+        PATCH com 422, ate um `{"is_active": false}` que nao chega perto do
+        tipo de desconto.
+
+        Nao e cupom preso: a saida e o proprio PATCH que conserta a mentira —
+        `{"discount_type": <o do template>}` ou `{"coupon_template_id": <a arte
+        certa>}` passam, e podem vir junto do `is_active` na mesma chamada.
+        Conferir so quando o corpo TOCA no tipo seria mais permissivo e pior:
+        deixaria a divergencia sobreviver a todas as outras edicoes.
+        """
         self._get_restaurant(restaurant_id)
         coupon = self.repository.get_by_id_and_restaurant(coupon_id, restaurant_id)
         if coupon is None:
@@ -335,7 +351,8 @@ class CouponService:
         }
         merged.update(changes)
         validated = CouponCampaignFields.model_validate(merged)
-        self._validate_template(validated.coupon_template_id)
+        template = self._load_active_template(validated.coupon_template_id)
+        self._ensure_template_agrees(template, validated.discount_type)
         code_owner = self.repository.get_by_code_and_restaurant(validated.code, restaurant_id)
         if code_owner is not None and code_owner.id != coupon.id:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codigo de cupom ja existe neste restaurante")
@@ -384,10 +401,36 @@ class CouponService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Restaurante nao encontrado")
         return restaurant
 
-    def _validate_template(self, template_id: UUID) -> None:
+    def _load_active_template(self, template_id: UUID) -> CouponTemplate:
         template = self.repository.get_template(template_id)
         if template is None or not template.is_active:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Template de cupom invalido")
+        return template
+
+    @staticmethod
+    def _ensure_template_agrees(template: CouponTemplate, discount_type: str) -> None:
+        """O template e a ARTE que o cliente ve; o cupom e a conta que ele paga.
+
+        `template.discount_type` nao e lido por linha nenhuma do calculo — quem
+        desconta e sempre `coupon.discount_type`. Entao um cupom `percent`
+        pendurado numa arte de frete gratis anuncia "Frete gratis" na vitrine e
+        tira 10% no checkout: nada falha, nada e logado, e quem descobre e o
+        cliente na tela de pagamento.
+
+        A recusa fica do lado do CUPOM, e nao do template, de proposito. Fazer o
+        template IMPOR o tipo pareceria mais esperto e seria pior: o POST do
+        painel passaria a gravar calado um valor diferente do que mandou, e o
+        lojista veria o campo que ele preencheu voltar trocado.
+        """
+        if template.discount_type == discount_type:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Tipo de desconto do cupom ({discount_type}) nao confere com o do "
+                f"template ({template.discount_type})"
+            ),
+        )
 
     @staticmethod
     def _aware(value: datetime) -> datetime:

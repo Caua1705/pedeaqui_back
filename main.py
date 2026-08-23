@@ -27,7 +27,6 @@ from src.api.endpoints import (
     delivery,
     health,
     menu,
-    menu_events,
     orders,
     payments,
     restaurants,
@@ -120,7 +119,6 @@ app.include_router(health.router)
 app.include_router(restaurants.router)
 app.include_router(branches.router)
 app.include_router(menu.router)
-app.include_router(menu_events.router)
 app.include_router(auth.router)
 app.include_router(customers.router)
 app.include_router(delivery.router)

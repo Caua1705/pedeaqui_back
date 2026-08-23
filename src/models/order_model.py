@@ -92,25 +92,6 @@ class Order(Base):
     delivery_estimate_provider: Mapped[str | None] = mapped_column(Text)
     delivery_estimated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)
-    # De onde veio quem fez este pedido: o QR da mesa, o ima da geladeira, o
-    # link da bio. Congelado na criacao, como todo o resto do pedido.
-    #
-    # E ATRIBUTO DA VENDA, e e por isso que ele vive aqui e para sempre,
-    # enquanto o funil que o acompanha (`menu_events`) vence em 90 dias. O
-    # funil explica quem NAO comprou e e telemetria; isto explica de onde veio
-    # a venda, e o lojista continua perguntando em marco quanto o ima vendeu
-    # em janeiro.
-    #
-    # NOT NULL com default `direct`: o nulo dividiria o relatorio entre "veio
-    # direto" e "nao sabemos", e nenhum lojista quer essa distincao. O valor
-    # e normalizado por `normalize_traffic_source` antes de chegar aqui.
-    #
-    # O que ele NAO pode virar: um rotulo por pessoa. `qr-mesa-04` e da mesa;
-    # `whatsapp-do-joao` seria dado pessoal dentro de uma coluna que nao tem
-    # prazo nenhum. Ver `docs/funil-e-origem.md`, secao 5.
-    source_snapshot: Mapped[str] = mapped_column(
-        Text, nullable=False, server_default=text("'direct'")
-    )
     created_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 

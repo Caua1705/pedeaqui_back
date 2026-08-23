@@ -248,11 +248,12 @@ class ResgateNoPedidoTests(unittest.TestCase):
 
 class ImpressaoDigitalTests(unittest.TestCase):
     def test_use_cashback_ENTRA_no_fingerprint(self):
-        """O oposto de `source`, e de propósito.
+        """Campo que muda o PEDIDO entra na assinatura, e tem que entrar.
 
-        `use_cashback` muda o total do pedido, então a mesma chave com este
-        campo diferente é conflito de verdade — e 409 é a resposta certa. O
-        preço é 24h de 409 para chaves em voo no deploy (armadilha 37).
+        `use_cashback` muda o total, então a mesma chave com este campo
+        diferente é conflito de verdade — e recusar (422, pedindo chave nova)
+        é a resposta certa. O preço é 24h de 422 para chaves em voo no deploy
+        (armadilha 37).
         """
         _, com = build_service()
         _, sem = build_service()

@@ -13,7 +13,6 @@ from src.models.coupon_model import CouponTemplate, RestaurantCoupon
 from src.models.coupon_redemption_model import CouponRedemption
 from src.models.customer_model import Customer, CustomerAddress, EmailVerificationCode, PasswordResetCode
 from src.models.idempotency_key_model import IdempotencyKey
-from src.models.menu_event_model import MenuEvent
 from src.models.order_item_model import OrderItem
 from src.models.order_item_option_model import OrderItemOption
 from src.models.order_model import Order
@@ -47,7 +46,6 @@ __all__ = [
     "CustomerAddress",
     "EmailVerificationCode",
     "IdempotencyKey",
-    "MenuEvent",
     "PasswordResetCode",
     "Order",
     "OrderItem",

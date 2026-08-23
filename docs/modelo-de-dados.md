@@ -167,7 +167,6 @@ expira — está em [cashback.md](cashback.md).
 | `idempotency_keys` | `scope`, `key`, `request_fingerprint`, `status`, `response_body` (JSONB), `expires_at` | UNIQUE `(scope, key)`. É esse índice que serializa as requisições concorrentes |
 | `delivery_estimates` | `token` (UNIQUE), `address_fingerprint`, taxa/distância/ETA, `expires_at` | Reaproveitada na criação do pedido |
 | `restaurant_payment_credentials` | `public_key`, `access_token_encrypted`, `webhook_secret_encrypted`, `environment` | Cifrados com Fernet. Uma linha por `(restaurant_id, environment)` |
-| `menu_events` | `restaurant_id`, `branch_id`, `session_id`, `event_type`, `source`, `product_id`, `occurred_at` | O funil do cardápio. **Sem `customer_id` de propósito** — a retenção de 90 dias é o mecanismo de exclusão dela. Ver [funil-e-origem.md](funil-e-origem.md) |
 
 ---
 

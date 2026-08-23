@@ -247,7 +247,7 @@ class SaldoDeCashbackContractTests(unittest.TestCase):
 
         Publicado com `default: false` — o pedido que nao o mandar continua
         valendo. Mas ele entra no fingerprint da idempotencia (armadilha 37),
-        e o custo disso e 24h de 409 para retry de pedido em voo no minuto do
+        e o custo disso e 24h de 422 para retry de pedido em voo no minuto do
         deploy.
         """
         corpo = self.schema["components"]["schemas"]["CreateOrderRequest"]

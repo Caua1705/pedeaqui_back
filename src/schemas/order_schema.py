@@ -4,7 +4,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from src.core.constants import MAX_TRAFFIC_SOURCE_LENGTH
 from src.schemas.common_schema import BaseResponse, StatusHistoryResponse
 from src.utils.normalization import normalize_digits
 
@@ -76,19 +75,6 @@ class CreateOrderRequest(BaseModel):
     # endereco so faz o servidor recalcular.
     delivery_estimate_token: str | None = Field(default=None, max_length=100)
     notes: str | None = Field(default=None, max_length=500)
-    # De onde veio quem esta pedindo: o QR da mesa, o ima da geladeira, o
-    # link da bio. O front guarda o rotulo em `sessionStorage` na primeira
-    # carga do cardapio e o devolve aqui; o servidor congela em
-    # `orders.source_snapshot`.
-    #
-    # OPCIONAL, e ausente vale `direct`. Um pedido nunca pode falhar por
-    # causa do rotulo de campanha — nem por ele faltar, nem por ele estar
-    # escrito errado no QR impresso (ver `normalize_traffic_source`).
-    #
-    # NAO entra no fingerprint da idempotencia. Ver `_idempotency_fingerprint`
-    # em `order_service.py`: e a diferenca entre um retry legitimo e 24h de
-    # 409 no deploy desta revisao.
-    source: str | None = Field(default=None, max_length=MAX_TRAFFIC_SOURCE_LENGTH)
     items: list[OrderItemInput] = Field(min_length=1, max_length=MAX_ITEMS_PER_ORDER)
     coupon_id: UUID | None = None
     coupon_code: str | None = Field(default=None, min_length=1, max_length=100)
@@ -98,10 +84,11 @@ class CreateOrderRequest(BaseModel):
     # entra sai de `CashbackService.amount_to_redeem`, limitado ao saldo e ao
     # subtotal ja descontado o cupom.
     #
-    # ENTRA no fingerprint da idempotencia, ao contrario de `source`: ele
-    # muda o total do pedido, entao a mesma chave com este campo diferente e
-    # conflito de verdade, e 409 e a resposta certa. O preco disso e 24h de
-    # 409 para chaves em voo no deploy — ver `_idempotency_fingerprint`.
+    # ENTRA no fingerprint da idempotencia, e tem que entrar: ele muda o
+    # total do pedido, entao a mesma chave com este campo diferente e
+    # conflito de verdade, e recusar e a resposta certa. O preco disso e 24h
+    # de 422 para chaves em voo no deploy — ver `_idempotency_fingerprint` e
+    # a armadilha 37.
     use_cashback: bool = False
 
     @model_validator(mode="after")

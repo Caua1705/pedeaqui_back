@@ -1268,82 +1268,54 @@ pega este caso. Os dois convivem na mesma rota e querem coisas diferentes:
 `tests/test_idempotency.py::test_same_key_with_different_body_is_rejected_with_422`
 e `::test_in_progress_is_rejected_with_409` travam os dois.
 
-`source` (revisão `20260822_0031`) sai do fingerprint por
-`_idempotency_fingerprint`, e por dois motivos que valem sozinhos:
-
-- **no mérito:** o fingerprint separa *retry* de *conflito*. Origem não muda
-  item, preço, endereço nem forma de pagamento — mesma chave com outra origem
-  deve devolver o pedido original;
-- **na janela de deploy:** com ele de fora, o corpo canonicalizado de um pedido
-  sem origem é byte a byte o mesmo de antes da revisão, e as chaves em voo
-  continuam valendo.
-
 **A regra que fica:** campo novo em `CreateOrderRequest` que **não muda o que
 foi pedido** entra na lista de exclusão de `_idempotency_fingerprint`. Campo que
 muda o pedido fica de fora dela — aí a recusa é a resposta certa.
 
-`tests/test_origem_e_funil_schema.py::ImpressaoDigitalTests` trava as duas
-metades.
+**Hoje a lista de exclusão está VAZIA, e isso é resultado, não escolha.** Ela
+teve um único membro: o `source` do funil (revisão `20260822_0031`), que saía do
+fingerprint porque origem não muda item, preço, endereço nem forma de pagamento
+— mesma chave com outra origem tinha que devolver o pedido original. A frente de
+funil e origem foi removida na revisão `20260822_0033` e o campo foi junto. A
+regra continua valendo para o próximo campo dessa natureza; o que não existe
+mais é um campo dela.
+
+**`use_cashback` é o exemplo vivo do outro lado.** Ele muda o total do pedido,
+então fica **dentro** do fingerprint, e a recusa é a resposta certa — ao preço
+das 24h de 422 descritas acima, que foi o custo real do deploy do cashback.
+`tests/test_cashback_no_pedido.py::ImpressaoDigitalTests` trava essa metade.
+
+E vale saber que a remoção do `source` **não mexeu no fingerprint**: o corpo
+canonicalizado é byte a byte o mesmo de antes dela, porque o campo já estava
+fora da assinatura. Tirar da lista de exclusão um campo que também sai do
+schema é a única forma de mexer nas duas coisas sem mudar o hash de ninguém.
 
 ---
 
-## 38. O funil conta pedido cancelado. O resumo, não — e as duas telas ficam lado a lado
+## 38. Tabela sem `customer_id` só é apagada pela retenção
 
-`billable_order_conditions` é o predicado de "o que virou venda", e **todo**
-relatório do painel o usa. `funnel_order_conditions` (revisão `20260822_0031`) é
-a única exceção do projeto, e a exceção é o ponto inteiro dele.
+`customer_anonymization_service` alcança o que pende de `customers`. Duas
+tabelas não pendem, **de propósito**, e nelas a retenção não é faxina de disco:
+**é o mecanismo de exclusão.**
 
-O funil pergunta se **a pessoa** terminou de pedir. Um pedido que a loja recusou
-meia hora depois converteu: ela entrou, montou o carrinho e fechou. Contá-lo
-como não-conversão faz o funil dizer *"o checkout está perdendo gente"* quando o
-que houve foi a loja recusando pedido — dois diagnósticos opostos, com soluções
-opostas, colapsados no mesmo número. É exatamente o colapso que o funil existe
-para desfazer.
+- **`ai_feedback`** — `user_message` guarda em texto puro o que a pessoa digitou
+  para o Rapi. Prazo em `chat_service.feedback_retention_cutoff`.
+- **o `comment` de `order_reviews`** — o de pedido de convidado (`customer_id`
+  nulo) é inalcançável a partir de conta nenhuma. Prazo em
+  `order_review_service.review_retention_cutoff`, e é a única das duas que apaga
+  só a coluna: apagar a linha levaria a NOTA junto e reescreveria a média
+  histórica do lojista todo mês.
 
-**A consequência é uma tela que discorda da outra, de propósito:**
-`/reports/funnel` e `/reports/summary` mostram números de pedido diferentes para
-o mesmo período, e a diferença são os cancelados.
+Quem executa é `scripts/cleanup_idempotency_keys.py`, no container `limpeza`.
 
-Por isso a ressalva viaja **na resposta** (`orders_note`), na mesma forma do
-`revenue_note` de `/reports/products`: quem consome precisa saber sem ler o
-backend. E por isso o predicado mora em `order_repository.py`, ao lado dos
-outros dois — escrevê-lo dentro do repositório de relatório seria a terceira
-definição de "conjunto de pedidos" no projeto.
+**Esticar o prazo "porque disco é barato" troca o mecanismo de exclusão por
+espaço em disco.** É a decisão que o número esconde, e ela precisa ser
+deliberada nas duas.
 
-**Não "conserte" essa divergência trocando o predicado pelo billable.** O
-número passaria a bater com o resumo e o funil pararia de responder à pergunta
-que justifica sua existência.
-
----
-
-## 39. `menu_events` vence em 90 dias; `orders.source_snapshot` fica para sempre
-
-São duas metades da mesma frente e têm prazos opostos **de propósito**:
-
-- **`orders.source_snapshot` é atributo da VENDA.** Fica, como todo snapshot do
-  pedido — o lojista pergunta em março quanto o ímã vendeu em janeiro.
-- **`menu_events` é TELEMETRIA de quem não comprou.** Vence.
-
-Com a origem vivendo só na tabela de evento, o relatório de origem morreria
-junto com o primeiro expurgo.
-
-**E a retenção não é faxina de disco: é o mecanismo de exclusão daquela
-tabela.** `menu_events` não tem `customer_id` — de propósito —, então
-`customer_anonymization_service` não alcança linha nenhuma dela, hoje ou nunca.
-É a terceira vez que este projeto chega nesse desenho (`ai_feedback`, comentário
-de `order_reviews`) e a resposta foi a mesma nas três: prazo curto **é** a
-defesa. Esticar o número "porque disco é barato" troca o mecanismo de exclusão
-por espaço em disco.
-
-Dois detalhes que andam juntos e quebram separados:
-
-- **90 dias de retenção × 92 de `MAX_REPORT_DAYS`.** Mexer num sem o outro cria
-  uma tela capaz de pedir um recorte que o banco já apagou.
-- **`orders` não tem `session_id`, e não pode ganhar.** Os quatro degraus se
-  contam por `(filial, dia, origem)` e o quinto sai de `orders` pelo mesmo
-  recorte: o funil **não precisa** desse vínculo. Criá-lo amarraria o rastro de
-  navegação inteiro a uma linha com nome, telefone e endereço, e a base legal
-  de legítimo interesse (que dispensa banner de consentimento) deixaria de se
-  sustentar.
-
-Desenho completo em `docs/funil-e-origem.md`.
+**Houve uma terceira, e ela mostra o custo de não escrever isso.** `menu_events`
+(o funil do cardápio, revisão `20260822_0031`) chegou no mesmo desenho — sem
+`customer_id`, com 90 dias de retenção como única forma de exclusão — e a frente
+inteira foi removida na revisão `20260822_0033` sem nunca ter sido usada. A
+regra é a que fica: **tabela nova que guarde rastro de gente e não penda de
+`customers` nasce com prazo, e o prazo é a defesa** — não um `TODO` de limpeza
+para depois.

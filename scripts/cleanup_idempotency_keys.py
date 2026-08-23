@@ -1,6 +1,6 @@
-"""Remove chaves, estimativas, codigos, feedback, comentario e funil.
+"""Remove chaves, estimativas, codigos, feedback e comentario.
 
-O nome do arquivo ficou para tras: ele cuida de SEIS tabelas hoje, nao so
+O nome do arquivo ficou para tras: ele cuida de CINCO tabelas hoje, nao so
 de `idempotency_keys`. Nao foi renomeado de proposito — o nome aparece no
 `command` do container `limpeza` em `docker-compose.yml`, na secao "Uso"
 abaixo e em `docs/`, e trocar tres referencias para ganhar um nome melhor nao
@@ -31,18 +31,12 @@ expurgo cobre o que sobra, que e o pedido de convidado (`customer_id` nulo,
 inalcancavel a partir de conta nenhuma). Quem sabe ate quando e
 `order_review_service.review_retention_cutoff`.
 
-`menu_events` e a SEXTA, e a que traz mais volume de longe — ordens de
-grandeza acima das outras cinco somadas, porque ela grava quem NAO comprou.
-Entrou pelo mesmo motivo do `ai_feedback` e do comentario de avaliacao: a
-tabela nao tem `customer_id` (de proposito — ver o modelo), entao a exclusao
-de conta nao alcanca linha nenhuma dela, hoje ou nunca, e a retencao E o
-mecanismo de exclusao. Quem sabe ate quando e
-`menu_event_service.menu_event_retention_cutoff`.
-
-E e a UNICA que apaga EM LOTES, com commit entre um e outro. Um DELETE unico
-de centenas de milhares de linhas segura lock e infla a tabela pela duracao
-inteira da transacao; as outras cinco apagam dezenas ou centenas de linhas por
-execucao e nao tem esse problema.
+As cinco apagam poucas linhas por execucao — dezenas ou centenas —, entao
+todas cabem numa transacao so, com um commit no fim. Foi a sexta tabela
+(`menu_events`, do funil do cardapio) que exigia expurgo EM LOTES, e ela saiu
+junto com a frente inteira de funil e origem: se algum dia entrar aqui uma
+tabela que cresca naquela ordem de grandeza, o expurgo dela nasce em lotes com
+commit entre um e outro, e nao pendurado neste commit unico.
 
 E os codigos NAO sao cortados pelo `expires_at`, ao contrario dos outros dois. A
 linha continua valendo depois de o codigo vencer — para o teto de reenvios e
@@ -61,7 +55,6 @@ No container:
 
 import argparse
 import sys
-from datetime import datetime
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -69,7 +62,6 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
 
 from src.db.session import SessionLocal
 from src.models.ai_feedback_model import AIFeedback
@@ -81,14 +73,9 @@ from src.repositories.ai_feedback_repository import AIFeedbackRepository
 from src.repositories.delivery_estimate_repository import DeliveryEstimateRepository
 from src.repositories.customer_repository import CustomerRepository
 from src.repositories.idempotency_repository import IdempotencyRepository
-from src.repositories.menu_event_repository import MenuEventRepository
 from src.repositories.order_review_repository import OrderReviewRepository
 from src.services.auth_service import codes_retention_cutoff
 from src.services.chat_service import feedback_retention_cutoff
-from src.services.menu_event_service import (
-    MENU_EVENT_PURGE_BATCH,
-    menu_event_retention_cutoff,
-)
 from src.services.order_review_service import review_retention_cutoff
 from src.utils.security import utcnow
 
@@ -108,7 +95,6 @@ def main() -> int:
     cutoff = codes_retention_cutoff(now)
     feedback_cutoff = feedback_retention_cutoff(now)
     review_cutoff = review_retention_cutoff(now)
-    funnel_cutoff = menu_event_retention_cutoff(now)
     with SessionLocal() as db:
         if args.dry_run:
             keys = db.scalar(
@@ -140,12 +126,10 @@ def main() -> int:
                     OrderReview.comment.is_not(None),
                 )
             )
-            eventos = MenuEventRepository(db).count_occurred_before(funnel_cutoff)
             print(
                 f"[dry-run] {keys} chave(s), {estimates} estimativa(s), "
-                f"{codes} codigo(s), {feedback} feedback(s), {eventos} evento(s) "
-                f"de funil seriam removidos e {comentarios} comentario(s) de "
-                f"avaliacao seriam limpos."
+                f"{codes} codigo(s) e {feedback} feedback(s) seriam removidos "
+                f"e {comentarios} comentario(s) de avaliacao seriam limpos."
             )
             return 0
 
@@ -156,35 +140,12 @@ def main() -> int:
         cleared_comments = OrderReviewRepository(db).clear_comments_created_before(review_cutoff)
         db.commit()
 
-        # Depois do commit acima, e em transacao propria por lote: o funil e a
-        # unica tabela grande o bastante para um DELETE unico virar problema, e
-        # nao ha por que prender as outras cinco na duracao dele.
-        removed_events = _expurgar_funil(db, funnel_cutoff)
         print(
             f"{removed_keys} chave(s), {removed_estimates} estimativa(s), "
-            f"{removed_codes} codigo(s), {removed_feedback} feedback(s) e "
-            f"{removed_events} evento(s) de funil removidos; "
-            f"{cleared_comments} comentario(s) de avaliacao limpos."
+            f"{removed_codes} codigo(s) e {removed_feedback} feedback(s) "
+            f"removidos; {cleared_comments} comentario(s) de avaliacao limpos."
         )
     return 0
-
-
-def _expurgar_funil(db: Session, cutoff: datetime) -> int:
-    """Apaga o funil vencido em lotes, commitando entre um e outro.
-
-    O laco para quando o lote volta vazio. Interrompido no meio (deploy,
-    container reiniciado), o que ja foi apagado esta commitado e a proxima
-    execucao continua de onde parou — que e a razao de o commit ser por lote e
-    nao no fim.
-    """
-    repositorio = MenuEventRepository(db)
-    total = 0
-    while True:
-        apagados = repositorio.delete_occurred_before(cutoff, MENU_EVENT_PURGE_BATCH)
-        db.commit()
-        if apagados == 0:
-            return total
-        total += apagados
 
 
 if __name__ == "__main__":

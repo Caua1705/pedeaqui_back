@@ -44,7 +44,7 @@ from src.services.coupon_service import CouponService
 from src.services.idempotency_service import IdempotencyService
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import ZERO, money_to_float, quantize_money, to_decimal
-from src.utils.normalization import normalize_digits, normalize_traffic_source
+from src.utils.normalization import normalize_digits
 from src.utils.security import generate_tracking_token, hash_tracking_token, utcnow
 
 
@@ -238,7 +238,6 @@ class OrderService:
                 delivery_estimate_provider=delivery_estimate.provider if delivery_estimate else None,
                 delivery_estimated_at=datetime.now(timezone.utc) if delivery_estimate else None,
                 notes=payload.notes,
-                source_snapshot=normalize_traffic_source(payload.source),
             )
             self.order_repository.create_order(order)
             if coupon is not None:
@@ -308,32 +307,34 @@ class OrderService:
 
     @staticmethod
     def _idempotency_fingerprint(payload: CreateOrderRequest) -> str:
-        """sha256 do corpo do pedido, MENOS o rotulo de origem.
+        """sha256 do corpo do pedido, para separar retry de conflito.
 
-        O fingerprint existe para distinguir retry ("mesma chave, mesmo
-        corpo": devolve a resposta gravada) de conflito ("mesma chave, corpo
-        diferente": 409). `source` nao pertence a nenhum dos dois lados dessa
-        pergunta — ele nao muda item, preco, endereco nem forma de pagamento.
-        Se a mesma chave voltar com outra origem, o certo e devolver o pedido
-        original, e nao recusar.
+        Mesma chave e mesmo corpo e RETRY: devolve a resposta gravada. Mesma
+        chave com corpo diferente e CONFLITO: 422, pedindo chave nova.
 
-        **E o exclude tambem e o que evita 24h de 409 no deploy desta
-        revisao.** O fingerprint sai de `model_dump()`, entao um campo novo
-        muda o hash de TODO corpo — e uma chave reservada antes do deploy,
-        retentada depois, calcularia um hash diferente do gravado e receberia
-        conflito por um pedido identico. E a armadilha 7 pelo outro lado: la
-        o custo estava em acrescentar campo obrigatorio na RESPOSTA gravada,
-        aqui em acrescentar qualquer campo ao CORPO que a assina.
+        **Todo campo do corpo entra hoje, e isso e uma consequencia, nao uma
+        escolha permanente.** O `source` do funil ficava de fora daqui porque
+        nao mudava item, preco, endereco nem forma de pagamento — a mesma
+        chave com outra origem tinha que devolver o pedido original. Com a
+        frente de origem removida, nao sobrou nenhum campo dessa natureza, e
+        a exclusao virou lista vazia.
 
-        Com `source` de fora, o corpo canonicalizado de um pedido sem origem
-        e byte a byte o mesmo de antes da revisao, e as chaves em voo no
-        deploy continuam valendo.
+        A regra que fica, e que vale para o proximo campo (armadilha 37):
 
-        A regra que fica: **campo novo em `CreateOrderRequest` que nao mude o
-        que foi pedido entra nesta lista de exclusao.** Campo que mude o
-        pedido fica de fora dela, porque ai o conflito e a resposta certa.
+        - campo que **nao muda o que foi pedido** volta a entrar numa lista
+          de exclusao aqui;
+        - campo que **muda o pedido** fica de fora dela — `use_cashback` e o
+          caso, porque ele muda o total, e ai o conflito e a resposta certa.
+
+        E o custo de qualquer campo novo no corpo e o mesmo dos dois lados: o
+        fingerprint sai de `model_dump()`, entao um campo a mais muda o hash
+        de TODO corpo, e uma chave reservada antes do deploy e retentada
+        depois recebe 422 por um pedido identico durante as 24h de vida dela.
+        E a armadilha 7 pelo outro lado — la o custo era acrescentar campo
+        obrigatorio na RESPOSTA gravada, aqui e acrescentar qualquer campo ao
+        CORPO que a assina.
         """
-        corpo = payload.model_dump(mode="json", exclude={"source"})
+        corpo = payload.model_dump(mode="json")
         return IdempotencyService.fingerprint(corpo)
 
     def _idempotency_scope(

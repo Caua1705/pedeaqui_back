@@ -16,7 +16,7 @@ protege nada, e o pior caso de um bug la e espaco em disco.
 
 **Aqui um bug apaga DINHEIRO DE CLIENTE**, e nao ha desfazer. Arquivo
 proprio, `--dry-run` proprio, log proprio — e nenhuma chance de uma mudanca
-no expurgo de funil arrastar isto junto.
+no expurgo de linha vencida arrastar isto junto.
 
 ## O que a execucao faz, por par vencido
 

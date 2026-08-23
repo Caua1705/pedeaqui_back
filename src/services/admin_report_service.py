@@ -34,19 +34,15 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from src.core.constants import MENU_EVENT_TYPES, PLATFORM_TIMEZONE
+from src.core.constants import PLATFORM_TIMEZONE
 from src.utils.date_window import period_bounds
 from src.repositories.admin_report_repository import AdminReportRepository
-from src.repositories.menu_event_repository import MenuEventRepository
 from src.repositories.order_repository import OrderRepository
 from src.schemas.admin_report_schema import (
     CancellationBreakdownItem,
     CancellationsResponse,
     CommissionReportItem,
     CommissionReportResponse,
-    FunnelResponse,
-    FunnelSourceItem,
-    FunnelStepItem,
     MetricComparison,
     OrderTypeSplitItem,
     PaymentMethodItem,
@@ -83,19 +79,6 @@ PRODUCT_REVENUE_NOTE = (
     "de servico. Nao fecha com revenue_total de /reports/summary."
 )
 
-# Aviso fixo na resposta de /reports/funnel. Mesma natureza do
-# PRODUCT_REVENUE_NOTE acima: o numero nao fecha com o do resumo, e quem
-# consome precisa saber disso sem ler o codigo.
-FUNNEL_ORDERS_NOTE = (
-    "Todo pedido feito no periodo, cancelados e recusados inclusive: o funil "
-    "mede se a pessoa terminou de pedir. Nao fecha com orders_count de "
-    "/reports/summary."
-)
-
-# O nome do quinto degrau. Nao esta em MENU_EVENT_TYPES de proposito: ele nao
-# e um evento gravado, e sim o proprio pedido, contado em `orders`.
-FUNNEL_ORDER_STEP = "order"
-
 ONE_HUNDRED = Decimal("100")
 
 
@@ -103,7 +86,6 @@ class AdminReportService:
     def __init__(self, db: Session):
         self.order_repository = OrderRepository(db)
         self.report_repository = AdminReportRepository(db)
-        self.menu_event_repository = MenuEventRepository(db)
 
     def commission_report(
         self,
@@ -111,16 +93,15 @@ class AdminReportService:
         start_date: date,
         end_date: date,
         branch_id: UUID | None = None,
-        source: str | None = None,
     ) -> CommissionReportResponse:
         self._validate_period(start_date, end_date)
         start_at, end_at = self._period_bounds(start_date, end_date)
 
         orders = self.order_repository.list_orders_for_commission(
-            restaurant_id, start_at, end_at, branch_id, source
+            restaurant_id, start_at, end_at, branch_id
         )
         excluded_count = self.order_repository.count_excluded_from_commission(
-            restaurant_id, start_at, end_at, branch_id, source
+            restaurant_id, start_at, end_at, branch_id
         )
 
         items = [self._to_item(order) for order in orders]
@@ -146,7 +127,6 @@ class AdminReportService:
         start_date: date,
         end_date: date,
         branch_id: UUID | None = None,
-        source: str | None = None,
     ) -> SalesSummaryResponse:
         """Os numeros do topo da aba Desempenho, com o periodo anterior ao lado.
 
@@ -160,15 +140,15 @@ class AdminReportService:
         period = self._period(start_date, end_date)
         previous = self._previous_period(period)
 
-        current_totals = self._totals_for(restaurant_id, period, branch_id, source)
-        previous_totals = self._totals_for(restaurant_id, previous, branch_id, source)
+        current_totals = self._totals_for(restaurant_id, period, branch_id)
+        previous_totals = self._totals_for(restaurant_id, previous, branch_id)
 
         start_at, end_at = self._period_bounds(start_date, end_date)
         type_rows = self.report_repository.totals_by_order_type(
-            restaurant_id, start_at, end_at, branch_id, source
+            restaurant_id, start_at, end_at, branch_id
         )
         excluded = self.report_repository.cancellation_totals(
-            restaurant_id, start_at, end_at, branch_id, source
+            restaurant_id, start_at, end_at, branch_id
         )
 
         revenue = current_totals["revenue_total"]
@@ -213,7 +193,6 @@ class AdminReportService:
         start_date: date,
         end_date: date,
         branch_id: UUID | None = None,
-        source: str | None = None,
     ) -> SalesByDayResponse:
         """Serie diaria do periodo, com os dias sem venda preenchidos com zero.
 
@@ -225,7 +204,7 @@ class AdminReportService:
         start_at, end_at = self._period_bounds(start_date, end_date)
 
         rows = self.report_repository.sales_by_day(
-            restaurant_id, start_at, end_at, branch_id, source
+            restaurant_id, start_at, end_at, branch_id
         )
         by_day = {
             row[0]: (row[1], quantize_money(to_decimal(row[2]))) for row in rows
@@ -259,13 +238,12 @@ class AdminReportService:
         start_date: date,
         end_date: date,
         branch_id: UUID | None = None,
-        source: str | None = None,
     ) -> PaymentMethodsResponse:
         self._validate_period(start_date, end_date)
         start_at, end_at = self._period_bounds(start_date, end_date)
 
         rows = self.report_repository.totals_by_payment_method(
-            restaurant_id, start_at, end_at, branch_id, source
+            restaurant_id, start_at, end_at, branch_id
         )
         revenue_total = quantize_money(
             sum((to_decimal(row[2]) for row in rows), ZERO)
@@ -296,7 +274,6 @@ class AdminReportService:
         end_date: date,
         limit: int = DEFAULT_PRODUCT_LIMIT,
         branch_id: UUID | None = None,
-        source: str | None = None,
     ) -> ProductSalesResponse:
         """Ranking de produtos por unidades vendidas.
 
@@ -314,7 +291,7 @@ class AdminReportService:
         start_at, end_at = self._period_bounds(start_date, end_date)
 
         rows = self.report_repository.top_products(
-            restaurant_id, start_at, end_at, limit, branch_id, source
+            restaurant_id, start_at, end_at, limit, branch_id
         )
         products = [
             ProductSalesItem(
@@ -351,7 +328,6 @@ class AdminReportService:
         start_date: date,
         end_date: date,
         branch_id: UUID | None = None,
-        source: str | None = None,
     ) -> CancellationsResponse:
         """Pedidos que nao viraram venda, e a taxa que isso representa.
 
@@ -364,13 +340,13 @@ class AdminReportService:
         start_at, end_at = self._period_bounds(start_date, end_date)
 
         totals = self.report_repository.cancellation_totals(
-            restaurant_id, start_at, end_at, branch_id, source
+            restaurant_id, start_at, end_at, branch_id
         )
         billable = self.report_repository.sales_totals(
-            restaurant_id, start_at, end_at, branch_id, source
+            restaurant_id, start_at, end_at, branch_id
         )
         rows = self.report_repository.cancellations_by_status(
-            restaurant_id, start_at, end_at, branch_id, source
+            restaurant_id, start_at, end_at, branch_id
         )
 
         cancelled_count = totals["orders_count"]
@@ -397,130 +373,11 @@ class AdminReportService:
             ],
         )
 
-    def funnel_report(
-        self,
-        restaurant_id: UUID,
-        start_date: date,
-        end_date: date,
-        branch_id: UUID | None = None,
-        source: str | None = None,
-    ) -> FunnelResponse:
-        """Os cinco degraus do funil, e a divisao por origem.
-
-        Responde a pergunta que nenhum outro relatorio alcanca: poucos
-        pedidos porque ninguem entrou no cardapio, ou porque quem entrou nao
-        comprou? Sao diagnosticos opostos com solucoes opostas.
-
-        Os quatro primeiros degraus contam SESSOES em `menu_events`; o quinto
-        conta PEDIDOS em `orders`, e conta TODOS eles — ver
-        `funnel_order_conditions` e a ressalva em `orders_note`.
-
-        **O periodo maximo e o mesmo dos outros relatorios (92 dias), e isso
-        importa mais aqui:** o evento de funil e apagado aos 90 dias
-        (`menu_event_retention_cutoff`). Um teto maior deixaria a tela pedir
-        um recorte cujo comeco o banco ja apagou, e o grafico responderia com
-        uma queda que nunca aconteceu.
-        """
-        self._validate_period(start_date, end_date)
-        start_at, end_at = self._period_bounds(start_date, end_date)
-
-        sessions = self.menu_event_repository.sessions_by_event_type(
-            restaurant_id, start_at, end_at, branch_id, source
-        )
-        orders_count = self.report_repository.count_orders_in_funnel(
-            restaurant_id, start_at, end_at, branch_id, source
-        )
-
-        return FunnelResponse(
-            restaurant_id=restaurant_id,
-            branch_id=branch_id,
-            source=source,
-            period=self._period(start_date, end_date),
-            steps=self._funnel_steps(sessions, orders_count),
-            orders_count=orders_count,
-            sources=self._funnel_sources(restaurant_id, start_at, end_at, branch_id),
-            orders_note=FUNNEL_ORDERS_NOTE,
-        )
-
-    def _funnel_steps(self, sessions: dict[str, int], orders_count: int) -> list[FunnelStepItem]:
-        """Os degraus na ordem, com a conversao de um para o outro.
-
-        A ordem sai de `MENU_EVENT_TYPES`, e nao do que o banco devolveu:
-        degrau sem nenhuma sessao nao volta da consulta, e sem esta lista ele
-        sumiria do grafico em vez de aparecer com zero — que e justamente o
-        degrau mais importante da tela.
-        """
-        counts = [sessions.get(tipo, 0) for tipo in MENU_EVENT_TYPES]
-        counts.append(orders_count)
-        nomes = [*MENU_EVENT_TYPES, FUNNEL_ORDER_STEP]
-
-        degraus = []
-        for indice, (nome, count) in enumerate(zip(nomes, counts)):
-            anterior = counts[indice - 1] if indice > 0 else None
-            degraus.append(
-                FunnelStepItem(
-                    step=nome,
-                    count=count,
-                    conversion_from_previous_percent=(
-                        self._share(Decimal(count), Decimal(anterior))
-                        if anterior is not None
-                        else None
-                    ),
-                )
-            )
-        return degraus
-
-    def _funnel_sources(
-        self,
-        restaurant_id: UUID,
-        start_at: datetime,
-        end_at: datetime,
-        branch_id: UUID | None,
-    ) -> list[FunnelSourceItem]:
-        """A divisao por origem: quem trouxe gente, e quem trouxe gente que compra.
-
-        Sempre sobre TODAS as origens, mesmo quando o relatorio esta filtrado
-        por uma: filtrado, esta lista teria uma linha so e nao responderia
-        nada. O filtro de origem recorta os DEGRAUS, que e onde ele muda a
-        leitura.
-
-        Uma origem entra na lista se trouxe sessao ou se trouxe pedido. As
-        duas metades sao necessarias e cada uma cobre um buraco real: origem
-        com pedido e zero sessao e o funil que venceu pela retencao enquanto o
-        pedido ficou; origem com sessao e zero pedido e o canal que traz gente
-        que nao compra — a linha mais importante da tela.
-        """
-        sessions = dict(
-            self.menu_event_repository.sessions_by_source(
-                restaurant_id, start_at, end_at, branch_id
-            )
-        )
-        orders = self.report_repository.orders_by_source(
-            restaurant_id, start_at, end_at, branch_id
-        )
-
-        linhas = [
-            FunnelSourceItem(
-                source=origem,
-                sessions_count=sessions.get(origem, 0),
-                orders_count=orders.get(origem, 0),
-                conversion_percent=self._share(
-                    Decimal(orders.get(origem, 0)), Decimal(sessions.get(origem, 0))
-                ),
-            )
-            for origem in sorted(set(sessions) | set(orders))
-        ]
-        # Por sessoes e nao por conversao: uma origem com uma visita e um
-        # pedido daria 100% e lideraria a tela para sempre.
-        linhas.sort(key=lambda linha: linha.sessions_count, reverse=True)
-        return linhas
-
     def _totals_for(
         self,
         restaurant_id: UUID,
         period: ReportPeriod,
         branch_id: UUID | None = None,
-        source: str | None = None,
     ) -> dict:
         """Somas de um periodo, ja com o ticket medio resolvido.
 
@@ -531,7 +388,7 @@ class AdminReportService:
         """
         start_at, end_at = self._period_bounds(period.start_date, period.end_date)
         totals = self.report_repository.sales_totals(
-            restaurant_id, start_at, end_at, branch_id, source
+            restaurant_id, start_at, end_at, branch_id
         )
 
         orders_count = totals["orders_count"]

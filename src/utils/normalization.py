@@ -1,11 +1,6 @@
 import re
 import unicodedata
 
-from src.core.constants import (
-    DEFAULT_TRAFFIC_SOURCE,
-    MAX_TRAFFIC_SOURCE_LENGTH,
-)
-
 
 _DIGITS_RE = re.compile(r"\D+")
 # O e-mail, em duas metades legiveis.
@@ -128,36 +123,6 @@ def slugify(value: str) -> str:
     without_accents = unicodedata.normalize("NFKD", value)
     ascii_only = without_accents.encode("ascii", "ignore").decode("ascii")
     return _NON_SLUG_RE.sub("-", ascii_only.lower()).strip("-")
-
-
-def normalize_traffic_source(value: str | None) -> str:
-    """O rotulo de origem pronto para gravar e para AGRUPAR no relatorio.
-
-    Existe porque o valor vem de um QR impresso, de um cartao de sacola ou de
-    um link que alguem digitou — nao de uma lista fechada. Sem normalizar,
-    `qr-mesa-4`, `QR mesa 04` e `qrmesa4` viram TRES linhas do relatorio para
-    a mesma mesa, e o erro so aparece depois de os imas estarem impressos.
-
-    Reusa `slugify` de proposito: a forma que se quer aqui e exatamente a de
-    um slug (minusculo, sem acento, hifen no lugar de pontuacao), e escrever
-    a segunda implementacao seria a segunda chance de errar a imunidade a
-    NFC/NFD que ele ja tem de graca (armadilha 31).
-
-    **Rotulo irreconhecivel nao e recusado: vira `direct`.** Recusar
-    transformaria um QR impresso com defeito em pedido perdido, e quinhentos
-    imas com o rotulo errado se consertam no relatorio — um pedido recusado,
-    nao. Vale para ausente, vazio e para o que sobra vazio depois do slug
-    (um rotulo so de emoji, por exemplo).
-
-    O corte no teto acontece DEPOIS do slug e leva outro `strip("-")`: cortar
-    "promocao-de-agosto..." no meio de um hifen deixaria o rotulo terminando
-    em traco, e `promo-` e `promo` seriam duas linhas do relatorio de novo.
-    """
-    if not value:
-        return DEFAULT_TRAFFIC_SOURCE
-
-    slug = slugify(value)[:MAX_TRAFFIC_SOURCE_LENGTH].strip("-")
-    return slug or DEFAULT_TRAFFIC_SOURCE
 
 
 def is_valid_email(email: str) -> bool:

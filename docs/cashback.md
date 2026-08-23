@@ -159,8 +159,9 @@ fecham ciclo, e o Postgres mata uma por deadlock — no checkout, no pico.
 
 **Campo novo em `CreateOrderRequest` custa 24h de 422 (armadilha 37).**
 `use_cashback` muda o que foi pedido, então fica **dentro** do
-`_idempotency_fingerprint`, ao contrário do `source`. Deploy de madrugada, e o
-app precisa tratar a recusa gerando chave nova.
+`_idempotency_fingerprint` — a lista de exclusão é para campo que não muda o
+pedido. Deploy de madrugada, e o app precisa tratar a recusa gerando chave
+nova.
 
 **O código é 422, e não 409** — a armadilha 37 dizia 409 e estava errada nisso
 (o 409 daquela rota é "requisição em andamento", que quer o oposto: tentar de

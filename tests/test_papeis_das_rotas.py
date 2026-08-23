@@ -126,11 +126,6 @@ PAPEL_ESPERADO = {
     ("GET", "/admin/reports/payment-methods"): GERENCIA,
     ("GET", "/admin/reports/products"): GERENCIA,
     ("GET", "/admin/reports/cancellations"): GERENCIA,
-    # Funil do cardapio (revisao 20260822_0031). GERENCIA pela mesma regra da
-    # avaliacao logo abaixo: nao ha um numero de dinheiro na resposta, e quem
-    # toca o balcao e quem consegue agir sobre "o carrinho enche e o checkout
-    # esvazia". Nao entra no `ensure_pode_ler_dinheiro` por isso.
-    ("GET", "/admin/reports/funnel"): GERENCIA,
     # --- avaliacao de pedido
     #
     # GERENCIA, e nao SOMENTE_DONO. A divisao dos relatorios acima e "dinheiro

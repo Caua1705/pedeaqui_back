@@ -97,39 +97,3 @@ DEFAULT_PLATFORM_COMMISSION_PERCENT = "10.00"
 # "pedidos de ontem" para o lojista e o dia dele, nao o dia do servidor.
 PLATFORM_TIMEZONE = "America/Fortaleza"
 
-# Os degraus do funil do cardapio, na ordem em que acontecem. ESPELHA o CHECK
-# `ck_menu_events_event_type` e muda JUNTO com ele — o mesmo par de listas da
-# armadilha 15, e erra do mesmo jeito: tipo que exista so aqui passa pela
-# validacao do schema e morre no INSERT; tipo que exista so no banco nunca
-# chega a ser oferecido ao front.
-#
-# A ORDEM E SIGNIFICATIVA: o relatorio de funil percorre esta tupla para
-# montar os degraus e calcular a queda de um para o outro. Reordenar aqui
-# reordena a tela.
-#
-# **O quinto degrau nao esta nesta lista, e nao pode estar.** Ele e o proprio
-# pedido, que ja existe em `orders` — repeti-lo como evento criaria uma
-# segunda contagem de venda, divergente da primeira no dia em que o pedido
-# fosse cancelado.
-#
-# Por que sao exatamente estes quatro, e por que nao ha um quinto de
-# navegacao: `docs/funil-e-origem.md`, secao 1.
-MENU_EVENT_TYPES = (
-    "menu_view",
-    "product_view",
-    "cart_add",
-    "checkout_start",
-)
-
-# Origem de quem chegou sem nenhum identificador na URL.
-#
-# GRAVADO, e nunca NULL. O nulo dividiria o relatorio entre "veio direto" e
-# "nao sabemos", e nenhum lojista quer essa distincao — as duas linhas
-# responderiam a mesma pergunta pela metade.
-DEFAULT_TRAFFIC_SOURCE = "direct"
-
-# Teto do rotulo de origem. Ele e impresso num QR, num ima ou num cartao:
-# quarenta caracteres cobrem "qr-mesa-04" e "panfleto-feira-agosto" com folga,
-# e o teto existe para o campo nao virar porta de texto arbitrario numa tabela
-# que aceita escrita sem autenticacao.
-MAX_TRAFFIC_SOURCE_LENGTH = 40

@@ -9,6 +9,7 @@ from src.models.product_model import Product
 from src.models.product_option_model import ProductOption, ProductOptionGroup
 from src.models.branch_model import Branch
 from src.repositories.branch_repository import BranchRepository
+from src.repositories.cashback_rule_repository import CashbackRuleRepository
 from src.repositories.menu_repository import MenuRepository
 from src.repositories.product_repository import ProductRepository
 from src.schemas.banner_schema import BannerResponse
@@ -16,12 +17,14 @@ from src.schemas.coupon_schema import PublicCouponResponse
 from src.schemas.menu_schema import RestaurantMenuResponse
 from src.schemas.product_schema import ProductOptionGroupResponse, ProductOptionResponse, ProductResponse
 from src.schemas.restaurant_schema import (
+    BranchCashbackTermsResponse,
     BranchResponse,
     CategoryResponse,
     DeliveryTimeBandResponse,
     RestaurantSettingsResponse,
 )
 from src.services.branch_operation import BranchOperation, resolve_branch_operation
+from src.services.cashback_rule import resolve_cashback_terms
 from src.services.menu_rules import blocking_required_group
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import money_to_float
@@ -35,6 +38,7 @@ class MenuService:
     def __init__(self, db: Session):
         self.menu_repository = MenuRepository(db)
         self.branch_repository = BranchRepository(db)
+        self.cashback_rule_repository = CashbackRuleRepository(db)
         self.product_repository = ProductRepository(db)
         self.restaurant_service = RestaurantService(db)
 
@@ -70,7 +74,11 @@ class MenuService:
             branch_id=branch.id if branch else None,
             settings_branch_id=branch.id if branch else None,
             settings=(
-                self._settings_response(operation, self._delivery_time_bands(branch))
+                self._settings_response(
+                    operation,
+                    self._delivery_time_bands(branch),
+                    self._cashback_terms(restaurant.id, branch),
+                )
                 if operation
                 else None
             ),
@@ -220,10 +228,36 @@ class MenuService:
             for band in self.branch_repository.list_delivery_time_bands(branch.id)
         ]
 
+    def _cashback_terms(self, restaurant_id: UUID, branch: Branch) -> BranchCashbackTermsResponse:
+        """Os termos de RESGATE daquela filial, para o app poder explicar o zero.
+
+        `resolve_cashback_terms` e a mesma funcao que o checkout chama, e nao
+        uma segunda leitura das mesmas tabelas: duas implementacoes da heranca
+        discordariam sem erro, e a discordancia aqui e a tela prometendo um
+        resgate que o pedido nao faz.
+
+        Sem `momento`, entao o `percent` que volta e o de hoje — e e
+        justamente por isso que ele NAO e publicado (ver
+        `BranchCashbackTermsResponse`). Daqui sai so o que nao depende do dia.
+
+        Uma consulta a mais no `/menu`, que e caminho quente:
+        `get_rules_for_branch` traz as duas regras de uma vez, com os dias da
+        semana em `selectinload`.
+        """
+        da_filial, do_restaurante = self.cashback_rule_repository.get_rules_for_branch(
+            restaurant_id, branch.id
+        )
+        terms = resolve_cashback_terms(da_filial, do_restaurante)
+        return BranchCashbackTermsResponse(
+            enabled=terms.enabled,
+            min_redeem_balance=money_to_float(terms.min_redeem_balance),
+        )
+
     @staticmethod
     def _settings_response(
         operation: BranchOperation,
         delivery_time_bands: list[DeliveryTimeBandResponse],
+        cashback: BranchCashbackTermsResponse,
     ) -> RestaurantSettingsResponse:
         """O bloco de operacao, ja resolvido para a filial.
 
@@ -251,6 +285,7 @@ class MenuService:
                 operation.free_delivery_min_order_value
             ),
             delivery_time_bands=delivery_time_bands,
+            cashback=cashback,
         )
 
     @staticmethod

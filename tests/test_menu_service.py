@@ -115,6 +115,25 @@ class FakeBranchRepository:
         return list(self.delivery_time_bands)
 
 
+class FakeCashbackRuleRepository:
+    """Sem regra nenhuma, que e o estado em que todo restaurante nasce.
+
+    Quem mede a heranca de verdade e
+    `tests/test_termos_de_cashback_no_cardapio_db.py`, contra o Postgres:
+    qual das duas linhas de `cashback_rules` vale e CONSULTA, e dubla-la aqui
+    seria testar o duble.
+    """
+
+    def __init__(self, da_filial=None, do_restaurante=None):
+        self.da_filial = da_filial
+        self.do_restaurante = do_restaurante
+        self.filial_pedida = None
+
+    def get_rules_for_branch(self, restaurant_id, branch_id):
+        self.filial_pedida = branch_id
+        return self.da_filial, self.do_restaurante
+
+
 class FakeProductRepository:
     def __init__(self, category_exists=True, by_category=(), by_slug=None):
         self.category_exists = category_exists
@@ -217,10 +236,12 @@ def make_service(
     product_repository=None,
     restaurant_service=None,
     branch_repository=None,
+    cashback_rule_repository=None,
 ):
     service = MenuService(FakeDb())
     service.menu_repository = menu_repository or FakeMenuRepository()
     service.branch_repository = branch_repository or FakeBranchRepository(make_branch())
+    service.cashback_rule_repository = cashback_rule_repository or FakeCashbackRuleRepository()
     service.product_repository = product_repository or FakeProductRepository()
     service.restaurant_service = restaurant_service or FakeRestaurantService()
     return service
@@ -784,6 +805,27 @@ class TestOCardapioSaiDaFilial:
 
         assert repositorio.produtos_pedidos_para == escolhida.id
         assert menu.branch_id == escolhida.id
+
+    def test_os_termos_de_cashback_sao_pedidos_para_a_MESMA_filial(self):
+        """O piso do resgate e da filial, e a filial e a do cardapio.
+
+        Publicar o piso da loja errada e o defeito que este bloco existe para
+        nao ter: a tela diria "faltam R$ 2" com base numa regra que nao vale
+        onde a pessoa esta pedindo.
+        """
+        escolhida = make_branch()
+        padrao = make_branch()
+        padrao.id = uuid.uuid4()
+        regras = FakeCashbackRuleRepository()
+        service = make_service(
+            branch_repository=FakeBranchRepository(padrao, branches=[padrao, escolhida]),
+            cashback_rule_repository=regras,
+        )
+
+        menu = service.get_restaurant_menu("pizzaria-do-ze", escolhida.id)
+
+        assert regras.filial_pedida == escolhida.id
+        assert menu.settings.cashback.enabled is False
 
     def test_restaurante_sem_filial_ativa_responde_a_vitrine_sem_cardapio(self):
         """200 com listas vazias, e nao 404.

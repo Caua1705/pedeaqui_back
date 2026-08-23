@@ -78,6 +78,55 @@ class RestaurantSettingsResponse(BaseResponse):
     # significado sem mudar de nome.
     delivery_time_bands: list["DeliveryTimeBandResponse"] = Field(default_factory=list)
 
+    # Os termos de RESGATE do cashback, ja resolvidos para esta filial. E o
+    # que permite ao app dizer "faltam R$ 2 para voce poder usar seu
+    # cashback" ANTES de o cliente tentar — ver `BranchCashbackTermsResponse`.
+    cashback: "BranchCashbackTermsResponse" = Field(
+        default_factory=lambda: BranchCashbackTermsResponse()
+    )
+
+
+class BranchCashbackTermsResponse(BaseResponse):
+    """O que a FILIAL precisa dizer antes de o cliente tentar resgatar.
+
+    Ate aqui o app nao tinha como explicar por que o cashback nao descontou.
+    Saldo abaixo do minimo devolve zero **sem erro** (`amount_to_redeem`), e a
+    unica pista era `cashback_redeemed_amount: 0` na resposta do pedido —
+    depois de fechado. `docs/cashback.md` registrou isso como pendencia
+    quando o saldo passou a ser por restaurante, e apontou o lugar de
+    resolver: aqui, ao lado do cardapio, que e quem conhece a filial.
+
+    **Por que nao coube em `by_restaurant[]` de `/customers/me/cashback`.** O
+    saldo e do RESTAURANTE; o resgate acontece numa FILIAL, que pode ter regra
+    propria — inclusive `enabled = false` com a rede inteira ligada, que e como
+    uma loja sai da campanha. Publicar o piso sob uma chave por restaurante
+    mostraria um numero que nao vale na loja em que a pessoa esta pedindo.
+
+    **O app junta as duas pontas:** o saldo daquele restaurante sai de
+    `by_restaurant[].balance`, os termos saem daqui, e a frase da tela e a
+    comparacao dos dois. Nenhum dos dois lados sozinho responde a pergunta.
+
+    **`percent` NAO esta aqui, e a ausencia e deliberada.** Ele e termo de
+    quanto o pedido GERA, nao de resgate, e muda por dia da semana: quem o
+    resolve para valer e o checkout, com `order.created_at`
+    (`resolve_cashback_terms`). Publica-lo na abertura do cardapio criaria a
+    segunda resposta para "quanto gera" — e as duas discordariam sempre que a
+    meia-noite caisse entre abrir o cardapio e fechar o pedido.
+    """
+
+    # Falso cobre os tres casos que caem em `SEM_CASHBACK`: restaurante sem
+    # regra, regra desligada e filial que saiu da campanha. Para a tela do
+    # cliente os tres sao a mesma frase — "esta loja nao tem cashback" —, e
+    # distingui-los aqui publicaria configuracao do lojista sem servir a
+    # decisao nenhuma do app.
+    enabled: bool = False
+
+    # O piso e do SALDO, e nao do resgate: com R$ 3 acumulados e minimo de
+    # R$ 5 nao ha resgate nenhum, nem parcial. A tela que trata isto como
+    # "valor minimo a resgatar" oferece um resgate de R$ 3 que o servidor
+    # ignora em silencio.
+    min_redeem_balance: float = 0.0
+
 
 class DeliveryTimeBandResponse(BaseResponse):
     """Uma faixa de prazo por distancia.

@@ -303,12 +303,37 @@ Três decisões que foram tomadas aqui e não estavam no desenho original:
   está pedindo. A linha é essa: `by_restaurant[]` carrega o que é verdade por
   restaurante (saldo, validade), e nada que seja verdade por filial.
 
-**O que fica pendente por causa dessa última decisão:** o checkout não tem como
-explicar "por que não descontou". Saldo abaixo do mínimo devolve zero sem erro
-(seção 2), e o app só descobre isso lendo `cashback_redeemed_amount = 0` na
-resposta do pedido. O lugar de resolver, quando doer, é uma resposta de termos
-por filial ao lado do cardápio — que é quem conhece a filial —, e não este
-campo aqui.
+**E foi por causa dessa última decisão que os termos foram parar no cardápio
+— feito em 23/08/2026.** Enquanto não estavam, o app não tinha como explicar
+"por que não descontou": saldo abaixo do mínimo devolve zero sem erro (seção
+2), e a única pista era `cashback_redeemed_amount = 0` na resposta do pedido,
+depois de fechado.
+
+`GET /restaurants/{slug}/menu?branch_id=…` passou a trazer, dentro de
+`settings` — que já é o bloco resolvido **daquela filial**:
+
+```json
+"cashback": { "enabled": true, "min_redeem_balance": 10.00 }
+```
+
+**O app junta as duas pontas, e nenhuma delas sozinha responde:** o saldo
+daquele restaurante sai de `by_restaurant[].balance`, o piso e o liga/desliga
+saem do cardápio, e a frase da tela ("faltam R$ 2 para você poder usar seu
+cashback") é a comparação dos dois.
+
+`enabled: false` cobre os três casos que caem em `SEM_CASHBACK` — restaurante
+sem regra, regra desligada, filial que saiu da campanha —, e não os distingue
+de propósito: para a tela do cliente os três são a mesma frase, e separá-los
+publicaria configuração do lojista sem servir a decisão nenhuma do app. Quem
+precisa da diferença é o painel, e lá ela existe como `source: "none"`.
+
+**`percent` NÃO vai junto**, e é a mesma disciplina que manteve
+`min_redeem_balance` fora de `by_restaurant[]`, aplicada do outro lado:
+`percent` é termo de quanto o pedido GERA, muda por dia da semana, e quem o
+resolve para valer é o checkout com `order.created_at`. Publicá-lo na abertura
+do cardápio criaria a segunda resposta para "quanto gera" — e as duas
+discordariam sempre que a meia-noite caísse entre abrir o cardápio e fechar o
+pedido.
 
 Saldo órfão (`restaurant_id` nulo, de restaurante apagado — a coluna é
 `ON DELETE SET NULL`) conta no total e fica de fora da lista: não tem nome para

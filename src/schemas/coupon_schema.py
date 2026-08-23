@@ -87,7 +87,14 @@ class CouponCampaignFields(BaseModel):
     @field_validator("code")
     @classmethod
     def normalize_campaign_code(cls, value: str) -> str:
-        return value.strip().upper()
+        code = value.strip().upper()
+        # `min_length=1` conferiu o valor CRU: "   " tem tres caracteres e
+        # passa, e so aqui vira vazio. Sem esta linha o codigo em branco chegava
+        # ao banco, batia no CHECK `restaurant_coupons_code_not_blank` e voltava
+        # como "codigo ja existe" — 409 para um cupom que nao existia.
+        if not code:
+            raise ValueError("code nao pode ser so espacos")
+        return code
 
     @field_validator("title")
     @classmethod
@@ -104,6 +111,12 @@ class CouponCampaignFields(BaseModel):
             raise ValueError("discount_value percentual deve ser no maximo 100")
         if self.discount_type != "percent" and self.max_discount_amount is not None:
             raise ValueError("max_discount_amount e permitido somente para percentual")
+        # Espelha o CHECK `restaurant_coupons_reuse_rules_valid`. Um cupom que o
+        # cliente so pode usar UMA vez na vida nao tem o que fazer com intervalo
+        # entre usos: a segunda vez nunca chega. O banco ja recusava, mas a
+        # recusa vinha de la sem dizer qual dos dois campos estava sobrando.
+        if self.cooldown_days is not None and self.usage_limit_per_customer == 1:
+            raise ValueError("cooldown_days nao faz sentido com usage_limit_per_customer = 1")
         return self
 
 

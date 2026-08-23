@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 from src.api.dependencies.admin_scope import AdminScope
-from src.schemas.coupon_schema import CouponPreviewRequest
+from src.schemas.coupon_schema import CouponCampaignFields, CouponPreviewRequest
 from src.schemas.order_schema import CreateOrderRequest
 from src.services.admin_order_service import AdminOrderService
 from src.services.coupon_service import CouponService
@@ -618,6 +618,55 @@ class OrderCouponIntegrationTests(unittest.TestCase):
         self.assertEqual(result, "detail")
         self.assertEqual(reversed_orders, [order.id])
         self.assertEqual(db.events, ["commit"])
+
+
+class CampaignSchemaTests(unittest.TestCase):
+    """As duas regras que o BANCO exigia e o schema nao conhecia.
+
+    Enquanto o schema as ignorava, elas viravam CHECK violado no Postgres — e o
+    `except IntegrityError` da criacao devolvia "codigo ja existe" para as duas.
+    Aqui elas viram recusa de validacao, com o nome do campo junto.
+    """
+
+    @staticmethod
+    def campanha(**overrides):
+        values = {
+            "coupon_template_id": uuid.uuid4(),
+            "code": "PROMO10",
+            "title": "Promocao",
+            "discount_type": "fixed",
+            "discount_value": Decimal("10"),
+            "valid_from": NOW,
+            "valid_until": NOW + timedelta(days=30),
+        }
+        values.update(overrides)
+        return CouponCampaignFields(**values)
+
+    def test_a_campanha_minima_e_valida(self):
+        self.assertEqual(self.campanha().code, "PROMO10")
+
+    def test_codigo_so_de_espacos_e_recusado(self):
+        """`min_length=1` conferiu o valor cru; o vazio nasce da normalizacao."""
+        with self.assertRaises(ValidationError):
+            self.campanha(code="   ")
+
+    def test_codigo_com_espaco_em_volta_continua_valendo(self):
+        self.assertEqual(self.campanha(code="  promo10  ").code, "PROMO10")
+
+    def test_intervalo_com_uso_unico_por_cliente_e_recusado(self):
+        """Uso unico na vida + intervalo entre usos: a segunda vez nunca chega."""
+        with self.assertRaises(ValidationError):
+            self.campanha(cooldown_days=7, usage_limit_per_customer=1)
+
+    def test_intervalo_com_dois_usos_por_cliente_passa(self):
+        campanha = self.campanha(cooldown_days=7, usage_limit_per_customer=2)
+        self.assertEqual(campanha.cooldown_days, 7)
+
+    def test_intervalo_sem_limite_por_cliente_passa(self):
+        self.assertEqual(self.campanha(cooldown_days=7).usage_limit_per_customer, None)
+
+    def test_uso_unico_sem_intervalo_passa(self):
+        self.assertEqual(self.campanha(usage_limit_per_customer=1).cooldown_days, None)
 
 
 class ConflictMessageTests(unittest.TestCase):

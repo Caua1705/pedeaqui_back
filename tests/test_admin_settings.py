@@ -27,6 +27,7 @@ from src.schemas.admin_settings_schema import (
     AdminBranchSettingsUpdate,
     AdminBranchUpdate,
     AdminPaymentMethodCreate,
+    AdminPaymentMethodResponse,
     AdminPaymentMethodUpdate,
     AdminRestaurantSettingsResponse,
     AdminRestaurantSettingsUpdate,
@@ -142,6 +143,7 @@ def make_payment_method(**overrides):
         "label": "Dinheiro",
         "icon_key": None,
         "enabled": True,
+        "earns_cashback": True,
         "requires_gateway": False,
         "sort_order": 0,
         "notes": None,
@@ -257,8 +259,17 @@ def build_service(settings_repository=None, branch_repository=None, current_peri
     return service
 
 
-def scope(restaurant_id=RESTAURANT_ID, branch_id=None):
-    return AdminScope(admin_user=None, restaurant_id=restaurant_id, branch_id=branch_id)
+def scope(restaurant_id=RESTAURANT_ID, branch_id=None, papel="owner"):
+    """O `admin_user` era None porque nenhuma regra deste arquivo o lia.
+
+    `ensure_pode_definir_cashback` le — e o default "owner" mantem todo teste
+    que ja existia passando pelo caminho de antes.
+    """
+    return AdminScope(
+        admin_user=SimpleNamespace(role=papel),
+        restaurant_id=restaurant_id,
+        branch_id=branch_id,
+    )
 
 
 class RestaurantSettingsTests(unittest.TestCase):
@@ -708,6 +719,85 @@ class PaymentMethodTests(unittest.TestCase):
 
         # Duas linhas iguais apareceriam duas vezes no checkout do cliente.
         self.assertEqual(raised.exception.status_code, 409)
+
+    def test_earns_cashback_is_part_of_the_contract(self):
+        """O campo existia na tabela e era lido pelo CashbackService, mas nao
+        aparecia em schema nenhum: o painel nao conseguia ler nem gravar."""
+        self.assertIn("earns_cashback", AdminPaymentMethodResponse.model_fields)
+        self.assertIn("earns_cashback", AdminPaymentMethodCreate.model_fields)
+        self.assertIn("earns_cashback", AdminPaymentMethodUpdate.model_fields)
+
+    def test_earns_cashback_defaults_to_true_like_the_column(self):
+        repository = FakeSettingsRepository()
+        response = build_service(repository, self.branch_repository).create_payment_method(
+            scope(papel="manager"),
+            self.branch.id,
+            AdminPaymentMethodCreate(
+                payment_flow="delivery", method_type="cash", label="Dinheiro"
+            ),
+        )
+
+        # O gerente que omite o campo nao e barrado: ele so nao o escolhe.
+        self.assertTrue(response.earns_cashback)
+
+    def test_the_manager_cannot_write_earns_cashback_on_create(self):
+        """Quem define o percentual e o dono; quem escolhe onde ele sai, tambem.
+
+        Sem esta regra a campanha teria meia decisao de cada lado.
+        """
+        repository = FakeSettingsRepository()
+
+        with self.assertRaises(HTTPException) as raised:
+            build_service(repository, self.branch_repository).create_payment_method(
+                scope(papel="manager"),
+                self.branch.id,
+                AdminPaymentMethodCreate(
+                    payment_flow="delivery",
+                    method_type="cash",
+                    label="Dinheiro",
+                    earns_cashback=False,
+                ),
+            )
+
+        self.assertEqual(raised.exception.status_code, 403)
+
+    def test_the_manager_cannot_flip_earns_cashback_on_update(self):
+        method = make_payment_method(branch_id=self.branch.id)
+        repository = FakeSettingsRepository(payment_methods=[method])
+
+        with self.assertRaises(HTTPException) as raised:
+            build_service(repository, self.branch_repository).update_payment_method(
+                scope(papel="manager"),
+                method.id,
+                AdminPaymentMethodUpdate(earns_cashback=False),
+            )
+
+        self.assertEqual(raised.exception.status_code, 403)
+
+    def test_the_manager_still_edits_the_rest_of_the_method(self):
+        """O portao morde o CAMPO, nao a rota: rotulo e ordem continuam dele."""
+        method = make_payment_method(branch_id=self.branch.id)
+        repository = FakeSettingsRepository(payment_methods=[method])
+
+        response = build_service(repository, self.branch_repository).update_payment_method(
+            scope(papel="manager"),
+            method.id,
+            AdminPaymentMethodUpdate(label="Dinheiro na entrega"),
+        )
+
+        self.assertEqual(response.label, "Dinheiro na entrega")
+
+    def test_the_owner_writes_earns_cashback(self):
+        method = make_payment_method(branch_id=self.branch.id)
+        repository = FakeSettingsRepository(payment_methods=[method])
+
+        response = build_service(repository, self.branch_repository).update_payment_method(
+            scope(),
+            method.id,
+            AdminPaymentMethodUpdate(earns_cashback=False),
+        )
+
+        self.assertFalse(response.earns_cashback)
 
     def test_flow_and_type_cannot_be_changed(self):
         # Trocar o fluxo mudaria, no meio do expediente, como os proximos

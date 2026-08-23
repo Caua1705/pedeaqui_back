@@ -1060,6 +1060,174 @@
         "title": "AdminBranchUpdate",
         "type": "object"
       },
+      "AdminCashbackRuleResponse": {
+        "description": "A LINHA de configuracao, como ela esta gravada.\n\n`branch_id` nulo e a regra padrao da rede; preenchido e a sobrescrita de\numa filial.",
+        "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "default_percent": {
+            "title": "Default Percent",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "expiry_days": {
+            "title": "Expiry Days",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "min_redeem_balance": {
+            "title": "Min Redeem Balance",
+            "type": "string"
+          },
+          "restaurant_id": {
+            "format": "uuid",
+            "title": "Restaurant Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "weekdays": {
+            "items": {
+              "$ref": "#/components/schemas/CashbackWeekdayResponse"
+            },
+            "title": "Weekdays",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "restaurant_id",
+          "enabled",
+          "default_percent",
+          "min_redeem_balance",
+          "expiry_days"
+        ],
+        "title": "AdminCashbackRuleResponse",
+        "type": "object"
+      },
+      "AdminCashbackRuleView": {
+        "description": "A regra que VALE, e de onde ela veio.\n\nExiste porque `rule` sozinho e ambiguo: a mesma resposta sairia para a\nfilial que tem regra propria e para a que herda a da rede, e o painel\nprecisa da diferenca para decidir entre \"editar a regra desta loja\" e\n\"criar uma sobrescrita\".\n\n`source = \"none\"` e regra nenhuma configurada, e ai `rule` vem nulo. Nao\ne o mesmo que `enabled: false`: um e \"ninguem configurou\", o outro e\n\"configurado e desligado\". Os dois caem em SEM_CASHBACK no checkout, mas\nso o segundo tem numeros para mostrar na tela.",
+        "properties": {
+          "rule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminCashbackRuleResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "enum": [
+              "branch",
+              "restaurant",
+              "none"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "AdminCashbackRuleView",
+        "type": "object"
+      },
+      "AdminCashbackRuleWrite": {
+        "description": "A regra INTEIRA. Nao ha PATCH aqui, e o motivo e a heranca.\n\nA heranca do cashback e por LINHA, nao por coluna: a filial tem a regra\ntoda ou herda a toda. Um PATCH sobre uma filial que ainda nao tem regra\npropria teria que responder \"patch sobre o que?\" — sobre os valores\nherdados, criando uma sobrescrita silenciosa a partir de um campo so.\nE exatamente o acidente que o `PUT` torna impossivel: quem escreve manda\na regra completa, e ve o que esta criando.\n\n**`weekdays` SUBSTITUI a lista inteira**, como o `PUT` de horarios. Dia\nque sair do corpo deixa de ter linha propria — e volta a valer\n`default_percent`, nao zero.",
+        "properties": {
+          "default_percent": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Default Percent"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "expiry_days": {
+            "exclusiveMinimum": 0.0,
+            "title": "Expiry Days",
+            "type": "integer"
+          },
+          "min_redeem_balance": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Min Redeem Balance"
+          },
+          "weekdays": {
+            "items": {
+              "$ref": "#/components/schemas/CashbackWeekdayInput"
+            },
+            "maxItems": 7,
+            "title": "Weekdays",
+            "type": "array"
+          }
+        },
+        "required": [
+          "enabled",
+          "default_percent",
+          "min_redeem_balance",
+          "expiry_days"
+        ],
+        "title": "AdminCashbackRuleWrite",
+        "type": "object"
+      },
       "AdminCategoryCreate": {
         "properties": {
           "branch_id": {
@@ -2032,6 +2200,11 @@
             ],
             "title": "Brand"
           },
+          "earns_cashback": {
+            "default": true,
+            "title": "Earns Cashback",
+            "type": "boolean"
+          },
           "enabled": {
             "default": true,
             "title": "Enabled",
@@ -2126,6 +2299,10 @@
             ],
             "title": "Brand"
           },
+          "earns_cashback": {
+            "title": "Earns Cashback",
+            "type": "boolean"
+          },
           "enabled": {
             "title": "Enabled",
             "type": "boolean"
@@ -2198,6 +2375,7 @@
           "method_type",
           "label",
           "enabled",
+          "earns_cashback",
           "requires_gateway",
           "sort_order"
         ],
@@ -2218,6 +2396,17 @@
               }
             ],
             "title": "Brand"
+          },
+          "earns_cashback": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Earns Cashback"
           },
           "enabled": {
             "anyOf": [
@@ -4647,6 +4836,54 @@
           "transactions"
         ],
         "title": "CashbackTransactionsResponse",
+        "type": "object"
+      },
+      "CashbackWeekdayInput": {
+        "description": "O percentual de UM dia da semana.\n\n`weekday` 0 = SEGUNDA (veja o topo do arquivo). Nao existe \"dia\ndesligado\": para um dia nao gerar, mande `percent: 0` explicitamente —\nomiti-lo faz o dia herdar `default_percent`.",
+        "properties": {
+          "percent": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Percent"
+          },
+          "weekday": {
+            "maximum": 6.0,
+            "minimum": 0.0,
+            "title": "Weekday",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "weekday",
+          "percent"
+        ],
+        "title": "CashbackWeekdayInput",
+        "type": "object"
+      },
+      "CashbackWeekdayResponse": {
+        "properties": {
+          "percent": {
+            "title": "Percent",
+            "type": "string"
+          },
+          "weekday": {
+            "title": "Weekday",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "weekday",
+          "percent"
+        ],
+        "title": "CashbackWeekdayResponse",
         "type": "object"
       },
       "CategoryPrintingSectorResponse": {
@@ -11159,6 +11396,152 @@
         ]
       }
     },
+    "/admin/branches/{branch_id}/cashback-rules": {
+      "delete": {
+        "description": "Apaga a sobrescrita: a filial volta a herdar a regra da rede.\n\n404 quando a filial nao tem regra propria — \"voltou a herdar agora\" e \"ja\nherdava\" sao estados diferentes na tela.",
+        "operationId": "delete_branch_cashback_rule_admin_branches__branch_id__cashback_rules_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "branch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Branch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Branch Cashback Rule",
+        "tags": [
+          "admin cashback"
+        ]
+      },
+      "get": {
+        "description": "A regra que VALE nesta filial, com `source` dizendo de onde ela veio.\n\n`source: \"branch\"` e regra propria da loja; `\"restaurant\"` e a da rede,\nherdada inteira. O painel precisa da diferenca para saber se salvar ali\nedita a rede ou **cria uma sobrescrita**.",
+        "operationId": "get_branch_cashback_rule_admin_branches__branch_id__cashback_rules_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "branch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Branch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCashbackRuleView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Branch Cashback Rule",
+        "tags": [
+          "admin cashback"
+        ]
+      },
+      "put": {
+        "description": "Cria ou substitui a sobrescrita desta filial.\n\nA partir daqui a loja **para de herdar**: mudanca na regra da rede nao a\nalcanca mais, ate alguem apagar a sobrescrita. E tambem como uma loja sai\nda campanha sozinha — sobrescrita propria com `enabled: false`.",
+        "operationId": "replace_branch_cashback_rule_admin_branches__branch_id__cashback_rules_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "branch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Branch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminCashbackRuleWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCashbackRuleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Replace Branch Cashback Rule",
+        "tags": [
+          "admin cashback"
+        ]
+      }
+    },
     "/admin/branches/{branch_id}/delivery-pause": {
       "patch": {
         "description": "Pausa a entrega desta filial por ate 24 horas — e so por um tempo.\n\n`{\"minutes\": 40, \"reason\": \"chuva forte\"}` pausa; `{\"minutes\": 0}`\nretoma na hora. Nao ha DELETE porque \"pare por 40 minutos\" e \"volte\nagora\" sao o mesmo botao na mesma tela.\n\n**Isto nao substitui `order-types`.** Aquele desliga a entrega por tempo\nindeterminado e espera alguem religar; este vence sozinho. A distincao\nimporta porque o dia em que a pausa e usada — chuva as 19h, entregador\nque sumiu — e exatamente o dia em que ninguem lembra de desfaze-la, e a\nloja amanheceria aberta sem aceitar entrega, com a ausencia de pedido\ncomo unico sintoma.\n\nO motivo sai para o CLIENTE junto do horario de volta (\"A entrega esta\npausada. Motivo: chuva forte. Voltamos a entregar as 20:30.\"): pausa sem\nprazo faz o cliente fechar o app, com prazo ele volta.",
@@ -12047,6 +12430,78 @@
         "summary": "Set Store Status",
         "tags": [
           "admin settings"
+        ]
+      }
+    },
+    "/admin/cashback-rules": {
+      "get": {
+        "description": "A regra padrao da rede — a que toda filial sem sobrescrita herda.\n\n`source: \"none\"` significa que ninguem configurou cashback neste\nrestaurante, e nao e o mesmo que `enabled: false`. Os dois nao geram\ncashback; so o segundo tem numeros para a tela mostrar.",
+        "operationId": "get_restaurant_cashback_rule_admin_cashback_rules_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCashbackRuleView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Restaurant Cashback Rule",
+        "tags": [
+          "admin cashback"
+        ]
+      },
+      "put": {
+        "description": "Cria ou substitui a regra da rede. Nao alcanca filial com sobrescrita.\n\n**`weekdays` substitui a lista inteira.** Dia que sair do corpo deixa de\nter percentual proprio e volta a valer `default_percent` — nunca zero.",
+        "operationId": "replace_restaurant_cashback_rule_admin_cashback_rules_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminCashbackRuleWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCashbackRuleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Replace Restaurant Cashback Rule",
+        "tags": [
+          "admin cashback"
         ]
       }
     },
@@ -13434,7 +13889,7 @@
     },
     "/admin/payment-methods/{method_id}": {
       "delete": {
-        "description": "Remove a forma de pagamento da filial.\n\nApagar e seguro aqui: `orders.payment_method` guarda texto, nao FK,\nentao pedido ja fechado nao muda.",
+        "description": "Remove a forma de pagamento da filial.\n\nApagar e seguro aqui: `orders.payment_method` guarda texto, nao FK,\nentao pedido ja fechado nao muda.\n\nMAS esta rota e GERENCIA e `earns_cashback` e do dono\n(`ensure_pode_definir_cashback`), entao apagar e recriar devolve o campo\nao default `True` — revertendo um `False` que o dono escolheu, pelas maos\nde quem nao podia escreve-lo. Residuo conhecido e ACEITO: fechar exigiria\ntirar o DELETE do gerente, caro por um caminho que tambem tira a forma da\ntela do cliente. Ver `docs/cashback.md`.",
         "operationId": "delete_payment_method_admin_payment_methods__method_id__delete",
         "parameters": [
           {

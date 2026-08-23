@@ -816,6 +816,15 @@ restaurante liga o crédito e o resgate ao mesmo tempo — e o resgate entra com
 subtração na base da comissão, então **ligar cashback mexe em faturamento no
 mesmo minuto.** Não é botão de teste.
 
+**E desde 23/08/2026 esse botão existe de verdade**, em
+`PUT /admin/cashback-rules` — antes a chave só virava por SQL, o que na
+prática significava que ninguém a virava sem querer. Por isso as rotas de
+escrita são **SOMENTE_DONO**, e por isso `earns_cashback` (que escolhe em
+quais formas de pagamento o dinheiro sai) também é, por
+`ensure_pode_definir_cashback` — a terceira exceção a `exigir_papel`. Sem
+ela o dono definiria o percentual e o gerente escolheria onde ele sai, que é
+meia decisão de cada lado da mesma campanha.
+
 **Duas coisas que continuam valendo:**
 
 - **O saldo é por (cliente, restaurante), nunca da plataforma.**

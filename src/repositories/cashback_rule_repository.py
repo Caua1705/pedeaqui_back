@@ -91,3 +91,45 @@ class CashbackRuleRepository:
             )
         )
         return list(self.db.scalars(stmt))
+
+    def get_rule(
+        self,
+        restaurant_id: uuid.UUID,
+        branch_id: uuid.UUID | None,
+    ) -> CashbackRule | None:
+        """UMA regra, pela chave exata. `branch_id` nulo pede a da rede.
+
+        Separada de `get_rules_for_branch`, que resolve heranca: aqui nao ha
+        queda para o padrao nenhuma. Quem edita a sobrescrita de uma filial
+        precisa saber se ela EXISTE — e a funcao que cai para o padrao
+        responderia a regra da rede e faria o painel editar a linha errada.
+
+        `is_(None)` e nao `== None` porque em SQL `branch_id = NULL` nao casa
+        com linha nenhuma: a regra padrao ficaria invisivel e todo `PUT` nela
+        criaria uma segunda, ate o indice parcial recusar.
+        """
+        stmt = (
+            select(CashbackRule)
+            .options(selectinload(CashbackRule.weekdays))
+            .where(CashbackRule.restaurant_id == restaurant_id)
+        )
+        if branch_id is None:
+            stmt = stmt.where(CashbackRule.branch_id.is_(None))
+        else:
+            stmt = stmt.where(CashbackRule.branch_id == branch_id)
+        return self.db.scalars(stmt).first()
+
+    def add(self, rule: CashbackRule) -> CashbackRule:
+        self.db.add(rule)
+        self.db.flush()
+        return rule
+
+    def delete(self, rule: CashbackRule) -> None:
+        """Apaga a linha. Os dias da semana caem junto, por FK.
+
+        `ondelete="CASCADE"` em `cashback_rule_weekdays.rule_id` e o
+        `delete-orphan` do relacionamento fazem a mesma coisa por caminhos
+        diferentes — o segundo dentro da sessao, o primeiro no banco. Nao
+        apague os dias a mao antes: seria a terceira copia da mesma regra.
+        """
+        self.db.delete(rule)

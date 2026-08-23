@@ -37,6 +37,7 @@ from src.api.dependencies.admin_scope import (
     PESSOAS_E_AGENTE,
     SOMENTE_DONO,
     AdminScope,
+    ensure_pode_definir_cashback,
     ensure_pode_ler_dinheiro,
 )
 
@@ -133,6 +134,22 @@ PAPEL_ESPERADO = {
     # Quem conserta atraso e pedido errado e quem toca a loja, e nota que so o
     # dono ve nao vira conserto no balcao.
     ("GET", "/admin/reviews"): GERENCIA,
+    # --- cashback: a mesma porta do cupom, com uma diferenca
+    #
+    # ESCREVER e SOMENTE_DONO pelo motivo do cupom (desconto e preco por
+    # outra porta) mais um que o cupom nao tem: `enabled` liga o credito E o
+    # resgate juntos, o resgate entra como subtracao na base da comissao, e o
+    # primeiro pedido depois do commit ja fecha com outro numero. Nao existe o
+    # "cupom que ninguem usou".
+    #
+    # LER e GERENCIA, igual a `GET /admin/coupons`: e termo comercial, nao
+    # alavanca de balcao — o atendente nao aplica cashback a mao, quem resolve
+    # e `resolve_cashback_terms` no checkout.
+    ("GET", "/admin/cashback-rules"): GERENCIA,
+    ("PUT", "/admin/cashback-rules"): SOMENTE_DONO,
+    ("GET", "/admin/branches/{branch_id}/cashback-rules"): GERENCIA,
+    ("PUT", "/admin/branches/{branch_id}/cashback-rules"): SOMENTE_DONO,
+    ("DELETE", "/admin/branches/{branch_id}/cashback-rules"): SOMENTE_DONO,
     # --- cupom: desconto e preco por outra porta
     ("GET", "/admin/coupons"): GERENCIA,
     ("POST", "/admin/coupons"): SOMENTE_DONO,
@@ -310,3 +327,32 @@ class TestQuemLeDinheiro:
         with pytest.raises(HTTPException):
             ensure_pode_ler_dinheiro(_escopo("print_agent"), uuid.uuid4())
 
+
+class TestQuemDefineCashbackNaFormaDePagamento:
+    """`ensure_pode_definir_cashback`, a terceira excecao a `exigir_papel`.
+
+    A rota (`POST`/`PATCH` de forma de pagamento) declara GERENCIA, e assim
+    fica: cadastrar bandeira, rotulo, icone e ordem e trabalho de quem toca a
+    loja. Quem decide este campo e o CORPO, como em
+    `ensure_pode_definir_preco`.
+
+    O que ela fecha: sem esta regra, o dono definiria o percentual do
+    cashback (as rotas de `cashback-rules` sao SOMENTE_DONO) e o gerente
+    escolheria em quais formas de pagamento ele sai — meia decisao de cada
+    lado da mesma campanha.
+    """
+
+    def test_o_dono_define(self):
+        ensure_pode_definir_cashback(SimpleNamespace(role="owner"))
+
+    def test_o_gerente_nao_define(self):
+        with pytest.raises(HTTPException) as erro:
+            ensure_pode_definir_cashback(SimpleNamespace(role="manager"))
+
+        assert erro.value.status_code == 403
+
+    def test_o_atendente_nao_define(self):
+        with pytest.raises(HTTPException) as erro:
+            ensure_pode_definir_cashback(SimpleNamespace(role="attendant"))
+
+        assert erro.value.status_code == 403

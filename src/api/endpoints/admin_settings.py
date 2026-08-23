@@ -459,6 +459,13 @@ def delete_payment_method(
 
     Apagar e seguro aqui: `orders.payment_method` guarda texto, nao FK,
     entao pedido ja fechado nao muda.
+
+    MAS esta rota e GERENCIA e `earns_cashback` e do dono
+    (`ensure_pode_definir_cashback`), entao apagar e recriar devolve o campo
+    ao default `True` — revertendo um `False` que o dono escolheu, pelas maos
+    de quem nao podia escreve-lo. Residuo conhecido e ACEITO: fechar exigiria
+    tirar o DELETE do gerente, caro por um caminho que tambem tira a forma da
+    tela do cliente. Ver `docs/cashback.md`.
     """
     AdminSettingsService(db).delete_payment_method(scope, method_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -543,6 +543,11 @@ class AdminPaymentMethodResponse(BaseResponse):
     label: str
     icon_key: str | None = None
     enabled: bool
+    # Esta forma de pagamento gera cashback? Ela nao LIGA cashback nenhum:
+    # quem decide se ha campanha e `cashback_rules.enabled`, e com ela
+    # desligada este campo nao faz nada. O que ele faz e EXCLUIR — o pix na
+    # entrega que o lojista nao quer bonificar.
+    earns_cashback: bool
     requires_gateway: bool
     sort_order: int
     notes: str | None = None
@@ -563,6 +568,11 @@ class AdminPaymentMethodCreate(BaseModel):
     brand: str | None = Field(default=None, max_length=60)
     icon_key: str | None = Field(default=None, max_length=60)
     enabled: bool = True
+    # Verdadeiro por default, como a coluna. O default nao gasta nada por si:
+    # sem `cashback_rules.enabled` nao ha campanha, e a forma nova de uma
+    # rede que ja tem campanha ligada entra bonificando — que e o que o
+    # lojista espera de "aceitar mais uma forma de pagamento".
+    earns_cashback: bool = True
     requires_gateway: bool = False
     sort_order: int = Field(default=0, ge=0)
     notes: str | None = Field(default=None, max_length=300)
@@ -586,6 +596,7 @@ class AdminPaymentMethodUpdate(BaseModel):
     brand: str | None = Field(default=None, max_length=60)
     icon_key: str | None = Field(default=None, max_length=60)
     enabled: bool | None = None
+    earns_cashback: bool | None = None
     requires_gateway: bool | None = None
     sort_order: int | None = Field(default=None, ge=0)
     notes: str | None = Field(default=None, max_length=300)

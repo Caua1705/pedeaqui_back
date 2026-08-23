@@ -38,11 +38,11 @@ que existe (a filial do lado, o restaurante do concorrente). O papel e sobre
 um recurso que ele sabe que existe — ele ve o botao na propria tela. Esconder
 com 404 nao esconderia nada e so tornaria o erro impossivel de depurar.
 
-Duas regras nao cabem em `exigir_papel`, e as duas moram aqui embaixo:
-`ensure_pode_definir_preco` (quem decide e o CORPO) e
-`ensure_pode_ler_dinheiro` (quem decide e o RECORTE de filial da consulta).
-Nos dois casos a rota inteira nao pode ser recusada — so uma parte do que ela
-faz.
+TRES regras nao cabem em `exigir_papel`, e as tres moram aqui embaixo:
+`ensure_pode_definir_preco` e `ensure_pode_definir_cashback` (quem decide e
+o CORPO) e `ensure_pode_ler_dinheiro` (quem decide e o RECORTE de filial da
+consulta). Nos tres casos a rota inteira nao pode ser recusada — so uma
+parte do que ela faz.
 
 **Nao existe tabela central de rota -> papel, e isso e decisao.** A regra
 mora no `dependencies=[...]` de cada rota. Uma tabela envelhece separada das
@@ -161,7 +161,7 @@ def ensure_role(admin_user: AdminUser, papeis: tuple[str, ...]) -> None:
 def ensure_pode_definir_preco(admin_user: AdminUser) -> None:
     """Quem escreve dinheiro no cardapio e o dono. 403 para os outros.
 
-    Esta e a UNICA regra que `exigir_papel` nao consegue expressar, e por um
+    Primeira das regras que `exigir_papel` nao consegue expressar, e por um
     motivo concreto: `PATCH /admin/products/{id}` edita nome, descricao,
     categoria e preco pela mesma rota, e o gerente precisa dos tres
     primeiros. Quem decide aqui e o CORPO da requisicao, nao a rota — entao
@@ -209,6 +209,34 @@ def ensure_pode_ler_dinheiro(scope: AdminScope, branch_filter: uuid.UUID | None)
         status_code=status.HTTP_403_FORBIDDEN,
         detail="Informe branch_id: seu perfil le o relatorio de uma filial por vez",
     )
+
+
+def ensure_pode_definir_cashback(admin_user: AdminUser) -> None:
+    """Quem escreve `earns_cashback` numa forma de pagamento e o dono. 403.
+
+    Terceira regra que `exigir_papel` nao consegue expressar, e pela mesma
+    razao das duas de cima: quem decide e o CORPO. `POST` e `PATCH` de forma
+    de pagamento sao GERENCIA porque cadastrar bandeira, rotulo, icone e
+    ordem e trabalho de quem toca a loja — e o gerente precisa dos quatro.
+
+    O que nao e dele e este campo. Ele decide se aquela forma **gasta o
+    dinheiro do lojista**, e as rotas de `cashback-rules` ja sao
+    SOMENTE_DONO: sem esta linha, o dono definiria o percentual e o gerente
+    escolheria em quais formas ele sai — meia decisao de cada lado da mesma
+    campanha.
+
+    **A checagem so morde quando o campo vem no corpo.** Quem omitir continua
+    passando, e cai no default `True` da coluna: o gerente que cadastra uma
+    forma nova nao e barrado, so nao escolhe este campo.
+
+    Residuo conhecido, e ele nao se fecha aqui: `DELETE` de forma de
+    pagamento e GERENCIA, entao apagar e recriar devolve o campo ao default.
+    Isso reverte para `True` um `False` que o dono tinha escolhido. Fechar
+    exigiria tirar o `DELETE` do gerente, que e caro por um caminho que
+    tambem tira a forma da tela do cliente — o efeito visivel que ninguem
+    deixa passar.
+    """
+    ensure_role(admin_user, SOMENTE_DONO)
 
 
 def exigir_papel(papeis: tuple[str, ...]):

@@ -32,7 +32,7 @@ from fastapi import HTTPException, status
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from src.api.dependencies.admin_scope import AdminScope
+from src.api.dependencies.admin_scope import AdminScope, ensure_pode_definir_cashback
 from src.models.branch_business_hour_model import BranchBusinessHour
 from src.models.branch_delivery_time_band_model import BranchDeliveryTimeBand
 from src.models.branch_model import Branch
@@ -444,6 +444,8 @@ class AdminSettingsService:
         payload: AdminPaymentMethodCreate,
     ) -> AdminPaymentMethodResponse:
         self._get_branch(scope, branch_id)
+        if "earns_cashback" in payload.model_fields_set:
+            ensure_pode_definir_cashback(scope.admin_user)
         duplicated = self.repository.get_payment_method_by_type(
             branch_id,
             payload.payment_flow,
@@ -469,7 +471,10 @@ class AdminSettingsService:
         payload: AdminPaymentMethodUpdate,
     ) -> AdminPaymentMethodResponse:
         method = self._get_payment_method(scope, method_id)
-        for field, value in payload.model_dump(exclude_unset=True).items():
+        campos = payload.model_dump(exclude_unset=True)
+        if "earns_cashback" in campos:
+            ensure_pode_definir_cashback(scope.admin_user)
+        for field, value in campos.items():
             setattr(method, field, value)
         self._commit()
         return AdminPaymentMethodResponse.model_validate(method)
@@ -480,6 +485,14 @@ class AdminSettingsService:
         Aqui o DELETE e de verdade, ao contrario do cardapio: `orders`
         guarda a forma de pagamento como texto (`payment_method`), nao por
         FK, entao apagar esta linha nao mexe em pedido nenhum ja fechado.
+
+        O que ele NAO preserva e `earns_cashback`. A rota e GERENCIA, o campo
+        e do dono (`ensure_pode_definir_cashback`), e a linha recriada nasce
+        no default `True`: apagar e recriar reverte um `False` que o dono
+        escolheu, sem passar pela checagem que existe para isso. Residuo
+        conhecido e ACEITO — fechar exigiria tirar o DELETE do gerente, caro
+        por um caminho que tambem tira a forma da tela do cliente. Ver
+        `docs/cashback.md`.
         """
         method = self._get_payment_method(scope, method_id)
         self._commit(lambda: self.repository.delete_payment_method(method))

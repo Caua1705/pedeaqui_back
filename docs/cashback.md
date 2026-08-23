@@ -314,6 +314,122 @@ Saldo órfão (`restaurant_id` nulo, de restaurante apagado — a coluna é
 `ON DELETE SET NULL`) conta no total e fica de fora da lista: não tem nome para
 mostrar nem cardápio onde gastar. Continua aparecendo no extrato.
 
+### A configuração pelo painel — feito em 23/08/2026
+
+A mecânica inteira existia e o lojista não tinha como configurar nada. As
+rotas são cinco, e o formato delas é ditado pela herança **por linha**:
+
+| Rota | Papel | O que faz |
+|---|---|---|
+| `GET /admin/cashback-rules` | GERENCIA | a regra padrão da rede |
+| `PUT /admin/cashback-rules` | SOMENTE_DONO | cria ou substitui a regra da rede |
+| `GET /admin/branches/{id}/cashback-rules` | GERENCIA | a regra que **vale** na filial, com `source` |
+| `PUT /admin/branches/{id}/cashback-rules` | SOMENTE_DONO | cria ou substitui a sobrescrita da filial |
+| `DELETE /admin/branches/{id}/cashback-rules` | SOMENTE_DONO | apaga a sobrescrita: a filial volta a herdar |
+
+**Escrever é SOMENTE_DONO**, o mesmo do cupom (`POST`/`PATCH /admin/coupons`)
+e pelo mesmo motivo — desconto é preço por outra porta. Mais um que o cupom
+não tem: `enabled` liga o crédito **e** o resgate juntos, o resgate entra como
+subtração na base da comissão, e o primeiro pedido depois do commit já fecha
+com outro número. Não existe o "cupom que ninguém usou".
+
+**Ler é GERENCIA**, igual a `GET /admin/coupons`. O percentual é termo
+comercial, não alavanca de balcão: o atendente não aplica cashback à mão —
+quem resolve é `resolve_cashback_terms` no checkout — e a senha do balcão é a
+que mais circula.
+
+**A leitura devolve `source`, e é ele que torna a herança visível:**
+
+```json
+{
+  "source": "restaurant",
+  "rule": {
+    "id": "…",
+    "restaurant_id": "…",
+    "branch_id": null,
+    "enabled": true,
+    "default_percent": "5.00",
+    "min_redeem_balance": "10.00",
+    "expiry_days": 60,
+    "weekdays": [{ "weekday": 1, "percent": "10.00" }]
+  }
+}
+```
+
+`source` é `"branch"` (regra própria da loja), `"restaurant"` (herdada
+inteira) ou `"none"` (ninguém configurou, e aí `rule` vem nulo). Sem esse
+campo, a filial que herda e a que tem regra própria respondem exatamente a
+mesma coisa, e o painel não tem como avisar que salvar ali **cria uma
+sobrescrita** em vez de editar a regra da rede.
+
+**`"none"` não é `enabled: false`.** Um é "ninguém configurou", o outro é
+"configurado e desligado". Os dois caem em `SEM_CASHBACK` no checkout, mas só
+o segundo tem números para a tela mostrar.
+
+**É `PUT` e não `PATCH`, e a herança é o motivo.** Um `PATCH` sobre uma filial
+que ainda não tem regra própria teria que responder "patch sobre o quê?" —
+sobre os valores herdados, criando uma sobrescrita inteira a partir de um
+campo só. O `PUT` obriga quem escreve a mandar a regra completa, e aí o que
+ele cria é o que ele viu.
+
+**`weekdays` substitui a lista inteira, e dia ausente herda `default_percent`
+— nunca zero.** É a inversão deliberada em relação ao `PUT` de horários
+(armadilha 3), onde dia ausente significa dia FECHADO. Com zero, o lojista que
+configurasse só a terça de 10% desligaria o cashback dos outros seis dias, sem
+erro e sem log, com a tela mostrando exatamente o que ele digitou.
+
+**`weekday` 0 = SEGUNDA.** É o `datetime.weekday()` do Python e o mesmo número
+de `branch_business_hours` (armadilha 1). O `getDay()` do JavaScript é
+0 = domingo, e o painel que mandar o número do JS grava a terça de 10% na
+segunda.
+
+#### Não existe `DELETE` da regra do restaurante
+
+Apagar a linha da rede **parece** "desligar o cashback de tudo", e não é: a
+filial com sobrescrita própria e `enabled: true` continua creditando, porque
+`resolve_cashback_terms` nem olha a linha do restaurante quando a da filial
+existe. O lojista teria desligado a campanha na tela e continuaria pagando
+cashback numa loja.
+
+Desligar é `enabled: false` no `PUT`, que vale para toda filial que herda. A
+loja que quiser sair sozinha ganha sobrescrita própria desligada — o recurso
+descrito no model.
+
+#### `earns_cashback` entrou nos schemas de forma de pagamento
+
+O campo existia em `branch_payment_methods` desde a revisão `0032` e era lido
+pelo `CashbackService`, mas não aparecia em `AdminPaymentMethodResponse`,
+`Create` nem `Update`: o painel não conseguia ler nem gravar. Entrou nos três.
+
+**Escrevê-lo é do dono** (`ensure_pode_definir_cashback`), embora as rotas de
+forma de pagamento sigam GERENCIA. É a terceira exceção a `exigir_papel`, pelo
+motivo das duas primeiras: quem decide é o CORPO. Cadastrar bandeira, rótulo,
+ícone e ordem é trabalho de quem toca a loja; escolher se aquela forma **gasta
+o dinheiro do lojista** não é. Sem essa linha, o dono definiria o percentual e
+o gerente escolheria em quais formas ele sai — meia decisão de cada lado da
+mesma campanha.
+
+A checagem só morde quando o campo vem no corpo: quem omite continua passando
+e cai no default `True` da coluna.
+
+**Resíduo conhecido:** `DELETE` de forma de pagamento é GERENCIA, então apagar
+e recriar devolve o campo ao default, revertendo para `True` um `False` que o
+dono escolheu. Fechar exigiria tirar o `DELETE` do gerente, que é caro por um
+caminho que também tira a forma da tela do cliente — efeito visível que
+ninguém deixa passar.
+
+#### Dinheiro e percentual saem como string de duas casas
+
+`Decimal`, e não `float` — o lado do `CouponAdminResponse` (campanha de
+desconto configurada pelo dono), e não o de `AdminRestaurantSettingsResponse`.
+A armadilha 34 proíbe converter um schema isolado porque isso faz o mesmo
+campo ter tipo diferente em rotas diferentes; o que dispensa a proibição aqui
+é que `default_percent`, `percent` e `min_redeem_balance` são **campos novos**,
+que não existiam em resposta nenhuma. `Numeric(5,2)` promete duas casas, e
+`10.00` só sobrevive como `"10.00"` — como número JSON ele vira `10.0`.
+
+---
+
 ---
 
 ## 5. O saldo na exclusão de conta

@@ -21,9 +21,21 @@ assinado, confirmar pagamento) ser testavel e demonstravel sem depender do
 Mercado Pago responder. Nao e mock de teste — roda em desenvolvimento.
 
 O provider "mercadopago" chama a API de Pagamentos (v1) de verdade —
-Checkout Transparente, hoje so pix (cartao fica para depois: exige token de
-cartao gerado no frontend com o SDK deles, fluxo bem diferente do pix). Duas
-particularidades do pix na API deles:
+Checkout Transparente, com pix e cartao de credito.
+
+**Os dois nao sao o mesmo fluxo com outro nome**, e as diferencas moram
+todas aqui:
+
+  - pix e ASSINCRONO: a cobranca nasce `pending` e o veredito chega por
+    webhook. Cartao e SINCRONO — o proprio POST responde aprovado, recusado
+    ou em analise. Por isso PaymentIntent carrega `payment_status`: ignorar
+    a resposta transformava cartao recusado em pedido pendente eterno.
+  - cartao passa por ANTIFRAUDE, e pix nao. Dai o estado `in_review`
+    (`in_process` no vocabulario deles), que pode durar ate 48h uteis.
+  - o numero do cartao NUNCA passa por aqui: o front tokeniza com o SDK
+    deles e manda so o token (ver CardPaymentInput).
+
+Duas particularidades do pix na API deles:
 
   - o corpo exige `payer.email`. O pedido aqui nao guarda e-mail (so nome e
     telefone — ver Order.customer_name_snapshot/customer_phone_snapshot);
@@ -64,9 +76,23 @@ MERCADOPAGO_API_BASE_URL = "https://api.mercadopago.com"
 MERCADOPAGO_TIMEOUT_SECONDS = 10.0
 MERCADOPAGO_SIGNATURE_HEADER = "x-signature"
 MERCADOPAGO_REQUEST_ID_HEADER = "x-request-id"
-# Piloto so aceita pix. Cartao exige token gerado no frontend (SDK do
-# Mercado Pago) e fluxo de parcelas — outra integracao, fica para depois.
-MERCADOPAGO_SUPPORTED_PAYMENT_METHODS = ("pix",)
+MERCADOPAGO_SUPPORTED_PAYMENT_METHODS = ("pix", "credit_card")
+
+# O sandbox NAO simula cartao, e a recusa e o ponto.
+#
+# Ele ignorava `payment_method` inteiro: `_create_sandbox_payment` so recebia
+# o `order_id`. Com cartao isso significaria intent valido, webhook marcando
+# como pago e COMANDA IMPRIMINDO — o fluxo inteiro parecendo funcionar sem
+# dinheiro nenhum ter existido, que e a pior demonstracao possivel de um meio
+# de pagamento. Cartao so se testa contra a credencial de teste do Mercado
+# Pago; aqui ele falha alto.
+SANDBOX_SUPPORTED_PAYMENT_METHODS = ("pix",)
+
+# Parcelamento fica FORA da v1: a taxa que o restaurante contratou e a de
+# cartao a vista, e parcelado sem juros sai do bolso de quem recebe. Habilitar
+# parcelas sem essa decisao comercial mudaria o que o lojista recebe sem ele
+# ter pedido.
+CARD_INSTALLMENTS = 1
 # Tolerancia da assinatura do webhook: uma notificacao capturada e reenviada
 # por terceiros horas depois nao pode passar so porque o HMAC bate.
 MERCADOPAGO_SIGNATURE_MAX_AGE_SECONDS = 300
@@ -90,8 +116,28 @@ _MERCADOPAGO_STATUS_TRANSLATION = {
     "approved": "paid",
     "rejected": "failed",
     "cancelled": "failed",
+    # Antifraude segurou para analise. So aparece com CARTAO — pix nao passa
+    # por analise. Antes disto nao tinha traducao e virava
+    # PaymentWebhookPayloadError, ou seja: o "em analise" ficava
+    # indistinguivel de corpo malformado no log.
+    "in_process": "in_review",
     "refunded": "refunded",
     "charged_back": "refunded",
+}
+
+# O mesmo dicionario nao serve para a RESPOSTA da criacao da cobranca, e a
+# diferenca esta no `pending`:
+#
+#   no WEBHOOK  `pending` nao produz mudanca — o pedido ja esta pending, e
+#               traduzi-lo faria uma transicao de X para X.
+#   na CRIACAO  `pending` e o desfecho normal do pix, e precisa virar o
+#               estado inicial do pagamento.
+_MERCADOPAGO_CREATION_STATUS_TRANSLATION = {
+    "pending": "pending",
+    "in_process": "in_review",
+    "approved": "paid",
+    "rejected": "failed",
+    "cancelled": "failed",
 }
 
 
@@ -139,14 +185,50 @@ class PaymentNotFoundError(PaymentGatewayError):
 
 
 @dataclass(frozen=True)
+class CardPaymentInput:
+    """O que so o cartao precisa, gerado no NAVEGADOR.
+
+    O numero do cartao nunca passa por este backend: o front tokeniza com o
+    SDK do Mercado Pago e manda so o `token`, que e de uso unico e vida
+    curta. Se algum dia aparecer PAN, CVV ou validade nesta classe, a
+    integracao saiu do padrao de tokenizacao e o perimetro de PCI mudou.
+    """
+
+    token: str
+    # Bandeira que o SDK resolveu ("visa", "master", "elo"). NAO e o
+    # `payment_method` da casa ("credit_card") — sao vocabularios diferentes
+    # e o Mercado Pago quer o dele.
+    payment_method_id: str
+    issuer_id: str | None = None
+    # CPF do portador. Atravessa para o gateway e NAO e persistido em lugar
+    # nenhum daqui.
+    payer_document_type: str | None = None
+    payer_document_number: str | None = None
+
+
+@dataclass(frozen=True)
 class PaymentIntent:
-    """O que o gateway devolve ao criar uma cobranca."""
+    """O que o gateway devolve ao criar uma cobranca.
+
+    `payment_status` e o campo que o pix nunca precisou: a cobranca pix nasce
+    sempre `pending` e o veredito chega por webhook, entao ler a resposta era
+    inutil. **Cartao responde no proprio POST** — aprovado, recusado ou em
+    analise —, e um `rejected` dentro de um HTTP 201 nao e excecao para o
+    codigo. Sem este campo, cartao recusado viraria pedido pendente eterno.
+    """
 
     provider: str
     provider_payment_id: str
+    # Ja em PAYMENT_STATUSES.
+    payment_status: str
     # Para onde mandar o cliente. Pix costuma vir com qr_code em vez de url.
     checkout_url: str | None = None
     qr_code: str | None = None
+    # Status cru do gateway, para log e para o front distinguir motivos de
+    # recusa ("cc_rejected_insufficient_amount" pede coisa diferente do
+    # cliente que "cc_rejected_bad_filled_security_code").
+    raw_status: str | None = None
+    raw_status_detail: str | None = None
 
 
 @dataclass(frozen=True)
@@ -179,10 +261,16 @@ class PaymentWebhookEvent:
     # gateways reenviam a mesma notificacao ate receber 2xx.
     event_id: str
     provider_payment_id: str
-    # Ja em PAYMENT_STATUSES: "paid", "failed" ou "refunded".
+    # Ja em PAYMENT_STATUSES: "paid", "in_review", "failed" ou "refunded".
     payment_status: str
     # O status cru do gateway, guardado so para log/depuracao.
     raw_status: str | None = None
+    # Quanto do pagamento ja voltou para o cliente, no total.
+    #
+    # E o UNICO sinal de estorno PARCIAL: no Mercado Pago ele mantem o
+    # pagamento em `approved`, entao `payment_status` continua "paid" e o
+    # webhook, sozinho, nao tem como saber que dinheiro voltou.
+    refunded_amount: Decimal = Decimal("0")
 
 
 def create_payment(
@@ -196,6 +284,7 @@ def create_payment(
     application_fee: Decimal | None = None,
     payer_email: str | None = None,
     previous_payment_id: str | None = None,
+    card: CardPaymentInput | None = None,
 ) -> PaymentIntent:
     """Cria a cobranca no gateway.
 
@@ -220,7 +309,7 @@ def create_payment(
     _mercadopago_idempotency_key.
     """
     if provider == SANDBOX_PROVIDER:
-        return _create_sandbox_payment(order_id)
+        return _create_sandbox_payment(order_id, payment_method)
 
     if provider == MERCADOPAGO_PROVIDER:
         if not access_token:
@@ -230,24 +319,22 @@ def create_payment(
             )
         if payment_method not in MERCADOPAGO_SUPPORTED_PAYMENT_METHODS:
             raise PaymentProviderNotConfiguredError(
-                f"Mercado Pago: metodo de pagamento '{payment_method}' ainda nao "
-                f"suportado (piloto so aceita {', '.join(MERCADOPAGO_SUPPORTED_PAYMENT_METHODS)})"
+                f"Mercado Pago: metodo de pagamento '{payment_method}' nao suportado "
+                f"(aceitos: {', '.join(MERCADOPAGO_SUPPORTED_PAYMENT_METHODS)})"
             )
         if not payer_email:
             raise PaymentProviderNotConfiguredError(
-                "Mercado Pago exige e-mail do pagador para cobranca pix e "
-                "nenhum foi informado"
+                "Mercado Pago exige e-mail do pagador e nenhum foi informado"
             )
 
-        body = {
-            "transaction_amount": float(amount),
-            "description": description,
-            "payment_method_id": "pix",
-            "payer": {"email": payer_email},
-        }
-        if application_fee is not None:
-            body["application_fee"] = float(application_fee)
-
+        body = _mercadopago_body(
+            amount=amount,
+            description=description,
+            payment_method=payment_method,
+            payer_email=payer_email,
+            card=card,
+            application_fee=application_fee,
+        )
         payload = _call_mercadopago(
             method="POST",
             path="/v1/payments",
@@ -259,16 +346,94 @@ def create_payment(
                 )
             },
         )
-
-        transaction_data = (payload.get("point_of_interaction") or {}).get("transaction_data") or {}
-        return PaymentIntent(
-            provider=MERCADOPAGO_PROVIDER,
-            provider_payment_id=str(payload["id"]),
-            checkout_url=transaction_data.get("ticket_url"),
-            qr_code=transaction_data.get("qr_code"),
-        )
+        return _mercadopago_intent(payload)
 
     raise PaymentProviderUnknownError(f"Provider de pagamento desconhecido: {provider}")
+
+
+def _mercadopago_body(
+    *,
+    amount: Decimal,
+    description: str,
+    payment_method: str,
+    payer_email: str,
+    card: CardPaymentInput | None,
+    application_fee: Decimal | None,
+) -> dict:
+    """Corpo do POST /v1/payments, que e diferente por metodo.
+
+    Duas montagens separadas e nao uma com `if` dentro: os corpos tem campos
+    obrigatorios distintos, e uma funcao unica com metade dos campos
+    condicionais esconderia justamente o que muda entre eles.
+    """
+    body = {
+        "transaction_amount": float(amount),
+        "description": description,
+        "payer": {"email": payer_email},
+    }
+    if application_fee is not None:
+        body["application_fee"] = float(application_fee)
+
+    if payment_method == "pix":
+        body["payment_method_id"] = "pix"
+        return body
+
+    if card is None:
+        raise PaymentProviderNotConfiguredError(
+            "Cobranca de cartao exige o token gerado no navegador e nenhum "
+            "foi informado"
+        )
+
+    # `payment_method_id` aqui e a BANDEIRA ("visa", "master"), resolvida
+    # pelo SDK no navegador — nao o "credit_card" do nosso vocabulario.
+    body["payment_method_id"] = card.payment_method_id
+    body["token"] = card.token
+    body["installments"] = CARD_INSTALLMENTS
+    # Captura automatica. `binary_mode` fica FALSO de proposito: verdadeiro
+    # forcaria approved/rejected e mataria o "em analise" junto — e mataria
+    # tambem o desafio 3DS, se um dia ele entrar.
+    body["capture"] = True
+    body["binary_mode"] = False
+    if card.issuer_id:
+        body["issuer_id"] = card.issuer_id
+    if card.payer_document_type and card.payer_document_number:
+        body["payer"]["identification"] = {
+            "type": card.payer_document_type,
+            "number": card.payer_document_number,
+        }
+    return body
+
+
+def _mercadopago_intent(payload: dict) -> PaymentIntent:
+    """Le a resposta da criacao — INCLUSIVE o veredito.
+
+    O `status` era descartado aqui. Para pix nao fazia diferenca (a cobranca
+    nasce sempre `pending`), mas cartao responde no proprio POST, e ignorar a
+    resposta transformava cartao recusado em pedido pendente para sempre.
+    """
+    transaction_data = (payload.get("point_of_interaction") or {}).get("transaction_data") or {}
+    raw_status = payload.get("status")
+    payment_status = _MERCADOPAGO_CREATION_STATUS_TRANSLATION.get(raw_status)
+
+    if payment_status is None:
+        # Status que eles inventaram depois desta linha ser escrita. `pending`
+        # e a queda SEGURA: o pedido continua cobravel, o lojista continua
+        # bloqueado, e o webhook corrige quando o desfecho de verdade chegar.
+        # Qualquer outra escolha erra para o lado de liberar comida.
+        logger.warning(
+            "[Pagamento][mercadopago] status de criacao sem traducao: %s", raw_status
+        )
+        payment_status = "pending"
+
+    return PaymentIntent(
+        provider=MERCADOPAGO_PROVIDER,
+        provider_payment_id=str(payload["id"]),
+        payment_status=payment_status,
+        checkout_url=transaction_data.get("ticket_url"),
+        qr_code=transaction_data.get("qr_code"),
+        raw_status=raw_status,
+        raw_status_detail=payload.get("status_detail"),
+    )
 
 
 def verify_webhook_signature(
@@ -350,13 +515,24 @@ def sign_sandbox_payload(raw_body: bytes, secret: str) -> str:
     return hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
 
 
-def _create_sandbox_payment(order_id: uuid.UUID) -> PaymentIntent:
+def _create_sandbox_payment(order_id: uuid.UUID, payment_method: str) -> PaymentIntent:
+    # A recusa por metodo tem que estar AQUI e nao so no ramo do Mercado
+    # Pago: o sandbox e o provider PADRAO (PAYMENT_PROVIDER), e antes disto
+    # ele nem recebia `payment_method` — devolvia intent valido para
+    # `credit_card`, o webhook marcava como pago e a comanda imprimia. O
+    # fluxo inteiro parecia funcionar sem dinheiro nenhum ter existido.
+    if payment_method not in SANDBOX_SUPPORTED_PAYMENT_METHODS:
+        raise PaymentProviderNotConfiguredError(
+            f"Sandbox nao simula '{payment_method}': cartao so se testa contra a "
+            "credencial de teste do Mercado Pago (PAYMENT_PROVIDER=mercadopago)"
+        )
     # Id derivado do pedido, nao aleatorio: chamar duas vezes para o mesmo
     # pedido devolve a mesma cobranca, que e como um gateway com
     # idempotencia se comporta.
     return PaymentIntent(
         provider=SANDBOX_PROVIDER,
         provider_payment_id=f"sandbox-{order_id}",
+        payment_status="pending",
         checkout_url=None,
         qr_code=None,
     )
@@ -465,6 +641,12 @@ def _parse_sandbox_event(raw_body: bytes) -> PaymentWebhookEvent:
         provider_payment_id=str(provider_payment_id),
         payment_status=payment_status,
         raw_status=payment_status,
+        # Opcional no corpo do sandbox, para o estorno parcial ser
+        # exercitavel sem depender do Mercado Pago responder — e o mesmo
+        # motivo de o sandbox existir.
+        refunded_amount=_refunded_amount(
+            {"transaction_amount_refunded": payload.get("refunded_amount")}
+        ),
     )
 
 
@@ -495,10 +677,10 @@ def _parse_mercadopago_event(raw_body: bytes, access_token: str | None) -> Payme
     raw_status = payload.get("status")
     payment_status = _MERCADOPAGO_STATUS_TRANSLATION.get(raw_status)
     if payment_status is None:
-        # pending/in_process/authorized, ou um status novo que o Mercado
-        # Pago venha a inventar: nao ha mudanca de estado nosso para
-        # aplicar agora. Nao e retentavel — o proprio gateway manda um
-        # novo webhook quando o status mudar de verdade.
+        # pending/authorized, ou um status novo que o Mercado Pago venha a
+        # inventar: nao ha mudanca de estado nosso para aplicar agora. Nao e
+        # retentavel — o proprio gateway manda um novo webhook quando o
+        # status mudar de verdade.
         raise PaymentWebhookPayloadError(
             f"Status do Mercado Pago sem traducao aplicavel: {raw_status}"
         )
@@ -508,7 +690,32 @@ def _parse_mercadopago_event(raw_body: bytes, access_token: str | None) -> Payme
         provider_payment_id=str(provider_payment_id),
         payment_status=payment_status,
         raw_status=raw_status,
+        refunded_amount=_refunded_amount(payload),
     )
+
+
+def _refunded_amount(payload: dict) -> Decimal:
+    """Quanto ja voltou para o cliente, segundo o gateway.
+
+    `transaction_amount_refunded` e o UNICO sinal de estorno parcial: ele
+    mantem o pagamento em `approved`, entao sem ler este campo o webhook
+    conclui "ja estava paid, nada a fazer" e o dinheiro devolvido nao existe
+    do nosso lado.
+
+    Campo ausente e zero, nao erro: pagamento nunca estornado pode
+    simplesmente nao traze-lo, e um estorno que a gente nao consegue ler nao
+    pode derrubar a confirmacao de um pagamento que a gente consegue.
+    """
+    raw = payload.get("transaction_amount_refunded")
+    if raw is None:
+        return Decimal("0")
+    try:
+        return Decimal(str(raw))
+    except (ArithmeticError, TypeError, ValueError):
+        logger.warning(
+            "[Pagamento][mercadopago] transaction_amount_refunded ilegivel: %r", raw
+        )
+        return Decimal("0")
 
 
 def _call_mercadopago(

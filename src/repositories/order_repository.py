@@ -570,12 +570,17 @@ class OrderRepository:
         *,
         provider: str,
         provider_payment_id: str,
+        payment_status: str = "pending",
     ) -> Order:
         order.payment_provider = provider
         order.provider_payment_id = provider_payment_id
-        # Uma nova tentativa depois de uma recusa volta o pagamento para
-        # "pending"; se ja estava pending, isto e um no-op.
-        order.payment_status = "pending"
+        # O default cobre o pix, cujo veredito so chega por webhook: uma nova
+        # tentativa depois de uma recusa volta para "pending", e se ja estava
+        # pending isto e um no-op.
+        #
+        # No CARTAO quem chama passa o desfecho que o gateway ja respondeu no
+        # proprio POST — aprovado, recusado ou em analise.
+        order.payment_status = payment_status
         self.db.add(order)
         self.db.flush()
         return order

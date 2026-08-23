@@ -639,14 +639,20 @@ class ParseWebhookEventMercadopagoTests(unittest.TestCase):
                     provider="mercadopago", raw_body=self._envelope(), access_token=ACCESS_TOKEN
                 )
 
-    def test_in_process_status_does_not_apply_any_change(self):
+    def test_in_process_becomes_in_review_instead_of_being_ignored(self):
+        # Mudanca deliberada: `in_process` levantava PaymentWebhookPayloadError,
+        # ou seja, o "em analise" do antifraude ficava indistinguivel de corpo
+        # malformado no log. Com pix nunca acontecia — pix nao passa por
+        # analise —, mas com cartao e rotina.
         fake_client = FakeHttpxClient(response=FakeResponse(200, {"status": "in_process"}))
 
         with patch(HTTPX_CLIENT_PATH, return_value=fake_client):
-            with self.assertRaises(PaymentWebhookPayloadError):
-                parse_webhook_event(
-                    provider="mercadopago", raw_body=self._envelope(), access_token=ACCESS_TOKEN
-                )
+            event = parse_webhook_event(
+                provider="mercadopago", raw_body=self._envelope(), access_token=ACCESS_TOKEN
+            )
+
+        self.assertEqual(event.payment_status, "in_review")
+        self.assertEqual(event.raw_status, "in_process")
 
     def test_unknown_status_does_not_apply_any_change(self):
         fake_client = FakeHttpxClient(response=FakeResponse(200, {"status": "algo_novo_que_nao_existe_hoje"}))

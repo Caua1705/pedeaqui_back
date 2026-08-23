@@ -57,12 +57,23 @@ PAYMENT_METHODS = (
 #              conferencia do dinheiro acontece no balcao, nao aqui.
 # pending      Pagamento online criado e aguardando confirmacao do gateway.
 #              O pedido NAO pode ser aceito nem chegar a cozinha nesse estado.
+# in_review    Antifraude do gateway segurou a cobranca para analise. So
+#              acontece com CARTAO — pix nao passa por analise. Como
+#              `pending`, NAO libera o pedido; existe separado porque as duas
+#              esperas pedem conversas opostas com o cliente: `pending` e "o
+#              cliente ainda nao pagou" (e com ele), `in_review` e "o gateway
+#              esta analisando" (e com ninguem, e pode levar ate 48h uteis).
+#              Sem essa separacao o lojista le "aguardando pagamento" nos dois
+#              casos e nao sabe qual ligacao fazer.
 # paid         Gateway confirmou o recebimento. So a partir daqui um pedido
 #              online pode ser aceito.
 # failed       Gateway recusou (cartao negado, pix expirado). O cliente pode
 #              tentar de novo no mesmo pedido, o que volta para `pending`.
-# refunded     Foi pago e depois estornado. Nao conta para comissao.
-PAYMENT_STATUSES = ("on_delivery", "pending", "paid", "failed", "refunded")
+# refunded     Foi pago e depois estornado POR INTEIRO. Nao conta para
+#              comissao. Estorno PARCIAL nao chega aqui: ele mantem o
+#              pagamento em `paid` e aparece so em `orders.refunded_amount`
+#              (ver PaymentService._apply_refunded_amount).
+PAYMENT_STATUSES = ("on_delivery", "pending", "in_review", "paid", "failed", "refunded")
 
 # O que o cliente aponta quando a nota e baixa. ESPELHA o CHECK
 # `ck_order_reviews_problem_tag` e muda JUNTO com ele — e o mesmo par de

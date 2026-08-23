@@ -52,16 +52,33 @@ KITCHEN_ORDER_STATUSES = ("accepted", "preparing", "ready", "out_for_delivery", 
 
 # Estados de pagamento que autorizam o pedido a entrar na cozinha.
 # `on_delivery` entra porque o dinheiro so existe no fim mesmo.
+#
+# `in_review` fica de FORA junto com `pending`: analise do antifraude nao e
+# pagamento, e um pedido preparado durante a analise vira prejuizo do lojista
+# quando ela recusa. A diferenca entre os dois e o que o lojista LE na tela,
+# nao o que ele pode fazer.
 PAYMENT_STATUSES_THAT_RELEASE_ORDER = ("paid", "on_delivery")
 
 PAYMENT_STATUS_TRANSITIONS: dict[str, tuple[str, ...]] = {
     # Pago na entrega nunca muda: o pedido nasce e morre assim.
     "on_delivery": (),
-    "pending": ("paid", "failed"),
+    "pending": ("in_review", "paid", "failed"),
+    # Analise do antifraude (so cartao). Sai para aprovado ou recusado, nunca
+    # de volta para `pending`: o cliente nao tem o que refazer enquanto o
+    # gateway analisa, e uma aresta de volta deixaria a mesma cobranca ser
+    # substituida no meio da analise.
+    "in_review": ("paid", "failed"),
     "paid": ("refunded",),
     # Cartao negado ou pix expirado nao mata o pedido: o cliente pode gerar
-    # outro pagamento para o MESMO pedido, e ai voltamos para `pending`.
-    "failed": ("pending",),
+    # outro pagamento para o MESMO pedido.
+    #
+    # Os tres destinos existem porque a nova tentativa tem desfechos
+    # diferentes por metodo: no pix ela nasce `pending` e o webhook confirma
+    # depois; no CARTAO o proprio POST ja responde, entao a tentativa
+    # seguinte pode ir direto para `paid` ou `in_review` sem nunca passar por
+    # `pending`. Sem essas duas arestas, um cartao aprovado na segunda
+    # tentativa seria recusado pela propria maquina de estados.
+    "failed": ("pending", "in_review", "paid"),
     "refunded": (),
 }
 

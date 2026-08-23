@@ -86,6 +86,11 @@ PAYMENT_STATUS_LABELS = {
     "paid": "PAGO",
     "on_delivery": "A RECEBER NA ENTREGA",
     "pending": "AGUARDANDO PAGAMENTO",
+    # Texto DIFERENTE do `pending`, e e a razao de o estado existir: as duas
+    # esperas pedem acoes opostas de quem le a via. "Aguardando pagamento" faz
+    # o balcao ligar para o cliente; "em analise" e com o gateway, e ligar so
+    # gera constrangimento.
+    "in_review": "PAGAMENTO EM ANALISE",
     "failed": "PAGAMENTO RECUSADO",
     "refunded": "ESTORNADO",
 }

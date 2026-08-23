@@ -1351,3 +1351,49 @@ inteira foi removida na revisão `20260822_0033` sem nunca ter sido usada. A
 regra é a que fica: **tabela nova que guarde rastro de gente e não penda de
 `customers` nasce com prazo, e o prazo é a defesa** — não um `TODO` de limpeza
 para depois.
+
+---
+
+## 39. Cartão é SÍNCRONO, e todo o desenho do pagamento assumia o contrário
+
+O pix nasce `pending` e o veredito chega por webhook. **O `POST /v1/payments`
+de cartão já responde o desfecho**, e três coisas do código antigo assumiam que
+isso não acontecia. As três estão consertadas; ficam aqui porque cada uma volta
+sozinha se alguém "simplificar" a função errada.
+
+**1. A resposta da criação era descartada.** `create_payment` lia só o `id` e o
+`point_of_interaction`, e `start_online_payment` devolvia `payment_status`
+**literal** `"pending"`. Inofensivo no pix (a cobrança nasce mesmo `pending`), e
+fatal no cartão: `rejected` dentro de um HTTP 201 **não é exceção**, e o pedido
+ficaria pendente para sempre.
+
+O segundo andar, que é o mais fácil de não enxergar: `previous_payment_id` só é
+preenchido quando `payment_status == "failed"`. Sem gravar o veredito, ele fica
+`None`, **a chave de idempotência se repete e o Mercado Pago devolve a própria
+cobrança recusada** — armadilha 6 reaberta pela porta do cartão. Gravar o
+veredito não é melhoria: é o que faz a nova tentativa existir.
+
+**2. `in_review` não pode entrar em `PAYMENT_STATUSES_THAT_RELEASE_ORDER`.**
+Ele é o `in_process` deles, o antifraude segurando a cobrança — e pode durar
+**até 48h úteis**. É tentador liberar ("já quase pagou"), e um pedido preparado
+durante a análise vira prejuízo do lojista quando ela recusa. Ele existe
+separado de `pending` só para a TELA e a comanda dizerem a verdade: uma espera
+pede ligar para o cliente, a outra pede não ligar.
+
+**3. Estorno parcial não muda `payment_status` nenhum.** No Mercado Pago
+devolver parte do valor mantém o pagamento em `approved` → `paid`, que é onde o
+pedido já está. O `if order.payment_status == event.payment_status: return
+already_applied` engolia isso **sem nem logar**.
+
+O sinal é `transaction_amount_refunded`, e ele mora em `orders.refunded_amount`.
+**A comissão não é reduzida por ele, de propósito** — a plataforma cobra sobre a
+venda que aconteceu. E mapear estorno parcial para `refunded` seria pior nas
+duas direções: tiraria o pedido inteiro do extrato, e a plataforma deixaria de
+cobrar sobre a parte que o cliente pagou.
+
+**E o sandbox recusa cartão.** Ele ignorava `payment_method` inteiro —
+`_create_sandbox_payment` só recebia o `order_id` — então devolvia intent válido
+para `credit_card`, o webhook marcava como pago e **a comanda imprimia**. O
+fluxo inteiro parecendo funcionar sem dinheiro nenhum ter existido é a pior
+demonstração possível de um meio de pagamento. Cartão só se testa contra a
+credencial de teste do Mercado Pago.

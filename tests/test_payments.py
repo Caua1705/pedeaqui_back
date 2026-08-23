@@ -36,7 +36,9 @@ from src.integrations.payment_gateway import (
     sign_sandbox_payload,
     verify_webhook_signature,
 )
+from src.schemas.payment_schema import CardPaymentPayload, StartPaymentRequest
 from src.services.idempotency_service import IdempotencyService
+from src.services.order_state_machine import PAYMENT_STATUSES_THAT_RELEASE_ORDER
 from src.services.payment_service import PaymentService
 
 
@@ -102,10 +104,12 @@ class FakeOrderRepository:
             return None
         return self.order
 
-    def attach_payment_intent(self, order, *, provider, provider_payment_id):
+    def attach_payment_intent(
+        self, order, *, provider, provider_payment_id, payment_status="pending"
+    ):
         order.payment_provider = provider
         order.provider_payment_id = provider_payment_id
-        order.payment_status = "pending"
+        order.payment_status = payment_status
 
     def update_payment_status(self, order, payment_status, paid_at=None):
         order.payment_status = payment_status
@@ -129,6 +133,10 @@ def make_order(**overrides):
         "payment_provider": None,
         "provider_payment_id": None,
         "paid_at": None,
+        # Zero na esmagadora maioria dos pedidos: so estorno mexe nele, e
+        # estorno parcial e o unico caso em que ele muda sem `payment_status`
+        # mudar junto.
+        "refunded_amount": Decimal("0"),
         "status": "pending",
         # None = pedido de convidado, o caso mais comum nos testes. Ver
         # PaymentService._resolve_payer_email.
@@ -356,7 +364,9 @@ class StartPaymentTests(unittest.TestCase):
             "src.services.payment_service.create_payment"
         ) as mocked_create_payment:
             mocked_create_payment.return_value = PaymentIntent(
-                provider="mercadopago", provider_payment_id="mp-1"
+                provider="mercadopago",
+                provider_payment_id="mp-1",
+                payment_status="pending",
             )
             service.start_online_payment("junior", "token-do-pedido")
 
@@ -377,7 +387,9 @@ class StartPaymentTests(unittest.TestCase):
             "src.services.payment_service.create_payment"
         ) as mocked_create_payment:
             mocked_create_payment.return_value = PaymentIntent(
-                provider="mercadopago", provider_payment_id="mp-1"
+                provider="mercadopago",
+                provider_payment_id="mp-1",
+                payment_status="pending",
             )
             service.start_online_payment("junior", "token-do-pedido")
 
@@ -395,7 +407,9 @@ class StartPaymentTests(unittest.TestCase):
             "src.services.payment_service.create_payment"
         ) as mocked_create_payment:
             mocked_create_payment.return_value = PaymentIntent(
-                provider="mercadopago", provider_payment_id="mp-1"
+                provider="mercadopago",
+                provider_payment_id="mp-1",
+                payment_status="pending",
             )
             service.start_online_payment("junior", "token-do-pedido")
 
@@ -415,7 +429,9 @@ class StartPaymentTests(unittest.TestCase):
             "src.services.payment_service.create_payment"
         ) as mocked_create_payment:
             mocked_create_payment.return_value = PaymentIntent(
-                provider="mercadopago", provider_payment_id="mp-1"
+                provider="mercadopago",
+                provider_payment_id="mp-1",
+                payment_status="pending",
             )
             service.start_online_payment("junior", "token-do-pedido")
 
@@ -439,7 +455,9 @@ class StartPaymentTests(unittest.TestCase):
             "src.services.payment_service.create_payment"
         ) as mocked_create_payment:
             mocked_create_payment.return_value = PaymentIntent(
-                provider="mercadopago", provider_payment_id="mp-2"
+                provider="mercadopago",
+                provider_payment_id="mp-2",
+                payment_status="pending",
             )
             service.start_online_payment("junior", "token-do-pedido")
 
@@ -459,6 +477,336 @@ class StartPaymentTests(unittest.TestCase):
 
         with patch.object(settings, "PAYMENT_PROVIDER", "sandbox"):
             service.start_online_payment("junior", "token-do-pedido")
+
+
+class CardPaymentTests(unittest.TestCase):
+    """Cartao: o veredito vem no PROPRIO POST, e nao por webhook."""
+
+    def _card_payload(self):
+        return StartPaymentRequest(
+            card=CardPaymentPayload(token="tok-123", payment_method_id="master")
+        )
+
+    def _customer(self):
+        return SimpleNamespace(id=uuid.uuid4(), email="cliente@exemplo.com")
+
+    def _service_with_card_order(self, customer=None, **order_overrides):
+        order = make_order(payment_method="credit_card", **order_overrides)
+        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        return order, build_service(order, credential=credential, customer=customer)
+
+    def _create_returning(self, status_gateway, payment_status, detail=None):
+        return PaymentIntent(
+            provider="mercadopago",
+            provider_payment_id="mp-card-1",
+            payment_status=payment_status,
+            raw_status=status_gateway,
+            raw_status_detail=detail,
+        )
+
+    def test_approved_card_marks_the_order_as_paid_without_any_webhook(self):
+        order, service = self._service_with_card_order(customer=self._customer())
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment"
+        ) as mocked:
+            mocked.return_value = self._create_returning("approved", "paid")
+            response = service.start_online_payment(
+                "junior", "token-do-pedido", self._card_payload(), self._customer()
+            )
+
+        self.assertEqual(response.payment_status, "paid")
+        self.assertEqual(order.payment_status, "paid")
+        # Sem isto o pedido ficaria pago sem hora de pagamento.
+        self.assertIsNotNone(order.paid_at)
+
+    def test_rejected_card_marks_the_order_as_failed_not_pending(self):
+        # O bug que este teste existe para impedir: `rejected` dentro de um
+        # HTTP 201 nao e excecao, e ignorar a resposta deixava o pedido
+        # `pending` para sempre — sem nunca alcancar o caminho de nova
+        # tentativa, que so existe a partir de `failed`.
+        order, service = self._service_with_card_order(customer=self._customer())
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment"
+        ) as mocked:
+            mocked.return_value = self._create_returning(
+                "rejected", "failed", detail="cc_rejected_insufficient_amount"
+            )
+            response = service.start_online_payment(
+                "junior", "token-do-pedido", self._card_payload(), self._customer()
+            )
+
+        self.assertEqual(response.payment_status, "failed")
+        self.assertEqual(order.payment_status, "failed")
+        # O motivo atravessa para o front: "saldo insuficiente" e "CVV errado"
+        # pedem coisas diferentes do cliente.
+        self.assertEqual(response.status_detail, "cc_rejected_insufficient_amount")
+
+    def test_card_in_analysis_does_not_release_the_order(self):
+        order, service = self._service_with_card_order(customer=self._customer())
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment"
+        ) as mocked:
+            mocked.return_value = self._create_returning("in_process", "in_review")
+            response = service.start_online_payment(
+                "junior", "token-do-pedido", self._card_payload(), self._customer()
+            )
+
+        self.assertEqual(response.payment_status, "in_review")
+        self.assertNotIn("in_review", PAYMENT_STATUSES_THAT_RELEASE_ORDER)
+
+    def test_synchronous_verdict_is_recorded_in_the_history(self):
+        order, service = self._service_with_card_order(customer=self._customer())
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment"
+        ) as mocked:
+            mocked.return_value = self._create_returning("approved", "paid")
+            service.start_online_payment(
+                "junior", "token-do-pedido", self._card_payload(), self._customer()
+            )
+
+        entry = service.order_repository.history[0]
+        self.assertEqual(entry.status, "payment:paid")
+        self.assertEqual(entry.changed_by, "gateway:mercadopago")
+
+    def test_pix_does_not_write_history_on_creation(self):
+        # O contrario do teste acima: pix nasce `pending` e quem escreve o
+        # historico e o webhook. Uma linha aqui seria evento de dinheiro que
+        # nao aconteceu.
+        order = make_order()
+        service = build_service(order)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "sandbox"):
+            response = service.start_online_payment("junior", "token-do-pedido")
+
+        self.assertEqual(response.payment_status, "pending")
+        self.assertEqual(service.order_repository.history, [])
+
+    def test_guest_cannot_pay_with_card(self):
+        # O e-mail sintetico de convidado e inocuo no pix e caro no cartao:
+        # ele entra na analise antifraude do gateway.
+        _, service = self._service_with_card_order()
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment"
+        ) as mocked:
+            with self.assertRaises(HTTPException) as captured:
+                service.start_online_payment(
+                    "junior", "token-do-pedido", self._card_payload(), None
+                )
+
+        self.assertEqual(captured.exception.status_code, 401)
+        self.assertEqual(captured.exception.detail["code"], "login_required")
+        # E o gateway nunca chega a ser chamado.
+        mocked.assert_not_called()
+
+    def test_card_without_a_browser_token_is_refused_before_the_gateway(self):
+        _, service = self._service_with_card_order(customer=self._customer())
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment"
+        ) as mocked:
+            with self.assertRaises(HTTPException) as captured:
+                service.start_online_payment(
+                    "junior", "token-do-pedido", None, self._customer()
+                )
+
+        self.assertEqual(captured.exception.status_code, 400)
+        self.assertEqual(captured.exception.detail["code"], "card_token_required")
+        mocked.assert_not_called()
+
+    def test_logged_in_payer_email_wins_over_a_guest_order(self):
+        # O pedido nasceu de convidado e a pessoa entrou na conta antes de
+        # pagar: o e-mail de verdade existe mesmo com customer_id nulo.
+        customer = self._customer()
+        _, service = self._service_with_card_order(customer=customer)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment"
+        ) as mocked:
+            mocked.return_value = self._create_returning("approved", "paid")
+            service.start_online_payment(
+                "junior", "token-do-pedido", self._card_payload(), customer
+            )
+
+        _, kwargs = mocked.call_args
+        self.assertEqual(kwargs["payer_email"], "cliente@exemplo.com")
+
+    def test_sandbox_refuses_card_instead_of_faking_it(self):
+        # A armadilha que este teste fecha: o sandbox ignorava payment_method
+        # e devolvia intent valido para cartao. O webhook marcava como pago e
+        # a COMANDA IMPRIMIA — o fluxo inteiro parecendo funcionar sem
+        # dinheiro nenhum ter existido.
+        with self.assertRaises(PaymentProviderNotConfiguredError):
+            create_payment(
+                provider="sandbox",
+                order_id=uuid.uuid4(),
+                amount=Decimal("10.00"),
+                payment_method="credit_card",
+                description="Pedido #1",
+            )
+
+
+class PaymentConfigTests(unittest.TestCase):
+    """A chave publica que o front precisa — e o que ela NAO pode levar junto."""
+
+    def test_public_key_of_the_restaurant_is_served(self):
+        order = make_order()
+        credential = SimpleNamespace(
+            public_key="TEST-public-do-junior",
+            access_token="token-secretissimo",
+            webhook_secret="segredo-do-webhook",
+        )
+        service = build_service(order, credential=credential)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"):
+            config = service.get_payment_config("junior")
+
+        self.assertEqual(config.public_key, "TEST-public-do-junior")
+        self.assertTrue(config.card_enabled)
+
+    def test_nothing_encrypted_ever_reaches_the_response(self):
+        order = make_order()
+        credential = SimpleNamespace(
+            public_key="TEST-public-do-junior",
+            access_token="token-secretissimo",
+            webhook_secret="segredo-do-webhook",
+        )
+        service = build_service(order, credential=credential)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"):
+            corpo = service.get_payment_config("junior").model_dump_json()
+
+        self.assertNotIn("token-secretissimo", corpo)
+        self.assertNotIn("segredo-do-webhook", corpo)
+
+    def test_restaurant_without_credential_does_not_offer_card(self):
+        # `card_enabled` responde ANTES de o cliente digitar o cartao, em vez
+        # de depois, com um 503.
+        service = build_service(make_order())
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"):
+            config = service.get_payment_config("junior")
+
+        self.assertIsNone(config.public_key)
+        self.assertFalse(config.card_enabled)
+
+    def test_sandbox_never_offers_card(self):
+        credential = SimpleNamespace(public_key="nao-deveria-sair", access_token="x")
+        service = build_service(make_order(), credential=credential)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "sandbox"):
+            config = service.get_payment_config("junior")
+
+        self.assertFalse(config.card_enabled)
+        self.assertIsNone(config.public_key)
+
+
+class PartialRefundTests(unittest.TestCase):
+    """Estorno parcial: o pagamento continua `paid` e so o VALOR muda."""
+
+    def setUp(self):
+        self.patcher = patch.object(settings, "PAYMENT_WEBHOOK_SECRET", WEBHOOK_SECRET)
+        self.patcher.start()
+        self.addCleanup(self.patcher.stop)
+
+    def _paid_order(self, **overrides):
+        return make_order(
+            payment_provider="sandbox",
+            provider_payment_id="sandbox-1",
+            payment_status="paid",
+            **overrides,
+        )
+
+    def _refund_body(self, amount, event_id="evt-refund"):
+        return json.dumps(
+            {
+                "event_id": event_id,
+                "payment_id": "sandbox-1",
+                "status": "paid",
+                "refunded_amount": amount,
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+    def test_partial_refund_is_recorded_even_though_the_status_does_not_change(self):
+        order = self._paid_order()
+        service = build_service(order)
+        raw_body = self._refund_body("20.00")
+
+        with self.assertLogs("uvicorn.error", level="WARNING") as captured:
+            result = service.handle_webhook("sandbox", raw_body, signed_headers(raw_body))
+
+        self.assertEqual(result["status"], "processed")
+        self.assertEqual(order.refunded_amount, Decimal("20.00"))
+        # O pagamento NAO vira `refunded`: parte do dinheiro ficou.
+        self.assertEqual(order.payment_status, "paid")
+        self.assertIn("estorno parcial registrado", "\n".join(captured.output))
+
+    def test_partial_refund_writes_its_own_history_entry(self):
+        order = self._paid_order()
+        service = build_service(order)
+        raw_body = self._refund_body("20.00")
+
+        service.handle_webhook("sandbox", raw_body, signed_headers(raw_body))
+
+        entry = service.order_repository.history[0]
+        self.assertEqual(entry.status, "payment:partially_refunded")
+
+    def test_the_same_refund_notification_twice_is_not_a_second_refund(self):
+        # O gateway reenvia ate receber 2xx. O valor e o TOTAL ja devolvido,
+        # nao um incremento, entao comparar com o gravado basta.
+        order = self._paid_order()
+        service = build_service(order)
+        raw_body = self._refund_body("20.00")
+
+        service.handle_webhook("sandbox", raw_body, signed_headers(raw_body))
+        result = service.handle_webhook("sandbox", raw_body, signed_headers(raw_body))
+
+        self.assertEqual(result["status"], "already_applied")
+        self.assertEqual(order.refunded_amount, Decimal("20.00"))
+        self.assertEqual(len(service.order_repository.history), 1)
+
+    def test_a_second_larger_refund_is_applied(self):
+        order = self._paid_order()
+        service = build_service(order)
+
+        primeiro = self._refund_body("20.00")
+        service.handle_webhook("sandbox", primeiro, signed_headers(primeiro))
+        segundo = self._refund_body("35.00", event_id="evt-refund-2")
+        service.handle_webhook("sandbox", segundo, signed_headers(segundo))
+
+        self.assertEqual(order.refunded_amount, Decimal("35.00"))
+
+    def test_a_paid_webhook_without_refund_stays_already_applied(self):
+        # O caminho normal nao pode virar escrita: um webhook repetido de
+        # pagamento confirmado nao mexe em nada.
+        order = self._paid_order()
+        service = build_service(order)
+        raw_body = webhook_body("sandbox-1", "paid")
+
+        result = service.handle_webhook("sandbox", raw_body, signed_headers(raw_body))
+
+        self.assertEqual(result["status"], "already_applied")
+        self.assertEqual(order.refunded_amount, Decimal("0"))
+        self.assertEqual(service.order_repository.history, [])
+
+    def test_commission_columns_are_never_touched_by_a_refund(self):
+        # Decisao tomada: a plataforma cobra sobre a venda que aconteceu.
+        # A coluna existe para a decisao CONTRARIA continuar possivel.
+        order = self._paid_order()
+        order.commission_amount = Decimal("9.30")
+        order.commission_base_amount = Decimal("93.00")
+        service = build_service(order)
+        raw_body = self._refund_body("20.00")
+
+        service.handle_webhook("sandbox", raw_body, signed_headers(raw_body))
+
+        self.assertEqual(order.commission_amount, Decimal("9.30"))
+        self.assertEqual(order.commission_base_amount, Decimal("93.00"))
 
 
 class StartPaymentErrorTests(unittest.TestCase):
@@ -779,6 +1127,7 @@ class MercadopagoWebhookWiringTests(unittest.TestCase):
                 provider_payment_id="mp-1",
                 payment_status="paid",
                 raw_status="approved",
+                refunded_amount=Decimal("0"),
             )
             result = service.handle_webhook("mercadopago", b"{}", {})
 
@@ -832,6 +1181,7 @@ class MercadopagoWebhookSignatureOrderingTests(unittest.TestCase):
                 provider_payment_id="mp-1",
                 payment_status="paid",
                 raw_status="approved",
+                refunded_amount=Decimal("0"),
             )
             result = service.handle_webhook("mercadopago", raw_body, headers)
 

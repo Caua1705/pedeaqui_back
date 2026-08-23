@@ -40,6 +40,20 @@ class Order(Base):
     # Estados possiveis em src/core/constants.py:PAYMENT_STATUSES.
     payment_status: Mapped[str] = mapped_column(Text, nullable=False, default="on_delivery")
     paid_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    # Quanto ja voltou para o cliente. Zero na esmagadora maioria dos pedidos.
+    #
+    # Existe porque estorno PARCIAL nao aparece em `payment_status`: no
+    # Mercado Pago ele mantem o pagamento em `approved`, e o unico sinal e o
+    # valor estornado na consulta do pagamento. `refunded` continua
+    # significando "voltou por inteiro".
+    #
+    # NAO entra no calculo da comissao — ela e cobrada sobre a venda que
+    # aconteceu, e essa e decisao tomada, nao pendencia. A coluna existe para
+    # a decisao contraria continuar POSSIVEL: o valor so existe do lado do
+    # gateway, e sem grava-lo agora nao ha como reconstitui-lo depois.
+    refunded_amount: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), nullable=False, default=0, server_default="0"
+    )
     # Quem processou o pagamento ("mercadopago", "sandbox"). Fica nulo em
     # pedido pago na entrega.
     payment_provider: Mapped[str | None] = mapped_column(Text)

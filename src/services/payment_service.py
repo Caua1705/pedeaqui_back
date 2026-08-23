@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 from src.core.config import settings
 from src.integrations.payment_gateway import (
     MERCADOPAGO_PROVIDER,
+    CardPaymentInput,
     PaymentGatewayCredentialError,
     PaymentGatewayError,
     PaymentGatewayUnavailableError,
@@ -41,22 +42,27 @@ from src.integrations.payment_gateway import (
     parse_webhook_event,
     verify_webhook_signature,
 )
+from src.models.customer_model import Customer
 from src.models.order_status_history_model import OrderStatusHistory
 from src.repositories.customer_repository import CustomerRepository
 from src.repositories.order_repository import OrderRepository
 from src.schemas.payment_schema import (
+    PaymentConfigResponse,
     PaymentErrorCode,
     PaymentErrorDetail,
+    StartPaymentRequest,
     StartPaymentResponse,
 )
 from src.services.idempotency_service import IdempotencyService
 from src.services.order_state_machine import (
+    PAYMENT_HISTORY_PREFIX,
     TERMINAL_ORDER_STATUSES,
     ensure_payment_transition_allowed,
     payment_history_status,
 )
 from src.services.payment_credential_service import ActivePaymentCredential, PaymentCredentialService
 from src.services.restaurant_service import RestaurantService
+from src.utils.money import to_decimal
 from src.utils.security import utcnow
 
 
@@ -65,7 +71,14 @@ logger = logging.getLogger("uvicorn.error")
 WEBHOOK_ROUTE = "POST /payments/webhooks/{provider}"
 
 # Estados de pagamento em que faz sentido criar (ou recriar) uma cobranca.
+# `in_review` fica de FORA: com o antifraude analisando nao ha o que retentar,
+# e uma segunda cobranca criaria duas analises para o mesmo pedido.
 PAYABLE_STATUSES = ("pending", "failed")
+
+# Formas de pagamento que exigem token gerado no navegador. `debit_card` NAO
+# entra na v1: no Mercado Pago ele tem fluxo proprio (debito virtual) e 3DS
+# obrigatorio de fato — parece vir de graca junto com o credito, e nao vem.
+CARD_PAYMENT_METHODS = ("credit_card",)
 
 # Os desfechos possiveis moram em PaymentErrorCode (payment_schema): a lista
 # tem que sair no /openapi.json para o frontend escrever um texto por caso,
@@ -84,6 +97,13 @@ _PAYMENT_REJECTED_MESSAGE = (
     "O provedor de pagamento recusou esta cobrança. "
     "Fale com o restaurante para concluir o pedido."
 )
+_LOGIN_REQUIRED_MESSAGE = (
+    "Para pagar com cartão é preciso entrar na sua conta. "
+    "Você também pode pagar com Pix ou na entrega."
+)
+_CARD_TOKEN_REQUIRED_MESSAGE = (
+    "Não foi possível ler os dados do cartão. Preencha novamente."
+)
 
 
 class PaymentService:
@@ -95,16 +115,51 @@ class PaymentService:
         self.payment_credential_service = PaymentCredentialService(db)
         self.customer_repository = CustomerRepository(db)
 
+    def get_payment_config(self, restaurant_slug: str) -> PaymentConfigResponse:
+        """O que o navegador precisa para tokenizar um cartao deste restaurante.
+
+        Publica, como o cardapio: a `public_key` e o unico dado do gateway que
+        o Mercado Pago manda expor no frontend, e e por isso que ela e a unica
+        coluna da credencial guardada em texto puro. Nada cifrado sai daqui.
+
+        `card_enabled` responde a pergunta que o front faria de qualquer jeito
+        — e responde ANTES de o cliente digitar o cartao, em vez de depois,
+        com um 503.
+        """
+        restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
+
+        if settings.PAYMENT_PROVIDER != MERCADOPAGO_PROVIDER:
+            # O sandbox nao processa cartao (ver SANDBOX_SUPPORTED_PAYMENT_METHODS)
+            # e nao tem chave publica nenhuma para dar.
+            return PaymentConfigResponse(
+                provider=settings.PAYMENT_PROVIDER,
+                public_key=None,
+                card_enabled=False,
+            )
+
+        credential = self.payment_credential_service.get_active_credential(restaurant.id)
+        return PaymentConfigResponse(
+            provider=settings.PAYMENT_PROVIDER,
+            public_key=credential.public_key if credential is not None else None,
+            card_enabled=credential is not None,
+        )
+
     def start_online_payment(
         self,
         restaurant_slug: str,
         tracking_token: str,
+        payload: StartPaymentRequest | None = None,
+        current_customer: Customer | None = None,
     ) -> StartPaymentResponse:
         """Cria a cobranca do pedido no gateway.
 
         Autorizacao pelo token de acompanhamento: quem tem o token e quem
-        criou o pedido. Nao ha login obrigatorio aqui porque pedido de
-        convidado tambem paga.
+        criou o pedido. Pedido de convidado tambem paga — mas so por pix; ver
+        _resolve_card_input.
+
+        `payload` so e necessario para cartao (traz o token gerado no
+        navegador). Pix continua sendo um POST sem corpo, e isso e de
+        proposito: o corpo opcional nao muda o contrato de quem ja integrou.
 
         Falha ao criar a cobranca sai como PaymentErrorDetail, separando o
         que vale tentar de novo do que nao vale — ver _create_payment_at_gateway.
@@ -155,6 +210,10 @@ class PaymentService:
         # (que nao precisa de credencial nenhuma) ou quando o restaurante
         # ainda nao cadastrou a credencial do ambiente ativo — nesse
         # segundo caso, create_payment e quem recusa com 503.
+        # Cartao e resolvido ANTES do commit e antes do gateway: recusar aqui
+        # custa uma resposta, recusar depois custa uma cobranca criada.
+        card = self._resolve_card_input(payment_method, payload, current_customer)
+
         access_token = None
         payer_email = None
         if settings.PAYMENT_PROVIDER == MERCADOPAGO_PROVIDER:
@@ -163,7 +222,7 @@ class PaymentService:
                 access_token = credential.access_token
             # So resolve e-mail quando de fato vai chamar o Mercado Pago: o
             # sandbox nao usa, e e uma consulta a mais no banco por nada.
-            payer_email = self._resolve_payer_email(order)
+            payer_email = self._resolve_payer_email(order, current_customer)
 
         # Fecha a transacao de leitura ANTES de falar com o gateway. Sem
         # isso a conexao de banco fica presa durante um I/O externo que pode
@@ -179,6 +238,7 @@ class PaymentService:
             access_token=access_token,
             payer_email=payer_email,
             previous_payment_id=previous_payment_id,
+            card=card,
             # application_fee (corte da plataforma no split) fica de fora:
             # e um campo opcional que so passa a ser preenchido quando
             # existir contrato de marketplace com o restaurante.
@@ -201,7 +261,9 @@ class PaymentService:
                 order,
                 provider=intent.provider,
                 provider_payment_id=intent.provider_payment_id,
+                payment_status=intent.payment_status,
             )
+            self._record_synchronous_verdict(order, intent)
             self.db.commit()
         except Exception:
             self.db.rollback()
@@ -210,22 +272,98 @@ class PaymentService:
         return StartPaymentResponse(
             provider=intent.provider,
             provider_payment_id=intent.provider_payment_id,
-            payment_status="pending",
+            payment_status=intent.payment_status,
             checkout_url=intent.checkout_url,
             qr_code=intent.qr_code,
+            status_detail=intent.raw_status_detail,
         )
 
-    def _resolve_payer_email(self, order) -> str:
-        """E-mail exigido pelo Mercado Pago para criar cobranca pix.
+    def _record_synchronous_verdict(self, order, intent) -> None:
+        """Grava no historico o desfecho que veio no PROPRIO POST.
+
+        Pix nao passa por aqui: a cobranca nasce `pending` e quem escreve o
+        historico e o webhook. Cartao responde na hora, e sem esta linha o
+        pedido teria `payment_status` mudado sem nenhum evento explicando
+        quando nem por quem — o oposto do que a tabela existe para dar.
+
+        `paid_at` tambem sai daqui pelo mesmo motivo: um cartao aprovado sem
+        ele ficaria pago sem hora de pagamento.
+        """
+        if intent.payment_status == "pending":
+            return
+
+        if intent.payment_status == "paid":
+            order.paid_at = utcnow()
+        self.order_repository.create_status_history(
+            OrderStatusHistory(
+                order_id=order.id,
+                status=payment_history_status(intent.payment_status),
+                changed_by=f"gateway:{intent.provider}",
+                note=f"status do gateway: {intent.raw_status} ({intent.raw_status_detail})",
+            )
+        )
+
+    def _resolve_card_input(
+        self,
+        payment_method: str | None,
+        payload: StartPaymentRequest | None,
+        current_customer: Customer | None,
+    ) -> CardPaymentInput | None:
+        """Monta o que so o cartao precisa, ou recusa o pedido de cobranca.
+
+        **Cartao exige login, e nao e por comodidade.** O `payer.email` de um
+        pedido de convidado seria o sintetico derivado do numero do pedido
+        (ver _resolve_payer_email) — inocuo no pix, que nao valida pagador, e
+        caro no cartao, onde ele entra na analise antifraude e ja rendeu
+        recusa direta do gateway em teste. Convidado paga por pix ou na
+        entrega.
+        """
+        if payment_method not in CARD_PAYMENT_METHODS:
+            return None
+        if current_customer is None:
+            raise self._payment_error(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                code=PaymentErrorCode.LOGIN_REQUIRED,
+                message=_LOGIN_REQUIRED_MESSAGE,
+                retryable=False,
+                cause=ValueError("cobranca de cartao sem cliente autenticado"),
+            )
+        if payload is None or payload.card is None:
+            raise self._payment_error(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                code=PaymentErrorCode.CARD_TOKEN_REQUIRED,
+                message=_CARD_TOKEN_REQUIRED_MESSAGE,
+                retryable=False,
+                cause=ValueError("cobranca de cartao sem token do navegador"),
+            )
+
+        card = payload.card
+        return CardPaymentInput(
+            token=card.token,
+            payment_method_id=card.payment_method_id,
+            issuer_id=card.issuer_id,
+            payer_document_type=card.payer_document_type,
+            payer_document_number=card.payer_document_number,
+        )
+
+    def _resolve_payer_email(self, order, current_customer: Customer | None = None) -> str:
+        """E-mail exigido pelo Mercado Pago para criar a cobranca.
 
         O pedido nao guarda e-mail nenhum (so nome e telefone — ver
-        Order.customer_name_snapshot/customer_phone_snapshot). Quem fez
-        login tem e-mail em customers; quem pediu como convidado nao tem
-        nenhum cadastrado em lugar algum. Para o convidado, usamos um
-        e-mail sintetico nosso, derivado do numero do pedido: o Mercado
-        Pago so usa esse campo para validar o payer da cobranca pix, nao
-        para mandar comunicacao nenhuma a ele.
+        Order.customer_name_snapshot/customer_phone_snapshot), entao ele sai
+        de `customers` quando ha cliente, e de um sintetico quando nao ha.
+
+        A ordem de preferencia importa e nao e obvia: quem esta pagando AGORA
+        vem antes do dono do pedido. Um pedido pode ter nascido de convidado e
+        a pessoa ter entrado na conta antes de pagar — e nesse caso o e-mail
+        de verdade existe, mesmo com `order.customer_id` nulo.
+
+        **O sintetico e para pix e so.** No cartao ele entra na analise
+        antifraude do gateway e ja rendeu recusa direta em teste; por isso
+        _resolve_card_input exige login antes de chegar aqui.
         """
+        if current_customer is not None and current_customer.email:
+            return current_customer.email
         if order.customer_id is not None:
             customer = self.customer_repository.get_by_id(order.customer_id)
             if customer is not None and customer.email:
@@ -341,9 +479,14 @@ class PaymentService:
             ) from exc
 
         if order.payment_status == event.payment_status:
-            # Reenvio depois de ja aplicado, ou duas notificacoes do mesmo
-            # evento. Nada a fazer, e nao e erro.
-            return {"status": "already_applied", "payment_status": order.payment_status}
+            # "Mesmo status" deixou de significar "nada aconteceu".
+            #
+            # No Mercado Pago, ESTORNO PARCIAL mantem o pagamento em
+            # `approved` — que traduz para `paid`, que e onde o pedido ja
+            # esta. Antes disto o metodo retornava aqui e o dinheiro
+            # devolvido nao existia do nosso lado: nem coluna, nem historico,
+            # nem log. Com pix quase nao acontece; com cartao e o caso comum.
+            return self._apply_partial_refund(order, event, provider)
 
         replayed = self.idempotency_service.begin(
             scope=IdempotencyService.build_scope(
@@ -386,6 +529,10 @@ class PaymentService:
                 payment_status=event.payment_status,
                 paid_at=utcnow() if event.payment_status == "paid" else None,
             )
+            # Vale tambem no estorno TOTAL: `refunded` diz que voltou tudo,
+            # mas nao diz quanto — e o relatorio que um dia somar dinheiro
+            # devolvido precisa do numero, nao do rotulo.
+            order.refunded_amount = event.refunded_amount
             self.order_repository.create_status_history(
                 OrderStatusHistory(
                     order_id=order.id,
@@ -419,6 +566,56 @@ class PaymentService:
         # lojista a aceitar. O que o pagamento faz e liberar o botao —
         # ensure_payment_allows_order_status passa a deixar.
         return response
+
+    def _apply_partial_refund(self, order, event, provider: str) -> dict:
+        """Grava o estorno parcial, que nao muda `payment_status`.
+
+        O sinal e o VALOR, nunca o status: o gateway mantem o pagamento em
+        `approved` e so aumenta o total ja devolvido. Comparar com o que esta
+        gravado torna o metodo idempotente de graca — o gateway reenvia a
+        mesma notificacao ate receber 2xx, e reaplicar o mesmo total nao e
+        um segundo estorno.
+
+        **A comissao NAO e mexida, e e decisao tomada.** A plataforma cobra
+        sobre a venda que aconteceu; devolucao por erro do lojista e custo
+        dele. A coluna existe para a decisao contraria continuar possivel —
+        o valor so existe do lado do gateway, e sem grava-lo agora nao ha
+        como reconstitui-lo depois.
+        """
+        gravado = to_decimal(order.refunded_amount)
+        if event.refunded_amount <= gravado:
+            return {"status": "already_applied", "payment_status": order.payment_status}
+
+        try:
+            order.refunded_amount = event.refunded_amount
+            self.order_repository.create_status_history(
+                OrderStatusHistory(
+                    order_id=order.id,
+                    # Nao e um PAYMENT_STATUS: e um evento de dinheiro que o
+                    # estado do pagamento nao consegue expressar.
+                    status=f"{PAYMENT_HISTORY_PREFIX}partially_refunded",
+                    changed_by=f"gateway:{provider}",
+                    note=f"estornado ate agora: {event.refunded_amount}",
+                )
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+
+        logger.warning(
+            "[Pagamento] estorno parcial registrado order_id=%s estornado=%s "
+            "payment_status=%s provider=%s",
+            order.id,
+            event.refunded_amount,
+            order.payment_status,
+            provider,
+        )
+        return {
+            "status": "processed",
+            "order_id": str(order.id),
+            "payment_status": order.payment_status,
+        }
 
     @staticmethod
     def _log_payment_on_terminal_order(
@@ -504,6 +701,7 @@ class PaymentService:
         access_token: str | None,
         payer_email: str | None = None,
         previous_payment_id: str | None = None,
+        card: CardPaymentInput | None = None,
         application_fee=None,
     ):
         try:
@@ -516,6 +714,7 @@ class PaymentService:
                 access_token=access_token,
                 payer_email=payer_email,
                 previous_payment_id=previous_payment_id,
+                card=card,
                 application_fee=application_fee,
             )
         # A ordem dos except importa: as duas primeiras sao subclasses de

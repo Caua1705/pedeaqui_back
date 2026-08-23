@@ -22,21 +22,135 @@ class PaymentErrorCode(str, Enum):
     # O gateway entendeu e RECUSOU a cobranca (dado invalido, conflito de
     # idempotencia). Tambem nao adianta insistir com a mesma cobranca.
     PAYMENT_REJECTED = "payment_rejected"
+    # Cartao pedido em pedido de convidado. O front precisa mandar o cliente
+    # fazer login (ou pagar por pix) — nao e falha de gateway nenhuma.
+    LOGIN_REQUIRED = "login_required"
+    # Cartao pedido sem o token gerado no navegador. Erro de integracao do
+    # front, nao do cliente.
+    CARD_TOKEN_REQUIRED = "card_token_required"
+
+
+class CardPaymentPayload(BaseModel):
+    """O que o navegador produziu com o SDK do Mercado Pago.
+
+    **Nao existe campo para numero, CVV ou validade do cartao, e nunca deve
+    existir.** Esses dados vao do navegador direto para o gateway, que
+    devolve o `token` — e o token e a unica coisa que este backend enxerga.
+    Acrescentar aqui qualquer parte do cartao muda o perimetro de PCI do
+    projeto inteiro.
+    """
+
+    token: str = Field(
+        description="Token de uso unico gerado pelo SDK no navegador.",
+        min_length=1,
+        max_length=256,
+    )
+    payment_method_id: str = Field(
+        description=(
+            "Bandeira que o SDK resolveu ('visa', 'master', 'elo'). NAO e o "
+            "`payment_method` do pedido ('credit_card') — sao vocabularios "
+            "diferentes, e o gateway quer o dele."
+        ),
+        min_length=1,
+        max_length=64,
+        examples=["master"],
+    )
+    issuer_id: str | None = Field(
+        default=None,
+        description="Emissor, quando o SDK o resolve.",
+        max_length=64,
+    )
+    payer_document_type: str | None = Field(
+        default=None,
+        description="Tipo do documento do portador, normalmente 'CPF'.",
+        max_length=16,
+        examples=["CPF"],
+    )
+    payer_document_number: str | None = Field(
+        default=None,
+        description=(
+            "Documento do portador. Atravessa para o gateway e NAO e gravado "
+            "em lugar nenhum daqui."
+        ),
+        max_length=32,
+    )
+
+
+class PaymentConfigResponse(BaseModel):
+    """O que o navegador precisa para tokenizar um cartao.
+
+    **`public_key` e publica por desenho** — o proprio Mercado Pago manda
+    expor no frontend, e e por isso que ela e a unica coluna de
+    `restaurant_payment_credentials` guardada em texto puro. O `access_token`
+    e o `webhook_secret` da mesma linha sao cifrados e nao passam nem perto
+    desta resposta.
+
+    `card_enabled` falso significa "nao ofereca cartao nesta tela": ou o
+    restaurante nao tem credencial cadastrada para o ambiente ativo, ou o
+    provider ativo nao processa cartao (o sandbox nao processa, de
+    proposito). Sem esse campo o front so descobriria isso no 503, com o
+    cliente ja tendo digitado o cartao.
+    """
+
+    provider: str
+    public_key: str | None = Field(
+        default=None,
+        description=(
+            "Chave publica do restaurante no gateway, para inicializar o SDK. "
+            "Nula quando nao ha credencial cadastrada."
+        ),
+    )
+    card_enabled: bool = Field(
+        description="Se o front deve oferecer cartao nesta tela.",
+    )
+
+
+class StartPaymentRequest(BaseModel):
+    """Corpo da criacao da cobranca.
+
+    OPCIONAL, e isso e o contrato: pix continua sendo um POST sem corpo, como
+    era antes do cartao existir, entao quem ja integrou nao muda nada. `card`
+    so e exigido quando a forma de pagamento do pedido e cartao.
+    """
+
+    card: CardPaymentPayload | None = None
 
 
 class StartPaymentResponse(BaseModel):
     """Resposta da criacao da cobranca.
 
-    `checkout_url` e `qr_code` sao alternativos e dependem do gateway e do
-    metodo: pix costuma vir com qr_code, cartao com url. O sandbox nao
-    devolve nenhum dos dois — nao ha para onde mandar o cliente.
+    `checkout_url` e `qr_code` sao do pix (o "copia e cola" e a pagina
+    hospedada). O sandbox nao devolve nenhum dos dois — nao ha para onde
+    mandar o cliente. Cartao nao devolve nenhum dos dois tampouco: nao ha
+    para onde ir, o desfecho ja esta em `payment_status`.
+
+    **`payment_status` e o campo que muda de significado por metodo**, e o
+    front precisa saber disso:
+
+        pix       sempre "pending" — o veredito vem por webhook depois
+        cartao    o VEREDITO, ja: "paid", "failed" ou "in_review"
     """
 
     provider: str
     provider_payment_id: str
-    payment_status: str
+    payment_status: str = Field(
+        description=(
+            "Estado do pagamento. No pix e sempre 'pending'; no cartao ja e o "
+            "desfecho ('paid', 'failed' ou 'in_review')."
+        ),
+    )
     checkout_url: str | None = None
     qr_code: str | None = None
+    status_detail: str | None = Field(
+        default=None,
+        description=(
+            "Motivo cru do gateway, so no cartao. Distingue recusas que pedem "
+            "coisas diferentes do cliente — 'cc_rejected_insufficient_amount' "
+            "(tentar outro cartao) de 'cc_rejected_bad_filled_security_code' "
+            "(redigitar o CVV)."
+        ),
+        examples=["cc_rejected_insufficient_amount"],
+    )
 
 
 class PaymentErrorDetail(BaseModel):

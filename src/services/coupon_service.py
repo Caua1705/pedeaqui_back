@@ -5,6 +5,7 @@ from typing import NoReturn
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -388,7 +389,10 @@ class CouponService:
             for field in CouponCampaignFields.model_fields
         }
         merged.update(changes)
-        validated = CouponCampaignFields.model_validate(merged)
+        try:
+            validated = CouponCampaignFields.model_validate(merged)
+        except ValidationError as exc:
+            self._raise_merged_validation(exc)
         template = self._load_active_template(validated.coupon_template_id)
         self._ensure_template_agrees(template, validated.discount_type)
         code_owner = self.repository.get_by_code_and_restaurant(validated.code, restaurant_id)
@@ -410,6 +414,37 @@ class CouponService:
         # sairia mais barato e faria a linha editada perder o contador na tela,
         # bem no momento em que o lojista esta olhando para ela.
         return self._admin_response(coupon, self.repository.count_applied_total(coupon.id))
+
+    @staticmethod
+    def _raise_unprocessable(errors: list[dict]) -> NoReturn:
+        """422 na MESMA forma que o FastAPI usa para o corpo da requisicao.
+
+        `{"detail": [{"loc", "msg", "type"}]}`, com `loc` comecando em `body`.
+        A rota tem duas fontes de 422 — a validacao do corpo, que e do FastAPI,
+        e as regras que so o service consegue conferir (a concordancia com o
+        template e a revalidacao da mescla do PATCH). Devolver formas
+        diferentes obrigaria o painel a adivinhar qual delas chegou antes de
+        conseguir apontar o campo errado na tela.
+        """
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=errors)
+
+    @staticmethod
+    def _raise_merged_validation(exc: ValidationError) -> NoReturn:
+        """A mescla do PATCH invalida e 422, e ate agora era 500.
+
+        `CouponCampaignFields.model_validate(merged)` levanta `ValidationError`
+        do pydantic, e o FastAPI so traduz a que ELE mesmo levanta ao montar o
+        corpo — a que sai de dentro do handler sobe como excecao qualquer e vira
+        "Internal Server Error". Ou seja: um PATCH com `valid_until` anterior ao
+        `valid_from` respondia 500, sem nada no corpo que dissesse o motivo.
+
+        `input` e `ctx` ficam de fora do que sai: eles carregam o valor cru, que
+        pode ser `Decimal` ou `datetime` e nao atravessa o JSON.
+        """
+        CouponService._raise_unprocessable([
+            {"loc": ["body", *erro["loc"]], "msg": erro["msg"], "type": erro["type"]}
+            for erro in exc.errors()
+        ])
 
     @staticmethod
     def _raise_conflict(exc: IntegrityError) -> NoReturn:
@@ -480,13 +515,16 @@ class CouponService:
         """
         if template.discount_type == discount_type:
             return
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                f"Tipo de desconto do cupom ({discount_type}) nao confere com o do "
-                f"template ({template.discount_type})"
-            ),
-        )
+        CouponService._raise_unprocessable([
+            {
+                "loc": ["body", "discount_type"],
+                "msg": (
+                    f"Tipo de desconto do cupom ({discount_type}) nao confere com o do "
+                    f"template ({template.discount_type})"
+                ),
+                "type": "coupon_template_discount_type_mismatch",
+            }
+        ])
 
     @staticmethod
     def _aware(value: datetime) -> datetime:

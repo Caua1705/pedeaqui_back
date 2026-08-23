@@ -44,6 +44,15 @@ def criar_template(db, *, discount_type: str, nome: str = "Arte", is_active: boo
     return template
 
 
+def mensagens(erro: HTTPException) -> str:
+    """Todas as `msg` do 422 numa string so, para o assert ler bem.
+
+    O `detail` do 422 desta rota e lista de `{loc, msg, type}` — a mesma forma
+    que o FastAPI usa para erro de corpo.
+    """
+    return " | ".join(item["msg"] for item in erro.detail)
+
+
 def payload_de_criacao(template: CouponTemplate, *, discount_type: str, code: str = "PROMO10") -> CouponCreate:
     return CouponCreate(
         coupon_template_id=template.id,
@@ -106,8 +115,10 @@ def test_criar_com_tipos_divergentes_responde_422(db):
         )
 
     assert erro.value.status_code == 422
-    assert "percent" in erro.value.detail
-    assert "free_delivery" in erro.value.detail
+    assert erro.value.detail[0]["loc"] == ["body", "discount_type"]
+    assert erro.value.detail[0]["type"] == "coupon_template_discount_type_mismatch"
+    assert "percent" in mensagens(erro.value)
+    assert "free_delivery" in mensagens(erro.value)
 
 
 def test_criar_divergente_nao_grava_nada(db):
@@ -288,3 +299,69 @@ def test_o_model_declara_os_dois_unique_com_o_nome_do_banco(db):
     assert "restaurant_coupons_restaurant_code_unique" in declarados
     assert "restaurant_coupons_restaurant_template_unique" in declarados
     assert declarados - {"restaurant_coupons_pkey"} <= no_banco
+
+
+def test_patch_que_invalida_a_mescla_responde_422_e_nao_500(db):
+    """`valid_until` antes do `valid_from` respondia "Internal Server Error".
+
+    A revalidacao da mescla levanta `ValidationError` do pydantic, e o FastAPI
+    so traduz a que ele mesmo levanta ao montar o corpo — a que sai de dentro do
+    handler subia como excecao qualquer.
+    """
+    restaurante = criar_restaurante(db)
+    template = criar_template(db, discount_type="fixed")
+    servico = CouponService(db)
+    cupom = servico.create_admin(restaurante.id, payload_de_criacao(template, discount_type="fixed"))
+
+    with pytest.raises(HTTPException) as erro:
+        servico.update_admin(
+            restaurante.id,
+            cupom.id,
+            CouponUpdate(valid_until=AGORA - timedelta(days=10)),
+        )
+
+    assert erro.value.status_code == 422
+    assert "valid_until" in mensagens(erro.value)
+
+
+def test_o_422_da_mescla_tem_a_mesma_forma_do_422_do_template(db):
+    """Uma forma so na rota: o painel nao precisa adivinhar qual chegou."""
+    restaurante = criar_restaurante(db)
+    template = criar_template(db, discount_type="fixed")
+    servico = CouponService(db)
+    cupom = servico.create_admin(restaurante.id, payload_de_criacao(template, discount_type="fixed"))
+
+    with pytest.raises(HTTPException) as da_mescla:
+        servico.update_admin(restaurante.id, cupom.id, CouponUpdate(discount_value=Decimal("0")))
+    with pytest.raises(HTTPException) as do_template:
+        servico.update_admin(
+            restaurante.id,
+            cupom.id,
+            CouponUpdate(discount_type="percent", discount_value=Decimal("10")),
+        )
+
+    for erro in (da_mescla.value, do_template.value):
+        assert erro.status_code == 422
+        assert isinstance(erro.detail, list)
+        for item in erro.detail:
+            assert set(item) == {"loc", "msg", "type"}
+            assert item["loc"][0] == "body"
+
+
+def test_o_422_da_mescla_atravessa_o_json(db):
+    """`input` e `ctx` do pydantic carregam Decimal e datetime, que nao serializam."""
+    import json
+
+    restaurante = criar_restaurante(db)
+    template = criar_template(db, discount_type="fixed")
+    servico = CouponService(db)
+    cupom = servico.create_admin(restaurante.id, payload_de_criacao(template, discount_type="fixed"))
+
+    with pytest.raises(HTTPException) as erro:
+        servico.update_admin(
+            restaurante.id,
+            cupom.id,
+            CouponUpdate(valid_from=AGORA + timedelta(days=90)),
+        )
+
+    assert json.dumps({"detail": erro.value.detail})

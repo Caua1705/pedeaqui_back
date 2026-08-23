@@ -1,10 +1,44 @@
-pytest
+# O CI reinstala este arquivo a cada execucao. Tudo que esta SEM pino aqui
+# muda sozinho, sem commit — e quando muda para pior, o vermelho aparece em
+# cima de um commit que nao tem nada a ver com o erro. E o modo de falha mais
+# caro de diagnosticar que existe num CI: a bisseccao nao ajuda, porque o
+# repositorio nao mudou.
+#
+# A regra, entao: **o que o CI executa entra pinado.** Subir a versao e um
+# commit deliberado, com o repositorio ficando verde junto.
+
+
+# O `pytest` era o buraco desta regra ate 23/08/2026: pinava-se o ruff pelo
+# risco escrito abaixo e deixava-se solto justamente o programa que roda a
+# suite inteira, em tres dos quatro jobs.
+#
+# Quanto isso ja custava sem ninguem ver: a maquina de quem escreve estava na
+# 8.4.1 e o CI instalava a 9.1.1 — DUAS majors de distancia. "Passa aqui" e
+# "passa no CI" nunca foram a mesma frase, e a diferenca so nao tinha
+# aparecido porque nada dependia dela ainda.
+#
+# Para o registro, porque a confusao e facil: este pino NAO e o conserto do
+# `ModuleNotFoundError: No module named 'src'` que derrubou os dois jobs de
+# teste. Aquilo era o `pythonpath` que faltava no `pytest.ini`, e foi medido —
+# o 7.4.4 falha igual no mesmo layout. Este pino fecha o buraco vizinho, que
+# e o proximo vermelho a chegar sozinho.
+#
+# 9.1.1 e o que o CI ja instalava: pinar na 8.4.1 da maquina de quem escreve
+# seria REBAIXAR o CI em silencio. As tres suites foram rodadas nesta versao
+# antes do pino — 1640 (rapida), 521 (db) e 126 (agente).
+#
+# O mesmo pino esta em `print-agent/requirements-dev.txt`. Os dois sobem
+# juntos.
+pytest==9.1.1
+
+# `coverage` fica SOLTO, e nao e esquecimento: nenhum passo do CI o executa.
+# Ele nao tem como deixar check nenhum vermelho — quem o roda e uma pessoa, na
+# propria maquina, olhando o resultado. Pinar aqui seria estender a regra a um
+# programa que ela nao protege, e a regra perderia o criterio.
 coverage
 
-# Pinado, ao contrario dos dois acima, e o motivo e o `select` curto do
-# ruff.toml: uma versao nova do ruff pode acrescentar uma regra ao conjunto
-# `F` e deixar o CI vermelho sem ninguem ter commitado nada. Lint que fica
-# vermelho por conta propria e lint que as pessoas aprendem a ignorar.
-# Subir a versao e um commit deliberado, com o repositorio ficando verde
-# junto.
+# Pinado pelo `select` curto do ruff.toml: uma versao nova do ruff pode
+# acrescentar uma regra ao conjunto `F` e deixar o CI vermelho sem ninguem ter
+# commitado nada. Lint que fica vermelho por conta propria e lint que as
+# pessoas aprendem a ignorar.
 ruff==0.16.4

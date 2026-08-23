@@ -1,2 +1,14 @@
 -r requirements.txt
-pytest
+
+# MESMA versao do requirements-dev.txt da raiz, e o "mesma" e o ponto: sao
+# dois projetos com ciclos de vida diferentes, mas UM CI so. O que se quer
+# evitar aqui nao e incompatibilidade entre os dois — e o job verde virando
+# vermelho sozinho, sem ninguem ter commitado nada, que foi o que custou uma
+# tarde em 23/08/2026.
+#
+# O ciclo de vida proprio do agente vale para o programa instalado no balcao
+# (dependencias curtas, instalacao a mao, Windows). Nao vale para a
+# ferramenta que roda os testes dele no Actions.
+#
+# Subir a versao e um commit deliberado, e sobe nos DOIS arquivos juntos.
+pytest==9.1.1

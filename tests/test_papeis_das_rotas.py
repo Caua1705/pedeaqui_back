@@ -160,6 +160,10 @@ PAPEL_ESPERADO = {
     ("GET", "/admin/coupons"): GERENCIA,
     ("POST", "/admin/coupons"): SOMENTE_DONO,
     ("PATCH", "/admin/coupons/{coupon_id}"): SOMENTE_DONO,
+    # O catalogo de arte da plataforma. GERENCIA e nao SOMENTE_DONO porque a
+    # lista nao tem valor, prazo nem restaurante — e o que o painel precisa
+    # para desenhar tanto o seletor do POST quanto a tela de leitura.
+    ("GET", "/admin/coupon-templates"): GERENCIA,
 }
 
 # Rotas /admin SEM `exigir_papel`, cada uma com o motivo. Toda rota que nao

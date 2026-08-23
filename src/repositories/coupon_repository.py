@@ -166,6 +166,17 @@ class CouponRepository:
     def get_template(self, template_id: uuid.UUID) -> CouponTemplate | None:
         return self.db.get(CouponTemplate, template_id)
 
+    def list_active_templates(self) -> list[CouponTemplate]:
+        # `name` desempata `sort_order` repetido: sem isso o seletor do painel
+        # sai numa ordem diferente a cada requisicao, e quem escolhe a arte
+        # pela posicao erra.
+        stmt = (
+            select(CouponTemplate)
+            .where(CouponTemplate.is_active.is_(True))
+            .order_by(CouponTemplate.sort_order.asc(), CouponTemplate.name.asc())
+        )
+        return list(self.db.scalars(stmt).all())
+
     def create_coupon(self, coupon: RestaurantCoupon) -> RestaurantCoupon:
         self.db.add(coupon)
         self.db.flush()

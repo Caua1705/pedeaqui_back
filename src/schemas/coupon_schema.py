@@ -26,6 +26,28 @@ class PublicCouponResponse(BaseResponse):
     is_active: bool
 
 
+class CouponTemplateResponse(BaseResponse):
+    """A arte da vitrine, para o painel montar o seletor do POST /admin/coupons.
+
+    `coupon_template_id` e obrigatorio na criacao do cupom e os templates sao
+    da PLATAFORMA, nao do restaurante: nao ha rota que os cadastre e nao ha
+    coluna `restaurant_id` neles. Por isso a lista vem inteira, sem recorte.
+
+    `image_url` acompanha `image_path` pelo mesmo motivo de
+    `PublicCouponResponse`: o caminho sozinho nao renderiza — quem monta a URL
+    do bucket e o backend (`build_storage_url`), e duplicar essa regra no
+    painel seria a segunda copia da configuracao do Supabase.
+    """
+
+    id: UUID
+    name: str
+    image_path: str | None = None
+    image_url: str | None = None
+    discount_type: str
+    discount_value: Decimal | None = None
+    sort_order: int
+
+
 class CouponSelector(BaseModel):
     coupon_id: UUID | None = None
     coupon_code: str | None = Field(default=None, min_length=1, max_length=100)

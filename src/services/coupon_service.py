@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from src.models.coupon_model import RestaurantCoupon
+from src.models.coupon_model import CouponTemplate, RestaurantCoupon
 from src.models.customer_model import Customer
 from src.core.constants import ORDER_TYPES
 from src.repositories.coupon_repository import CouponRepository
@@ -17,6 +17,7 @@ from src.schemas.coupon_schema import (
     AvailableCouponsResponse,
     CouponAdminResponse,
     CouponCreate,
+    CouponTemplateResponse,
     CouponPreviewRequest,
     CouponPreviewResponse,
     CouponUpdate,
@@ -24,6 +25,7 @@ from src.schemas.coupon_schema import (
 )
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import ZERO, quantize_money, to_decimal
+from src.utils.storage import build_storage_url
 
 
 @dataclass(frozen=True)
@@ -287,6 +289,21 @@ class CouponService:
     def list_admin(self, restaurant_id: UUID) -> list[CouponAdminResponse]:
         self._get_restaurant(restaurant_id)
         return [CouponAdminResponse.model_validate(coupon) for coupon in self.repository.list_by_restaurant(restaurant_id)]
+
+    def list_templates(self) -> list[CouponTemplateResponse]:
+        return [self._template_response(template) for template in self.repository.list_active_templates()]
+
+    @staticmethod
+    def _template_response(template: CouponTemplate) -> CouponTemplateResponse:
+        return CouponTemplateResponse(
+            id=template.id,
+            name=template.name,
+            image_path=template.image_path,
+            image_url=build_storage_url(template.image_path),
+            discount_type=template.discount_type,
+            discount_value=template.discount_value,
+            sort_order=template.sort_order or 0,
+        )
 
     def create_admin(self, restaurant_id: UUID, payload: CouponCreate) -> CouponAdminResponse:
         self._get_restaurant(restaurant_id)

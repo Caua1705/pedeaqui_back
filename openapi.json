@@ -5878,6 +5878,69 @@
         "title": "CouponPreviewResponse",
         "type": "object"
       },
+      "CouponTemplateResponse": {
+        "description": "A arte da vitrine, para o painel montar o seletor do POST /admin/coupons.\n\n`coupon_template_id` e obrigatorio na criacao do cupom e os templates sao\nda PLATAFORMA, nao do restaurante: nao ha rota que os cadastre e nao ha\ncoluna `restaurant_id` neles. Por isso a lista vem inteira, sem recorte.\n\n`image_url` acompanha `image_path` pelo mesmo motivo de\n`PublicCouponResponse`: o caminho sozinho nao renderiza — quem monta a URL\ndo bucket e o backend (`build_storage_url`), e duplicar essa regra no\npainel seria a segunda copia da configuracao do Supabase.",
+        "properties": {
+          "discount_type": {
+            "title": "Discount Type",
+            "type": "string"
+          },
+          "discount_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discount Value"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "image_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Path"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "sort_order": {
+            "title": "Sort Order",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "discount_type",
+          "sort_order"
+        ],
+        "title": "CouponTemplateResponse",
+        "type": "object"
+      },
       "CouponUpdate": {
         "additionalProperties": false,
         "properties": {
@@ -12993,6 +13056,36 @@
         "summary": "Set Category Printing Sector",
         "tags": [
           "admin printing"
+        ]
+      }
+    },
+    "/admin/coupon-templates": {
+      "get": {
+        "operationId": "list_coupon_templates_admin_coupon_templates_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CouponTemplateResponse"
+                  },
+                  "title": "Response List Coupon Templates Admin Coupon Templates Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Coupon Templates",
+        "tags": [
+          "admin coupons"
         ]
       }
     },

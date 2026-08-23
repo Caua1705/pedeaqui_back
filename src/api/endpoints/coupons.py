@@ -20,6 +20,7 @@ from src.schemas.coupon_schema import (
     CouponCreate,
     CouponPreviewRequest,
     CouponPreviewResponse,
+    CouponTemplateResponse,
     CouponUpdate,
 )
 from src.services.coupon_service import CouponService
@@ -41,6 +42,17 @@ router = APIRouter(prefix="/restaurants", tags=["coupons"])
 # Ler continua sendo do GERENCIA: quem toca a loja precisa saber qual
 # campanha esta no ar para responder ao cliente que ligou.
 admin_router = APIRouter(prefix="/admin/coupons", tags=["admin coupons"])
+
+# Router proprio porque o caminho e irmao, nao filho, de `/admin/coupons`:
+# pendurar a lista em `/admin/coupons/templates` faria o `{coupon_id}` do
+# PATCH disputar o segmento com a palavra `templates`.
+#
+# GERENCIA, e nao SOMENTE_DONO, apesar de so o dono conseguir CRIAR cupom: a
+# lista e o catalogo de arte da plataforma, sem valor, sem prazo e sem
+# restaurante. Fecha-la no dono nao protegeria nada e tiraria da gerencia a
+# tela de leitura de `GET /admin/coupons`, que mostra o template de cada
+# campanha no ar.
+template_router = APIRouter(prefix="/admin/coupon-templates", tags=["admin coupons"])
 
 
 @router.get("/{restaurant_slug}/coupons/available", response_model=AvailableCouponsResponse)
@@ -109,3 +121,14 @@ def update_admin_coupon(
     db: Session = Depends(get_db),
 ) -> CouponAdminResponse:
     return CouponService(db).update_admin(scope.restaurant_id, coupon_id, payload)
+
+
+@template_router.get(
+    "",
+    response_model=list[CouponTemplateResponse],
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
+def list_coupon_templates(
+    db: Session = Depends(get_db),
+) -> list[CouponTemplateResponse]:
+    return CouponService(db).list_templates()

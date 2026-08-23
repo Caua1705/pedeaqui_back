@@ -378,6 +378,12 @@ class CouponService:
         certa>}` passam, e podem vir junto do `is_active` na mesma chamada.
         Conferir so quando o corpo TOCA no tipo seria mais permissivo e pior:
         deixaria a divergencia sobreviver a todas as outras edicoes.
+
+        **A arte segue a regra oposta, e a diferenca esta em `_template_do_patch`:**
+        o tipo divergente e mentira do proprio cupom, e o lojista consegue
+        conserta-la; a arte desativada e decisao da PLATAFORMA sobre o
+        catalogo, e nao ha PATCH que a desfaca. Por isso a mescla so exige
+        arte ativa quando o corpo TROCA de arte.
         """
         self._get_restaurant(restaurant_id)
         coupon = self.repository.get_by_id_and_restaurant(coupon_id, restaurant_id)
@@ -393,7 +399,7 @@ class CouponService:
             validated = CouponCampaignFields.model_validate(merged)
         except ValidationError as exc:
             self._raise_merged_validation(exc)
-        template = self._load_active_template(validated.coupon_template_id)
+        template = self._template_do_patch(coupon, validated.coupon_template_id)
         self._ensure_template_agrees(template, validated.discount_type)
         code_owner = self.repository.get_by_code_and_restaurant(validated.code, restaurant_id)
         if code_owner is not None and code_owner.id != coupon.id:
@@ -493,10 +499,46 @@ class CouponService:
         return restaurant
 
     def _load_active_template(self, template_id: UUID) -> CouponTemplate:
+        """A arte que o lojista esta ESCOLHENDO. Aposentada nao serve.
+
+        Quem esta MANTENDO a arte que ja usa passa por `_template_do_patch`, e
+        o motivo esta la: as duas perguntas parecem a mesma e nao sao.
+        """
         template = self.repository.get_template(template_id)
         if template is None or not template.is_active:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Template de cupom invalido")
         return template
+
+    def _template_do_patch(self, coupon: RestaurantCoupon, template_id: UUID) -> CouponTemplate:
+        """A arte que o PATCH vai gravar: ativa quando MUDA, qualquer uma quando FICA.
+
+        O cupom preso, que este metodo existe para abrir. `_load_active_template`
+        rodava sobre o resultado da mescla, e a mescla repete a arte que ja
+        esta gravada — entao bastava a plataforma desativar uma arte para
+        TODO PATCH daquele cupom responder 400 "Template de cupom invalido",
+        inclusive um `{"is_active": false}` sozinho, que nao chega perto do
+        campo. E nao havia saida: trocar de arte tambem e edicao, e desligar a
+        campanha era exatamente o que o lojista estava tentando fazer.
+
+        A linha e ESCOLHER contra MANTER. Recusar quem mantem nao protegia
+        nada — a arte aposentada continua na vitrine, porque
+        `list_public_available` nao olha `template.is_active` — e custava o
+        unico caminho de tirar a campanha do ar.
+
+        Consequencia de aceitar isto: `{"is_active": true}` sobre um cupom
+        desligado com arte aposentada volta a por a campanha no ar. E
+        coerente, e nao um buraco: desativar a arte esconde a arte do seletor
+        do painel, nunca foi (nem hoje e) o jeito de derrubar campanha alheia.
+        Quando precisar existir esse jeito, ele e uma alavanca propria da
+        plataforma sobre o CUPOM, e nao um efeito colateral do catalogo.
+
+        Nao vai ao banco: `get_by_id_and_restaurant` ja traz o template pelo
+        `joinedload`, e a coluna e NOT NULL com FK — nao ha caminho que
+        devolva nulo aqui.
+        """
+        if template_id != coupon.coupon_template_id:
+            return self._load_active_template(template_id)
+        return coupon.template
 
     @staticmethod
     def _ensure_template_agrees(template: CouponTemplate, discount_type: str) -> None:

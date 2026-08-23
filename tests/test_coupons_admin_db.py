@@ -226,6 +226,87 @@ def test_cupom_ja_divergente_e_consertado_pelo_proprio_patch(db):
     assert resposta.is_active is False
 
 
+def aposentar(db, template: CouponTemplate) -> None:
+    """A plataforma tira a arte do catalogo, DEPOIS de a campanha existir.
+
+    E a ordem que importa: a arte estava ativa quando o cupom nasceu, entao
+    nenhuma checagem de criacao chega perto deste caso.
+    """
+    template.is_active = False
+    db.flush()
+
+
+def test_desligar_a_campanha_com_a_arte_aposentada_passa(db):
+    """O cupom preso: `{"is_active": false}` sozinho respondia 400.
+
+    A checagem da arte roda sobre o resultado da MESCLA, e a mescla repete a
+    arte que ja esta gravada. Bastava a plataforma desativar uma arte para o
+    lojista nao conseguir nem editar nem desligar a campanha — e nao havia
+    PATCH que o tirasse de la, porque trocar de arte tambem e edicao.
+    """
+    restaurante = criar_restaurante(db)
+    template = criar_template(db, discount_type="fixed")
+    servico = CouponService(db)
+    cupom = servico.create_admin(restaurante.id, payload_de_criacao(template, discount_type="fixed"))
+    aposentar(db, template)
+
+    resposta = servico.update_admin(restaurante.id, cupom.id, CouponUpdate(is_active=False))
+
+    assert resposta.is_active is False
+    assert resposta.coupon_template_id == template.id
+
+
+def test_editar_qualquer_campo_com_a_arte_aposentada_passa(db):
+    """Nao era so o desligar: TODO PATCH morria, inclusive o que so muda texto."""
+    restaurante = criar_restaurante(db)
+    template = criar_template(db, discount_type="fixed")
+    servico = CouponService(db)
+    cupom = servico.create_admin(restaurante.id, payload_de_criacao(template, discount_type="fixed"))
+    aposentar(db, template)
+
+    resposta = servico.update_admin(restaurante.id, cupom.id, CouponUpdate(title="Promocao de agosto"))
+
+    assert resposta.title == "Promocao de agosto"
+
+
+def test_escolher_uma_arte_aposentada_continua_400(db):
+    """A outra metade da regra: MANTER passa, ESCOLHER nao.
+
+    Sem este teste, "deixe o PATCH passar" viraria "aceite qualquer arte", e o
+    seletor do painel — que so lista arte ativa — deixaria de significar
+    alguma coisa.
+    """
+    restaurante = criar_restaurante(db)
+    atual = criar_template(db, discount_type="fixed", nome="Atual")
+    aposentada = criar_template(db, discount_type="fixed", nome="Aposentada", is_active=False)
+    servico = CouponService(db)
+    cupom = servico.create_admin(restaurante.id, payload_de_criacao(atual, discount_type="fixed"))
+
+    with pytest.raises(HTTPException) as erro:
+        servico.update_admin(restaurante.id, cupom.id, CouponUpdate(coupon_template_id=aposentada.id))
+
+    assert erro.value.status_code == 400
+    assert erro.value.detail == "Template de cupom invalido"
+
+
+def test_a_arte_aposentada_nao_dispensa_a_concordancia_de_tipo(db):
+    """Manter a arte nao e passe livre: o tipo continua sendo conferido contra ela."""
+    restaurante = criar_restaurante(db)
+    template = criar_template(db, discount_type="fixed")
+    servico = CouponService(db)
+    cupom = servico.create_admin(restaurante.id, payload_de_criacao(template, discount_type="fixed"))
+    aposentar(db, template)
+
+    with pytest.raises(HTTPException) as erro:
+        servico.update_admin(
+            restaurante.id,
+            cupom.id,
+            CouponUpdate(discount_type="percent", discount_value=Decimal("10")),
+        )
+
+    assert erro.value.status_code == 422
+
+
 def test_arte_ja_usada_responde_409_falando_da_arte(db):
     """O 409 que mandava o lojista mexer no campo errado.
 

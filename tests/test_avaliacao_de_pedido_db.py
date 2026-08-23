@@ -9,7 +9,6 @@ o status. As recusas são tão testadas quanto os aceites — a rota é pública
 o que ela recusa é a maior parte do que ela é.
 """
 
-import uuid
 from datetime import timedelta
 
 import pytest

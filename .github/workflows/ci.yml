@@ -12,6 +12,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Só o ruff: o lint não importa a aplicação, então não precisa do
+      # requirements.txt nem de nenhuma variável de ambiente. Instalar tudo
+      # aqui só tornaria o job mais lento pelo mesmo resultado.
+      - run: pip install ruff==0.16.4
+
+      # Um comando para o repositório inteiro — API e agente de impressão
+      # juntos. Ao contrário do pytest, que os separa em dois jobs porque
+      # são dois conjuntos de dependências, o ruff não importa nada: só lê.
+      #
+      # O conjunto de regras é curto e a razão está no ruff.toml. O que
+      # importa aqui: este passo nasce VERDE, então qualquer vermelho dele é
+      # uma coisa que o commit trouxe.
+      - run: ruff check .
+
   api:
     name: Testes da API
     runs-on: ubuntu-latest

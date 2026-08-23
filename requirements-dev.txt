@@ -1,2 +1,10 @@
 pytest
 coverage
+
+# Pinado, ao contrario dos dois acima, e o motivo e o `select` curto do
+# ruff.toml: uma versao nova do ruff pode acrescentar uma regra ao conjunto
+# `F` e deixar o CI vermelho sem ninguem ter commitado nada. Lint que fica
+# vermelho por conta propria e lint que as pessoas aprendem a ignorar.
+# Subir a versao e um commit deliberado, com o repositorio ficando verde
+# junto.
+ruff==0.16.4

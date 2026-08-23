@@ -25,7 +25,6 @@ from src.services.order_review_service import (
 )
 from src.utils.security import utcnow
 from tests.fabricas_db import (
-    criar_cliente,
     criar_filial,
     criar_pedido,
     criar_restaurante,

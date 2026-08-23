@@ -1,0 +1,54 @@
+# Lint da API e do agente de impressao.
+#
+# ## Por que a lista de regras e curta
+#
+# `ruff check` com o conjunto padrao-ampliado (E,F,W,I,UP,B) acusa 2132
+# ocorrencias neste repositorio HOJE. Quase nenhuma e defeito: 1388 sao
+# linhas com mais de 88 caracteres, 250 sao `Depends(...)` no valor padrao do
+# argumento (que e como o FastAPI se escreve), 108 sao `Union[str, None]` no
+# lugar de `str | None` nos arquivos do Alembic.
+#
+# Um passo de CI que nasce com 2132 erros nao vira qualidade: ou vira um
+# `--exit-zero` que ninguem le, ou vira uma tarde inteira de diff mecanico
+# sobre codigo que funciona. As duas terminam no mesmo lugar — o passo
+# perde a autoridade, e quando ele finalmente acusar um `F821` de verdade
+# ninguem vai olhar.
+#
+# Entao a escolha e a oposta: **regra que so acusa defeito**, e o passo
+# comeca verde. `E9` e erro de sintaxe e de indentacao (codigo que nao
+# roda); `F` e o pyflakes — nome indefinido, import que nao serve mais,
+# chave repetida em dicionario, f-string sem nada dentro das chaves,
+# variavel local que nunca e usada. Sao os erros que passariam no teste
+# porque estao no ramo que o teste nao percorre.
+#
+# ## O que NAO esta aqui, e nao esta de proposito
+#
+# - **E501 (linha longa)**: 1388 ocorrencias. Formatacao nao e defeito, e
+#   este repositorio tem comentario longo em portugues por decisao.
+# - **B008 (chamada no argumento padrao)**: e `Depends()`, `Query()` e
+#   `File()`. Desligar caso a caso com `noqa` seria 250 comentarios de ruido
+#   para uma regra que aqui nunca esta certa.
+# - **I001 (ordem dos imports)**: mexeria em 257 arquivos num commit so,
+#   apagando o `git blame` de metade do repositorio para nao consertar nada.
+# - **E402 (import fora do topo)**: e deliberado em `tests/conftest.py` (o
+#   ambiente precisa nascer antes do primeiro `import src.*`) e em
+#   `scripts/export_openapi.py` (importar `main` sobe a aplicacao inteira, e
+#   com o import no topo ate o `--help` morreria).
+#
+# Ampliar a lista e bem-vindo — uma regra por vez, com o repositorio ficando
+# verde no mesmo commit. O que nao vale e ligar tudo e conviver com vermelho.
+
+target-version = "py312"
+
+# `line-length` nao liga E501 (ela nao esta no `select`). Fica declarada
+# porque o `ruff format`, se alguem o rodar um dia, le daqui — e 88 nao e a
+# largura deste codigo.
+line-length = 110
+
+[lint]
+select = ["E9", "F"]
+
+# Sem `per-file-ignores`, e isso e resultado, nao esquecimento. O candidato
+# obvio seria `src/models/__init__.py`, que importa 30 models sem usa-los —
+# mas ele declara `__all__`, e o pyflakes entende `__all__` como uso. Uma
+# entrada la nao mudaria nada e viraria ruina que parece protecao.

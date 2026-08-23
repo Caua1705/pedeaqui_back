@@ -1,7 +1,7 @@
 import logging
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from time import perf_counter
 
 from fastapi import HTTPException, status

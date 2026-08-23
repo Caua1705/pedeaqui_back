@@ -74,6 +74,11 @@ cujo nome não termine em `_teste`. O primeiro comando que ela executa é um
 
 ### No CI
 
+O workflow tem quatro jobs: `lint` (ruff), `api` (suíte rápida mais o
+`export_openapi --check`), `banco` e `print-agent`. **Que eles barrem o merge
+não é configuração deste repositório** — é um ruleset do GitHub, e a lista do
+que clicar está em `docs/ci-e-protecao-da-main.md`.
+
 O job `banco` do workflow sobe a **mesma** imagem (`pgvector/pgvector:pg17`) como
 `services:` do GitHub Actions, na mesma porta 55432, e roda `pytest -m db`. O
 schema sai da fixture, e não de um passo de shell no YAML: um segundo

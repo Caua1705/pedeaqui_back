@@ -13,7 +13,6 @@ import unittest
 import uuid
 from datetime import date, datetime
 from types import SimpleNamespace
-from unittest.mock import patch
 
 from fastapi import HTTPException
 

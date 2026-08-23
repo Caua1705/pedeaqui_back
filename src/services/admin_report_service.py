@@ -26,7 +26,7 @@ O que os dois compartilham, e que nao pode divergir:
    arquivo: e `ensure_pode_ler_dinheiro`, na rota.
 """
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 from zoneinfo import ZoneInfo

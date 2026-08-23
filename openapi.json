@@ -3413,6 +3413,152 @@
         "title": "AdminStreamTicketResponse",
         "type": "object"
       },
+      "AdminUserCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "email": {
+            "maxLength": 255,
+            "minLength": 3,
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "owner",
+              "manager",
+              "attendant"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "email",
+          "role"
+        ],
+        "title": "AdminUserCreate",
+        "type": "object"
+      },
+      "AdminUserCreatedResponse": {
+        "description": "A UNICA vez que a senha temporaria existe fora do bcrypt.\n\nNao ha rota que a devolva de novo, e isso e propriedade e nao limitacao:\numa rota \"me mostra de novo\" seria uma rota que devolve a senha de outra\npessoa. Segunda via e `POST /admin/users/{id}/reset-password`, que gera\nOUTRA e revoga os tokens da anterior.",
+        "properties": {
+          "admin_user": {
+            "$ref": "#/components/schemas/AdminUserDetailResponse"
+          },
+          "temporary_password": {
+            "title": "Temporary Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "admin_user",
+          "temporary_password"
+        ],
+        "title": "AdminUserCreatedResponse",
+        "type": "object"
+      },
+      "AdminUserDetailResponse": {
+        "description": "O usuario como o painel o le. Nunca com `password_hash`.\n\nO e-mail SAI aqui: e a tela do dono sobre a propria equipe, e sem ele nao\nda para saber com qual conta a pessoa entra. Uma futura tela de gerente\nsobre a equipe da filial nao pode reusar este schema pelo mesmo motivo.",
+        "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "must_change_password": {
+            "title": "Must Change Password",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "password_changed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password Changed At"
+          },
+          "restaurant_id": {
+            "format": "uuid",
+            "title": "Restaurant Id",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "restaurant_id",
+          "branch_id",
+          "name",
+          "email",
+          "role",
+          "is_active",
+          "must_change_password"
+        ],
+        "title": "AdminUserDetailResponse",
+        "type": "object"
+      },
       "AdminUserResponse": {
         "properties": {
           "branch_id": {
@@ -3464,6 +3610,65 @@
           "is_active"
         ],
         "title": "AdminUserResponse",
+        "type": "object"
+      },
+      "AdminUserUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "enum": [
+                  "owner",
+                  "manager",
+                  "attendant"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          }
+        },
+        "title": "AdminUserUpdate",
         "type": "object"
       },
       "AvailableCouponResponse": {
@@ -15848,6 +16053,190 @@
         "summary": "Update Restaurant Settings",
         "tags": [
           "admin settings"
+        ]
+      }
+    },
+    "/admin/users": {
+      "get": {
+        "description": "A equipe do restaurante. A conta de maquina fica de fora.\n\nO agente de impressao ja tem tela propria em `/admin/printing`, que e onde\nele faz sentido — com nome de impressora e heartbeat ao lado. Aqui ele\nseria uma linha sem cargo e sem ninguem por tras.",
+        "operationId": "list_admin_users_admin_users_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AdminUserDetailResponse"
+                  },
+                  "title": "Response List Admin Users Admin Users Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Admin Users",
+        "tags": [
+          "admin users"
+        ]
+      },
+      "post": {
+        "description": "Cadastra alguem e devolve a senha temporaria UMA vez.\n\nA senha vem no corpo da resposta e nao existe em nenhum outro lugar: o\nbanco so tem o bcrypt dela. A tela precisa mostra-la com botao de copiar e\ndeixar claro que ela nao volta — segunda via e\n`POST /admin/users/{id}/reset-password`, que gera outra.\n\n`role` nao aceita `print_agent`: conta de maquina nasce so pelo\n`scripts/create_admin_user.py`, porque criar um agente e parte de uma\ninstalacao fisica.",
+        "operationId": "create_admin_user_admin_users_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminUserCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserCreatedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Admin User",
+        "tags": [
+          "admin users"
+        ]
+      }
+    },
+    "/admin/users/{admin_user_id}": {
+      "patch": {
+        "description": "Nome, papel, filial e `is_active`. Desativar tem efeito imediato.\n\n`is_active: false` vale na requisicao SEGUINTE daquela pessoa, sem esperar\nas 12h do token: `_load_admin_from_token` recarrega o usuario do banco a\ncada chamada. Vale tambem para a conexao SSE, na proxima reconexao.\n\nTres coisas a rota recusa com 400, e as tres sao o mesmo buraco: desativar\na propria conta, desativar o unico dono ativo, rebaixar o unico dono ativo.",
+        "operationId": "update_admin_user_admin_users__admin_user_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "admin_user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Admin User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminUserUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Admin User",
+        "tags": [
+          "admin users"
+        ]
+      }
+    },
+    "/admin/users/{admin_user_id}/reset-password": {
+      "post": {
+        "description": "Nova senha temporaria, e todo token daquela pessoa morre na hora.\n\nE para quem perdeu a senha e para a suspeita de vazamento. Se a pessoa for\no usuario de um agente de impressao... nao e: `print_agent` nao e alcancado\npor estas rotas. A rotacao daquela senha continua sendo\n`scripts/create_admin_user.py --reset-password`, seguida de editar o\n`config.ini` da maquina do balcao.",
+        "operationId": "reset_admin_user_password_admin_users__admin_user_id__reset_password_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "admin_user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Admin User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserCreatedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reset Admin User Password",
+        "tags": [
+          "admin users"
         ]
       }
     },

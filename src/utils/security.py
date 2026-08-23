@@ -125,6 +125,34 @@ def generate_reset_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+# Alfabeto da senha temporaria de lojista. Sem `O`/`0`, `I`/`l`/`1` e sem
+# minuscula que se confunda com maiuscula na fonte do WhatsApp: esta senha e
+# DITADA por telefone e copiada a mao no balcao, e um caractere ambiguo vira
+# "nao consigo entrar" que ninguem consegue depurar a distancia.
+_TEMPORARY_PASSWORD_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+# 20 caracteres sobre 31 simbolos: ~99 bits. O minimo do lojista e 12
+# (`MIN_ADMIN_PASSWORD_LENGTH`), e o excedente e de graca — ninguem memoriza
+# esta senha, ela e usada uma vez e trocada.
+_TEMPORARY_PASSWORD_LENGTH = 20
+
+
+def generate_temporary_password() -> str:
+    """Senha de primeiro acesso, gerada pelo servidor.
+
+    Gerada aqui e nao escolhida por quem cadastra, e a diferenca e concreta: o
+    dono digitando a senha da equipe produz `mesa123`, e passa a CONHECER a
+    senha de outra pessoa — com isso o `admin:{email}` do historico de pedidos
+    deixa de identificar quem de fato agiu.
+
+    Ela existe em claro uma vez so, na resposta do POST. Nao ha rota que a
+    devolva de novo.
+    """
+    return "".join(
+        secrets.choice(_TEMPORARY_PASSWORD_ALPHABET)
+        for _ in range(_TEMPORARY_PASSWORD_LENGTH)
+    )
+
+
 def generate_tracking_token() -> str:
     """Segredo de acompanhamento do pedido.
 

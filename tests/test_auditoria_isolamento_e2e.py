@@ -249,6 +249,9 @@ def test_listagens_de_a_nao_mostram_nada_de_b(cliente_http, a_e_b):
         "/admin/categories",
         "/admin/customers",
         "/admin/coupons",
+        # A lista da equipe: e-mail e id de lojista de outro restaurante nao
+        # podem aparecer aqui de jeito nenhum.
+        "/admin/users",
         "/admin/branches",
         "/admin/settings",
         f"/admin/reports/summary?{periodo}",

@@ -21,6 +21,7 @@ from src.api.endpoints import (
     admin_reports,
     admin_reviews,
     admin_settings,
+    admin_users,
     auth,
     branches,
     coupons,
@@ -129,6 +130,7 @@ app.include_router(coupons.router)
 app.include_router(coupons.admin_router)
 app.include_router(coupons.template_router)
 app.include_router(admin_auth.router)
+app.include_router(admin_users.router)
 app.include_router(admin_orders.router)
 app.include_router(admin_menu.router)
 app.include_router(admin_printing.router)

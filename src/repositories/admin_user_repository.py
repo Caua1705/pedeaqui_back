@@ -3,6 +3,7 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from src.core.constants import PAPEL_DE_DONO, PAPEL_DE_MAQUINA
 from src.models.admin_user_model import AdminUser
 
 
@@ -27,7 +28,61 @@ class AdminUserRepository:
         )
         return list(self.db.scalars(stmt).all())
 
+    def list_people_by_restaurant(self, restaurant_id: uuid.UUID) -> list[AdminUser]:
+        """As PESSOAS do restaurante. A conta de maquina fica de fora.
+
+        `GET /admin/users` e a tela da equipe. O agente de impressao ja tem
+        tela propria em `/admin/printing`, que e onde ele faz sentido — com
+        nome de impressora e estado de heartbeat ao lado. Misturado aqui ele
+        vira uma linha sem telefone, sem cargo e sem ninguem por tras.
+        """
+        stmt = (
+            select(AdminUser)
+            .where(
+                AdminUser.restaurant_id == restaurant_id,
+                AdminUser.role != PAPEL_DE_MAQUINA,
+            )
+            .order_by(AdminUser.created_at)
+        )
+        return list(self.db.scalars(stmt).all())
+
+    def get_by_id_and_restaurant(
+        self,
+        admin_user_id: uuid.UUID,
+        restaurant_id: uuid.UUID,
+    ) -> AdminUser | None:
+        """O usuario, se ele for deste restaurante.
+
+        O filtro entra no WHERE, e nao numa comparacao depois do `get`: e o
+        mesmo motivo de toda rota /admin: quem escreve o `if` esquece, quem
+        escreve o WHERE nao tem como.
+        """
+        stmt = select(AdminUser).where(
+            AdminUser.id == admin_user_id,
+            AdminUser.restaurant_id == restaurant_id,
+        )
+        return self.db.scalar(stmt)
+
+    def count_active_owners(self, restaurant_id: uuid.UUID) -> int:
+        """Quantos donos ATIVOS o restaurante ainda tem.
+
+        E a conta que impede o restaurante de ficar sem dono nenhum — estado
+        cuja unica saida seria `docker exec`, que e exatamente o que estas
+        rotas existem para eliminar.
+        """
+        stmt = select(func.count(AdminUser.id)).where(
+            AdminUser.restaurant_id == restaurant_id,
+            AdminUser.role == PAPEL_DE_DONO,
+            AdminUser.is_active.is_(True),
+        )
+        return int(self.db.scalar(stmt) or 0)
+
     def create(self, admin_user: AdminUser) -> AdminUser:
+        self.db.add(admin_user)
+        self.db.flush()
+        return admin_user
+
+    def save(self, admin_user: AdminUser) -> AdminUser:
         self.db.add(admin_user)
         self.db.flush()
         return admin_user

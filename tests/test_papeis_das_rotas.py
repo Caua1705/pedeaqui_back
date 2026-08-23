@@ -164,6 +164,17 @@ PAPEL_ESPERADO = {
     # lista nao tem valor, prazo nem restaurante — e o que o painel precisa
     # para desenhar tanto o seletor do POST quanto a tela de leitura.
     ("GET", "/admin/coupon-templates"): GERENCIA,
+    # --- usuarios do painel: as quatro sao do dono, inclusive a de LER
+    #
+    # A lista diz quem tem acesso ao faturamento do restaurante — e o mapa de
+    # quem atacar, e nao o que o balcao precisa para atender. A pergunta "o
+    # gerente precisa ver a equipe da filial dele?" foi feita e respondida
+    # antes de escrever a rota: nao. Se um dia virar necessidade, e rota
+    # diferente, com recorte de filial e sem e-mail na resposta.
+    ("GET", "/admin/users"): SOMENTE_DONO,
+    ("POST", "/admin/users"): SOMENTE_DONO,
+    ("PATCH", "/admin/users/{admin_user_id}"): SOMENTE_DONO,
+    ("POST", "/admin/users/{admin_user_id}/reset-password"): SOMENTE_DONO,
 }
 
 # Rotas /admin SEM `exigir_papel`, cada uma com o motivo. Toda rota que nao

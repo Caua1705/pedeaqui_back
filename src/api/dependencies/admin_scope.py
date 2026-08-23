@@ -56,12 +56,17 @@ from dataclasses import dataclass
 from fastapi import Depends, HTTPException, status
 
 from src.api.dependencies.admin_auth import get_current_admin
+from src.core.constants import PAPEL_DE_DONO
 from src.models.admin_user_model import AdminUser
 
 
 # Papel que enxerga o restaurante inteiro. Deixado como constante para que a
 # comparacao nao apareca solta como string no meio das regras.
-UNRESTRICTED_ROLE = "owner"
+#
+# O valor mora em `core/constants.PAPEL_DE_DONO` porque o repositorio de
+# usuarios tambem precisa dele (para contar os donos ativos) e repositorio nao
+# importa dependencia de rota. O nome daqui fica: e ele que as regras leem.
+UNRESTRICTED_ROLE = PAPEL_DE_DONO
 
 # Os conjuntos de papeis, com nome. Cada rota aponta para um destes, e a
 # leitura da rota vira uma frase — `dependencies=[Depends(exigir_papel(GERENCIA))]`

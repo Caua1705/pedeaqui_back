@@ -7,6 +7,35 @@
 # tela no painel e nao pertence a uma pessoa.
 ADMIN_USER_ROLES = ("owner", "manager", "attendant", "print_agent")
 
+# Os papeis que uma PESSOA pode ter. E `ADMIN_USER_ROLES` menos a conta de
+# maquina, e existe para o cadastro de usuario do painel nao oferecer "agente
+# de impressao" como se fosse cargo de gente.
+#
+# Constante propria e nao um `[:-1]`: a lista de cima espelha o CHECK da
+# tabela, esta espelha uma decisao de produto, e um dia elas divergem por
+# motivos que nada tem a ver um com o outro.
+#
+# **Nao confundir com `PESSOAS`, de `dependencies/admin_scope.py`**, que hoje
+# tem os mesmos tres valores e responde outra pergunta: aquela e "quais papeis
+# esta ROTA aceita", esta e "quais papeis podem ser ATRIBUIDOS a alguem". Uma
+# rota nova aberta so a dono e gerente mexeria em `PESSOAS` sem que o cadastro
+# de usuario tivesse mudado.
+PAPEIS_DE_PESSOA = ("owner", "manager", "attendant")
+
+# A conta de maquina, para quem precisa nomea-la sem repetir a string. Ela
+# NASCE SO PELO SCRIPT (`scripts/create_admin_user.py`), e a rota de cadastro
+# a recusa no corpo: criar um agente e parte de uma instalacao fisica — alguem
+# esta na loja, com a maquina na frente, editando o config.ini. Uma tela que
+# crie a conta sem ninguem la cria conta orfa, que o heartbeat nunca preenche.
+PAPEL_DE_MAQUINA = "print_agent"
+
+# Quem enxerga o restaurante inteiro. Mora aqui, e nao so em
+# `dependencies/admin_scope.py`, porque o repositorio precisa dele para contar
+# os donos ativos — e uma camada de repositorio nao importa dependencia de
+# rota. `UNRESTRICTED_ROLE` continua existindo la, apontando para este valor:
+# dois literais "owner" em arquivos diferentes seriam duas chances de divergir.
+PAPEL_DE_DONO = "owner"
+
 # Minimo da senha de LOJISTA — 12, contra os 8 do cliente. A diferenca e
 # proposital e vem da conta de estrago: a conta de cliente da acesso ao
 # proprio historico; a de lojista da acesso a todos os pedidos, a lista de

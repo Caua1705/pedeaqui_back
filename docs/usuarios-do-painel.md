@@ -1,13 +1,26 @@
-# Usuários do painel — levantamento e proposta
+# Usuários do painel
 
-**Status: proposta. Nada aqui foi implementado.**
+**Status: implementado em 23/08/2026.** Este documento nasceu como proposta,
+foi decidido, e agora descreve o que existe. As três decisões que ele pedia
+estão respondidas na seção 8, com o que foi feito de cada uma.
 
-Este documento é para ser lido e decidido, não aplicado. Levantado em
-23/08/2026, contra a árvore em `4a1f4c1`.
+Levantado em 23/08/2026 contra a árvore em `4a1f4c1`; implementado nas
+revisões `20260823_0037` (a coluna) e nos commits das quatro rotas.
 
 O que ele responde, porque foi o que se pediu: **como a senha nasce**, **como
 se desativa alguém** e **o que acontece com o `print_agent`**, que é conta de
 máquina e não deveria conseguir entrar no painel.
+
+## O que existe, em uma tabela
+
+| Rota | Papel | O que faz |
+|---|---|---|
+| `GET /admin/users` | `SOMENTE_DONO` | a equipe do restaurante, sem a conta de máquina |
+| `POST /admin/users` | `SOMENTE_DONO` | cadastra e devolve a senha temporária **uma vez** |
+| `PATCH /admin/users/{id}` | `SOMENTE_DONO` | nome, papel, filial, `is_active` |
+| `POST /admin/users/{id}/reset-password` | `SOMENTE_DONO` | outra temporária, e revoga os tokens |
+
+Não há `DELETE`, e a ausência é da seção 4.
 
 ---
 
@@ -42,19 +55,32 @@ usam. Serve de graça para o reset feito pelo dono.
 
 ---
 
-## 2. O que não existe
+## 2. O que faltava, e o que ainda falta
 
-1. **Nenhuma rota.** Não há listar, criar, editar nem desativar usuário do
-   painel. Todo cadastro é `docker exec` + `scripts/create_admin_user.py`, com
-   `--branch-id` colado de uma consulta SQL feita antes.
-2. **O `role` do usuário criado não passa por revisão de ninguém.** O script
-   aceita `--role owner` sem cerimônia. Numa rota isso vira uma pergunta:
-   quem pode criar um `owner`?
-3. **Não há rastro de quem criou ou desativou quem.** `admin_users` não tem
-   `created_by`, e não há tabela de auditoria do painel.
-4. **`print_agent` está na mesma lista dos outros três** (`ADMIN_USER_ROLES`).
-   Uma tela que renderize o seletor de papel a partir dessa constante oferece
-   "agente de impressão" como se fosse cargo de gente.
+O levantamento original listava quatro buracos. **Três foram fechados**, e
+ficam registrados porque explicam por que as rotas são como são:
+
+1. ~~**Nenhuma rota.**~~ Todo cadastro era `docker exec` +
+   `scripts/create_admin_user.py`, com `--branch-id` colado de uma consulta SQL
+   feita antes. Hoje são as quatro rotas da tabela no topo. O script continua
+   existindo, e continua sendo o único caminho para o **primeiro** usuário de
+   um restaurante — não há ninguém autenticado para autorizar essa criação — e
+   para a conta de máquina.
+2. ~~**O `role` não passava por revisão de ninguém.**~~ O script aceita
+   `--role owner` sem cerimônia, e continua aceitando: quem tem `docker exec`
+   já tem o banco. Pela API, criar e editar usuário é `SOMENTE_DONO`, e as
+   guardas da seção 4 impedem que o restaurante fique sem dono ativo.
+3. ~~**`print_agent` na mesma lista dos outros três.**~~ `PAPEIS_DE_PESSOA`
+   existe em `core/constants.py`, e é dela que o painel monta o seletor de
+   cargo — o `role` do corpo é um `Literal` com esses três valores, então a
+   lista sai no `/openapi.json` e a tela não precisa da segunda cópia.
+
+**O que continua não existindo, e é decisão:**
+
+4. **Não há rastro de quem criou ou desativou quem.** `admin_users` não tem
+   `created_by`, e não há tabela de auditoria do painel. O `logger.info` de
+   `AdminUserService` registra quem agiu, o que é rastro de operação e não
+   auditoria consultável. É frente própria — ver seção 7.
 
 ---
 
@@ -143,7 +169,7 @@ a porta de A: as duas terminam no mesmo lugar, um usuário com senha própria e
    restaurante (o login recebe só e-mail e senha, sem slug). E-mail liberado é
    e-mail que pode reaparecer em outro restaurante.
 
-**A proposta:** `PATCH /admin/users/{id}` com `is_active: false`. Efeito na
+**Implementado:** `PATCH /admin/users/{id}` com `is_active: false`. Efeito na
 requisição seguinte, pelo motivo da seção 1. E, junto no mesmo commit,
 **gravar `password_changed_at = now()` ao desativar** — sem isso, reativar a
 pessoa depois ressuscita tokens antigos que ainda estejam dentro das 12h.
@@ -194,16 +220,17 @@ frente nova pode estragar é justamente isso, de três jeitos:
    impressora e estado de heartbeat ao lado.
 
 **Onde o `print_agent` continua nascendo, então?** No script. E isso é
-proposta, não omissão: criar um agente é parte de uma instalação física —
+decisão, não omissão: criar um agente é parte de uma instalação física —
 alguém está na loja, com a máquina na frente, editando o `config.ini`. Uma
 tela que crie a conta sem que ninguém esteja lá cria conta órfã.
 
 ---
 
-## 6. As rotas que eu proponho
+## 6. As rotas
 
 Todas `SOMENTE_DONO`, com a linha correspondente em
-`tests/test_papeis_das_rotas.py` no mesmo commit.
+`tests/test_papeis_das_rotas.py` — que é o teste que faz rota nova sem papel
+nascer vermelha.
 
 | Rota | O que faz |
 |---|---|
@@ -230,8 +257,8 @@ consome. Nada renomeado, nada removido — é adição pura.
 
 ## 7. O que fica de fora, e por quê
 
-- **Convite por e-mail** — seção 3, opção A. Fica para quando o painel tiver
-  página pública.
+- **Convite por e-mail** — seção 3, opção A. Continua fora: fica para quando o
+  painel tiver sua primeira página pública.
 - **Auditoria de quem criou/desativou quem.** É desejável, e é uma tabela
   nova; misturar com esta frente dobra o tamanho dela. Vale como frente
   própria, junto com o resto da auditoria do painel.
@@ -242,12 +269,55 @@ consome. Nada renomeado, nada removido — é adição pura.
 
 ---
 
-## 8. As decisões que eu preciso antes de escrever código
+## 8. As três decisões, e o que foi feito de cada uma
 
-1. **Senha temporária (B) ou convite por e-mail (A)?** Recomendo B, e a razão
-   é a página pública que A exige no `rapidex-admin`.
-2. **`print_agent` continua nascendo só pelo script?** Recomendo que sim, e
-   que a rota recuse o papel no corpo.
-3. **`GET /admin/users` é `SOMENTE_DONO` mesmo para ler?** Recomendo que sim.
-   Se a resposta for "o gerente precisa ver a equipe da filial dele", isso é
-   uma rota diferente com outro recorte, e prefiro saber disso antes.
+Decididas em 23/08/2026.
+
+### 1. Senha temporária (B), não convite por e-mail (A)
+
+**Decidido: B.** O argumento de escopo decidiu — A exige uma página pública em
+outro repositório, com deploy próprio, para uma frente que cabe na área
+autenticada. E o caso do "quem não tem e-mail" é real: atendente de balcão
+muitas vezes não tem e-mail que ele mesmo acesse, e o dono acabaria cadastrando
+com o próprio.
+
+Os dois detalhes que vinham junto foram confirmados e implementados:
+
+- **`must_change_password` é coluna nova** (revisão `20260823_0037`), e não
+  `password_changed_at IS NULL`. Aquele nulo é o estado de todo lojista antigo;
+  reusá-lo poria a plataforma inteira numa tela de troca de senha no dia do
+  deploy.
+- **Segunda via é gerar outra**, nunca "me mostra de novo" — que seria uma rota
+  que devolve a senha de outra pessoa.
+
+**Além do que a proposta dizia:** a obrigação de trocar é aplicada no
+**backend**, não só na tela. Com `must_change_password` verdadeiro, só
+`GET /admin/auth/me` e `PATCH /admin/auth/password` abrem; o resto responde
+403. Sem isso a limitação seria enfeite — quem interceptasse a senha no
+WhatsApp chamaria a API direto. O sinal que o painel obedece é o
+`must_change_password` que o login e o `/me` devolvem; o 403 é a rede embaixo.
+
+**A porta de A continua aberta.** As duas terminam no mesmo lugar (um usuário
+com senha própria e `must_change_password` falso), e metade do backend de A —
+token assinado com `purpose`, envio por Resend — já está escrita.
+
+### 2. `print_agent` nasce só pelo script
+
+**Decidido: sim**, e a rota recusa o papel no corpo com 422 que diz o motivo.
+`PAPEIS_DE_PESSOA` é constante própria em `core/constants.py`, separada de
+`ADMIN_USER_ROLES` — a primeira espelha uma decisão de produto, a segunda
+espelha o CHECK da tabela.
+
+A conta de máquina também **não aparece** no `GET /admin/users` e responde
+**404** no `PATCH` e no `reset-password`: não aparecer na lista mas ser
+editável por id seria a porta lateral da mesma decisão.
+
+### 3. `GET /admin/users` é `SOMENTE_DONO` inclusive para ler
+
+**Decidido: sim.** E a pergunta que dependia disso foi respondida: **o gerente
+não precisa ver a equipe.** Com um restaurante de duas filiais, quem cadastra é
+o dono.
+
+Se um dia virar necessidade, é **rota diferente com outro recorte** — filial em
+vez de restaurante, e sem e-mail na resposta. Afrouxar o papel destas entregaria
+o restaurante inteiro para resolver uma pergunta sobre uma loja.

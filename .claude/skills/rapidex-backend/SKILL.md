@@ -358,21 +358,27 @@ duas cópias em disco.
 `scripts/audit_indexes.py` procura as duas coisas — colisão de nome e duplicata
 de definição.
 
-**PENDENTE: `admin_users` tem a duplicata em produção, agora.** Achada em
-22/08/2026 rodando o audit. `idx_admin_users_restaurant_id` e
-`ix_admin_users_restaurant_id` existem os dois, sobre a mesma coluna, e os dois
-estão no `schema_baseline.sql` — quer dizer, no banco de verdade.
+**`admin_users` teve a mesma duplicata, e a revisão `20260823_0036` a
+fechou.** Achada em 22/08/2026 rodando o audit: `idx_admin_users_restaurant_id`
+e `ix_admin_users_restaurant_id` existiam os dois, sobre a mesma coluna, os
+dois no `schema_baseline.sql` — quer dizer, no banco de verdade.
 
 Foi a revisão `20260726_0003` que criou o segundo: `CREATE INDEX IF NOT EXISTS
 ix_admin_users_restaurant_id` sobre uma tabela que já tinha o `idx_`. É esta
 armadilha inteira, materializada, e ninguém percebeu porque nada falha — o
 Postgres só mantém os dois em toda escrita.
 
-O conserto é o mesmo da `20260810_0012` (DROP do antigo, CREATE do canônico,
-mesma transação, DROP primeiro) e cabe numa revisão própria. Não foi feito
-junto da `20260822_0032`, que fez essa adoção em `cashback_transactions`: são
-tabelas diferentes e motivos diferentes de mexer, e misturar as duas faria um
-rollback de uma arrastar a outra.
+O conserto foi o mesmo da `20260810_0012` (DROP do antigo, CREATE do canônico,
+mesma transação, DROP primeiro), em revisão própria. Não foi feito junto da
+`20260822_0032`, que fez essa adoção em `cashback_transactions`: são tabelas
+diferentes e motivos diferentes de mexer, e misturar as duas faria um rollback
+de uma arrastar a outra.
+
+**Uma diferença entre as duas que só aparece no `downgrade`.** A `0012`
+derruba o nome canônico ao voltar, porque foi ela quem o criou. A `0036` não
+derruba: quem criou o `ix_` de `admin_users` foi a `0003`, e derrubá-lo ali
+deixaria sem índice nenhum quem parasse entre as duas revisões. A regra é
+"desfaça o que ESTA revisão fez", não "termine sem o índice".
 
 E o audit tem um falso positivo conhecido: ele lista o mesmo índice repetido
 (`restaurants_pkey (16 kB), restaurants_pkey (16 kB), ...`) uma vez por FK que

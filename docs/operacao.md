@@ -68,9 +68,12 @@ adiante. Não há `|| true`: se a migração falhar, o container morre e o
 
 ```sh
 set -e
-alembic upgrade head
+alembic upgrade "${ALEMBIC_TARGET:-head}"
 exec "$@"        # uvicorn
 ```
+
+`ALEMBIC_TARGET` é a exceção, e só serve à migração em duas etapas (§2). Sem
+ela — que é o caso de todo deploy normal — o alvo é `head`.
 
 Duas consequências que você precisa ter na cabeça:
 
@@ -100,7 +103,7 @@ container.
 
 ## 2. Migrações
 
-Fonte da verdade: `alembic/versions/` (12 revisões hoje). A pasta `migrations/` é
+Fonte da verdade: `alembic/versions/` (38 revisões hoje). A pasta `migrations/` é
 **arquivo histórico congelado** dos 12 `.sql` aplicados à mão — não rode nada de
 lá.
 
@@ -125,6 +128,22 @@ alembic revision --autogenerate -m "descricao"
 alembic downgrade -1
 alembic history --verbose
 ```
+
+### Migração em duas etapas: `ALEMBIC_TARGET`
+
+O entrypoint vai até `head`, sempre — e é o certo em 99% dos deploys. A exceção
+é a revisão **irreversível**, que precisa de uma janela de conferência com a API
+nova rodando contra o schema da revisão anterior. Duas revisões na mesma imagem
+não dão essa janela: `upgrade head` aplica as duas no mesmo segundo.
+
+`ALEMBIC_TARGET=<revisão>` no `.env` faz o entrypoint parar naquela revisão. É
+**estado temporário**: enquanto a variável existir, nenhuma revisão posterior é
+aplicada, o deploy passa verde e a API sobe contra um schema velho — que é
+exatamente o que o entrypoint existe para impedir. Por isso ele grita no log
+enquanto ela estiver lá.
+
+Roteiro de uso real, com o que conferir entre as etapas:
+[`deploy-hash-do-tracking-token.md`](deploy-hash-do-tracking-token.md).
 
 ### `--autogenerate` quer apagar metade do banco
 

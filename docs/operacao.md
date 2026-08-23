@@ -215,6 +215,11 @@ docker logs pedeaqui-reindex --tail 50 | grep "mais_antigo_s"
 
 # comanda saindo errada
 grep "item sem setor utilizavel"
+
+# lojista relatou um erro pelo painel. A linha leva id, loja e tela, e NÃO
+# leva o texto — o relato pode ter dado pessoal dentro, e log aqui não
+# carrega dado pessoal. Para ler o relato: `scripts/error_reports.py`.
+grep "\[relato\] erro relatado pelo lojista"
 ```
 
 ---
@@ -227,10 +232,13 @@ docker exec pedeaqui-api python scripts/cleanup_idempotency_keys.py
 docker exec pedeaqui-api python scripts/reindex_ai.py
 docker exec pedeaqui-api python scripts/audit_indexes.py
 docker exec pedeaqui-api python scripts/check_restaurant.py junior-da-picanha
+docker exec pedeaqui-api python scripts/error_reports.py
 ```
 
 - **`cleanup_idempotency_keys.py`** apaga chaves de idempotência **e** estimativas
-  de entrega vencidas. Seguro: passado o TTL nenhuma das duas protege ou vale mais
+  de entrega vencidas (e mais quatro tabelas — códigos, feedback do Rapi,
+  comentário de avaliação e relato de erro, estas por retenção de dado
+  pessoal, não por espaço em disco). Seguro: passado o TTL nenhuma das duas protege ou vale mais
   nada. Bota no cron.
 - **`reindex_ai.py`** regenera os embeddings dos produtos. **O dia a dia não
   depende mais dele:** o container `reindex` faz isso sozinho a cada minuto. Rode
@@ -239,6 +247,12 @@ docker exec pedeaqui-api python scripts/check_restaurant.py junior-da-picanha
   gravado.
 - **`audit_indexes.py`** procura colisão de nome e duplicata de definição entre
   índices.
+- **`error_reports.py`** lista o que os lojistas mandaram pelo botão de
+  reportar erro (`POST /admin/error-reports`), do mais novo para o mais velho.
+  Só leitura — quem apaga relato é a retenção de 90 dias, no
+  `cleanup_idempotency_keys.py`. **A saída tem dado pessoal:** credencial já
+  foi mascarada antes de o registro existir, mas o texto livre pode ter nome,
+  telefone e endereço de cliente. Não cole em canal compartilhado.
 - **`check_restaurant.py <slug>`** responde "este restaurante está pronto?" —
   confere os cinco passos do onboarding que quebram em silêncio e sai com 1 se
   algum estiver em ERRO. Só leitura. Rode antes de considerar um restaurante no

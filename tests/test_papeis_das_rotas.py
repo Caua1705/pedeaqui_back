@@ -175,6 +175,13 @@ PAPEL_ESPERADO = {
     ("POST", "/admin/users"): SOMENTE_DONO,
     ("PATCH", "/admin/users/{admin_user_id}"): SOMENTE_DONO,
     ("POST", "/admin/users/{admin_user_id}/reset-password"): SOMENTE_DONO,
+    # --- relato de erro: PESSOAS, e de proposito o papel mais largo
+    #
+    # Quem mais esbarra em erro e quem passa o dia na tela, e esse e o
+    # atendente. Fechar na gerencia faria o erro chegar de segunda mao,
+    # contado por quem nao viu. A rota so escreve, so no proprio restaurante
+    # (que sai do token) e nao le nada.
+    ("POST", "/admin/error-reports"): PESSOAS,
 }
 
 # Rotas /admin SEM `exigir_papel`, cada uma com o motivo. Toda rota que nao

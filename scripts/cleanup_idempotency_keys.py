@@ -1,6 +1,6 @@
-"""Remove chaves, estimativas, codigos, feedback e comentario.
+"""Remove chaves, estimativas, codigos, feedback, comentario e relato.
 
-O nome do arquivo ficou para tras: ele cuida de CINCO tabelas hoje, nao so
+O nome do arquivo ficou para tras: ele cuida de SEIS tabelas hoje, nao so
 de `idempotency_keys`. Nao foi renomeado de proposito — o nome aparece no
 `command` do container `limpeza` em `docker-compose.yml`, na secao "Uso"
 abaixo e em `docs/`, e trocar tres referencias para ganhar um nome melhor nao
@@ -31,7 +31,14 @@ expurgo cobre o que sobra, que e o pedido de convidado (`customer_id` nulo,
 inalcancavel a partir de conta nenhuma). Quem sabe ate quando e
 `order_review_service.review_retention_cutoff`.
 
-As cinco apagam poucas linhas por execucao — dezenas ou centenas —, entao
+`admin_error_reports` e a SEXTA, e entrou pelo mesmo motivo do `ai_feedback`:
+`description` e `error_log` guardam texto livre escrito por um lojista, que
+descreve um cliente que nao tem como saber que o registro existe, e a tabela
+nao tem `customer_id` — nenhuma exclusao de conta vai alcanca-la, hoje ou
+nunca. Quem sabe ate quando e
+`admin_error_report_service.error_report_retention_cutoff`.
+
+As seis apagam poucas linhas por execucao — dezenas ou centenas —, entao
 todas cabem numa transacao so, com um commit no fim. Foi a sexta tabela
 (`menu_events`, do funil do cardapio) que exigia expurgo EM LOTES, e ela saiu
 junto com a frente inteira de funil e origem: se algum dia entrar aqui uma
@@ -64,16 +71,19 @@ if str(ROOT_DIR) not in sys.path:
 from sqlalchemy import func, select
 
 from src.db.session import SessionLocal
+from src.models.admin_error_report_model import AdminErrorReport
 from src.models.ai_feedback_model import AIFeedback
 from src.models.customer_model import EmailVerificationCode, PasswordResetCode
 from src.models.delivery_estimate_model import DeliveryEstimate
 from src.models.order_review_model import OrderReview
 from src.models.idempotency_key_model import IdempotencyKey
+from src.repositories.admin_error_report_repository import AdminErrorReportRepository
 from src.repositories.ai_feedback_repository import AIFeedbackRepository
 from src.repositories.delivery_estimate_repository import DeliveryEstimateRepository
 from src.repositories.customer_repository import CustomerRepository
 from src.repositories.idempotency_repository import IdempotencyRepository
 from src.repositories.order_review_repository import OrderReviewRepository
+from src.services.admin_error_report_service import error_report_retention_cutoff
 from src.services.auth_service import codes_retention_cutoff
 from src.services.chat_service import feedback_retention_cutoff
 from src.services.order_review_service import review_retention_cutoff
@@ -82,7 +92,7 @@ from src.utils.security import utcnow
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Remove chaves, estimativas, codigos, feedback e comentarios vencidos."
+        description="Remove chaves, estimativas, codigos, feedback, comentarios e relatos vencidos."
     )
     parser.add_argument(
         "--dry-run",
@@ -95,6 +105,7 @@ def main() -> int:
     cutoff = codes_retention_cutoff(now)
     feedback_cutoff = feedback_retention_cutoff(now)
     review_cutoff = review_retention_cutoff(now)
+    relato_cutoff = error_report_retention_cutoff(now)
     with SessionLocal() as db:
         if args.dry_run:
             keys = db.scalar(
@@ -126,10 +137,16 @@ def main() -> int:
                     OrderReview.comment.is_not(None),
                 )
             )
+            relatos = db.scalar(
+                select(func.count())
+                .select_from(AdminErrorReport)
+                .where(AdminErrorReport.created_at < relato_cutoff)
+            )
             print(
                 f"[dry-run] {keys} chave(s), {estimates} estimativa(s), "
-                f"{codes} codigo(s) e {feedback} feedback(s) seriam removidos "
-                f"e {comentarios} comentario(s) de avaliacao seriam limpos."
+                f"{codes} codigo(s), {feedback} feedback(s) e {relatos} relato(s) "
+                f"seriam removidos e {comentarios} comentario(s) de avaliacao "
+                f"seriam limpos."
             )
             return 0
 
@@ -138,12 +155,14 @@ def main() -> int:
         removed_codes = CustomerRepository(db).delete_codes_created_before(cutoff)
         removed_feedback = AIFeedbackRepository(db).delete_created_before(feedback_cutoff)
         cleared_comments = OrderReviewRepository(db).clear_comments_created_before(review_cutoff)
+        removed_reports = AdminErrorReportRepository(db).delete_created_before(relato_cutoff)
         db.commit()
 
         print(
             f"{removed_keys} chave(s), {removed_estimates} estimativa(s), "
-            f"{removed_codes} codigo(s) e {removed_feedback} feedback(s) "
-            f"removidos; {cleared_comments} comentario(s) de avaliacao limpos."
+            f"{removed_codes} codigo(s), {removed_feedback} feedback(s) e "
+            f"{removed_reports} relato(s) removidos; {cleared_comments} "
+            f"comentario(s) de avaliacao limpos."
         )
     return 0
 

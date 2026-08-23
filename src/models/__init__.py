@@ -1,3 +1,4 @@
+from src.models.admin_error_report_model import AdminErrorReport
 from src.models.admin_user_model import AdminUser
 from src.models.ai_feedback_model import AIFeedback
 from src.models.ai_product_embedding_model import AIProductEmbedding
@@ -28,6 +29,7 @@ from src.models.restaurant_payment_credential_model import RestaurantPaymentCred
 from src.models.restaurant_setting_model import RestaurantSetting
 
 __all__ = [
+    "AdminErrorReport",
     "AdminUser",
     "AIFeedback",
     "AIProductEmbedding",

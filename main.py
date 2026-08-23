@@ -15,6 +15,7 @@ from src.api.endpoints import (
     admin_auth,
     admin_cashback,
     admin_customers,
+    admin_error_reports,
     admin_menu,
     admin_orders,
     admin_printing,
@@ -139,6 +140,7 @@ app.include_router(admin_cashback.router)
 app.include_router(admin_customers.router)
 app.include_router(admin_reports.router)
 app.include_router(admin_reviews.router)
+app.include_router(admin_error_reports.router)
 app.include_router(chat.router)
 
 # Atendimento por voz. `VOICE_ENABLED` e a CHAVE MESTRA: desligada, as rotas

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from fastapi import HTTPException
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 
 from src.api.dependencies.admin_scope import AdminScope
 from src.schemas.coupon_schema import CouponPreviewRequest
@@ -617,6 +618,53 @@ class OrderCouponIntegrationTests(unittest.TestCase):
         self.assertEqual(result, "detail")
         self.assertEqual(reversed_orders, [order.id])
         self.assertEqual(db.events, ["commit"])
+
+
+class ConflictMessageTests(unittest.TestCase):
+    """Qual dos tres UNIQUE de `restaurant_coupons` o lojista esbarrou.
+
+    Sem banco de proposito: o que se prova aqui e a TABELA de traducao. Que o
+    Postgres de fato preenche `diag.constraint_name` para UNIQUE INDEX esta
+    provado contra o banco em `test_coupons_admin_db.py`.
+    """
+
+    @staticmethod
+    def erro_de_integridade(constraint_name):
+        origem = SimpleNamespace(diag=SimpleNamespace(constraint_name=constraint_name))
+        return IntegrityError("INSERT ...", {}, origem)
+
+    def levantar(self, constraint_name):
+        return CouponService._raise_conflict(self.erro_de_integridade(constraint_name))
+
+    def test_codigo_repetido_fala_de_codigo(self):
+        with self.assertRaises(HTTPException) as capturado:
+            self.levantar("restaurant_coupons_restaurant_code_unique")
+        self.assertEqual(capturado.exception.status_code, 409)
+        self.assertIn("Codigo", capturado.exception.detail)
+
+    def test_codigo_repetido_em_outra_caixa_fala_de_codigo(self):
+        """PROMO10 e promo10 sao o mesmo cupom para quem usa; a mensagem tambem."""
+        with self.assertRaises(HTTPException) as capturado:
+            self.levantar("uq_restaurant_coupons_restaurant_code_ci")
+        self.assertIn("Codigo", capturado.exception.detail)
+
+    def test_arte_repetida_fala_de_arte(self):
+        with self.assertRaises(HTTPException) as capturado:
+            self.levantar("restaurant_coupons_restaurant_template_unique")
+        self.assertEqual(capturado.exception.status_code, 409)
+        self.assertIn("arte", capturado.exception.detail)
+        self.assertNotIn("Codigo", capturado.exception.detail)
+
+    def test_indice_desconhecido_nao_vira_409_chutado(self):
+        """Relanca. Um 409 adivinhado manda mexer num campo que nao colidiu —
+        que e exatamente o defeito que a tabela de traducao veio consertar."""
+        with self.assertRaises(IntegrityError):
+            self.levantar("alguma_constraint_nova")
+
+    def test_erro_sem_diagnostico_tambem_relanca(self):
+        """Driver que nao preenche `diag` nao pode virar mensagem inventada."""
+        with self.assertRaises(IntegrityError):
+            CouponService._raise_conflict(IntegrityError("INSERT ...", {}, Exception("sem diag")))
 
 
 if __name__ == "__main__":

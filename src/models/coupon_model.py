@@ -27,8 +27,32 @@ class CouponTemplate(Base):
 
 
 class RestaurantCoupon(Base):
-    __table_args__ = (UniqueConstraint("restaurant_id", "code", name="uq_restaurant_coupons_restaurant_code"),)
     __tablename__ = "restaurant_coupons"
+    # Os nomes aqui sao os do banco de PRODUCAO, conferidos com
+    # `\d restaurant_coupons` contra o `schema_baseline.sql`. O nome importa:
+    # e por ele que `_raise_conflict` descobre QUAL regra o lojista esbarrou —
+    # e o que estava escrito antes (`uq_restaurant_coupons_restaurant_code`)
+    # nao existe em banco nenhum.
+    #
+    # `(restaurant_id, coupon_template_id)` nao estava declarado, e a ausencia
+    # custava caro: UMA arte por restaurante e uma regra de produto inteira que
+    # so aparecia como IntegrityError vindo do Postgres. Duas campanhas
+    # simultaneas exigem dois templates diferentes.
+    #
+    # Falta de proposito o terceiro indice unico do banco,
+    # `uq_restaurant_coupons_restaurant_code_ci`, sobre
+    # `lower(trim(code))`: indice por EXPRESSAO nao ida e volta fiel pelo
+    # autogenerate, e declara-lo aqui convidaria a armadilha 24 (proposta de
+    # DROP do que o ORM nao reconhece). `_raise_conflict` conhece o nome dele
+    # mesmo assim.
+    __table_args__ = (
+        UniqueConstraint("restaurant_id", "code", name="restaurant_coupons_restaurant_code_unique"),
+        UniqueConstraint(
+            "restaurant_id",
+            "coupon_template_id",
+            name="restaurant_coupons_restaurant_template_unique",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
     restaurant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("restaurants.id"), nullable=False)

@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from typing import NoReturn
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -26,6 +27,27 @@ from src.schemas.coupon_schema import (
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import ZERO, quantize_money, to_decimal
 from src.utils.storage import build_storage_url
+
+
+# Nome do indice UNIQUE no Postgres -> o que dizer ao lojista.
+#
+# `restaurant_coupons` tem TRES indices unicos, e ate 23/08/2026 os tres saiam
+# como "Codigo de cupom ja existe neste restaurante". Quem esbarrava na ARTE
+# trocava o codigo, tomava 409 de novo, e nao tinha como sair do lugar: o campo
+# que a mensagem mandava mexer nao era o campo que estava colidindo.
+#
+# A chave e `exc.orig.diag.constraint_name`. O Postgres preenche esse campo
+# tambem para UNIQUE INDEX — nenhum dos tres e CONSTRAINT de tabela —, e isso
+# foi conferido contra o banco antes de o codigo passar a depender disso.
+UNIQUE_INDEX_MESSAGES = {
+    "restaurant_coupons_restaurant_code_unique": "Codigo de cupom ja existe neste restaurante",
+    # O mesmo codigo em outra caixa. A mensagem e a mesma de proposito: para o
+    # lojista, PROMO10 e promo10 sao o mesmo cupom, e e assim que a busca trata.
+    "uq_restaurant_coupons_restaurant_code_ci": "Codigo de cupom ja existe neste restaurante",
+    "restaurant_coupons_restaurant_template_unique": (
+        "Esta arte ja esta em uso por outra campanha deste restaurante"
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -332,7 +354,7 @@ class CouponService:
             self.db.refresh(coupon)
         except IntegrityError as exc:
             self.db.rollback()
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codigo de cupom ja existe neste restaurante") from exc
+            self._raise_conflict(exc)
         except Exception:
             self.db.rollback()
             raise
@@ -380,7 +402,7 @@ class CouponService:
             self.db.refresh(coupon)
         except IntegrityError as exc:
             self.db.rollback()
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codigo de cupom ja existe neste restaurante") from exc
+            self._raise_conflict(exc)
         except Exception:
             self.db.rollback()
             raise
@@ -388,6 +410,21 @@ class CouponService:
         # sairia mais barato e faria a linha editada perder o contador na tela,
         # bem no momento em que o lojista esta olhando para ela.
         return self._admin_response(coupon, self.repository.count_applied_total(coupon.id))
+
+    @staticmethod
+    def _raise_conflict(exc: IntegrityError) -> NoReturn:
+        """Traduz a violacao de UNIQUE para o campo que o lojista tem que mexer.
+
+        Indice desconhecido NAO vira 409: relanca. Um 409 chutado manda o
+        lojista mexer num campo que nao tem nada a ver com o que o banco
+        recusou, e foi exatamente esse chute que segurou a arte repetida sob a
+        mensagem do codigo. O erro relancado ja carrega o nome do indice.
+        """
+        diag = getattr(exc.orig, "diag", None)
+        message = UNIQUE_INDEX_MESSAGES.get(getattr(diag, "constraint_name", None))
+        if message is None:
+            raise exc
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=message) from exc
 
     def _find_coupon(
         self,

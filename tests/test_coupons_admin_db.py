@@ -16,6 +16,7 @@ from decimal import Decimal
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import text
 
 from src.models.coupon_model import CouponTemplate, RestaurantCoupon
 from src.schemas.coupon_schema import CouponCreate, CouponUpdate
@@ -212,3 +213,78 @@ def test_cupom_ja_divergente_e_consertado_pelo_proprio_patch(db):
 
     assert resposta.discount_type == "free_delivery"
     assert resposta.is_active is False
+
+
+def test_arte_ja_usada_responde_409_falando_da_arte(db):
+    """O 409 que mandava o lojista mexer no campo errado.
+
+    `restaurant_coupons_restaurant_template_unique` e UNIQUE em
+    `(restaurant_id, coupon_template_id)`: uma arte por restaurante. A violacao
+    dela saia como "Codigo de cupom ja existe neste restaurante", entao o
+    lojista trocava o codigo e tomava 409 de novo — para sempre, porque o campo
+    que a mensagem apontava nao era o que estava colidindo.
+    """
+    restaurante = criar_restaurante(db)
+    template = criar_template(db, discount_type="fixed")
+    servico = CouponService(db)
+    servico.create_admin(restaurante.id, payload_de_criacao(template, discount_type="fixed", code="PRIMEIRO"))
+
+    with pytest.raises(HTTPException) as erro:
+        servico.create_admin(restaurante.id, payload_de_criacao(template, discount_type="fixed", code="SEGUNDO"))
+
+    assert erro.value.status_code == 409
+    assert "arte" in erro.value.detail
+    assert "Codigo" not in erro.value.detail
+
+
+def test_a_mesma_arte_em_restaurantes_diferentes_passa(db):
+    """O UNIQUE e por restaurante: a arte e do catalogo da plataforma."""
+    template = criar_template(db, discount_type="fixed")
+    primeiro = criar_restaurante(db)
+    segundo = criar_restaurante(db, nome="Outro")
+    servico = CouponService(db)
+
+    servico.create_admin(primeiro.id, payload_de_criacao(template, discount_type="fixed"))
+    resposta = servico.create_admin(segundo.id, payload_de_criacao(template, discount_type="fixed"))
+
+    assert resposta.restaurant_id == segundo.id
+
+
+def test_editar_para_uma_arte_ja_usada_responde_409_da_arte(db):
+    restaurante = criar_restaurante(db)
+    ocupada = criar_template(db, discount_type="fixed", nome="Ocupada")
+    livre = criar_template(db, discount_type="fixed", nome="Livre")
+    servico = CouponService(db)
+    servico.create_admin(restaurante.id, payload_de_criacao(ocupada, discount_type="fixed", code="OCUPA"))
+    meu = servico.create_admin(restaurante.id, payload_de_criacao(livre, discount_type="fixed", code="MEU"))
+
+    with pytest.raises(HTTPException) as erro:
+        servico.update_admin(restaurante.id, meu.id, CouponUpdate(coupon_template_id=ocupada.id))
+
+    assert erro.value.status_code == 409
+    assert "arte" in erro.value.detail
+
+
+def test_o_model_declara_os_dois_unique_com_o_nome_do_banco(db):
+    """O nome nao e decorativo: e por ele que `_raise_conflict` decide a mensagem.
+
+    Conferido contra o banco de verdade — o `schema_baseline.sql` e um pg_dump
+    de producao, entao o que esta aqui e o que existe la.
+    """
+    declarados = {
+        constraint.name
+        for constraint in RestaurantCoupon.__table__.constraints
+        if constraint.name is not None
+    }
+    no_banco = set(
+        db.execute(
+            text(
+                "SELECT indexname FROM pg_indexes "
+                "WHERE tablename = 'restaurant_coupons' AND indexdef LIKE 'CREATE UNIQUE%'"
+            )
+        ).scalars()
+    )
+
+    assert "restaurant_coupons_restaurant_code_unique" in declarados
+    assert "restaurant_coupons_restaurant_template_unique" in declarados
+    assert declarados - {"restaurant_coupons_pkey"} <= no_banco

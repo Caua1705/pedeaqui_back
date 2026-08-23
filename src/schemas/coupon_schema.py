@@ -143,6 +143,20 @@ class CouponUpdate(BaseModel):
 
 
 class CouponAdminResponse(BaseResponse):
+    """O cupom como o painel do lojista o le.
+
+    `total_usage_count` e o par de `total_usage_limit`, e conta a mesma coisa
+    que `evaluate` conta para decidir se o cupom ainda vale: redencoes em
+    `applied`, so. Redencao estornada (o pedido foi cancelado) devolve a vaga e
+    sai da conta — a tela mostra o numero que barra o proximo cliente, nao um
+    historico de tentativas. Sem ele o painel exibia "limite: 100" e nao sabia
+    quantos ja tinham usado.
+
+    OPCIONAL com default, e nao obrigatorio: o numero e preenchido pelo
+    service, nao sai de coluna nenhuma, entao um `model_validate(coupon)` novo
+    que esqueca de passa-lo devolve `null` em vez de estourar na serializacao.
+    """
+
     id: UUID
     restaurant_id: UUID
     coupon_template_id: UUID
@@ -161,6 +175,7 @@ class CouponAdminResponse(BaseResponse):
     first_order_only: bool
     is_public: bool
     is_active: bool
+    total_usage_count: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

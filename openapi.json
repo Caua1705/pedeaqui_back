@@ -5421,6 +5421,7 @@
         "type": "object"
       },
       "CouponAdminResponse": {
+        "description": "O cupom como o painel do lojista o le.\n\n`total_usage_count` e o par de `total_usage_limit`, e conta a mesma coisa\nque `evaluate` conta para decidir se o cupom ainda vale: redencoes em\n`applied`, so. Redencao estornada (o pedido foi cancelado) devolve a vaga e\nsai da conta — a tela mostra o numero que barra o proximo cliente, nao um\nhistorico de tentativas. Sem ele o painel exibia \"limite: 100\" e nao sabia\nquantos ja tinham usado.\n\nOPCIONAL com default, e nao obrigatorio: o numero e preenchido pelo\nservice, nao sai de coluna nenhuma, entao um `model_validate(coupon)` novo\nque esqueca de passa-lo devolve `null` em vez de estourar na serializacao.",
         "properties": {
           "code": {
             "title": "Code",
@@ -5518,6 +5519,17 @@
           "title": {
             "title": "Title",
             "type": "string"
+          },
+          "total_usage_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Usage Count"
           },
           "total_usage_limit": {
             "anyOf": [

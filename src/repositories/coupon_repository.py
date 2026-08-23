@@ -93,6 +93,29 @@ class CouponRepository:
         )
         return int(self.db.scalar(stmt) or 0)
 
+    def count_applied_by_coupon(self, coupon_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
+        """Os usos de VARIOS cupons numa consulta so.
+
+        Existe separada de `count_applied_total` por causa da tela de cupons do
+        painel: chamar aquela por cupom dentro do `list_admin` seria uma ida ao
+        banco por linha da lista (N+1), e o custo cresce junto com o numero de
+        campanhas do restaurante — que e exatamente quem abre essa tela.
+
+        Cupom sem nenhuma redencao NAO aparece no resultado: `GROUP BY` so
+        devolve grupo que existe. Quem chama resolve com `.get(id, 0)`.
+        """
+        if not coupon_ids:
+            return {}
+        stmt = (
+            select(CouponRedemption.coupon_id, func.count(CouponRedemption.id))
+            .where(
+                CouponRedemption.coupon_id.in_(coupon_ids),
+                CouponRedemption.status == "applied",
+            )
+            .group_by(CouponRedemption.coupon_id)
+        )
+        return {coupon_id: int(total) for coupon_id, total in self.db.execute(stmt).all()}
+
     def count_applied_redemptions_for_customer(
         self,
         coupon_id: uuid.UUID,

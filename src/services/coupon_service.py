@@ -288,7 +288,21 @@ class CouponService:
 
     def list_admin(self, restaurant_id: UUID) -> list[CouponAdminResponse]:
         self._get_restaurant(restaurant_id)
-        return [CouponAdminResponse.model_validate(coupon) for coupon in self.repository.list_by_restaurant(restaurant_id)]
+        coupons = self.repository.list_by_restaurant(restaurant_id)
+        usage = self.repository.count_applied_by_coupon([coupon.id for coupon in coupons])
+        return [self._admin_response(coupon, usage.get(coupon.id, 0)) for coupon in coupons]
+
+    @staticmethod
+    def _admin_response(coupon: RestaurantCoupon, total_usage_count: int) -> CouponAdminResponse:
+        """O contador entra por fora porque nao e coluna do cupom.
+
+        Ele sai de `coupon_redemptions`, e quem o conta muda conforme a rota: a
+        LISTA usa uma agregacao unica para as campanhas todas, o POST sabe que e
+        zero sem perguntar nada ao banco.
+        """
+        response = CouponAdminResponse.model_validate(coupon)
+        response.total_usage_count = total_usage_count
+        return response
 
     def list_templates(self) -> list[CouponTemplateResponse]:
         return [self._template_response(template) for template in self.repository.list_active_templates()]
@@ -322,7 +336,9 @@ class CouponService:
         except Exception:
             self.db.rollback()
             raise
-        return CouponAdminResponse.model_validate(coupon)
+        # Zero sem ir ao banco: cupom que acabou de nascer nao tem redencao, e
+        # `coupon_redemptions` referencia um pedido que ainda nao existe.
+        return self._admin_response(coupon, 0)
 
     def update_admin(self, restaurant_id: UUID, coupon_id: UUID, payload: CouponUpdate) -> CouponAdminResponse:
         """PATCH parcial, validado sobre o cupom INTEIRO depois do merge.
@@ -368,7 +384,10 @@ class CouponService:
         except Exception:
             self.db.rollback()
             raise
-        return CouponAdminResponse.model_validate(coupon)
+        # Uma consulta a mais numa rota de escrita rara. Devolver `null` aqui
+        # sairia mais barato e faria a linha editada perder o contador na tela,
+        # bem no momento em que o lojista esta olhando para ela.
+        return self._admin_response(coupon, self.repository.count_applied_total(coupon.id))
 
     def _find_coupon(
         self,

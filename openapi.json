@@ -4768,6 +4768,76 @@
         "title": "CancellationsResponse",
         "type": "object"
       },
+      "CardPaymentPayload": {
+        "description": "O que o navegador produziu com o SDK do Mercado Pago.\n\n**Nao existe campo para numero, CVV ou validade do cartao, e nunca deve\nexistir.** Esses dados vao do navegador direto para o gateway, que\ndevolve o `token` — e o token e a unica coisa que este backend enxerga.\nAcrescentar aqui qualquer parte do cartao muda o perimetro de PCI do\nprojeto inteiro.",
+        "properties": {
+          "issuer_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Emissor, quando o SDK o resolve.",
+            "title": "Issuer Id"
+          },
+          "payer_document_number": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Documento do portador. Atravessa para o gateway e NAO e gravado em lugar nenhum daqui.",
+            "title": "Payer Document Number"
+          },
+          "payer_document_type": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Tipo do documento do portador, normalmente 'CPF'.",
+            "examples": [
+              "CPF"
+            ],
+            "title": "Payer Document Type"
+          },
+          "payment_method_id": {
+            "description": "Bandeira que o SDK resolveu ('visa', 'master', 'elo'). NAO e o `payment_method` do pedido ('credit_card') — sao vocabularios diferentes, e o gateway quer o dele.",
+            "examples": [
+              "master"
+            ],
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Payment Method Id",
+            "type": "string"
+          },
+          "token": {
+            "description": "Token de uso unico gerado pelo SDK no navegador.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "payment_method_id"
+        ],
+        "title": "CardPaymentPayload",
+        "type": "object"
+      },
       "CashbackBalanceResponse": {
         "description": "O saldo do cliente, com o total e a quebra por restaurante.",
         "properties": {
@@ -8424,12 +8494,46 @@
         "title": "OrdersInFlightResponse",
         "type": "object"
       },
+      "PaymentConfigResponse": {
+        "description": "O que o navegador precisa para tokenizar um cartao.\n\n**`public_key` e publica por desenho** — o proprio Mercado Pago manda\nexpor no frontend, e e por isso que ela e a unica coluna de\n`restaurant_payment_credentials` guardada em texto puro. O `access_token`\ne o `webhook_secret` da mesma linha sao cifrados e nao passam nem perto\ndesta resposta.\n\n`card_enabled` falso significa \"nao ofereca cartao nesta tela\": ou o\nrestaurante nao tem credencial cadastrada para o ambiente ativo, ou o\nprovider ativo nao processa cartao (o sandbox nao processa, de\nproposito). Sem esse campo o front so descobriria isso no 503, com o\ncliente ja tendo digitado o cartao.",
+        "properties": {
+          "card_enabled": {
+            "description": "Se o front deve oferecer cartao nesta tela.",
+            "title": "Card Enabled",
+            "type": "boolean"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "public_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Chave publica do restaurante no gateway, para inicializar o SDK. Nula quando nao ha credencial cadastrada.",
+            "title": "Public Key"
+          }
+        },
+        "required": [
+          "provider",
+          "card_enabled"
+        ],
+        "title": "PaymentConfigResponse",
+        "type": "object"
+      },
       "PaymentErrorCode": {
         "description": "Os desfechos possiveis de uma cobranca que nao pode ser criada.\n\nEnum e nao `str` solto para o valor sair no /openapi.json: o frontend\nprecisa da LISTA para escrever um texto proprio por caso, e nao so o\n`retryable` para decidir entre \"tentar de novo\" e \"nao adianta\". A lista\ntambem e a fonte unica dos codigos — PaymentService importa daqui.",
         "enum": [
           "gateway_unavailable",
           "payment_unavailable",
-          "payment_rejected"
+          "payment_rejected",
+          "login_required",
+          "card_token_required"
         ],
         "title": "PaymentErrorCode",
         "type": "string"
@@ -10472,8 +10576,25 @@
         "title": "SalesSummaryResponse",
         "type": "object"
       },
+      "StartPaymentRequest": {
+        "description": "Corpo da criacao da cobranca.\n\nOPCIONAL, e isso e o contrato: pix continua sendo um POST sem corpo, como\nera antes do cartao existir, entao quem ja integrou nao muda nada. `card`\nso e exigido quando a forma de pagamento do pedido e cartao.",
+        "properties": {
+          "card": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CardPaymentPayload"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "StartPaymentRequest",
+        "type": "object"
+      },
       "StartPaymentResponse": {
-        "description": "Resposta da criacao da cobranca.\n\n`checkout_url` e `qr_code` sao alternativos e dependem do gateway e do\nmetodo: pix costuma vir com qr_code, cartao com url. O sandbox nao\ndevolve nenhum dos dois — nao ha para onde mandar o cliente.",
+        "description": "Resposta da criacao da cobranca.\n\n`checkout_url` e `qr_code` sao do pix (o \"copia e cola\" e a pagina\nhospedada). O sandbox nao devolve nenhum dos dois — nao ha para onde\nmandar o cliente. Cartao nao devolve nenhum dos dois tampouco: nao ha\npara onde ir, o desfecho ja esta em `payment_status`.\n\n**`payment_status` e o campo que muda de significado por metodo**, e o\nfront precisa saber disso:\n\n    pix       sempre \"pending\" — o veredito vem por webhook depois\n    cartao    o VEREDITO, ja: \"paid\", \"failed\" ou \"in_review\"",
         "properties": {
           "checkout_url": {
             "anyOf": [
@@ -10487,6 +10608,7 @@
             "title": "Checkout Url"
           },
           "payment_status": {
+            "description": "Estado do pagamento. No pix e sempre 'pending'; no cartao ja e o desfecho ('paid', 'failed' ou 'in_review').",
             "title": "Payment Status",
             "type": "string"
           },
@@ -10508,6 +10630,21 @@
               }
             ],
             "title": "Qr Code"
+          },
+          "status_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Motivo cru do gateway, so no cartao. Distingue recusas que pedem coisas diferentes do cliente — 'cc_rejected_insufficient_amount' (tentar outro cartao) de 'cc_rejected_bad_filled_security_code' (redigitar o CVV).",
+            "examples": [
+              "cc_rejected_insufficient_amount"
+            ],
+            "title": "Status Detail"
           }
         },
         "required": [
@@ -17388,7 +17525,7 @@
     },
     "/restaurants/{restaurant_slug}/orders/{tracking_token}/payment": {
       "post": {
-        "description": "Cria a cobranca do pedido no gateway.\n\nAutorizacao pelo token de acompanhamento, o mesmo que a consulta\npublica usa: quem tem o token e quem fez o pedido. Fica fora de\ncreate_order de proposito — a chamada ao gateway nao pode acontecer com\na transacao do pedido aberta.\n\nFalha ao criar a cobranca responde 502 ou 503 com `detail` no formato\nde `PaymentErrorDetail` — um objeto, nao a string de sempre: sem o\n`retryable` nao ha como o frontend escolher entre oferecer \"tentar de\nnovo\" e mandar o cliente falar com o restaurante.",
+        "description": "Cria a cobranca do pedido no gateway.\n\nAutorizacao pelo token de acompanhamento, o mesmo que a consulta\npublica usa: quem tem o token e quem fez o pedido. Fica fora de\ncreate_order de proposito — a chamada ao gateway nao pode acontecer com\na transacao do pedido aberta.\n\n**O login e OPCIONAL na rota e obrigatorio para CARTAO**, e a diferenca e\nproposital: o token de acompanhamento continua sendo a autorizacao (pix\nde convidado tem que seguir funcionando sem conta), mas a cobranca de\ncartao precisa de um e-mail de pagador de verdade para a analise\nantifraude do gateway — e quem recusa e o service, com\n`login_required`, nao esta rota.\n\n`payload` e opcional pelo mesmo motivo: pix continua sendo um POST sem\ncorpo, exatamente como antes de o cartao existir.\n\nFalha ao criar a cobranca responde 502 ou 503 com `detail` no formato\nde `PaymentErrorDetail` — um objeto, nao a string de sempre: sem o\n`retryable` nao ha como o frontend escolher entre oferecer \"tentar de\nnovo\" e mandar o cliente falar com o restaurante.",
         "operationId": "start_payment_restaurants__restaurant_slug__orders__tracking_token__payment_post",
         "parameters": [
           {
@@ -17410,6 +17547,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/StartPaymentRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
@@ -17420,6 +17574,26 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentErrorResponse"
+                }
+              }
+            },
+            "description": "Cobranca de cartao sem o token do navegador"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentErrorResponse"
+                }
+              }
+            },
+            "description": "Cartao exige cliente autenticado"
           },
           "422": {
             "content": {
@@ -17452,7 +17626,55 @@
             "description": "Pagamento indisponivel no momento"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Start Payment",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/restaurants/{restaurant_slug}/payment-config": {
+      "get": {
+        "description": "O que o navegador precisa para tokenizar um cartao.\n\nPublica, como o cardapio, e sem segredo nenhum: a `public_key` e o unico\ndado do gateway que o proprio Mercado Pago manda expor no frontend. O\n`access_token` e o `webhook_secret` do mesmo restaurante sao cifrados em\nrepouso e nao passam por esta rota.\n\nSem rate limit proprio: e uma leitura barata e sem efeito, chamada uma vez\npor abertura da tela de pagamento.",
+        "operationId": "get_payment_config_restaurants__restaurant_slug__payment_config_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "restaurant_slug",
+            "required": true,
+            "schema": {
+              "title": "Restaurant Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentConfigResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Payment Config",
         "tags": [
           "payments"
         ]

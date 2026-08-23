@@ -66,7 +66,7 @@ business_     payment_   sectors ◄──┐     │           │
 
 | Tabela | Guarda | Notas |
 |---|---|---|
-| `restaurants` | nome, `slug` (UNIQUE), cores da marca, logo, `is_active` | O `slug` é a identidade pública na URL |
+| `restaurants` | nome, `slug` (UNIQUE), cores da marca, logo, `is_active`, `description`, `assistant_notes` | O `slug` é a identidade pública na URL. Os dois textos têm públicos **opostos**: `description` é a vitrine (sai em `RestaurantPublicResponse`), `assistant_notes` é o contexto do assistente de IA e não sai em resposta pública nenhuma |
 | `restaurant_settings` | `min_order_value`, `service_fee_enabled/amount`, `estimated_delivery_time_min/max`, `default_delivery_fee`, `platform_commission_percent`, `voice_enabled` | **1:1 opcional.** Os seis primeiros são só o **padrão** que a filial herda — nenhum pedido os lê direto (ver `operacao-por-filial.md`) |
 | `branches` | endereço, lat/lng, regras de entrega da loja (base, por km, piso, teto, raio), **`is_open` / `accepts_delivery` / `accepts_pickup`** e as sobrescritas comerciais | A taxa de entrega e a **operação do dia** são por filial. Nas colunas comerciais homônimas de `restaurant_settings`, **NULL significa "herda"** |
 | `branch_business_hours` | uma linha por faixa de horário: `weekday`, `opens_at`, `closes_at`, `prep_time_min/max`, `is_closed` | **`weekday` 0 = segunda** (é o `datetime.weekday()` do Python) |

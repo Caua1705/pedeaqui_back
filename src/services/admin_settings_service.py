@@ -37,9 +37,11 @@ from src.models.branch_business_hour_model import BranchBusinessHour
 from src.models.branch_delivery_time_band_model import BranchDeliveryTimeBand
 from src.models.branch_model import Branch
 from src.models.branch_payment_method_model import BranchPaymentMethod
+from src.models.restaurant_model import Restaurant
 from src.models.restaurant_setting_model import RestaurantSetting
 from src.repositories.admin_settings_repository import AdminSettingsRepository
 from src.repositories.branch_repository import BranchRepository
+from src.repositories.restaurant_repository import RestaurantRepository
 from src.schemas.admin_settings_schema import (
     MAX_PERIODS_PER_WEEKDAY,
     MAX_PREP_TIME_MINUTES,
@@ -55,6 +57,8 @@ from src.schemas.admin_settings_schema import (
     AdminPaymentMethodCreate,
     AdminPaymentMethodResponse,
     AdminPaymentMethodUpdate,
+    AdminRestaurantProfileResponse,
+    AdminRestaurantProfileUpdate,
     AdminRestaurantSettingsResponse,
     AdminRestaurantSettingsUpdate,
     BranchPrepTimeAdjustRequest,
@@ -90,11 +94,52 @@ class AdminSettingsService:
         self.db = db
         self.repository = AdminSettingsRepository(db)
         self.branch_repository = BranchRepository(db)
+        # O PERFIL mora em `restaurants`, e nao em `restaurant_settings`: sao
+        # tabelas diferentes, e as rotas de perfil sao as unicas deste
+        # service que escrevem na primeira.
+        self.restaurant_repository = RestaurantRepository(db)
         # Mesma classe que a estimativa de entrega usa para achar a faixa
         # vigente. O atalho de tempo de preparo PRECISA concordar com ela:
         # ajustar uma faixa diferente da que o pedido le seria mudar um
         # numero que ninguem vai olhar.
         self.branch_hours_service = BranchHoursService(db)
+
+    def get_restaurant_profile(self, scope: AdminScope) -> AdminRestaurantProfileResponse:
+        return AdminRestaurantProfileResponse.model_validate(self._get_restaurant(scope))
+
+    def update_restaurant_profile(
+        self,
+        scope: AdminScope,
+        payload: AdminRestaurantProfileUpdate,
+    ) -> AdminRestaurantProfileResponse:
+        """Grava os dois textos do lojista sobre a casa.
+
+        Parcial como todo PATCH daqui: `exclude_unset` distingue "nao mandei
+        este campo" de "mandei nulo". Nulo APAGA — e apagar `assistant_notes`
+        devolve o assistente ao estado de antes desta frente, com o prompt
+        sem a linha `Sobre a casa`. Nao ha terceiro estado nem heranca de
+        quem: acima do restaurante nao ha ninguem.
+        """
+        restaurant = self._get_restaurant(scope)
+        for field, value in payload.model_dump(exclude_unset=True).items():
+            setattr(restaurant, field, value)
+        self._commit()
+        return AdminRestaurantProfileResponse.model_validate(restaurant)
+
+    def _get_restaurant(self, scope: AdminScope) -> Restaurant:
+        """A linha de `restaurants` do token. 404 se ela sumiu.
+
+        `get_by_id` e nao `get_active_by_id`: um restaurante desativado ainda
+        tem painel, e e por ele que o dono arruma o cadastro antes de voltar.
+        Recusar aqui trancaria a porta pelo lado de dentro.
+        """
+        restaurant = self.restaurant_repository.get_by_id(scope.restaurant_id)
+        if restaurant is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Restaurante nao encontrado",
+            )
+        return restaurant
 
     def get_restaurant_settings(self, scope: AdminScope) -> AdminRestaurantSettingsResponse:
         return self._settings_response(self._get_or_create_settings(scope.restaurant_id))

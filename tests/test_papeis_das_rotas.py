@@ -74,6 +74,12 @@ PAPEL_ESPERADO = {
     # --- configuracao
     ("GET", "/admin/settings"): PESSOAS,
     ("PATCH", "/admin/settings"): SOMENTE_DONO,
+    # O PERFIL e outra tabela (`restaurants`) e outra decisao: a vitrine da
+    # marca inteira, e `assistant_notes`, que entra no PROMPT do assistente
+    # que fala com o cliente. Escrever no prompt nao pode ser a senha do
+    # balcao, que e a que mais circula.
+    ("GET", "/admin/restaurant"): PESSOAS,
+    ("PATCH", "/admin/restaurant"): SOMENTE_DONO,
     ("GET", "/admin/branches"): PESSOAS,
     ("GET", "/admin/branches/operation"): PESSOAS,
     ("GET", "/admin/branches/{branch_id}"): PESSOAS,

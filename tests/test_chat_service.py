@@ -97,13 +97,18 @@ def make_product(name="X-Burger", product_id=None):
     )
 
 
-def make_restaurant(name="Restaurante de Teste", description=None):
+def make_restaurant(name="Restaurante de Teste", assistant_notes=None):
     """A linha de `restaurants` que o `chat()` carrega e repassa a `_answer`.
 
-    Tem `name` e `description` porque e de la que sai o `restaurant_context`
-    do prompt — um fake so com `id` nao chega mais ao fim do pipeline.
+    Tem `name` e `assistant_notes` porque e de la que sai o
+    `restaurant_context` do prompt — um fake so com `id` nao chega mais ao fim
+    do pipeline.
+
+    `description` NAO esta aqui de proposito, e a ausencia e parte do teste:
+    desde a revisao 20260823_0034 o prompt nao a le mais, e um fake que a
+    trouxesse de graca deixaria passar um fallback acidental para ela.
     """
-    return SimpleNamespace(id=uuid.uuid4(), name=name, description=description)
+    return SimpleNamespace(id=uuid.uuid4(), name=name, assistant_notes=assistant_notes)
 
 
 # Sentinela para distinguir "o teste nao falou de filial" (usa a padrao) de
@@ -326,35 +331,56 @@ class TestBuildRestaurantContext:
 
         assert str(restaurante.id) not in ChatService._build_restaurant_context(restaurante)
 
-    def test_a_descricao_entra_quando_existe(self):
-        """Nao ha campo de tipo de cozinha no cadastro. `description` e o texto
-        livre do lojista sobre a casa, e e o mais proximo disso."""
+    def test_as_anotacoes_entram_quando_existem(self):
+        """Nao ha campo de tipo de cozinha no cadastro. `assistant_notes` e o
+        texto livre que o lojista escreve PARA o assistente sobre a casa."""
         restaurante = make_restaurant("Junior da Picanha", "Carnes nobres na brasa")
 
         assert "Carnes nobres na brasa" in ChatService._build_restaurant_context(restaurante)
 
-    def test_sem_descricao_sobra_so_o_nome(self):
+    def test_a_vitrine_publica_nao_entra_no_prompt(self):
+        """`description` alimentava esta linha ate 23/08/2026, e alimentar os
+        dois destinos com um campo so era o problema: na vitrine o lojista
+        escreve anuncio, com razao, e anuncio nao e o que serve ao atendente.
+
+        Nao ha fallback de um para o outro. Com ele, quem nunca preenchesse as
+        anotacoes ficaria com o anuncio no prompt para sempre — de pe
+        justamente para quem tem o problema.
+        """
+        restaurante = make_restaurant("Junior da Picanha")
+        restaurante.description = "A MELHOR picanha da cidade! Peca ja!"
+
+        contexto = ChatService._build_restaurant_context(restaurante)
+
+        assert "picanha da cidade" not in contexto
+        assert contexto == "Nome do restaurante: Junior da Picanha"
+
+    def test_sem_anotacoes_sobra_so_o_nome(self):
         contexto = ChatService._build_restaurant_context(make_restaurant("Junior da Picanha"))
 
         assert contexto == "Nome do restaurante: Junior da Picanha"
 
-    def test_descricao_so_de_espacos_conta_como_ausente(self):
+    def test_anotacao_so_de_espacos_conta_como_ausente(self):
         restaurante = make_restaurant("Junior da Picanha", "   \n  ")
 
         assert ChatService._build_restaurant_context(restaurante) == (
             "Nome do restaurante: Junior da Picanha"
         )
 
-    def test_descricao_longa_e_cortada(self):
-        """Texto do lojista entrando no prompt: sem teto, uma descricao longa
-        empurra as instrucoes para longe e passa a competir com elas."""
+    def test_anotacao_longa_e_cortada(self):
+        """Texto do lojista entrando no prompt: sem teto, um texto longo
+        empurra as instrucoes para longe e passa a competir com elas.
+
+        O mesmo teto existe na ESCRITA (`AdminRestaurantProfileUpdate`), e um
+        nao dispensa o outro: a coluna e `text` e continua gravavel por SQL.
+        """
         restaurante = make_restaurant("Junior da Picanha", "carne " * 200)
 
         contexto = ChatService._build_restaurant_context(restaurante)
 
         assert len(contexto) < 400
 
-    def test_quebra_de_linha_na_descricao_e_achatada(self):
+    def test_quebra_de_linha_na_anotacao_e_achatada(self):
         """Sem isto, o lojista escreve uma "secao" nova no prompt.
 
         Nao torna o texto confiavel — quem escreve ali manda no atendente da

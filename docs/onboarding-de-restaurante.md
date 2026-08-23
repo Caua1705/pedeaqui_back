@@ -83,6 +83,30 @@ primeiro item do menu é o par) e insira explicitamente.
 na primeira leitura do painel. Mas criar à mão é o que permite gravar a
 comissão junto (passo 7), e a linha criada sozinha nasce com **10%**.
 
+**`description` e `assistant_notes` são os dois únicos campos de `restaurants`
+que o painel grava**, em `PATCH /admin/restaurant` (SOMENTE_DONO). Nome, logo,
+capa e cores continuam só por SQL; o `slug` é o que **não** deve virar rota, e
+o motivo está logo acima.
+
+Eles têm públicos opostos, e o `insert` acima só preenche o primeiro:
+
+- **`description` é a vitrine.** Sai em `RestaurantPublicResponse`, e é por ela
+  que o cliente decide pedir. Anúncio ali é o uso certo.
+- **`assistant_notes` é o contexto do assistente de IA** (chat e voz), e não sai
+  em resposta pública nenhuma. O que serve ali é o contrário do anúncio: o que
+  a casa faz, o que ela não faz, o que o atendente precisa saber para não
+  inventar. Cabem 300 caracteres, e o corte vale nos dois lados — 422 na
+  escrita, e de novo na montagem do prompt, porque a coluna continua gravável
+  por SQL.
+
+**A coluna nasce nula e NÃO herda a `description`.** Enquanto ela estiver
+vazia, o prompt do assistente sai só com o nome do restaurante — a linha
+`Sobre a casa` não aparece. Não é bug: um fallback para a `description` faria
+o anúncio ser o contexto do assistente para sempre em toda casa que nunca
+preenchesse o campo, que é exatamente o problema que a separação (revisão
+`20260823_0034`) existe para resolver. **Preencher é passo de onboarding**, e
+para os restaurantes que já existiam é um `UPDATE` ou um salvar na tela.
+
 Guarde os dois UUIDs. Os passos 2, 6 e 7 precisam deles.
 
 ---

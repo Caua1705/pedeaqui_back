@@ -20,15 +20,19 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from src.api.dependencies.admin_scope import AdminScope
 from src.schemas.admin_settings_schema import (
+    MAX_ASSISTANT_NOTES_LENGTH,
     AdminBranchOrderTypesRequest,
     AdminBranchSettingsUpdate,
     AdminBranchUpdate,
     AdminPaymentMethodCreate,
     AdminPaymentMethodResponse,
     AdminPaymentMethodUpdate,
+    AdminRestaurantProfileResponse,
+    AdminRestaurantProfileUpdate,
     AdminRestaurantSettingsResponse,
     AdminRestaurantSettingsUpdate,
     BranchPrepTimeAdjustRequest,
@@ -36,6 +40,7 @@ from src.schemas.admin_settings_schema import (
     BusinessHoursReplaceRequest,
     StoreStatusRequest,
 )
+from src.schemas.restaurant_schema import RestaurantPublicResponse
 from src.services.admin_settings_service import AdminSettingsService
 
 
@@ -67,6 +72,24 @@ def make_settings(**overrides):
         "service_fee_amount": Decimal("0.99"),
         "platform_commission_percent": Decimal("10.00"),
         "receipt_footer_message": None,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def make_restaurant(**overrides):
+    """A linha de `restaurants` — a MARCA, e nao os numeros da operacao.
+
+    Nao ha `make_settings` que sirva: sao tabelas diferentes, e desde a
+    revisao 20260823_0034 esta tem dois textos com publicos opostos
+    (`description` e vitrine, `assistant_notes` e prompt).
+    """
+    values = {
+        "id": RESTAURANT_ID,
+        "name": "Junior da Picanha",
+        "slug": "junior-da-picanha",
+        "description": None,
+        "assistant_notes": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -214,6 +237,16 @@ class FakeSettingsRepository:
         self.payment_methods.remove(method)
 
 
+class FakeRestaurantRepository:
+    def __init__(self, restaurant=None):
+        self.restaurant = restaurant
+
+    def get_by_id(self, restaurant_id):
+        if self.restaurant is not None and self.restaurant.id == restaurant_id:
+            return self.restaurant
+        return None
+
+
 class FakeBranchRepository:
     """Respeita o filtro por restaurante, como o WHERE real."""
 
@@ -251,10 +284,18 @@ class FakeBranchHoursService:
         return self.current_period
 
 
-def build_service(settings_repository=None, branch_repository=None, current_period=None):
+def build_service(
+    settings_repository=None,
+    branch_repository=None,
+    current_period=None,
+    restaurant_repository=None,
+):
     service = AdminSettingsService(FakeDb())
     service.repository = settings_repository or FakeSettingsRepository()
     service.branch_repository = branch_repository or FakeBranchRepository()
+    service.restaurant_repository = restaurant_repository or FakeRestaurantRepository(
+        make_restaurant()
+    )
     service.branch_hours_service = FakeBranchHoursService(current_period)
     return service
 
@@ -270,6 +311,109 @@ def scope(restaurant_id=RESTAURANT_ID, branch_id=None, papel="owner"):
         restaurant_id=restaurant_id,
         branch_id=branch_id,
     )
+
+
+class RestaurantProfileTests(unittest.TestCase):
+    """Os dois textos do lojista sobre a casa, e eles tem PUBLICOS opostos.
+
+    `description` e a VITRINE (o cliente le e decide pedir); `assistant_notes`
+    e o PROMPT do assistente. Estavam no mesmo campo ate a revisao
+    20260823_0034, e era por isso que a tela nao conseguia instruir nenhum dos
+    dois sem mentir sobre o outro.
+    """
+
+    def test_a_anotacao_do_assistente_nao_e_publica(self):
+        # E o ponto inteiro da separacao: se ela vazasse para a vitrine, o
+        # lojista voltaria a escrever anuncio nela — com razao.
+        self.assertNotIn("assistant_notes", RestaurantPublicResponse.model_fields)
+        self.assertIn("description", RestaurantPublicResponse.model_fields)
+
+    def test_o_slug_nao_e_gravavel(self):
+        # E a URL publica do cardapio, a unica coisa que o cliente tem salva.
+        # Troca-lo por PATCH quebraria todo link que existe, em silencio.
+        self.assertNotIn("slug", AdminRestaurantProfileUpdate.model_fields)
+        self.assertNotIn("name", AdminRestaurantProfileUpdate.model_fields)
+        # Mas saem na LEITURA: a tela precisa mostrar de quem esta falando.
+        self.assertIn("slug", AdminRestaurantProfileResponse.model_fields)
+        self.assertIn("name", AdminRestaurantProfileResponse.model_fields)
+
+    def test_o_teto_da_anotacao_e_o_MESMO_que_o_prompt_corta(self):
+        """Um numero so, em dois lugares que nao se dispensam.
+
+        Aqui ele e 422 com contador na tela; no prompt e a ultima defesa,
+        porque a coluna e `text` e continua gravavel por SQL. Dois numeros
+        diferentes fariam o lojista digitar o que cabe na tela e ver o texto
+        cortado no atendente.
+        """
+        from src.services import chat_service
+
+        self.assertIs(chat_service.MAX_ASSISTANT_NOTES_LENGTH, MAX_ASSISTANT_NOTES_LENGTH)
+
+        campo = AdminRestaurantProfileUpdate.model_fields["assistant_notes"]
+        tetos = [item.max_length for item in campo.metadata if hasattr(item, "max_length")]
+        self.assertEqual(tetos, [MAX_ASSISTANT_NOTES_LENGTH])
+
+    def test_texto_acima_do_teto_e_recusado(self):
+        with self.assertRaises(ValidationError):
+            AdminRestaurantProfileUpdate(
+                assistant_notes="c" * (MAX_ASSISTANT_NOTES_LENGTH + 1)
+            )
+
+    def test_so_de_espacos_vira_nulo(self):
+        # `""` e `None` dizem a mesma coisa nestes campos, e o painel manda um
+        # ou outro conforme o componente. Normalizar impede que a vitrine
+        # distinga dois estados que o lojista nao sabe que criou.
+        payload = AdminRestaurantProfileUpdate(description="   ", assistant_notes="")
+
+        self.assertIsNone(payload.description)
+        self.assertIsNone(payload.assistant_notes)
+
+    def test_patch_parcial_nao_toca_no_campo_ausente(self):
+        restaurant = make_restaurant(
+            description="A melhor picanha da cidade",
+            assistant_notes="Churrascaria",
+        )
+        service = build_service(restaurant_repository=FakeRestaurantRepository(restaurant))
+
+        service.update_restaurant_profile(
+            scope(), AdminRestaurantProfileUpdate(assistant_notes="Churrascaria e rodizio")
+        )
+
+        self.assertEqual(restaurant.description, "A melhor picanha da cidade")
+        self.assertEqual(restaurant.assistant_notes, "Churrascaria e rodizio")
+
+    def test_nulo_explicito_apaga(self):
+        # Apagar `assistant_notes` devolve o assistente ao estado de antes
+        # desta frente: prompt sem a linha `Sobre a casa`.
+        restaurant = make_restaurant(assistant_notes="Churrascaria")
+        service = build_service(restaurant_repository=FakeRestaurantRepository(restaurant))
+
+        service.update_restaurant_profile(
+            scope(), AdminRestaurantProfileUpdate(assistant_notes=None)
+        )
+
+        self.assertIsNone(restaurant.assistant_notes)
+
+    def test_restaurante_desativado_ainda_tem_painel(self):
+        """`get_by_id`, e nao `get_active_by_id`: e pelo painel que o dono
+        arruma o cadastro antes de voltar. Recusar aqui trancaria a porta pelo
+        lado de dentro."""
+        restaurant = make_restaurant(is_active=False)
+        service = build_service(restaurant_repository=FakeRestaurantRepository(restaurant))
+
+        response = service.get_restaurant_profile(scope())
+
+        self.assertEqual(response.slug, "junior-da-picanha")
+
+    def test_restaurante_de_outro_token_nao_e_alcancado(self):
+        service = build_service(
+            restaurant_repository=FakeRestaurantRepository(make_restaurant())
+        )
+
+        with self.assertRaises(HTTPException) as erro:
+            service.get_restaurant_profile(scope(restaurant_id=OTHER_RESTAURANT_ID))
+
+        self.assertEqual(erro.exception.status_code, 404)
 
 
 class RestaurantSettingsTests(unittest.TestCase):

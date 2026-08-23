@@ -22,6 +22,8 @@ from src.schemas.admin_settings_schema import (
     AdminPaymentMethodCreate,
     AdminPaymentMethodResponse,
     AdminPaymentMethodUpdate,
+    AdminRestaurantProfileResponse,
+    AdminRestaurantProfileUpdate,
     AdminRestaurantSettingsResponse,
     AdminRestaurantSettingsUpdate,
     BranchPrepTimeAdjustRequest,
@@ -47,9 +49,64 @@ from src.services.admin_settings_service import AdminSettingsService
 # - `PATCH /settings` e `PATCH /branches/{id}/settings` sao SOMENTE_DONO
 #   (pedido minimo, taxa de servico, raio de entrega: e o contrato comercial
 #   da loja);
+# - `PATCH /restaurant` e SOMENTE_DONO por outro motivo: e a vitrine da marca
+#   inteira, e um dos campos entra no PROMPT do assistente;
 # - `store-status` e `prep-time` sao PESSOAS, porque sao as alavancas que a
 #   operacao de balcao puxa sozinha as 20h.
 router = APIRouter(prefix="/admin", tags=["admin settings"])
+
+
+@router.get(
+    "/restaurant",
+    response_model=AdminRestaurantProfileResponse,
+    dependencies=[Depends(exigir_papel(PESSOAS))],
+)
+def get_restaurant_profile(
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> AdminRestaurantProfileResponse:
+    """O perfil do restaurante: nome, slug e os dois textos sobre a casa.
+
+    `/restaurant` e nao `/settings` porque sao tabelas diferentes com donos
+    diferentes: `/settings` e `restaurant_settings`, o PADRAO que a filial
+    herda; aqui e `restaurants`, a marca, que filial nenhuma herda.
+    """
+    return AdminSettingsService(db).get_restaurant_profile(scope)
+
+
+@router.patch(
+    "/restaurant",
+    response_model=AdminRestaurantProfileResponse,
+    # SOMENTE_DONO pelos dois campos, e por motivos diferentes.
+    #
+    # `description` e a vitrine da marca INTEIRA — o texto que todo cliente
+    # le antes de decidir pedir, em todas as filiais de uma vez.
+    #
+    # `assistant_notes` e mais que isso: e texto do lojista entrando no
+    # PROMPT do assistente que fala com o cliente. As duas defesas de
+    # `_build_restaurant_context` (corte de tamanho e achatamento de quebra
+    # de linha) limitam o estrago, e nao o eliminam — quem escreve ali manda
+    # no atendente da propria loja. Pelo mesmo criterio do cashback, quem
+    # escreve no prompt nao pode ser a senha do balcao, que e a que mais
+    # circula.
+    dependencies=[Depends(exigir_papel(SOMENTE_DONO))],
+)
+def update_restaurant_profile(
+    payload: AdminRestaurantProfileUpdate,
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> AdminRestaurantProfileResponse:
+    """Grava a descricao publica e as anotacoes para o assistente.
+
+    Os dois campos tem PUBLICOS opostos, e a tela precisa dizer isso:
+    `description` sai na vitrine (o cliente le), `assistant_notes` entra no
+    contexto do assistente de IA e nao sai em resposta publica nenhuma.
+
+    Nulo APAGA o campo. Nao ha fallback de um para o outro: sem
+    `assistant_notes` o prompt sai sem a linha `Sobre a casa`, e nao com a
+    descricao no lugar dela.
+    """
+    return AdminSettingsService(db).update_restaurant_profile(scope, payload)
 
 
 @router.get(

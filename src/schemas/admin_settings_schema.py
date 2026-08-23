@@ -57,6 +57,92 @@ MAX_BAND_MINUTES = MAX_PREP_TIME_MINUTES
 # restaurante — e o dedo que digitou 1000 no lugar de 10.
 MAX_BAND_DISTANCE_KM = Decimal("100")
 
+# Teto da descricao publica na ESCRITA. Nao e limite de banco — a coluna e
+# `text` — e sim a guarda contra corpo sem fim numa rota que grava texto
+# livre. Generoso de proposito: e vitrine, e nenhum texto de vitrine real
+# chega perto disto. Nao vale na LEITURA, para nao recusar a resposta de uma
+# linha antiga mais longa que ele.
+MAX_RESTAURANT_DESCRIPTION_LENGTH = 1000
+
+# Teto das anotacoes para o assistente, e este numero e o MESMO com que
+# `ChatService._build_restaurant_context` corta o texto ao montar o prompt —
+# a constante e uma so, importada de la.
+#
+# Os dois lugares continuam existindo, e nenhum e redundante: aqui o teto e
+# 422 com contador na tela, e o lojista sabe que o texto nao coube; la ele e
+# a ultima defesa, porque a coluna e `text` e continua gravavel por SQL.
+# Mexer neste numero move os dois juntos, que e o que se quer — o corte do
+# prompt existe pelo tamanho do prompt, nao pelo tamanho do formulario.
+MAX_ASSISTANT_NOTES_LENGTH = 300
+
+
+def clean_free_text(value: str | None) -> str | None:
+    """Texto livre pronto para gravar: sem espaco nas pontas, vazio vira nulo.
+
+    `""` e `None` significam a MESMA coisa nestes dois campos — "nao ha
+    texto" —, e o painel manda um ou outro conforme o componente que ele
+    usou. Normalizar aqui e o que impede a resposta publica de distinguir
+    dois estados que o lojista nao sabe que criou.
+    """
+    if value is None:
+        return None
+    return value.strip() or None
+
+
+class AdminRestaurantProfileResponse(BaseResponse):
+    """O PERFIL do restaurante: quem ele e, e nao com que numeros ele opera.
+
+    Separado de `AdminRestaurantSettingsResponse` porque sao tabelas
+    diferentes com donos diferentes: aquele e `restaurant_settings`, o PADRAO
+    que a filial herda; este e `restaurants`, a marca, que filial nenhuma
+    herda porque ela e uma so.
+
+    `name` e `slug` saem para a tela mostrar de quem esta falando, e NAO sao
+    gravaveis (ver `AdminRestaurantProfileUpdate`). Logo, capa e cores
+    continuam so por SQL: entram aqui quando a tela que os edita existir, e o
+    lugar delas ja e este.
+    """
+
+    id: UUID
+    name: str
+    slug: str
+    description: str | None = None
+    assistant_notes: str | None = None
+
+
+class AdminRestaurantProfileUpdate(BaseModel):
+    """Os dois textos do lojista sobre a casa, e eles tem PUBLICOS opostos.
+
+    `description` e VITRINE: sai em `RestaurantPublicResponse`, e o cliente
+    decide pedir por ela. Anuncio ali e o uso certo.
+
+    `assistant_notes` e PROMPT: entra no contexto do assistente de IA (chat e
+    voz) e nao sai em resposta publica nenhuma. O que serve ali e o oposto do
+    anuncio — o que a casa faz, o que ela nao faz, o que o atendente precisa
+    saber para nao inventar. Foi para poder dizer isso na tela sem mentir que
+    os dois campos se separaram (revisao 20260823_0034).
+
+    Nao ha fallback de um para o outro: `assistant_notes` nulo e prompt sem a
+    linha `Sobre a casa`, e nao a `description` no lugar dela.
+
+    `name` e `slug` NAO estao aqui. O slug e a URL publica do cardapio — a
+    unica coisa que o cliente tem salva — e troca-lo por PATCH quebraria todo
+    link que existe no mundo, em silencio e sem redirecionamento. Se um dia
+    for preciso, e rota propria, com o motivo escrito.
+    """
+
+    description: str | None = Field(
+        default=None, max_length=MAX_RESTAURANT_DESCRIPTION_LENGTH
+    )
+    assistant_notes: str | None = Field(
+        default=None, max_length=MAX_ASSISTANT_NOTES_LENGTH
+    )
+
+    @field_validator("description", "assistant_notes")
+    @classmethod
+    def clean_text(cls, value: str | None) -> str | None:
+        return clean_free_text(value)
+
 
 class AdminRestaurantSettingsResponse(BaseResponse):
     """Os PADROES do restaurante — o que a filial herda quando nao diverge.

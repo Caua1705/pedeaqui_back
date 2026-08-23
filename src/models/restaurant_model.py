@@ -16,6 +16,16 @@ class Restaurant(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
+    # O que o ASSISTENTE precisa saber sobre a casa. Separado da `description`
+    # na revisao 20260823_0034 porque os dois destinos pedem textos opostos:
+    # ela e vitrine (`RestaurantPublicResponse`, o cliente decide pedir por
+    # ela), esta e prompt (`ChatService._build_restaurant_context`, reusado
+    # pelo agente de voz).
+    #
+    # NAO sai em resposta publica nenhuma, e a leitura do prompt NAO cai para
+    # `description` quando isto e nulo: o fallback preservaria o anuncio no
+    # prompt para todo mundo que nunca preencher.
+    assistant_notes: Mapped[str | None] = mapped_column(Text)
     logo_path: Mapped[str | None] = mapped_column(Text)
     cover_path: Mapped[str | None] = mapped_column(Text)
     primary_color: Mapped[str | None] = mapped_column(Text, default="#D95C04")

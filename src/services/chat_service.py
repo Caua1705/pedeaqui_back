@@ -15,6 +15,7 @@ from src.repositories.ai_feedback_repository import AIFeedbackRepository
 from src.repositories.branch_repository import BranchRepository
 from src.repositories.product_repository import ProductRepository
 from src.repositories.restaurant_repository import RestaurantRepository
+from src.schemas.admin_settings_schema import MAX_ASSISTANT_NOTES_LENGTH
 from src.schemas.ai_feedback_schema import AIFeedbackRequest, AIFeedbackResponse
 from src.services.menu_service import MenuService
 from src.utils.money import format_money_br
@@ -25,8 +26,6 @@ logger = logging.getLogger("uvicorn.error")
 
 _MAX_SESSION_MESSAGES = 20
 _SESSION_TTL = timedelta(hours=1)
-# Teto da descricao do restaurante dentro do prompt. Ver `_build_restaurant_context`.
-_MAX_CONTEXT_DESCRIPTION = 300
 
 
 class SessionMessage(TypedDict):
@@ -263,24 +262,40 @@ class ChatService:
         ser cumprida, e o assistente falava de um restaurante que ele nao
         sabia qual era.
 
-        NAO ha campo de tipo de cozinha no cadastro: `restaurants` tem name,
-        slug, description, logos e cores, e mais nada. `description` e o texto
-        livre que o lojista escreve sobre a casa, e e o mais proximo disso —
-        ja e publico, sai em `RestaurantPublicResponse`.
+        A segunda linha sai de `assistant_notes`, e ate 23/08/2026 saia de
+        `description`. A troca (revisao 20260823_0034) e o conserto de um
+        duplo uso: a `description` tambem e a VITRINE publica, e os dois
+        destinos pedem textos opostos — o cliente le a vitrine para decidir
+        pedir, e o que serve aqui e o contrario do anuncio (o que a casa faz,
+        o que ela nao faz, o que o atendente precisa saber para nao
+        inventar). Com um campo so, a tela do painel nao conseguia instruir
+        nenhum dos dois sem mentir sobre o outro.
 
-        As duas defesas sobre a `description` existem porque ela e texto do
-        LOJISTA entrando no prompt. O corte em `_MAX_CONTEXT_DESCRIPTION`
-        impede que uma descricao longa empurre as instrucoes para longe e
-        passe a competir com elas; o colapso das quebras de linha impede que
-        ela finja ser uma secao nova do prompt. Nenhuma das duas transforma
-        isso em texto confiavel — quem escreve ali manda no atendente da
-        propria loja, e esse e o limite do estrago.
+        **Nao ha fallback para `description`, e isso e deliberado.** Com ele,
+        quem nunca preenchesse as anotacoes continuaria com o anuncio no
+        prompt para sempre — que e exatamente o problema que a separacao
+        existe para resolver, mantido de pe justamente para quem o tem. Sem
+        anotacoes a linha `Sobre a casa` nao sai, do mesmo jeito que ja nao
+        saia para quem tinha a descricao vazia.
+
+        As duas defesas continuam, porque isto continua sendo texto do
+        LOJISTA entrando no prompt. O corte em `MAX_ASSISTANT_NOTES_LENGTH`
+        impede que um texto longo empurre as instrucoes para longe e passe a
+        competir com elas; o colapso das quebras de linha impede que ele
+        finja ser uma secao nova do prompt. Nenhuma das duas transforma isso
+        em texto confiavel — quem escreve ali manda no atendente da propria
+        loja, e esse e o limite do estrago.
+
+        O teto vale tambem na ESCRITA (`AdminRestaurantProfileUpdate`), com a
+        mesma constante, e um nao dispensa o outro: la ele e 422 com contador
+        na tela, e o lojista sabe que o texto nao coube; aqui e a ultima
+        defesa, porque a coluna e `text` e continua gravavel por SQL.
         """
         lines = [f"Nome do restaurante: {restaurant.name}"]
 
-        description = " ".join((restaurant.description or "").split())
-        if description:
-            lines.append(f"Sobre a casa: {description[:_MAX_CONTEXT_DESCRIPTION]}")
+        notes = " ".join((restaurant.assistant_notes or "").split())
+        if notes:
+            lines.append(f"Sobre a casa: {notes[:MAX_ASSISTANT_NOTES_LENGTH]}")
 
         return "\n".join(lines)
 

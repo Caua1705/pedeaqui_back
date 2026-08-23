@@ -595,6 +595,66 @@ class WebhookTests(unittest.TestCase):
 
         self.assertEqual(self.order.status, "pending")
 
+    def test_payment_confirmed_on_a_rejected_order_is_logged(self):
+        # A corrida real: o lojista recusa enquanto o pagamento esta em voo.
+        # O pedido termina `rejected` + `paid`, e o extrato exclui `rejected`
+        # da comissao — entao esta linha de log e o unico rastro de que
+        # existe dinheiro de cliente parado.
+        order = make_order(
+            payment_provider="sandbox",
+            provider_payment_id="sandbox-1",
+            status="rejected",
+        )
+        service = build_service(order)
+
+        with self.assertLogs("uvicorn.error", level="WARNING") as captured:
+            self._handle(service, webhook_body("sandbox-1", "paid"))
+
+        logged = "\n".join(captured.output)
+        self.assertIn("pagamento confirmado em pedido ja rejected", logged)
+        self.assertIn(str(order.id), logged)
+        # O pagamento e gravado assim mesmo: recusar a escrita esconderia o
+        # dinheiro que de fato entrou.
+        self.assertEqual(order.payment_status, "paid")
+
+    def test_payment_confirmed_on_a_cancelled_order_is_logged(self):
+        order = make_order(
+            payment_provider="sandbox",
+            provider_payment_id="sandbox-1",
+            status="cancelled",
+        )
+        service = build_service(order)
+
+        with self.assertLogs("uvicorn.error", level="WARNING") as captured:
+            self._handle(service, webhook_body("sandbox-1", "paid"))
+
+        self.assertIn("pagamento confirmado em pedido ja cancelled", "\n".join(captured.output))
+
+    def test_payment_confirmed_on_a_live_order_is_not_logged_as_a_problem(self):
+        # O caminho normal nao pode gerar o aviso: um warning que sai em todo
+        # pedido pago deixa de ser lido no dia em que importar.
+        service = build_service(self.order)
+
+        with self.assertLogs("uvicorn.error", level="INFO") as captured:
+            self._handle(service, webhook_body("sandbox-1", "paid"))
+
+        self.assertNotIn("sem estorno automatico", "\n".join(captured.output))
+
+    def test_refund_on_a_terminal_order_is_not_the_same_alarm(self):
+        # Estorno em pedido cancelado e o desfecho CERTO, nao dinheiro parado.
+        order = make_order(
+            payment_provider="sandbox",
+            provider_payment_id="sandbox-1",
+            status="cancelled",
+            payment_status="paid",
+        )
+        service = build_service(order)
+
+        with self.assertLogs("uvicorn.error", level="INFO") as captured:
+            self._handle(service, webhook_body("sandbox-1", "refunded"))
+
+        self.assertNotIn("sem estorno automatico", "\n".join(captured.output))
+
     def test_payment_event_is_recorded_in_the_history_with_its_author(self):
         service = build_service(self.order)
 

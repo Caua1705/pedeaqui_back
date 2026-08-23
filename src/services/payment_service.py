@@ -51,6 +51,7 @@ from src.schemas.payment_schema import (
 )
 from src.services.idempotency_service import IdempotencyService
 from src.services.order_state_machine import (
+    TERMINAL_ORDER_STATUSES,
     ensure_payment_transition_allowed,
     payment_history_status,
 )
@@ -375,6 +376,10 @@ class PaymentService:
             )
             return {"status": "ignored", "reason": "invalid_transition"}
 
+        # Lido ANTES do commit: depois dele o objeto do SQLAlchemy esta
+        # expirado e cada atributo relido dispara um SELECT novo.
+        order_status = order.status
+
         try:
             self.order_repository.update_payment_status(
                 order,
@@ -409,10 +414,45 @@ class PaymentService:
             event.payment_status,
             provider,
         )
+        self._log_payment_on_terminal_order(order.id, order_status, event.payment_status)
         # O pedido NAO e aceito automaticamente aqui: pagar nao obriga o
         # lojista a aceitar. O que o pagamento faz e liberar o botao —
         # ensure_payment_allows_order_status passa a deixar.
         return response
+
+    @staticmethod
+    def _log_payment_on_terminal_order(
+        order_id: uuid.UUID,
+        order_status: str,
+        payment_status: str,
+    ) -> None:
+        """Avisa quando o dinheiro entra num pedido que ja acabou.
+
+        A corrida: o lojista recusa (ou cancela) enquanto o pagamento ainda
+        esta em voo, e o webhook chega depois. `handle_webhook` valida so a
+        transicao de PAGAMENTO, e `pending -> paid` e valida qualquer que
+        seja o status operacional — o pedido termina `rejected` + `paid`.
+        Dinheiro do cliente entrou, o pedido nao vai ser produzido, e ninguem
+        estorna.
+
+        `AdminOrderService._log_cancellation_of_paid_order` NAO cobre este
+        caso: ela dispara quando o pedido JA estava pago no momento da
+        recusa, e aqui a ordem e a inversa. O extrato tambem nao denuncia —
+        `cancelled` e `rejected` sao excluidos da comissao, corretamente.
+
+        Por isso esta linha e o unico rastro, como a daquela. Vale o mesmo
+        grep no radar.
+        """
+        if payment_status != "paid":
+            return
+        if order_status not in TERMINAL_ORDER_STATUSES:
+            return
+        logger.warning(
+            "[Pagamento] pagamento confirmado em pedido ja %s sem estorno "
+            "automatico order_id=%s",
+            order_status,
+            order_id,
+        )
 
     def _verify_signature(
         self,

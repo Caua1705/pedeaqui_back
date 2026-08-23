@@ -359,11 +359,23 @@ seguinte, para não perder pedido das 23:59.
 1. **Só pix passa pelo Mercado Pago.** Método não suportado responde 503
    (`payment_unavailable`) — falhar alto é proposital, um retorno plausível
    deixaria pedidos pendentes para sempre.
-2. **Cancelar um pedido pago NÃO estorna.** O estorno só acontece quando o
-   gateway avisa (webhook `refunded`) ou quando alguém o faz no painel do próprio
-   gateway. Cancelamento de pedido `paid` sai no log como
-   `[Pagamento] pedido pago foi cancelled sem estorno automatico` — é o **único
-   rastro de dinheiro de cliente parado**. Vale ter esse grep no radar.
+2. **Nada aqui estorna sozinho.** O estorno só acontece quando o gateway avisa
+   (webhook `refunded`) ou quando alguém o faz no painel do próprio gateway.
+   Dinheiro de cliente parado tem **dois** logs, e qual sai depende da ordem dos
+   eventos:
+
+   | Ordem | Onde | Linha |
+   |---|---|---|
+   | pagou → lojista cancelou | `AdminOrderService._log_cancellation_of_paid_order` | `pedido pago foi cancelled sem estorno automatico` |
+   | lojista recusou → pagamento entrou | `PaymentService._log_payment_on_terminal_order` | `pagamento confirmado em pedido ja rejected sem estorno automatico` |
+
+   A segunda é a corrida mais provável e ficou sem rastro nenhum até 23/08/2026:
+   `handle_webhook` valida só a transição de **pagamento**, e `pending → paid` é
+   válida qualquer que seja o `orders.status`. A escrita acontece de propósito —
+   recusá-la esconderia o dinheiro que de fato entrou. E o extrato não denuncia,
+   porque `cancelled`/`rejected` já estão fora da comissão.
+
+   O grep cobre as duas: `sem estorno automatico`.
 3. **Pagamento recusado não cancela o pedido.** Ele fica `status=pending` com
    `payment_status=failed`, visível para o lojista cancelar, e o cliente pode
    gerar nova cobrança para o mesmo pedido (`failed → pending`).

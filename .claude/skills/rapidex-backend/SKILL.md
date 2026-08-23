@@ -787,18 +787,41 @@ E em banco que já tem o schema, a baseline é `alembic stamp 20260726_0001`, nu
 
 ---
 
-## 25. Cancelar pedido pago não estorna — e o log é o único rastro
+## 25. Dinheiro de cliente parado tem DOIS logs, e a ordem dos eventos decide qual
 
 O estorno só acontece quando o gateway avisa (webhook `refunded`) ou quando alguém
-o faz no painel do próprio gateway.
+o faz no painel do próprio gateway. Nada aqui estorna sozinho.
 
-Cancelamento de pedido `paid` sai como:
+**A ordem em que as duas coisas acontecem produz logs diferentes, em arquivos
+diferentes, e cada um cobre só a metade dele.**
+
+**Pagou primeiro, o lojista cancelou depois** — `AdminOrderService._log_cancellation_of_paid_order`:
 
 ```
 [Pagamento] pedido pago foi cancelled sem estorno automatico order_id=...
 ```
 
-**É o único rastro de dinheiro de cliente parado.** Vale ter esse grep no radar.
+**O lojista recusou primeiro, o pagamento entrou depois** — `PaymentService._log_payment_on_terminal_order`:
+
+```
+[Pagamento] pagamento confirmado em pedido ja rejected sem estorno automatico order_id=...
+```
+
+A segunda metade ficou **sem rastro nenhum até 23/08/2026**, e é a corrida mais
+provável das duas: `handle_webhook` valida só a transição de **pagamento**, e
+`pending → paid` é válida qualquer que seja o `orders.status`. O pedido termina
+`rejected` + `paid` sem que nada recuse a escrita — corretamente, porque recusar
+esconderia o dinheiro que de fato entrou.
+
+**E o faturamento não denuncia:** `billable_order_conditions` exclui `cancelled` e
+`rejected` da comissão, o que está certo e é justamente o que faz o pedido sumir
+do extrato levando junto a única pista de que havia dinheiro nele.
+
+O grep que vale no radar cobre os dois: `sem estorno automatico`.
+
+Isso fica mais frequente com **cartão**: o antifraude do Mercado Pago pode segurar
+um pagamento em análise por até 48h úteis, e nenhum lojista espera 48h para
+recusar um pedido de almoço.
 
 ---
 

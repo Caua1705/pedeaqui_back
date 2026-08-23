@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, Text, TIMESTAMP
+from sqlalchemy import Boolean, ForeignKey, Text, text, TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -51,6 +51,17 @@ class AdminUser(Base):
     # senha depois da revisao 0013, e ai nada e revogado.
     password_changed_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True)
+    )
+    # A senha atual foi ENTREGUE pelo servidor, nao escolhida pela pessoa. E o
+    # que a senha temporaria de `POST /admin/users` deixa marcado, e o que
+    # obriga a troca antes de qualquer outra rota do painel.
+    #
+    # Campo proprio, e nao `password_changed_at IS NULL`: aquele nulo significa
+    # "nunca trocou desde a revisao 0013" e vale para TODO lojista antigo — le-lo
+    # como pendencia poria a plataforma inteira na tela de troca de senha no dia
+    # do deploy. Os dois sao independentes de proposito (revisao 20260823_0037).
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
     )
     created_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now()

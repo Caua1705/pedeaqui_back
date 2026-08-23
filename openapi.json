@@ -4174,6 +4174,23 @@
         "title": "BranchAvailabilityResponse",
         "type": "object"
       },
+      "BranchCashbackTermsResponse": {
+        "description": "O que a FILIAL precisa dizer antes de o cliente tentar resgatar.\n\nAte aqui o app nao tinha como explicar por que o cashback nao descontou.\nSaldo abaixo do minimo devolve zero **sem erro** (`amount_to_redeem`), e a\nunica pista era `cashback_redeemed_amount: 0` na resposta do pedido —\ndepois de fechado. `docs/cashback.md` registrou isso como pendencia\nquando o saldo passou a ser por restaurante, e apontou o lugar de\nresolver: aqui, ao lado do cardapio, que e quem conhece a filial.\n\n**Por que nao coube em `by_restaurant[]` de `/customers/me/cashback`.** O\nsaldo e do RESTAURANTE; o resgate acontece numa FILIAL, que pode ter regra\npropria — inclusive `enabled = false` com a rede inteira ligada, que e como\numa loja sai da campanha. Publicar o piso sob uma chave por restaurante\nmostraria um numero que nao vale na loja em que a pessoa esta pedindo.\n\n**O app junta as duas pontas:** o saldo daquele restaurante sai de\n`by_restaurant[].balance`, os termos saem daqui, e a frase da tela e a\ncomparacao dos dois. Nenhum dos dois lados sozinho responde a pergunta.\n\n**`percent` NAO esta aqui, e a ausencia e deliberada.** Ele e termo de\nquanto o pedido GERA, nao de resgate, e muda por dia da semana: quem o\nresolve para valer e o checkout, com `order.created_at`\n(`resolve_cashback_terms`). Publica-lo na abertura do cardapio criaria a\nsegunda resposta para \"quanto gera\" — e as duas discordariam sempre que a\nmeia-noite caisse entre abrir o cardapio e fechar o pedido.",
+        "properties": {
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "min_redeem_balance": {
+            "default": 0.0,
+            "title": "Min Redeem Balance",
+            "type": "number"
+          }
+        },
+        "title": "BranchCashbackTermsResponse",
+        "type": "object"
+      },
       "BranchDeliveryResponse": {
         "description": "A resposta de entrega para UMA filial. So existe com endereco no corpo.\n\n`delivers_to_address` e a unica pergunta que a tela precisa responder para\nhabilitar ou desabilitar a filial. `reason` diz por que nao, e vem do\nmesmo vocabulario de `POST /delivery/estimate` — os codigos sao os\nmesmos, de proposito.\n\n`distance_km` e `delivery_fee` podem vir preenchidos MESMO com\n`delivers_to_address = false`: e o caso de \"fora da area\", em que a rota\nfoi calculada e reprovada pelo raio. Vem nulos quando nem chegou a\ncalcular (filial fechada, ou descartada pela linha reta).",
         "properties": {
@@ -6504,6 +6521,59 @@
         "title": "CreateCustomerAddressRequest",
         "type": "object"
       },
+      "CreateErrorReportRequest": {
+        "additionalProperties": false,
+        "description": "O relato como o painel o envia.\n\n**So o que o lojista sabe.** Restaurante, filial e usuario NAO estao aqui\ne nao podem estar: os tres saem do token. `extra=\"forbid\"` fecha a porta\nde propria — um corpo que mandasse `branch_id` seria recusado no schema,\nantes de qualquer service ter a chance de obedece-lo.",
+        "properties": {
+          "description": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "error_log": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Log"
+          },
+          "order_number": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Number"
+          },
+          "screen": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Screen"
+          }
+        },
+        "required": [
+          "description"
+        ],
+        "title": "CreateErrorReportRequest",
+        "type": "object"
+      },
       "CreateOrderRequest": {
         "properties": {
           "address": {
@@ -7563,6 +7633,27 @@
           }
         },
         "title": "DeliveryTimeBandsReplaceRequest",
+        "type": "object"
+      },
+      "ErrorReportResponse": {
+        "description": "O comprovante. E o numero que o lojista repete no WhatsApp.\n\nDevolve o id e a hora, e mais nada — nem o texto de volta. Ecoar o relato\nja redigido faria a tela mostrar `[redigido]` no lugar do que a pessoa\nacabou de digitar, e ela reescreveria achando que perdeu.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "created_at"
+        ],
+        "title": "ErrorReportResponse",
         "type": "object"
       },
       "ForgotPasswordRequest": {
@@ -10564,6 +10655,9 @@
             ],
             "default": true,
             "title": "Accepts Pickup"
+          },
+          "cashback": {
+            "$ref": "#/components/schemas/BranchCashbackTermsResponse"
           },
           "default_delivery_fee": {
             "title": "Default Delivery Fee",
@@ -13640,6 +13734,53 @@
         "summary": "List Customers",
         "tags": [
           "admin customers"
+        ]
+      }
+    },
+    "/admin/error-reports": {
+      "post": {
+        "description": "Registra o relato e devolve o numero dele.\n\nO corpo leva so o que o lojista sabe: a historia, o log que a tela\ncapturou, a tela e opcionalmente o numero do pedido. Restaurante, filial e\nusuario saem do token — mandar qualquer um deles no corpo e 422, por\n`extra=\"forbid\"`.\n\nCredencial que venha no texto (`Authorization`, JWT, `Idempotency-Key`,\n`tracking_token`, campo de senha) e mascarada antes de o registro existir.\nO relato inteiro e apagado em 90 dias.",
+        "operationId": "create_error_report_admin_error_reports_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateErrorReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Error Report",
+        "tags": [
+          "admin error reports"
         ]
       }
     },

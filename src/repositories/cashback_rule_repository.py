@@ -71,3 +71,23 @@ class CashbackRuleRepository:
             )
         )
         return {regra.restaurant_id: regra for regra in self.db.scalars(stmt)}
+
+    def list_enabled_restaurant_rules(self) -> list[CashbackRule]:
+        """Toda regra de restaurante LIGADA. E a lista que a expiracao varre.
+
+        So `branch_id IS NULL` porque o prazo e do restaurante (o saldo e um
+        so), e so `enabled` porque campanha desligada **congela** o saldo em
+        vez de vencê-lo: `resolve_cashback_terms` devolve `SEM_CASHBACK` para
+        a regra desligada, a tela passa a responder `expires_at: null`, e a
+        varredura tem que concordar com a tela. Loja que sai da campanha nao
+        apaga o que ja prometeu.
+        """
+        stmt = (
+            select(CashbackRule)
+            .options(selectinload(CashbackRule.weekdays))
+            .where(
+                CashbackRule.branch_id.is_(None),
+                CashbackRule.enabled.is_(True),
+            )
+        )
+        return list(self.db.scalars(stmt))

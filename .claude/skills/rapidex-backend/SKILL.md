@@ -823,12 +823,26 @@ mesmo minuto.** Não é botão de teste.
   `balance` (o *acumulado*) e o que se perde ao excluir a conta. Para decidir
   quanto entra num pedido é `get_available_balance_for_restaurant` — usar a
   soma ali seria gastar no Varjota o dinheiro que o Júnior concedeu.
-- **A EXPIRAÇÃO AINDA NÃO EXISTE.** `GET /customers/me/cashback` já publica
-  `expires_at` por restaurante (último pedido + `expiry_days`), mas nada zera o
-  saldo quando a data passa: `scripts/expire_cashback.py` é o passo seguinte.
-  Até ele existir, **a API promete um vencimento que ninguém cumpre** — o que é
-  seguro na direção do cliente (ninguém perde saldo) e é chamado na direção do
-  lojista (o passivo não vence). Não anuncie a campanha antes disso.
+- **A validade é do SALDO, e o relógio é o ÚLTIMO PEDIDO.** Não há FIFO, não
+  há lote, não há crédito partido ao meio: um relógio por (cliente,
+  restaurante), que todo pedido reinicia, e quando vence o saldo daquele par
+  vira zero de uma vez. `cashback_transactions.expires_at` fica **sempre
+  nulo** — preenchê-lo criaria a segunda resposta para "quando isto vence".
+  Quem responde é `expires_at_from_last_order`, e ela é chamada pela tela
+  (`GET /customers/me/cashback`) **e** pela varredura, de propósito.
+- **Quem vence é `scripts/expire_cashback.py`, no container `limpeza`, e ele
+  não é o `cleanup_idempotency_keys.py`.** Aquele arquivo tem o contrato
+  "apagar linha vencida não afeta correção" no docstring; aqui um bug apaga
+  **dinheiro de cliente**. Três coisas dele que parecem detalhe e não são: ele
+  trava o cliente e **reconfere o vencimento já travado** (a lista é lida sem
+  lock, e um pedido feito no meio da varredura salva o saldo); a linha
+  negativa nasce com `status="expired"`, senão o saldo fica **negativo**; e
+  ela **não leva `idempotency_key`** — uma chave derivada da data prenderia
+  em `available`, para sempre e sem erro, o saldo lançado a mão depois.
+- **Campanha desligada CONGELA o saldo, não o vence.** A regra desligada cai
+  em `SEM_CASHBACK`, a tela passa a responder `expires_at: null` e a varredura
+  concorda. Fazer a varredura vencer assim faria o app mostrar "não vence" no
+  dia anterior ao saldo sumir.
 
 ---
 

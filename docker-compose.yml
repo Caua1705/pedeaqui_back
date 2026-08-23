@@ -51,12 +51,21 @@ services:
     # `alembic upgrade head`, e dois containers migrando o mesmo banco ao
     # mesmo tempo é corrida de verdade. Só a API migra.
     entrypoint: []
+    # DOIS scripts, e eles são separados de propósito: o primeiro apaga
+    # linha vencida (onde um bug custa espaço em disco) e o segundo vence
+    # SALDO DE CASHBACK (onde um bug apaga dinheiro de cliente). O motivo
+    # inteiro está no docstring de `expire_cashback.py`.
+    #
+    # Encadeados com `&&`: se a limpeza falhar, a expiração não roda e o
+    # laço tenta os dois de novo em 5 min. Rodar a limpeza duas vezes é
+    # inofensivo — ela é idempotente — e a ordem inversa faria a expiração
+    # depender de um passo que acabou de falhar.
     command:
       - sh
       - -c
       - |
         while true; do
-          if python scripts/cleanup_idempotency_keys.py; then
+          if python scripts/cleanup_idempotency_keys.py && python scripts/expire_cashback.py; then
             sleep 86400
           else
             echo "[limpeza] falhou; nova tentativa em 5 min"

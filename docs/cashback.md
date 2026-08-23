@@ -1,17 +1,28 @@
 # Cashback
 
-> **Estado: em construção.** A revisão `20260822_0032` (22/08/2026) põe o
-> schema de pé, e o crédito, o resgate e a devolução já existem em código.
-> O **saldo por restaurante na API** entrou em 22/08/2026 (seção 4):
-> `GET /customers/me/cashback` publica `by_restaurant[]` com `expires_at`.
+> **Estado: a frente está completa em código, em 22/08/2026.** A revisão
+> `20260822_0032` põe o schema de pé; o crédito, o resgate e a devolução
+> existem; `GET /customers/me/cashback` publica `by_restaurant[]` com
+> `expires_at` (seção 4); e `scripts/expire_cashback.py` vence o saldo parado,
+> no container `limpeza` (seção 3).
 >
-> **Falta uma coisa, e ela é bloqueante para anunciar:** a **expiração**
-> (seção 3). A data já sai na resposta; o que ainda não existe é quem zera o
-> saldo quando ela passa — ou seja, hoje a API promete um vencimento que
-> ninguém cumpre. É o próximo passo, e é `scripts/expire_cashback.py`.
+> **O que segura tudo é um dado, e não o código: `cashback_rules.enabled`
+> nasce FALSO em todo restaurante.** Enquanto for falso, `resolve_cashback_terms`
+> devolve `SEM_CASHBACK`, o razão continua sem escritor e nada vence.
 >
-> Nada disso está ligado em produção: `cashback_rules.enabled` nasce falso em
-> todo restaurante, e enquanto for falso o razão continua sem escritor.
+> **Ligar a chave de um restaurante liga o crédito e o resgate no mesmo
+> minuto — e o resgate entra como subtração na base da comissão.** Antes de
+> ligar, a medição pendente da seção 1 ("o lojista fecha o pedido no
+> painel?") precisa ser refeita com operação real.
+>
+> **Duas coisas ficaram para depois, e nenhuma bloqueia:**
+>
+> 1. **Termos por filial ao lado do cardápio**, para o app conseguir explicar
+>    *por que não descontou* (saldo abaixo do mínimo devolve zero sem erro).
+>    O porquê de não terem entrado em `by_restaurant[]` está na seção 4.
+> 2. **O `balance` somado não é gastável**, e a tela do app tem que chamá-lo
+>    de **"acumulado"**, nunca de "disponível". É contrato de front, não de
+>    backend: a API já entrega a lista gastável ao lado.
 
 Este documento é o desenho combinado, e existe para que as decisões não
 precisem ser retomadas do zero quando o código chegar.
@@ -171,7 +182,9 @@ restaurante)**, que todo pedido reinicia, e quando ele vence **o saldo inteiro
 vira zero de uma vez**.
 
 - **Quem roda:** script próprio (`scripts/expire_cashback.py`), no container
-  `limpeza` que já existe — mesma imagem, mesmo laço diário, mesmo retry.
+  `limpeza` que já existe — mesma imagem, mesmo laço diário, mesmo retry. Os
+  dois scripts são encadeados com `&&`; a limpeza é idempotente, então o
+  retry de 5 min repeti-la é inofensivo.
 - **Por que não dentro do `cleanup_idempotency_keys.py`:** aquele arquivo tem
   um contrato explícito no docstring — "apagar linha vencida não afeta
   correção". Aqui afeta: um bug apaga dinheiro de cliente. Arquivo próprio,
@@ -179,6 +192,36 @@ vira zero de uma vez**.
 - **O que faz:** as linhas `available` daquele par viram `expired`, e entra
   UMA linha `type="expired"` com o total negativo, para o extrato ficar
   legível.
+
+### O que a escrita da expiração obrigou a decidir
+
+- **Trava o cliente (`lock_customer`) e RECONFERE o vencimento já travado.**
+  A lista de candidatos é lida sem lock; entre lê-la e agir, a pessoa pode ter
+  feito um pedido — e pedido empurra a validade. Sem a segunda leitura, quem
+  pediu no segundo errado perde o saldo inteiro. É o mesmo lock do resgate, e
+  ele também impede que a varredura marque as linhas como `expired` no
+  instante em que o checkout já leu o saldo e vai gravar o débito.
+- **A linha negativa nasce com `status="expired"`, não `available`.** Com
+  `available` ela seria a única linha na soma, e o saldo do cliente ficaria
+  **negativo** — uma dívida que ele descobriria no próximo pedido.
+- **Ela NÃO leva `idempotency_key`, ao contrário das outras três escritas.**
+  Lá a chave é o pedido, e o mesmo pedido pode voltar. Aqui o evento não tem
+  chave natural que se repita: o que impede a segunda gravação é não haver
+  mais saldo `available` para vencer. Uma chave derivada da data do
+  vencimento faria pior — saldo lançado a mão depois (o `adjustment`, que só
+  entra por SQL) ficaria preso em `available` para sempre, sem erro em lugar
+  nenhum.
+- **Commit por cliente**, e não um no fim: interrompido no meio, o que já
+  venceu está gravado, e nenhum lock fica de pé pela duração da varredura —
+  o que travaria o checkout dessas pessoas.
+- **Campanha desligada CONGELA o saldo em vez de vencê-lo**, e a tela
+  concorda: com a regra desligada ela responde `expires_at: null`. Vencer o
+  que a loja já prometeu porque ela saiu da campanha seria a plataforma
+  apagando dinheiro que não é dela.
+- **A conta do vencimento é uma só** (`expires_at_from_last_order`), chamada
+  pela tela e pela varredura. Duas contas discordariam no dia em que uma
+  fosse ajustada, e a divergência seria saldo apagado antes da data que o app
+  mostrou.
 - **"Último pedido"** = o último pedido daquele cliente naquele restaurante
   que chegou a `KITCHEN_ORDER_STATUSES` — a constante que já existe em
   `order_state_machine.py`. Não se cria uma quarta definição de "quais

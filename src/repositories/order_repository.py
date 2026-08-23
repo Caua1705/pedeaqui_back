@@ -565,6 +565,32 @@ class OrderRepository:
         )
         return {row[0]: row[1] for row in self.db.execute(stmt).all()}
 
+    def last_order_at_by_customer(
+        self,
+        restaurant_id: uuid.UUID,
+        statuses: tuple[str, ...],
+    ) -> dict[uuid.UUID, datetime]:
+        """O ultimo pedido de CADA pessoa naquele restaurante.
+
+        O mesmo relogio de `last_order_at_by_restaurant`, pelo outro eixo: la
+        e uma pessoa em varias lojas (a tela de saldo), aqui e uma loja com
+        varias pessoas (a expiracao, que varre restaurante a restaurante).
+
+        Uma consulta por restaurante, e nao uma por cliente: a varredura
+        diaria passa por todo mundo que tem saldo, e o N+1 aqui seria uma
+        consulta por pessoa.
+        """
+        stmt = (
+            select(Order.customer_id, func.max(Order.created_at))
+            .where(
+                Order.restaurant_id == restaurant_id,
+                Order.customer_id.is_not(None),
+                Order.status.in_(statuses),
+            )
+            .group_by(Order.customer_id)
+        )
+        return {row[0]: row[1] for row in self.db.execute(stmt).all()}
+
     def list_all_by_customer(self, customer_id: uuid.UUID) -> list[Order]:
         """Todos os pedidos da pessoa, sem join nem ordem.
 

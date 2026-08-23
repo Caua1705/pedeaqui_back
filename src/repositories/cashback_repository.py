@@ -1,7 +1,7 @@
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from src.models.cashback_transaction_model import CashbackTransaction
@@ -94,6 +94,65 @@ class CashbackRepository:
             .order_by(saldo.desc(), Restaurant.name)
         )
         return [(row[0], row[1]) for row in self.db.execute(stmt).all()]
+
+    def list_available_balances_by_customer(
+        self,
+        restaurant_id: uuid.UUID,
+    ) -> list[tuple[uuid.UUID, Decimal]]:
+        """Quem tem saldo NAQUELE restaurante, e quanto. O outro eixo.
+
+        `list_available_balances_by_restaurant` responde "as lojas de UMA
+        pessoa" e monta a tela; este responde "as pessoas de UMA loja" e
+        alimenta a expiracao, que varre restaurante a restaurante porque o
+        prazo e do restaurante.
+
+        Duas consultas parecidas e nao uma generica com um `group_by` vindo
+        por parametro: cada uma se le inteira, e quem for mexer numa nao
+        precisa conferir o que a outra faz com a mudanca.
+        """
+        saldo = func.sum(CashbackTransaction.amount)
+        stmt = (
+            select(CashbackTransaction.customer_id, saldo)
+            .where(
+                CashbackTransaction.restaurant_id == restaurant_id,
+                CashbackTransaction.status == "available",
+            )
+            .group_by(CashbackTransaction.customer_id)
+            .having(saldo > 0)
+        )
+        return [(row[0], row[1]) for row in self.db.execute(stmt).all()]
+
+    def mark_available_as_expired(
+        self,
+        customer_id: uuid.UUID,
+        restaurant_id: uuid.UUID,
+    ) -> int:
+        """Tira da soma as linhas `available` daquele par. Devolve quantas.
+
+        **O `status` e o que tira linha do saldo de uma vez, e e para isto
+        que ele existe.** O saldo e `SUM(amount)` das linhas `available`:
+        marcadas como `expired`, elas somem da conta sem que nenhum valor
+        seja reescrito, e o extrato continua mostrando o que foi creditado
+        um dia.
+
+        `synchronize_session=False` porque o UPDATE e em massa e a sessao nao
+        precisa reconciliar objeto nenhum: quem chama ja leu o saldo antes e
+        nao volta a ler as linhas depois.
+
+        NAO commita — quem chama e que fecha a transacao, com o lock do
+        cliente ainda de pe.
+        """
+        stmt = (
+            update(CashbackTransaction)
+            .where(
+                CashbackTransaction.customer_id == customer_id,
+                CashbackTransaction.restaurant_id == restaurant_id,
+                CashbackTransaction.status == "available",
+            )
+            .values(status="expired")
+            .execution_options(synchronize_session=False)
+        )
+        return self.db.execute(stmt).rowcount
 
     def get_by_idempotency_key(self, idempotency_key: str) -> CashbackTransaction | None:
         stmt = select(CashbackTransaction).where(

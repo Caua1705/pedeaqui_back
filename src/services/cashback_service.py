@@ -42,6 +42,7 @@ from src.models.customer_model import Customer
 from src.repositories.branch_repository import BranchRepository
 from src.repositories.cashback_repository import CashbackRepository
 from src.repositories.cashback_rule_repository import CashbackRuleRepository
+from src.repositories.customer_repository import CustomerRepository
 from src.repositories.order_repository import OrderRepository
 from src.schemas.cashback_schema import (
     CashbackBalanceResponse,
@@ -76,6 +77,7 @@ class CashbackService:
         self.cashback_rule_repository = CashbackRuleRepository(db)
         self.branch_repository = BranchRepository(db)
         self.order_repository = OrderRepository(db)
+        self.customer_repository = CustomerRepository(db)
 
     def get_balance(self, customer: Customer) -> CashbackBalanceResponse:
         """O acumulado e a quebra por restaurante.
@@ -320,6 +322,111 @@ class CashbackService:
             metadata={"motivo": "pedido cancelado"},
         )
         return amount
+
+    # -----------------------------------------------------------------
+    # Expiracao — o relogio e o ULTIMO PEDIDO
+    # -----------------------------------------------------------------
+
+    def expire_balance(
+        self,
+        customer_id: uuid.UUID,
+        restaurant_id: uuid.UUID,
+        momento: datetime,
+    ) -> Decimal:
+        """Vence o saldo daquele par, se ele estiver vencido. Nao commita.
+
+        **Confere o vencimento DE NOVO, ja com o cliente travado**, e nao
+        confia na lista que a varredura montou. Entre ler a lista e chegar
+        aqui a pessoa pode ter feito um pedido — e o pedido empurra a
+        validade para a frente. Sem esta segunda leitura, quem pediu no
+        segundo errado perde o saldo inteiro, e nao ha desfazer.
+
+        **O lock e o mesmo do resgate, e tem que ser.** Sem ele a varredura
+        marca as linhas como `expired` no instante em que o checkout ja leu
+        o saldo e vai gravar o resgate: o pedido sairia descontando um
+        dinheiro que deixou de existir. Cliente primeiro, como em todo
+        caminho — aqui nao ha segundo lock, entao nao ha ciclo possivel.
+
+        Devolve o valor vencido, ou zero. Zero e resultado normal: a maior
+        parte das linhas da lista some aqui quando a varredura demora.
+        """
+        self.customer_repository.lock_customer(customer_id)
+
+        vencimento = self.expires_at_for(customer_id, restaurant_id)
+        if vencimento is None:
+            return ZERO
+        if vencimento > momento:
+            return ZERO
+
+        saldo = self.cashback_repository.get_available_balance_for_restaurant(
+            customer_id, restaurant_id
+        )
+        if saldo <= ZERO:
+            return ZERO
+
+        linhas = self.cashback_repository.mark_available_as_expired(
+            customer_id, restaurant_id
+        )
+        self._register_expiry(customer_id, restaurant_id, saldo, vencimento, linhas)
+        return saldo
+
+    def expires_at_for(
+        self,
+        customer_id: uuid.UUID,
+        restaurant_id: uuid.UUID,
+    ) -> datetime | None:
+        """Quando o saldo daquele par vence — a MESMA conta que a tela faz.
+
+        A tela e a varredura chamam esta funcao, e nao duas contas parecidas.
+        Duas discordariam no dia em que uma delas fosse ajustada, e a
+        divergencia seria saldo apagado antes da data que o app mostrou.
+        """
+        ultimo_pedido = self.order_repository.last_order_at_by_restaurant(
+            customer_id, KITCHEN_ORDER_STATUSES
+        )
+        regra = self.cashback_rule_repository.list_restaurant_rules([restaurant_id])
+        terms = resolve_cashback_terms(None, regra.get(restaurant_id))
+        return expires_at_from_last_order(ultimo_pedido.get(restaurant_id), terms)
+
+    def _register_expiry(
+        self,
+        customer_id: uuid.UUID,
+        restaurant_id: uuid.UUID,
+        saldo: Decimal,
+        vencimento: datetime,
+        linhas: int,
+    ) -> CashbackTransaction:
+        """UMA linha negativa, para o extrato ficar legivel.
+
+        Sem ela o extrato mostraria creditos que somam R$ 40 e um saldo de
+        zero, sem nada dizendo para onde o dinheiro foi.
+
+        **`status="expired"`, e nao `available`.** Esta linha e historico, e
+        nao parcela do saldo: com `available` ela seria a UNICA linha na soma
+        e o saldo do cliente ficaria NEGATIVO — uma divida que ele
+        descobriria no proximo pedido.
+
+        **Sem `idempotency_key`, ao contrario das outras tres escritas.** Ali
+        a chave e o pedido, e o mesmo pedido pode voltar. Aqui o evento nao
+        tem chave natural que se repita: o que impede a segunda execucao de
+        gravar de novo e nao haver mais saldo `available` para vencer, e a
+        varredura seguinte simplesmente nao encontra o par. Uma chave
+        derivada da data do vencimento faria pior — saldo lancado a mao
+        depois (o `adjustment`, que so entra por SQL) ficaria preso em
+        `available` para sempre, sem erro em lugar nenhum.
+        """
+        return self.cashback_repository.create(
+            CashbackTransaction(
+                customer_id=customer_id,
+                restaurant_id=restaurant_id,
+                order_id=None,
+                type="expired",
+                amount=-quantize_money(saldo),
+                status="expired",
+                idempotency_key=None,
+                metadata_={"vencimento": vencimento.isoformat(), "linhas": linhas},
+            )
+        )
 
     # -----------------------------------------------------------------
 

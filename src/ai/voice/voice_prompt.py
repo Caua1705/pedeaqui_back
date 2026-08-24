@@ -54,6 +54,56 @@ E o nome da loja entra para o modelo se SITUAR, não para ser falado. Cada
 palavra dita é áudio de saída, o item mais caro da sessão, e o cliente
 escolheu a loja na tela antes de apertar o microfone: repeti-la em voz alta é
 pagar para informar o que ele acabou de escolher.
+
+O ANÚNCIO DA BUSCA SAIU (24/08/2026). O atendente dizia "vou buscar a
+informação correta para você, só um instante" antes de chamar a ferramenta.
+São ~3,2 s de áudio de saída, ~64 tokens, **US$ 0,0013 por busca** — e numa
+bancada de catorze turnos com cinco buscas isso deu US$ 0,0065, o mesmo que o
+turno mais caro da sessão inteira. Áudio pago para não dizer nada. A busca
+acontece em silêncio; quem espera é o cliente, e ele já sabe que perguntou.
+
+O PREÇO DEIXOU DE SER SEMPRE (24/08/2026). Ele custa: "cinquenta e sete reais
+e dezesseis centavos" são ~2,5 s de saída (~50 tokens, US$ 0,0010), e a forma
+curta do balcão — "cinquenta e sete e dezesseis" — corta ~44% disso sem perder
+o número. Numa conversa de dois minutos com quatro preços ditos, é entre 5% e
+10% da sessão.
+
+**Mas tirar o preço do áudio inteiro seria errado**, e a razão é a mesma que
+faz o aviso de inatividade ser falado: quem está com o telefone no ouvido não
+está olhando a tela. Preço é o que decide o pedido. Por isso a regra ficou
+sendo QUANDO, e não SE: preço quando ele muda a decisão (produto sendo
+confirmado, pergunta direta), nome só quando são dois produtos e a tela mostra
+os valores ao lado.
+
+E o medo do arredondamento errado não se resolve calando — se resolve na regra
+de COPIAR o valor exato, que é a que ficou.
+
+A NEGATIVA POR NOME, E O LIMIAR QUE NÃO EXISTIU (24/08/2026). Perguntado por
+"baião", o atendente respondeu "temos banana à milanesa por 35 reais e 30
+centavos". A busca não escolhe: ela devolve os cinco mais próximos, e o prompt
+manda falar o que a ferramenta devolveu — então ele obedeceu.
+
+A primeira proposta foi um limiar só da voz: abaixo de X, o resumo diria "nada
+com esse nome" em vez de afirmar. **Foi medido e recusado.** No cardápio real
+(`scripts/afere_limiar_de_similaridade.py`, 24/08/2026):
+
+    "baião"              -> 0,502  Baião de dois        (acerto)
+    "algo vegetariano"   -> 0,374  Filé ao poivre vert  (pergunta legítima)
+
+Não há corte entre 0,374 e 0,502. Qualquer número que pegasse o erro mataria
+"algo vegetariano" — a mesma sobreposição que barrou subir o
+`AI_SEARCH_MIN_SIMILARITY` do `/chat`, e pelo mesmo motivo.
+
+E a medição mostrou outra coisa: **a busca estava certa.** "baião" acha "Baião
+de dois" no topo. Se o modelo tivesse consultado "baião", teria recebido o
+produto certo — logo ele consultou outra palavra. O defeito é de percepção do
+áudio, não de relevância da busca, e limiar nenhum alcança isso.
+
+Por isso a regra que ficou é condicionada ao que a FERRAMENTA devolveu, e não
+a um número nosso: se o cliente disse um nome e nenhum dos nomes que voltaram
+é aquele, isso o modelo compara sozinho. Mais uma regra para ele perguntar o
+nome de novo quando não tiver entendido — uma pergunta curta custa menos que
+oferecer o produto errado.
 """
 
 from src.models.branch_model import Branch
@@ -77,6 +127,9 @@ COMO FALAR
 O CARDAPIO
 - Voce NAO sabe o cardapio de cor. Para falar de qualquer produto, chame
   primeiro a ferramenta buscar_no_cardapio.
+- Busque CALADO. Nunca anuncie que vai buscar, nunca narre o que esta fazendo:
+  nada de "vou verificar", "so um instante", "deixa eu ver aqui". Chame a
+  ferramenta e responda o resultado.
 - NUNCA diga que algo nao existe, nao tem, acabou, ou que voce nao sabe, sem
   ter buscado antes. "Nao temos" e conclusao de busca, nunca palpite.
 - Isso vale para categoria inteira, e nao so para produto: se perguntarem de
@@ -92,9 +145,20 @@ O CARDAPIO
   Nao descreva a tela e nao leia a lista: cite no maximo DOIS em voz, e deixe
   os outros para ela.
 - Se a busca nao devolver nada, diga que aqui nao temos e ofereca ajuda.
+- Se o cliente pediu um produto PELO NOME e nenhum nome que a ferramenta
+  devolveu e aquele, diga PRIMEIRO que aqui nao temos esse, e so depois
+  ofereca o mais parecido. Nunca apresente um nome diferente como se fosse o
+  que ele pediu.
+- Se voce nao entendeu bem o nome que ele falou, pergunte o nome de novo antes
+  de buscar. Uma pergunta curta custa menos que oferecer o produto errado.
 
 PRECO
-- Diga o preco exatamente como a ferramenta devolveu, em reais e centavos.
+- Diga o preco so quando ele decidir alguma coisa: um produto que o cliente
+  esta confirmando, ou pergunta direta de preco. Citando dois produtos, fale
+  so os nomes — os valores estao na tela, ao lado.
+- Quando disser, copie o valor EXATO que a ferramenta devolveu, na forma curta
+  do balcao: "trinta e cinco e trinta", e nao "trinta e cinco reais e trinta
+  centavos".
 - Nao arredonde, nao diga "cerca de", nao some precos e nao fale de taxa de
   entrega, desconto ou promocao.
 

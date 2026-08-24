@@ -29,7 +29,6 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from main import app
 from src.api.dependencies.admin_scope import (
     AGENTE_DE_IMPRESSAO,
     GERENCIA,
@@ -40,6 +39,7 @@ from src.api.dependencies.admin_scope import (
     ensure_pode_definir_cashback,
     ensure_pode_ler_dinheiro,
 )
+from tests.rotas_do_app import rotas_com_caminho
 
 
 # metodo + caminho -> papeis que a rota aceita.
@@ -206,9 +206,16 @@ SEM_EXIGENCIA_DE_PAPEL = {
 
 
 def rotas_admin():
-    """Cada (metodo, caminho) de /admin, com os papeis que a rota declara."""
+    """Cada (metodo, caminho) de /admin, com os papeis que a rota declara.
+
+    `rotas_com_caminho()` e nao `app.routes`: desde o starlette 1.6 o
+    `include_router` nao copia mais as rotas para la, e ler `app.routes`
+    direto devolvia ZERO rotas /admin — com a lista vazia, o teste
+    parametrizado abaixo gera zero casos e a auditoria some sem falhar.
+    Ver `tests/rotas_do_app.py`.
+    """
     encontradas = []
-    for route in app.routes:
+    for route in rotas_com_caminho():
         caminho = getattr(route, "path", "")
         if not caminho.startswith("/admin"):
             continue
@@ -255,6 +262,35 @@ def test_cada_rota_admin_declara_o_papel_esperado(metodo, caminho, papeis):
         f"{PAPEL_ESPERADO[chave]}. Mudar isto e mudanca de contrato: rotas "
         f"que respondiam 200 passam a responder 403 e o painel precisa "
         f"esconder o botao junto."
+    )
+
+
+def test_a_auditoria_enxerga_rotas_admin():
+    """A trava que faltava, e que custou a auditoria ficar DESLIGADA em producao.
+
+    `test_cada_rota_admin_declara_o_papel_esperado` e parametrizado sobre
+    `rotas_admin()`. Lista vazia nao falha: o pytest gera zero casos, o
+    arquivo fica verde e a conferencia de papel de TODA rota /admin
+    simplesmente deixa de acontecer.
+
+    Foi o que aconteceu quando o starlette 1.6 entrou em producao por um
+    `--build` com o `requirements.txt` sem pino: `app.routes` parou de
+    conter as rotas, `rotas_admin()` passou a devolver zero, e nada aqui
+    ficou vermelho por causa DISSO — dois testes irmaos cairam por
+    compararem com conjuntos nao vazios, e foram eles que denunciaram.
+
+    O numero e um PISO generoso, nao a contagem exata: subir para o total de
+    hoje faria este teste falhar a cada rota nova, que e ruido, e o que ele
+    precisa provar e "a descoberta funcionou", nao "sao exatamente N".
+    """
+    encontradas = rotas_admin()
+
+    assert len(encontradas) > 40, (
+        f"a auditoria encontrou apenas {len(encontradas)} rotas /admin. Com "
+        f"lista vazia (ou quase) o teste parametrizado gera zero casos e a "
+        f"conferencia de papel some SEM ficar vermelha. Provavel causa: o "
+        f"jeito de listar as rotas do `app` mudou de novo — ver "
+        f"`tests/rotas_do_app.py`."
     )
 
 

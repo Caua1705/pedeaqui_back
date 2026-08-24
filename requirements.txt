@@ -1,30 +1,38 @@
-# O TRIO DO FRAMEWORK ENTRA PINADO. O resto deste arquivo continua solto de
-# proposito — o que se quer travar aqui e o que ja quebrou, nao tudo.
+# O TRIO DO FRAMEWORK ENTRA PINADO, NAS VERSOES QUE A PRODUCAO JA RODA. O
+# resto deste arquivo continua solto de proposito — o que se quer travar aqui
+# e o que ja quebrou, nao tudo.
 #
 # O QUE ACONTECEU EM 23/08/2026. Este arquivo nao tinha pino nenhum, e o
 # `Dockerfile` constroi a partir dele: cada `docker compose up --build`
-# instalava o que o pip resolvesse NAQUELE DIA. Naquele dia o pip passou a
-# resolver `starlette 1.6.0` — um salto de major que ninguem escolheu — e no
-# starlette 1.6 o `include_router` DEIXOU DE COPIAR as rotas para
+# instalava o que o pip resolvesse NAQUELE DIA. Foi assim que a VPS chegou ao
+# `starlette 1.6.0` sem ninguem ter escolhido — e foi assim que se descobriu,
+# porque no starlette 1.6 o `include_router` DEIXOU DE COPIAR as rotas para
 # `app.routes`: onde havia 126 objetos `Route` passou a haver 28, sendo 24
-# `_IncludedRouter` com `path` nulo.
+# `_IncludedRouter`.
 #
-# A aplicacao continua funcionando assim (o `app.openapi()` sai completo, com
-# os 100 caminhos). Quem quebra e quem INTROSPECTA as rotas — e isso e
+# A API nao quebrou com isso, e e o que torna o caso perigoso: o app sobe, as
+# rotas respondem, os pedidos entram, o `app.openapi()` sai completo com os
+# 100 caminhos. Quem parou foi a INTROSPECCAO — e com ela
 # `tests/test_papeis_das_rotas.py`, a auditoria que confere o papel exigido
-# por cada rota /admin. Ou seja: a atualizacao silenciosa nao derrubava a
-# API, derrubava a trava que impede rota nova de nascer aberta ao
-# `print_agent`.
+# por cada rota /admin. A trava que impede rota nova de nascer aberta ao
+# `print_agent` ficou desligada em producao ate o commit que acompanha estes
+# pinos, que ensinou os tres testes a atravessar o `_IncludedRouter`.
+#
+# POR QUE O PINO E NA VERSAO NOVA, E NAO NA ANTIGA. A primeira tentativa
+# pinou o trio na versao da maquina de desenvolvimento (0.116.1 / 0.47.3 /
+# 2.11.7), que era a que passava nos testes. Estava errado: a producao ja
+# rodava a nova, e o pino a faria DESCER tres frameworks no proximo
+# `--build`. Pino nao e escolha de versao — e o registro do que ESTA no ar.
+# Trocar de versao e outro trabalho, com os testes indo junto.
 #
 # `starlette` aparece aqui embora seja dependencia transitiva do FastAPI: e
 # ELE que muda o comportamento, e deixa-lo implicito seria pinar a causa pelo
-# sintoma. A faixa que a fastapi 0.116.1 declara e `>=0.40.0,<0.48.0`, entao
-# o pino esta dentro dela.
+# sintoma.
 #
-# Subir esses tres e um commit deliberado, com os testes de introspeccao
-# adaptados junto e o repositorio ficando verde no mesmo commit.
-fastapi==0.116.1
-starlette==0.47.3
+# Subir esses tres continua sendo um commit deliberado, com o que introspecta
+# rota conferido junto e o repositorio ficando verde no mesmo commit.
+fastapi==0.141.1
+starlette==1.6.0
 # Exigida pelo FastAPI para ler multipart/form-data. Sem ela, a rota de
 # upload de imagem do painel (POST /admin/products/{id}/image) derruba o
 # boot com "Form data requires python-multipart".
@@ -32,7 +40,7 @@ python-multipart
 uvicorn[standard]
 sqlalchemy
 psycopg[binary]
-pydantic==2.11.7
+pydantic==2.13.4
 pydantic-settings
 python-dotenv
 resend

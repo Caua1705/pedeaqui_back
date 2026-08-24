@@ -515,9 +515,9 @@ class RotaTests(unittest.TestCase):
         self.addCleanup(setattr, rota, "BranchAvailabilityService", original)
 
     def test_a_rota_esta_registrada(self):
-        caminhos = {rota.path for rota in self.app.routes if hasattr(rota, "path")}
+        from tests.rotas_do_app import caminhos
 
-        self.assertIn("/restaurants/{restaurant_slug}/branches/availability", caminhos)
+        self.assertIn("/restaurants/{restaurant_slug}/branches/availability", caminhos())
 
     def test_corpo_vazio_responde_200(self):
         from src.schemas.branch_availability_schema import BranchAvailabilityResponse

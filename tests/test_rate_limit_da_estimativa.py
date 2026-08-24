@@ -91,9 +91,9 @@ class RateLimitDaEstimativaTests(unittest.TestCase):
         return self.client.post(CAMINHO, json=CORPO, headers={"x-real-ip": ip})
 
     def test_a_rota_esta_registrada(self):
-        caminhos = {rota.path for rota in self.app.routes if hasattr(rota, "path")}
+        from tests.rotas_do_app import caminhos
 
-        self.assertIn("/restaurants/{restaurant_slug}/delivery/estimate", caminhos)
+        self.assertIn("/restaurants/{restaurant_slug}/delivery/estimate", caminhos())
 
     def test_dentro_do_teto_responde_200(self):
         resposta = self._chamar()

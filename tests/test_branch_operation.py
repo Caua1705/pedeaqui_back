@@ -16,12 +16,21 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
-from src.services.branch_operation import resolve_branch_operation
+from src.services.branch_operation import (
+    resolve_branch_operation,
+    resolver_atendimento,
+)
 
 
 # Instante fixo para a pausa da entrega: `resolve_branch_operation` aceita
 # `agora` justamente para o teste nao depender do relogio da maquina.
 AGORA = datetime(2026, 8, 21, 22, 0, tzinfo=timezone.utc)
+
+# `resolver_atendimento` so pergunta se a faixa E NULA — o periodo em si so
+# interessa a `BranchAvailabilityItem.current_period`. Um objeto qualquer
+# serve, e dizer isso aqui evita um dublê de `BranchBusinessHour` que fingiria
+# que a funcao le a faixa.
+FAIXA = object()
 
 
 def filial(**sobrescritas):
@@ -277,6 +286,64 @@ class DinheiroTests(unittest.TestCase):
         operacao = resolve_branch_operation(filial(), restaurante(default_delivery_fee=None))
 
         self.assertIsNone(operacao.default_delivery_fee)
+
+
+class ResolverAtendimentoTests(unittest.TestCase):
+    """"Esta filial esta atendendo agora?" — a resposta que dois lugares usam.
+
+    A funcao existe para nao haver duas. Os chamadores sao a tela de escolha
+    de filial (`BranchAvailabilityService._branch_item`), que habilita ou
+    desabilita o botao, e o prompt do Rapi (`ChatService._build_branch_state`),
+    que decide se o assistente recomenda picanha com preco a quem nao tem como
+    pedir. Duas copias de `period is not None and operation.is_open` nao
+    divergem hoje: divergem no dia em que alguem acrescentar uma condicao a
+    uma so, e o sintoma e a tela dizer "fechada" enquanto o Rapi separa a
+    picanha.
+    """
+
+    def _operacao(self, **sobrescritas):
+        return resolve_branch_operation(filial(**sobrescritas), None, AGORA)
+
+    def test_dentro_da_faixa_e_sem_pausa_esta_atendendo(self):
+        atende, motivo = resolver_atendimento(FAIXA, self._operacao())
+
+        self.assertTrue(atende)
+        self.assertIsNone(motivo)
+
+    def test_fora_de_toda_faixa_e_a_agenda(self):
+        atende, motivo = resolver_atendimento(None, self._operacao())
+
+        self.assertFalse(atende)
+        self.assertEqual(motivo, "outside_business_hours")
+
+    def test_dentro_da_faixa_mas_pausada_e_o_balcao(self):
+        """Os dois motivos sao diferentes para quem le a tela:
+        `outside_business_hours` passa sozinho quando o relogio virar,
+        `branch_paused` so passa quando alguem apertar o botao de volta."""
+        atende, motivo = resolver_atendimento(FAIXA, self._operacao(is_open=False))
+
+        self.assertFalse(atende)
+        self.assertEqual(motivo, "branch_paused")
+
+    def test_a_agenda_vence_quando_as_duas_valem(self):
+        """Ordem herdada do `_closed_reason` que esta funcao substituiu, e ela
+        nao e estetica: `current_period` ja sai nulo neste caso, e responder
+        "pausada" faria a tela dizer que a agenda esta em ordem enquanto o
+        campo da agenda vem vazio. Os dois campos contam a mesma historia ou
+        nao contam nenhuma."""
+        atende, motivo = resolver_atendimento(None, self._operacao(is_open=False))
+
+        self.assertFalse(atende)
+        self.assertEqual(motivo, "outside_business_hours")
+
+    def test_a_entrega_nao_entra_na_conta(self):
+        """Filial que nao entrega continua ABERTA — quem so faz retirada
+        atende. Misturar os dois fecharia a loja para quem ia buscar."""
+        atende, _ = resolver_atendimento(
+            FAIXA, self._operacao(accepts_delivery=False)
+        )
+
+        self.assertTrue(atende)
 
 
 if __name__ == "__main__":

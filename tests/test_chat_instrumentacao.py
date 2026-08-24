@@ -57,6 +57,7 @@ class TestTamanhoDoPrompt:
         """O incidente. Antes do conserto, esta linha era um TypeError."""
         ChatLLMService._log_prompt_size(
             restaurant_context="Nome do restaurante: Junior da Picanha",
+            branch_state="Aberta agora: sim\nEntrega: funcionando",
             conversation=[{"role": "user", "content": "oi"}],
             retrieved_products=produtos_como_a_busca_devolve(),
             user_message="quanto custa a picanha?",
@@ -77,6 +78,7 @@ class TestTamanhoDoPrompt:
         """A rede do ponto 2: a medicao se perde, a resposta nao."""
         ChatLLMService._log_prompt_size(
             restaurant_context="Nome do restaurante: Junior da Picanha",
+            branch_state="Aberta agora: sim\nEntrega: funcionando",
             conversation=[{"role": "user", "content": ExplodeAoVirarTexto()}],
             retrieved_products=[{"id": ExplodeAoVirarTexto()}],
             user_message="oi",
@@ -87,6 +89,7 @@ class TestTamanhoDoPrompt:
         with caplog.at_level("WARNING", logger="uvicorn.error"):
             ChatLLMService._log_prompt_size(
                 restaurant_context="x",
+                branch_state="y",
                 conversation=[],
                 retrieved_products=[{"id": ExplodeAoVirarTexto()}],
                 user_message="oi",

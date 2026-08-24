@@ -46,19 +46,26 @@ que nenhum deles le.
 
 ## O que este modulo NAO faz
 
-Nao le horario de funcionamento. `is_open` e a pausa manual; a agenda da
-semana e de `BranchHoursService`, e as duas se combinam em quem responde
-"aberta agora" — a filial precisa estar dentro de uma faixa **e** nao estar
-pausada. Juntar as duas aqui exigiria banco, e este modulo e uma funcao pura
-de proposito: ele e chamado dentro do laco da tela de escolha de filial.
+Nao LE horario de funcionamento — mas combina o que outro leu. `is_open` e a
+pausa manual; a agenda da semana e de `BranchHoursService`, que precisa de
+banco. A juncao das duas ("aberta agora" e a filial dentro de uma faixa **e**
+nao pausada) mora em `resolver_atendimento`, que recebe a faixa ja lida em vez
+de ir busca-la.
+
+Essa e a linha que o modulo nao cruza: ele nao abre consulta. E o que permite
+chama-lo dentro do laco da tela de escolha de filial sem uma consulta por
+volta, e o motivo de `resolver_atendimento` pedir um `period` pronto em vez de
+um `branch_id`.
 """
 
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
+from src.models.branch_business_hour_model import BranchBusinessHour
 from src.models.branch_model import Branch
 from src.models.restaurant_setting_model import RestaurantSetting
+from src.schemas.branch_availability_schema import BranchClosedReason
 from src.utils.money import quantize_money, to_decimal
 from src.utils.security import utcnow
 
@@ -201,6 +208,44 @@ def _delivery_esta_pausada(branch: Branch, agora: datetime) -> bool:
     if pausada_ate.tzinfo is None:
         pausada_ate = pausada_ate.replace(tzinfo=agora.tzinfo)
     return pausada_ate > agora
+
+
+def resolver_atendimento(
+    period: BranchBusinessHour | None,
+    operation: BranchOperation,
+) -> tuple[bool, BranchClosedReason | None]:
+    """"Esta filial esta atendendo agora?", em UM lugar so.
+
+    Vive aqui, e nao no servico que a usa, porque agora ha DOIS chamadores
+    com consequencias diferentes: a tela de escolha de filial
+    (`BranchAvailabilityService._branch_item`), que habilita ou desabilita o
+    botao, e o prompt do Rapi (`ChatService._build_branch_state`), que decide
+    se o assistente recomenda picanha com preco a uma pessoa que nao tem como
+    pedir.
+
+    Duas copias da linha `period is not None and operation.is_open` seriam a
+    armadilha 10 na forma mais cara dela: elas nao divergem hoje, divergem no
+    dia em que alguem acrescentar uma terceira condicao a uma so. O sintoma
+    seria a tela dizer "fechada" enquanto o Rapi separa a picanha — sem erro,
+    sem log, e descoberto pelo cliente.
+
+    Continua PURA, e por isso recebe o `period` pronto em vez de o `branch_id`:
+    quem le a agenda e `BranchHoursService`, que precisa de banco. O modulo
+    inteiro e funcao pura de proposito (ver o cabecalho), e e o que permite
+    chamar isto dentro do laco da tela de filiais sem uma consulta por volta.
+
+    A ORDEM DO `closed_reason` E DELIBERADA e veio do `_closed_reason` que
+    esta funcao substitui: a agenda vem primeiro quando as duas coisas valem
+    ao mesmo tempo (fora do horario E pausada), porque `current_period` ja sai
+    nulo nesse caso — responder "pausada" faria a tela dizer que a agenda esta
+    em ordem enquanto o campo da agenda vem vazio. Os dois campos contam a
+    mesma historia ou nao contam nenhuma.
+    """
+    if period is None:
+        return False, "outside_business_hours"
+    if not operation.is_open:
+        return False, "branch_paused"
+    return True, None
 
 
 def resolve_receipt_footer(

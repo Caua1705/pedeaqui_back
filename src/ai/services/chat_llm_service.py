@@ -95,6 +95,7 @@ class ChatLLMService:
     def invoke(
         self,
         restaurant_context: str,
+        branch_state: str,
         conversation: list[dict[str, str]],
         retrieved_products: list[dict[str, Any]],
         user_message: str,
@@ -108,7 +109,11 @@ class ChatLLMService:
         )
 
         self._log_prompt_size(
-            restaurant_context, conversation, retrieved_products, user_message
+            restaurant_context,
+            branch_state,
+            conversation,
+            retrieved_products,
+            user_message,
         )
 
         logger.info("[AI LLM] Início da chamada ao LLM")
@@ -116,6 +121,7 @@ class ChatLLMService:
         result = chain.invoke(
             {
                 "restaurant_context": restaurant_context,
+                "branch_state": branch_state,
                 "conversation": conversation,
                 "retrieved_products": retrieved_products,
                 "user_message": user_message,
@@ -196,6 +202,7 @@ class ChatLLMService:
     @staticmethod
     def _log_prompt_size(
         restaurant_context: str,
+        branch_state: str,
         conversation: list[dict[str, str]],
         retrieved_products: list[dict[str, Any]],
         user_message: str,
@@ -208,6 +215,12 @@ class ChatLLMService:
         ou no que `_format_retrieved_product` guarda, e `conversation_chars`
         cresce sozinho ate o teto de `_MAX_SESSION_MESSAGES` — e e o unico que
         faz o mesmo cliente ficar mais lento quanto mais ele conversa.
+
+        `branch_state_chars` entrou junto com a secao "Loja" (24/08/2026), e
+        nao e decorativo: ele e o unico pedaco do prompt que MUDA SOZINHO, sem
+        ninguem editar nada. Uma loja que fecha faz a linha crescer, e sem
+        medida propria esse crescimento apareceria como "o contexto aumentou"
+        sem dizer qual dos dois blocos aumentou.
 
         Caracteres e nao tokens de proposito: contar token exigiria carregar o
         tiktoken so para o log, e a proporcao entre as secoes — que e o que se
@@ -230,10 +243,12 @@ class ChatLLMService:
         try:
             logger.info(
                 "[AI /chat prompt] system_chars=%d | context_chars=%d "
+                "| branch_state_chars=%d "
                 "| conversation_chars=%d | conversation_messages=%d "
                 "| products_chars=%d | products_count=%d | user_chars=%d",
                 len(SYSTEM_PROMPT),
                 len(restaurant_context),
+                len(branch_state),
                 len(str(conversation)),
                 len(conversation),
                 len(str(retrieved_products)),

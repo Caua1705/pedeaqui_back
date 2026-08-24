@@ -79,7 +79,6 @@ from src.repositories.branch_repository import BranchRepository
 from src.repositories.menu_repository import MenuRepository
 from src.schemas.branch_availability_schema import (
     BranchAvailabilityItem,
-    BranchClosedReason,
     BranchAvailabilityRequest,
     BranchAvailabilityResponse,
     BranchDeliveryResponse,
@@ -87,7 +86,10 @@ from src.schemas.branch_availability_schema import (
 )
 from src.schemas.delivery_schema import DeliveryAddressInput, DeliveryEstimateRequest
 from src.services.branch_hours_service import BRANCH_TIMEZONE, BranchHoursService
-from src.services.branch_operation import resolve_branch_operation
+from src.services.branch_operation import (
+    resolve_branch_operation,
+    resolver_atendimento,
+)
 from src.services.delivery_estimate_service import DeliveryEstimateService
 from src.services.restaurant_service import RestaurantService
 from src.utils.geo import haversine_km
@@ -248,6 +250,7 @@ class BranchAvailabilityService:
     ) -> BranchAvailabilityItem:
         period = self.branch_hours_service.find_current_period(branch.id, now)
         operation = resolve_branch_operation(branch, restaurant_settings)
+        is_open_now, closed_reason = resolver_atendimento(period, operation)
 
         return BranchAvailabilityItem(
             id=branch.id,
@@ -260,27 +263,11 @@ class BranchAvailabilityService:
             latitude=float(branch.latitude) if branch.latitude is not None else None,
             longitude=float(branch.longitude) if branch.longitude is not None else None,
             is_main=bool(branch.is_main),
-            is_open_now=period is not None and operation.is_open,
-            closed_reason=self._closed_reason(period, operation.is_open),
+            is_open_now=is_open_now,
+            closed_reason=closed_reason,
             current_period=self._period_response(period),
             delivery=self._delivery(branch, restaurant_slug, destino, current_customer),
         )
-
-    @staticmethod
-    def _closed_reason(period, is_open: bool) -> BranchClosedReason | None:
-        """Por que a filial nao esta atendendo — ou None quando esta.
-
-        A agenda vem primeiro quando as duas coisas valem ao mesmo tempo
-        (fora do horario E pausada), e a razao e que `current_period` ja sai
-        nulo nesse caso: responder "pausada" faria a tela dizer que a agenda
-        esta em ordem enquanto o campo da agenda vem vazio. Os dois campos
-        contam a mesma historia ou nao contam nenhuma.
-        """
-        if period is None:
-            return "outside_business_hours"
-        if not is_open:
-            return "branch_paused"
-        return None
 
     @staticmethod
     def _period_response(period) -> BranchOpenPeriodResponse | None:

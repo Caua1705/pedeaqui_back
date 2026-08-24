@@ -25,6 +25,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.ai.services.greeting import GREETINGS, is_greeting
+from src.models.branch_model import Branch
 from src.services import chat_service as chat_module
 from src.services.chat_service import _SESSION_HISTORY, ChatService
 
@@ -101,9 +102,20 @@ class TestPipeline:
         restaurante = SimpleNamespace(
             id=uuid.uuid4(), name="Junior da Picanha", assistant_notes=None
         )
-        filial = SimpleNamespace(id=uuid.uuid4())
+        filial = Branch(
+            id=uuid.uuid4(),
+            restaurant_id=restaurante.id,
+            is_open=True,
+            accepts_delivery=True,
+        )
 
         service = ChatService(db=SimpleNamespace())
+        # A pergunta de cardapio passa pelo estado da loja antes do modelo;
+        # a saudacao nao chega la. Os dois dublês servem so ao primeiro caso.
+        service.branch_hours_service = SimpleNamespace(
+            find_current_period=lambda _b, _now=None: object()
+        )
+        service.menu_repository = SimpleNamespace(get_settings=lambda _r: None)
         service.restaurant_repository = SimpleNamespace(
             get_active_by_id=lambda _id: restaurante
         )

@@ -15,10 +15,13 @@ from src.ai.services.retrieval_service import RetrievalService
 from src.core.config import settings
 from src.repositories.ai_feedback_repository import AIFeedbackRepository
 from src.repositories.branch_repository import BranchRepository
+from src.repositories.menu_repository import MenuRepository
 from src.repositories.product_repository import ProductRepository
 from src.repositories.restaurant_repository import RestaurantRepository
 from src.schemas.admin_settings_schema import MAX_ASSISTANT_NOTES_LENGTH
 from src.schemas.ai_feedback_schema import AIFeedbackRequest, AIFeedbackResponse
+from src.services.branch_hours_service import BRANCH_TIMEZONE, BranchHoursService
+from src.services.branch_operation import resolve_branch_operation, resolver_atendimento
 from src.services.menu_service import MenuService
 from src.utils.money import format_money_br
 from src.utils.normalization import fold_for_match
@@ -52,6 +55,19 @@ _turnos_com_llm = 0
 # Ver `_contar_cartao_do_turno`.
 _turnos_com_contexto = 0
 _turnos_sem_cartao = 0
+
+# `BranchClosedReason` em portugues, para o prompt. As chaves sao o vocabulario
+# de `resolver_atendimento`, e a traducao mora aqui e nao la porque o outro
+# consumidor daquela funcao — a tela de escolha de filial — quer o codigo cru:
+# quem escreve a frase para o cliente ali e o app, e ele a escreve num contexto
+# que este prompt nao tem.
+#
+# Sem `KeyError` possivel: `resolver_atendimento` so devolve motivo quando
+# `is_open_now` e falso, e so devolve estes dois.
+_MOTIVO_DE_FECHADA = {
+    "outside_business_hours": "fora do horario de funcionamento",
+    "branch_paused": "a loja pausou o atendimento",
+}
 
 
 # Por quanto tempo o voto do cliente sobre uma resposta do Rapi continua no
@@ -108,6 +124,11 @@ class ChatService:
         self.product_repository = ProductRepository(db)
         self.restaurant_repository = RestaurantRepository(db)
         self.branch_repository = BranchRepository(db)
+        # Os dois que o estado da loja precisa. Atributos, e nao construidos
+        # dentro do `_answer`, pelo mesmo motivo dos de cima: e assim que o
+        # teste sem banco troca por dublê depois do `__init__`.
+        self.branch_hours_service = BranchHoursService(db)
+        self.menu_repository = MenuRepository(db)
 
     def create_feedback(self, request: AIFeedbackRequest) -> AIFeedbackResponse:
         """Registra o voto do cliente sobre uma resposta do Rapi.
@@ -274,9 +295,20 @@ class ChatService:
         context_ms = (perf_counter() - context_started_at) * 1000
         logger.info("[AI /chat perf] context_build_ms=%.2f", context_ms)
 
+        # Cronometro proprio, e nao dentro do `context_build_ms`: este e o
+        # unico dos dois que ABRE CONSULTA (ate tres por turno), e somados
+        # ninguem saberia se o numero cresceu por causa do banco ou do texto.
+        # Se ele aparecer, o conserto e cache no Redis — horario de
+        # funcionamento e cadastro, e quase nunca muda.
+        branch_state_started_at = perf_counter()
+        branch_state = self._build_branch_state(restaurant, branch, now)
+        branch_state_ms = (perf_counter() - branch_state_started_at) * 1000
+        logger.info("[AI /chat perf] branch_state_ms=%.2f", branch_state_ms)
+
         llm_started_at = perf_counter()
         llm_response = self._invoke_llm(
             restaurant_context=restaurant_context,
+            branch_state=branch_state,
             conversation=conversation,
             retrieved_products=retrieved_products,
             message=message,
@@ -434,10 +466,21 @@ class ChatService:
         """O que o atendente sabe sobre a casa onde ele trabalha.
 
         Era `f"restaurant_id={uuid}"` — um dado que o modelo nao tem como usar
-        para nada. O prompt manda falar como funcionario da casa e citar o
-        restaurante pelo nome; sem o nome aqui, essa instrucao nao tinha como
-        ser cumprida, e o assistente falava de um restaurante que ele nao
-        sabia qual era.
+        para nada.
+
+        O NOME CONTINUA AQUI, mas o motivo virou o oposto do que era. Ate
+        24/08/2026 o prompt mandava citar a casa pelo nome, e sem o nome a
+        instrucao nao tinha como ser cumprida. Hoje o prompt PROIBE dizer o
+        nome: o cliente abriu o link do restaurante e ja sabe onde esta, e
+        "Aqui na Junior da Picanha" saia em sete de nove turnos — token em
+        toda resposta para informar o que a pessoa acabou de escolher. E o
+        mesmo raciocinio que `voice_prompt.branch_context_for` ja registra
+        para a loja.
+
+        O nome fica porque o modelo precisa se SITUAR — e o que separa "aqui
+        nao temos" de um assistente que nao sabe de que cardapio esta
+        falando. Tirar a linha para economizar tokens de entrada seria pagar
+        em alucinacao o que se economiza no prompt.
 
         A segunda linha sai de `assistant_notes`, e ate 23/08/2026 saia de
         `description`. A troca (revisao 20260823_0034) e o conserto de um
@@ -476,9 +519,80 @@ class ChatService:
 
         return "\n".join(lines)
 
+    def _build_branch_state(self, restaurant, branch, now: datetime) -> str:
+        """Se a loja esta atendendo AGORA, nas duas unicas perguntas que decidem.
+
+        O QUE ISTO CONSERTA. A uma da manha, com a loja fechada, o Rapi
+        recomendava picanha com preco e perguntava se queria que separasse. O
+        cliente montava o carrinho e so descobria no checkout, onde
+        `ensure_branch_is_open` recusa. Nenhuma regra de desvio pegava isso,
+        porque nao houve pergunta sobre horario — o assistente nao estava
+        chutando o horario, ele nao sabia que existia horario.
+
+        `_answer` ja carregava a filial (`_get_active_branch`) e a descartava:
+        ela servia de barreira 404 e nada mais. Aqui ela vira dado, do mesmo
+        jeito que `POST /voice/session` fez em 20/08/2026.
+
+        DOIS FATOS, E SO ELES. Prazo de entrega, taxa, pedido minimo e ate que
+        horas a loja fica aberta NAO entram, e a omissao e deliberada: sao os
+        assuntos que a secao QUANDO NAO DA PARA RESPONDER manda devolver para
+        a tela. O que entra aqui e reenviado em TODO turno, e o modelo trata o
+        que le como conhecimento — ponha o prazo de entrega no prompt e ele
+        passa a recitar um numero cuja consequencia, quando erra, e a proxima
+        compra indo embora.
+
+        O `now` VEM EM DUAS ROUPAS, e trocar uma pela outra quebra em silencio:
+
+        - `find_current_period` compara RELOGIO DE PAREDE (`moment.time()`),
+          entao recebe o instante no fuso da loja. Passar o `now` de UTC direto
+          leria 04:00 onde sao 01:00, e uma loja aberta ate as 02:00 sairia
+          fechada — na madrugada, que e exatamente o caso que motivou isto.
+        - `resolve_branch_operation` compara `delivery_paused_until` e trata
+          coluna ingenua como UTC (ver `_delivery_esta_pausada`), entao recebe
+          o `now` de UTC. Dar a ele o horario local deslocaria a pausa em tres
+          horas.
+
+        E o mesmo instante nas duas, e nao duas leituras do relogio: `_answer`
+        tem um `now` para o turno inteiro de proposito.
+
+        Quem responde "aberta agora" e `resolver_atendimento`, a MESMA funcao
+        que a tela de escolha de filial usa. Reescrever a regra aqui seria a
+        armadilha 10 no formato mais caro dela: a tela dizendo "fechada"
+        enquanto o Rapi separa a picanha.
+        """
+        period = self.branch_hours_service.find_current_period(
+            branch.id, now.astimezone(BRANCH_TIMEZONE)
+        )
+        # O SELECT dos settings paga por um campo que ninguem le aqui:
+        # `is_open` e `accepts_delivery_now` sao estado do dia e nao herdam
+        # nada do restaurante. Mesmo assim a leitura passa por
+        # `resolve_branch_operation`, pelo motivo que a tela de filiais ja
+        # registra no proprio comentario — um segundo jeito de ler a mesma
+        # regra e como a armadilha 10 comeca. Um SELECT ao lado de uma
+        # chamada de 1700 a 3800 ms.
+        operation = resolve_branch_operation(
+            branch, self.menu_repository.get_settings(restaurant.id), now
+        )
+        is_open_now, closed_reason = resolver_atendimento(period, operation)
+
+        if is_open_now:
+            aberta = "sim"
+        else:
+            aberta = f"nao ({_MOTIVO_DE_FECHADA[closed_reason]})"
+
+        if operation.accepts_delivery_now:
+            entrega = "funcionando"
+        elif not operation.accepts_delivery:
+            entrega = "esta loja nao faz entrega"
+        else:
+            entrega = "pausada agora"
+
+        return f"Aberta agora: {aberta}\nEntrega: {entrega}"
+
     @staticmethod
     def _invoke_llm(
         restaurant_context: str,
+        branch_state: str,
         conversation: list[SessionMessage],
         retrieved_products: list[dict],
         message: str,
@@ -507,6 +621,7 @@ class ChatService:
 
         llm_response = llm_service.invoke(
             restaurant_context=restaurant_context,
+            branch_state=branch_state,
             conversation=conversation,
             retrieved_products=retrieved_products,
             user_message=message,

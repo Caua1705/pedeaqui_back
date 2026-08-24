@@ -181,6 +181,35 @@ prefixo diferente por cliente, ou seja, cache nenhum.
 
 E ela é CURTA porque é áudio de saída, o item mais caro da conta, em toda
 sessão — inclusive nas que o cliente abandona no segundo seguinte.
+
+O CUMPRIMENTO QUE VIROU BUSCA, E O PRODUTO QUE NAO SAIA DE CENA (24/08/2026).
+Duas falhas da mesma sessão, e as duas na porta de entrada da conversa:
+
+    [eu]          Olá, tudo bem?
+    [tool]        buscar_no_cardapio {"consulta":"sobremesa"}
+    [assistente]  Temos pudim, que custa um centavo, e também temos brownie...
+
+    [eu]          Tem sobremesa aí?     -> "aqui temos a picanha suína por..."
+    [eu]          Qual é o seu nome?    -> "você quer a picanha suína?"
+
+A primeira é a NAO INVENTE furando antes de a conversa começar: ele não tinha o
+que buscar e escolheu um assunto sozinho. A regra ficou colada em "na duvida
+entre buscar e responder, busque" **de propósito** — é essa linha que empurra
+para buscar num cumprimento, e a exceção precisa ser lida junto dela, não três
+parágrafos depois.
+
+A segunda é o oposto: em vez de assunto novo inventado, o assunto velho que não
+sai. Pergunta nova é pergunta nova, e o produto do turno anterior sai de cena
+quando o cliente muda de assunto — inclusive para não virar confirmação de um
+pedido que ninguém fez.
+
+Nos dois casos o exemplo enumerado é a FALA DO CLIENTE e a FALHA, nunca a frase
+certa: escrever aqui como a resposta boa soa é o molde da armadilha 44, que
+este arquivo já pagou uma vez.
+
+E vale notar que a saudação automática derruba boa parte do primeiro caso
+sozinha: com o atendente cumprimentando primeiro, "olá, tudo bem?" deixa de ser
+a porta de entrada.
 """
 
 import random
@@ -218,6 +247,12 @@ NAO INVENTE
   preco na memoria.
 - Nunca traga assunto que o cliente nao trouxe. Ponto da carne, tamanho,
   acompanhamento, quantidade, bebida junto: so se ELE falar primeiro.
+- Pergunta nova apaga o produto anterior. Assim que o cliente muda de assunto,
+  o produto de que voce falou antes saiu de cena: nao o traga de volta, nao
+  confirme pedido que ninguem fez, e nao responda a pergunta nova com ele.
+- Isto ja aconteceu, e nao pode se repetir:
+    "Tem sobremesa ai?"  respondido com a picanha do turno anterior
+    "Qual e o seu nome?" respondido com "voce quer a picanha suina?"
 - Pergunta que nao e sobre produto nao se responde com produto nem com preco.
 - Nao entendeu o que ele disse? Diga que nao entendeu e pergunte. Uma frase
   curta. Nunca preencha o buraco com o que parece plausivel.
@@ -248,6 +283,12 @@ O CARDAPIO
   diga que AQUI nao temos, nunca que o restaurante nao tem, e nunca que tem em
   outra loja.
 - Na duvida entre buscar e responder, busque.
+- A UNICA excecao: cumprimento nao e consulta ao cardapio. "Oi", "ola", "tudo
+  bem?", "bom dia", "boa noite", "e ai": responda o cumprimento em uma frase e
+  espere ele dizer o que quer. So busque se ele disser junto o que quer — "oi,
+  tem sobremesa?" e pedido de sobremesa.
+- Isto ja aconteceu, e nao pode se repetir:
+    ele disse "Ola, tudo bem?", voce buscou "sobremesa"
 - Fale somente dos produtos que a ferramenta devolver. Nunca invente produto,
   ingrediente nem preco.
 - Os produtos aparecem na TELA do cliente automaticamente quando voce busca.

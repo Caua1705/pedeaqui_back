@@ -1,6 +1,23 @@
+# O commit de que as imagens sao construidas, repetido nos TRES servicos que
+# constroem (`pedeaqui-api`, `limpeza`, `reindex`).
+#
+# Repetido, e nao so na API, por um motivo mecanico: os tres tem `build: .`, e
+# `build args` diferentes produzem IMAGENS diferentes. Carimbar so a API faria
+# o compose construir a mesma arvore duas vezes, e o worker de reindex — que
+# tambem fala com a OpenAI e tambem aparece em investigacao de log — ficaria
+# sem a versao.
+#
+# `${GIT_SHA:-}` vazio cai no default do `Dockerfile` (`nao-carimbado`) e a API
+# avisa no boot. O deploy que carimba esta em `docs/operacao.md`:
+#
+#     GIT_SHA=$(git rev-parse --short HEAD) docker compose up -d --build
+#
 services:
   pedeaqui-api:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_SHA: "${GIT_SHA:-}"
     container_name: pedeaqui-api
     restart: always
     env_file:
@@ -37,7 +54,10 @@ services:
   # passaria a existir em SQL solto no banco em vez de no script versionado
   # que os testes já cobrem.
   limpeza:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_SHA: "${GIT_SHA:-}"
     container_name: pedeaqui-limpeza
     restart: always
     env_file:
@@ -93,7 +113,10 @@ services:
   # por minuto, recriando o pool de conexões sessenta vezes por hora para, na
   # maioria das vezes, não achar nada.
   reindex:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_SHA: "${GIT_SHA:-}"
     container_name: pedeaqui-reindex
     restart: always
     env_file:

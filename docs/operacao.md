@@ -8,8 +8,32 @@ o `README.md` da raiz é mais curto e basta.
 ## 1. Deploy
 
 ```bash
-docker compose up -d --build
+GIT_SHA=$(git rev-parse --short HEAD) docker compose up -d --build
 docker logs -f pedeaqui-api
+```
+
+**O `GIT_SHA=` na frente não é enfeite, e o `--build` também não.**
+
+O `--build` é o que faz o deploy pegar o código novo: sem ele o compose reusa a
+imagem que já existe, e um `up -d` "bem-sucedido" pode deixar em pé exatamente o
+que estava antes.
+
+O `GIT_SHA=` carimba na imagem o commit de que ela foi construída. Ele sai em
+três lugares — na primeira linha do boot, em `[AI /chat] Nova requisicao` e em
+`GET /health` —, e existe por um caso concreto: em 24/08/2026 três commits
+ficaram sem `push`, produção seguiu rodando o código anterior, e uma bateria de
+medição inteira foi feita contra o build errado. Descobrir isso custou meia hora
+comparando frases de log com `git log -S`, porque nenhuma linha dizia a versão.
+
+Esqueceu o `GIT_SHA=`? Não quebra nada, e **a API avisa**: o boot sai como
+`WARNING` dizendo `git_sha=nao-carimbado` e repetindo o comando acima.
+
+Confira que subiu o que você acha que subiu, antes de medir qualquer coisa:
+
+```bash
+curl -s https://api.pederapidex.com/health
+# {"status":"ok","app":"PedeAqui API","git_sha":"874a5b7"}
+git rev-parse --short HEAD   # tem que bater
 ```
 
 O compose **não expõe porta**: o Traefik roteia pela rede externa `n8n_default`,

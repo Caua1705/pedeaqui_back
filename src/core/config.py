@@ -3,10 +3,35 @@ from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+#: O que `GIT_SHA` vale quando a imagem foi construida sem o build arg. Nao e
+#: string vazia de proposito: ele APARECE no log, e um campo vazio numa linha
+#: de log e indistinguivel de um campo que nao existe.
+GIT_SHA_NAO_CARIMBADO = "nao-carimbado"
+
+
 class Settings(BaseSettings):
     APP_NAME: str = "PedeAqui API"
     APP_ENV: str = "development"
     DEBUG: bool = True
+
+    # O commit de que esta imagem foi construida. Entra pelo `ARG GIT_SHA` do
+    # `Dockerfile`, que o `docker-compose.yml` preenche a partir do ambiente.
+    #
+    # POR QUE ISTO EXISTE. Em 24/08/2026, tres commits ficaram sem `push` e a
+    # producao seguiu rodando o codigo anterior. Descobrir isso custou uma
+    # bateria de medicao em producao e meia hora de arqueologia de log — e o
+    # unico jeito que havia de saber qual codigo estava rodando era comparar
+    # frases de log com `git log -S`. Nenhuma linha dizia a versao.
+    #
+    # O valor sai em tres lugares, de proposito, porque respondem a perguntas
+    # diferentes: no boot (que imagem subiu), em `[AI /chat] Nova requisicao`
+    # (de que build veio ESTE turno que estou medindo) e em `GET /health`
+    # (qual esta no ar agora, sem precisar de log).
+    #
+    # NAO derruba o boot quando falta. E observabilidade, nao configuracao —
+    # a mesma divisao de `warmup` contra `startup_checks`. O que ele faz e
+    # gritar: ver a linha de aviso no lifespan de `main.py`.
+    GIT_SHA: str = GIT_SHA_NAO_CARIMBADO
 
     # Deixe em None para seguir o APP_ENV (desligado em producao).
     # Defina explicitamente para forcar um dos dois lados.

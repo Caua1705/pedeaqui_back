@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -34,13 +35,45 @@ from src.api.endpoints import (
     payments,
     restaurants,
 )
-from src.core.config import settings
+from src.core.config import GIT_SHA_NAO_CARIMBADO, settings
 from src.core.startup_checks import validate_settings
 from src.core.warmup import warm_up
 
 
+logger = logging.getLogger("uvicorn.error")
+
+
+def _log_versao_da_imagem() -> None:
+    """A PRIMEIRA linha do boot: de que commit esta imagem foi construida.
+
+    Primeira de proposito. Quando alguem vai ler este log, e porque alguma
+    coisa nao esta batendo — e a pergunta que precede todas as outras e "estou
+    olhando o codigo que eu acho que estou olhando?". Em 24/08/2026 essa
+    pergunta custou uma bateria de medicao em producao para ser respondida,
+    porque tres commits tinham ficado sem `push` e nada dizia isso.
+
+    SEM O CARIMBO, ELE GRITA. Um `git_sha=nao-carimbado` silencioso seria pior
+    que nao ter campo nenhum: daria a impressao de que a versao esta sendo
+    registrada quando nao esta. O aviso traz o comando junto porque o modo de
+    errar e um so — rodar `docker compose up -d --build` sem a variavel na
+    frente.
+    """
+    if settings.GIT_SHA == GIT_SHA_NAO_CARIMBADO:
+        logger.warning(
+            "[boot] git_sha=%s | a imagem foi construida sem o build arg. "
+            "Deploy que carimba: "
+            "GIT_SHA=$(git rev-parse --short HEAD) docker compose up -d --build",
+            GIT_SHA_NAO_CARIMBADO,
+        )
+        return
+    logger.info("[boot] git_sha=%s | app_env=%s", settings.GIT_SHA, settings.APP_ENV)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # Antes de tudo, inclusive das checagens: se o resto desta subida for
+    # investigado um dia, a primeira coisa no log tem que ser a versao.
+    _log_versao_da_imagem()
     # Falha aqui derruba o boot com mensagem explicita, em vez de deixar a
     # API subir e recusar silenciosamente todo pedido de entrega.
     validate_settings(settings)

@@ -7756,9 +7756,14 @@
         "type": "object"
       },
       "HealthResponse": {
+        "description": "A resposta de `GET /health`.\n\n`git_sha` e o commit de que a imagem foi construida, e existe aqui para a\npergunta \"qual versao esta no ar AGORA?\" ter resposta sem precisar de\nacesso ao log do container. Vale `nao-carimbado` quando a imagem foi\nconstruida sem o build arg — ver `Settings.GIT_SHA`.\n\n**Nao ha risco de vazamento aqui.** O repositorio e privado, e um hash de\ncommit nao diz nada a quem nao o tem; o que ele evita e uma investigacao\ninteira. A rota ja era publica e ja dizia o nome da aplicacao.",
         "properties": {
           "app": {
             "title": "App",
+            "type": "string"
+          },
+          "git_sha": {
+            "title": "Git Sha",
             "type": "string"
           },
           "status": {
@@ -7768,7 +7773,8 @@
         },
         "required": [
           "status",
-          "app"
+          "app",
+          "git_sha"
         ],
         "title": "HealthResponse",
         "type": "object"
@@ -17508,6 +17514,7 @@
     },
     "/health": {
       "get": {
+        "description": "Sinal de vida, com a versao da imagem junto.\n\nA rota NAO ganhou checagem de banco nem de Redis, e isso e deliberado: ela\nresponde \"o processo esta de pe e e este o codigo dele\", nada mais. Uma\nrota de health que consulta dependencias vira candidata natural a\n`healthcheck` do compose — e ai o `start_period` passa a depender da soma\ndos timeouts do warmup, que e a armadilha 40 da skill.",
         "operationId": "health_check_health_get",
         "responses": {
           "200": {

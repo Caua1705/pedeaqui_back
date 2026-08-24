@@ -18,6 +18,22 @@ RUN pip install --no-cache-dir -r requirements.lock.txt
 
 COPY . .
 
+# O commit de que esta imagem foi construida, carimbado no ambiente.
+#
+# DEPOIS do `COPY . .`, e isso e o que mantem o build rapido: trocar so o SHA
+# invalida esta camada e nao a instalacao do pip nem a copia do codigo. Antes
+# do `COPY`, cada deploy recopiaria a arvore inteira por causa de sete
+# caracteres.
+#
+# **Nao da para descobrir isso em tempo de execucao:** o `.dockerignore`
+# exclui `.git`, entao nao ha repositorio dentro da imagem para perguntar. Tem
+# que entrar como build arg, e quem o preenche e o `docker-compose.yml`.
+#
+# O default e `nao-carimbado`, e nao um SHA falso: imagem construida sem o arg
+# tem que ser reconhecivel como tal. `main.py` avisa no boot quando e o caso.
+ARG GIT_SHA=nao-carimbado
+ENV GIT_SHA=${GIT_SHA}
+
 # O bit de execucao nao sobrevive ao checkout no Windows, entao e marcado
 # aqui. Precisa vir antes do `chmod -R a-w` (que so tira escrita, nao +x).
 RUN chmod +x /app/docker-entrypoint.sh

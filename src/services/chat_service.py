@@ -12,6 +12,7 @@ from src.ai.schemas.chat_response_schema import ChatResponse
 from src.ai.services.chat_llm_service import ChatLLMService
 from src.ai.services.greeting import greeting_reply, is_greeting
 from src.ai.services.retrieval_service import RetrievalService
+from src.core.config import settings
 from src.repositories.ai_feedback_repository import AIFeedbackRepository
 from src.repositories.branch_repository import BranchRepository
 from src.repositories.product_repository import ProductRepository
@@ -132,9 +133,21 @@ class ChatService:
         cold_start = _take_cold_start_flag()
         # A mensagem do usuario e dado pessoal e nao vai para o log.
         # O digest permite correlacionar requisicoes sem expor o conteudo.
+        #
+        # `git_sha` abre a linha, e nao fecha, porque e a primeira pergunta de
+        # toda medicao: de que build veio ESTE turno? Uma bateria de producao
+        # so vale contra um commit conhecido — em 24/08/2026 uma delas mediu o
+        # codigo anterior por meia hora, porque tres commits tinham ficado sem
+        # `push` e nenhuma linha do log dizia isso.
+        #
+        # Repetir a versao em toda requisicao parece redundante com a linha de
+        # boot, e nao e: o log de producao e recortado por janela de tempo, e o
+        # recorte quase nunca alcanca o boot. Sete caracteres por turno e o
+        # preco de o recorte se bastar.
         logger.info(
-            "[AI /chat] Nova requisicao | restaurant_id=%s | branch_id=%s "
-            "| session_id=%s | message_chars=%d | message_digest=%s",
+            "[AI /chat] Nova requisicao | git_sha=%s | restaurant_id=%s "
+            "| branch_id=%s | session_id=%s | message_chars=%d | message_digest=%s",
+            settings.GIT_SHA,
             restaurant_id,
             branch_id,
             session_id,

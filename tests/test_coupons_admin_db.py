@@ -1,14 +1,21 @@
-"""Cupom e template precisam concordar no tipo de desconto.
+"""Cupom e template precisam concordar no tipo E no valor do desconto.
 
-Contra banco de verdade porque a checagem depende de LER o template: o tipo
-que a vitrine anuncia mora numa tabela, o tipo que o checkout desconta mora em
-outra, e o defeito que este arquivo tranca e justamente os dois divergirem.
+Contra banco de verdade porque a checagem depende de LER o template: o que a
+vitrine anuncia mora numa tabela, o que o checkout desconta mora em outra, e o
+defeito que este arquivo tranca e justamente os dois divergirem.
 
-Por que isso e propaganda enganosa, e nao detalhe de consistencia:
-`template.discount_type` nao entra em `calculate_discount` — quem desconta e
-sempre `coupon.discount_type`. A arte de frete gratis com um cupom `percent`
-por baixo mostra "Frete gratis" na tela do cliente e tira 10% no pagamento,
-sem erro em lugar nenhum.
+Por que isso e propaganda enganosa, e nao detalhe de consistencia: nada do
+template entra em `calculate_discount` — quem desconta e sempre o par
+`coupon.discount_type` / `coupon.discount_value`. Sao dois eixos, e os dois
+mentem sem erro em lugar nenhum:
+
+- a arte de frete gratis com um cupom `percent` por baixo mostra "Frete gratis"
+  na tela do cliente e tira 10% no pagamento;
+- a arte de "10% OFF" com um cupom de 7% por baixo anuncia dez e tira sete.
+
+O valor so passou a ser conferido em 23/08/2026. Ate ali, quem segurava a
+coerencia era o painel, que copia o valor da arte ao montar o POST — protecao
+de tela, que some no dia em que aquela tela ganhar um campo editavel.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -30,12 +37,30 @@ pytestmark = pytest.mark.db
 AGORA = datetime(2026, 8, 23, 12, tzinfo=timezone.utc)
 
 
-def criar_template(db, *, discount_type: str, nome: str = "Arte", is_active: bool = True) -> CouponTemplate:
+def valor_padrao_do_tipo(discount_type: str) -> Decimal:
+    """O valor que uma arte daquele tipo teria no catalogo.
+
+    Frete gratis nao tem percentual nem reais para anunciar, e a coluna e
+    `NOT NULL` com default 0 no banco — entao 0 e o valor de verdade dela, nao
+    um placeholder de teste. Os outros dois anunciam um numero, e 10 serve para
+    os dois (10% ou R$ 10).
+    """
+    return Decimal("0") if discount_type == "free_delivery" else Decimal("10")
+
+
+def criar_template(
+    db,
+    *,
+    discount_type: str,
+    nome: str = "Arte",
+    is_active: bool = True,
+    discount_value: Decimal | None = None,
+) -> CouponTemplate:
     template = CouponTemplate(
         name=nome,
         image_path=f"coupons/{nome.lower()}.png",
         discount_type=discount_type,
-        discount_value=Decimal("10"),
+        discount_value=valor_padrao_do_tipo(discount_type) if discount_value is None else discount_value,
         sort_order=0,
         is_active=is_active,
     )
@@ -53,13 +78,25 @@ def mensagens(erro: HTTPException) -> str:
     return " | ".join(item["msg"] for item in erro.detail)
 
 
-def payload_de_criacao(template: CouponTemplate, *, discount_type: str, code: str = "PROMO10") -> CouponCreate:
+def payload_de_criacao(
+    template: CouponTemplate,
+    *,
+    discount_type: str,
+    code: str = "PROMO10",
+    discount_value: Decimal | None = None,
+) -> CouponCreate:
+    """Por omissao, o corpo que o PAINEL monta: valor copiado da arte.
+
+    Quem quer divergencia de valor a pede por escrito, com `discount_value`.
+    Foi de proposito que o padrao virou "concorda": teste que diverge sem
+    querer passaria a falhar por um motivo que nao e o dele.
+    """
     return CouponCreate(
         coupon_template_id=template.id,
         code=code,
         title="Promocao",
         discount_type=discount_type,
-        discount_value=Decimal("0") if discount_type == "free_delivery" else Decimal("10"),
+        discount_value=template.discount_value if discount_value is None else discount_value,
         valid_from=AGORA - timedelta(days=1),
         valid_until=AGORA + timedelta(days=30),
     )
@@ -105,8 +142,9 @@ def test_criar_com_tipos_iguais_passa(db):
 
 
 def test_criar_com_tipos_divergentes_responde_422(db):
+    """So o tipo diverge: os dois valores sao 10, e o unico erro e o do tipo."""
     restaurante = criar_restaurante(db)
-    template = criar_template(db, discount_type="free_delivery", nome="Frete Gratis")
+    template = criar_template(db, discount_type="fixed")
 
     with pytest.raises(HTTPException) as erro:
         CouponService(db).create_admin(
@@ -115,10 +153,127 @@ def test_criar_com_tipos_divergentes_responde_422(db):
         )
 
     assert erro.value.status_code == 422
+    assert len(erro.value.detail) == 1
     assert erro.value.detail[0]["loc"] == ["body", "discount_type"]
     assert erro.value.detail[0]["type"] == "coupon_template_discount_type_mismatch"
     assert "percent" in mensagens(erro.value)
-    assert "free_delivery" in mensagens(erro.value)
+    assert "fixed" in mensagens(erro.value)
+
+
+def test_criar_com_valores_divergentes_responde_422(db):
+    """A arte de "10% OFF" com um cupom de 7% por baixo: mesmo tipo, outro numero.
+
+    Este e o buraco que o `discount_type` sozinho nao fechava. Grava e passa,
+    e o cliente ve dez na vitrine e sete no pagamento.
+    """
+    restaurante = criar_restaurante(db)
+    template = criar_template(db, discount_type="percent", nome="10% OFF")
+
+    with pytest.raises(HTTPException) as erro:
+        CouponService(db).create_admin(
+            restaurante.id,
+            payload_de_criacao(template, discount_type="percent", discount_value=Decimal("7")),
+        )
+
+    assert erro.value.status_code == 422
+    assert len(erro.value.detail) == 1
+    assert erro.value.detail[0]["loc"] == ["body", "discount_value"]
+    assert erro.value.detail[0]["type"] == "coupon_template_discount_value_mismatch"
+    assert "7" in mensagens(erro.value)
+    assert "10" in mensagens(erro.value)
+
+
+def test_o_valor_divergente_nao_grava_nada(db):
+    """422 e recusa, nao meia gravacao — a mesma prova que o tipo ja tinha."""
+    restaurante = criar_restaurante(db)
+    template = criar_template(db, discount_type="percent")
+
+    with pytest.raises(HTTPException):
+        CouponService(db).create_admin(
+            restaurante.id,
+            payload_de_criacao(
+                template,
+                discount_type="percent",
+                discount_value=Decimal("7"),
+                code="NEMESTE",
+            ),
+        )
+
+    assert CouponService(db).repository.get_by_code_and_restaurant("NEMESTE", restaurante.id) is None
+
+
+def test_a_mesma_escala_nao_e_exigida_10_bate_com_10_00(db):
+    """`numeric(10,2)` no template, `numeric(12,2)` no cupom.
+
+    A comparacao e numerica, nao textual: exigir a mesma representacao faria
+    `Decimal("10")` recusar `Decimal("10.00")` e o painel nao teria como saber
+    qual das duas mandar.
+    """
+    restaurante = criar_restaurante(db)
+    template = criar_template(db, discount_type="percent", discount_value=Decimal("10"))
+
+    resposta = CouponService(db).create_admin(
+        restaurante.id,
+        payload_de_criacao(template, discount_type="percent", discount_value=Decimal("10.00")),
+    )
+
+    assert resposta.discount_value == Decimal("10.00")
+
+
+def test_trocar_so_a_arte_diverge_nos_dois_eixos_e_os_dois_erros_saem_juntos(db):
+    """Uma lista com os dois, e nao um 422 de cada vez.
+
+    Trocar a arte de "10% OFF" para "Frete gratis" sem mexer no cupom diverge
+    no tipo E no valor de uma vez. Cuspir um por vez faria o lojista consertar
+    o tipo, tomar 422 de novo pelo valor, e concluir que a tela esta quebrada.
+    """
+    restaurante = criar_restaurante(db)
+    template = criar_template(db, discount_type="free_delivery", nome="Frete Gratis")
+
+    with pytest.raises(HTTPException) as erro:
+        CouponService(db).create_admin(
+            restaurante.id,
+            payload_de_criacao(template, discount_type="percent", discount_value=Decimal("10")),
+        )
+
+    assert erro.value.status_code == 422
+    tipos = [item["type"] for item in erro.value.detail]
+    assert tipos == [
+        "coupon_template_discount_type_mismatch",
+        "coupon_template_discount_value_mismatch",
+    ]
+
+
+def test_editar_para_um_valor_que_a_arte_nao_anuncia_responde_422(db):
+    """O PATCH tem a mesma guarda do POST: a arte nao muda sozinha."""
+    restaurante = criar_restaurante(db)
+    template = criar_template(db, discount_type="percent", nome="10% OFF")
+    servico = CouponService(db)
+    cupom = servico.create_admin(restaurante.id, payload_de_criacao(template, discount_type="percent"))
+
+    with pytest.raises(HTTPException) as erro:
+        servico.update_admin(restaurante.id, cupom.id, CouponUpdate(discount_value=Decimal("7")))
+
+    assert erro.value.status_code == 422
+    assert erro.value.detail[0]["loc"] == ["body", "discount_value"]
+
+
+def test_editar_o_valor_junto_com_a_arte_que_o_anuncia_passa(db):
+    """A saida legitima: quem quer descontar outro numero troca de campanha."""
+    restaurante = criar_restaurante(db)
+    dez = criar_template(db, discount_type="percent", nome="10% OFF", discount_value=Decimal("10"))
+    sete = criar_template(db, discount_type="percent", nome="7% OFF", discount_value=Decimal("7"))
+    servico = CouponService(db)
+    cupom = servico.create_admin(restaurante.id, payload_de_criacao(dez, discount_type="percent"))
+
+    resposta = servico.update_admin(
+        restaurante.id,
+        cupom.id,
+        CouponUpdate(coupon_template_id=sete.id, discount_value=Decimal("7")),
+    )
+
+    assert resposta.discount_value == Decimal("7.00")
+    assert resposta.coupon_template_id == sete.id
 
 
 def test_criar_divergente_nao_grava_nada(db):

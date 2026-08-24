@@ -345,7 +345,7 @@ class CouponService:
     def create_admin(self, restaurant_id: UUID, payload: CouponCreate) -> CouponAdminResponse:
         self._get_restaurant(restaurant_id)
         template = self._load_active_template(payload.coupon_template_id)
-        self._ensure_template_agrees(template, payload.discount_type)
+        self._ensure_template_agrees(template, payload.discount_type, payload.discount_value)
         if self.repository.get_by_code_and_restaurant(payload.code, restaurant_id):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Código de cupom já existe neste restaurante")
         coupon = RestaurantCoupon(restaurant_id=restaurant_id, **payload.model_dump())
@@ -371,13 +371,14 @@ class CouponService:
         Um cupom que ja esteja gravado divergente (so existe se alguem escrever
         por SQL — nenhuma rota grava assim desde este commit) recusa QUALQUER
         PATCH com 422, ate um `{"is_active": false}` que nao chega perto do
-        tipo de desconto.
+        tipo nem do valor do desconto.
 
         Nao e cupom preso: a saida e o proprio PATCH que conserta a mentira —
-        `{"discount_type": <o do template>}` ou `{"coupon_template_id": <a arte
-        certa>}` passam, e podem vir junto do `is_active` na mesma chamada.
-        Conferir so quando o corpo TOCA no tipo seria mais permissivo e pior:
-        deixaria a divergencia sobreviver a todas as outras edicoes.
+        `{"discount_type": ..., "discount_value": ...}` iguais aos do template,
+        ou `{"coupon_template_id": <a arte certa>}`, passam e podem vir junto do
+        `is_active` na mesma chamada. Conferir so quando o corpo TOCA nesses
+        campos seria mais permissivo e pior: deixaria a divergencia sobreviver a
+        todas as outras edicoes.
 
         **A arte segue a regra oposta, e a diferenca esta em `_template_do_patch`:**
         o tipo divergente e mentira do proprio cupom, e o lojista consegue
@@ -400,7 +401,7 @@ class CouponService:
         except ValidationError as exc:
             self._raise_merged_validation(exc)
         template = self._template_do_patch(coupon, validated.coupon_template_id)
-        self._ensure_template_agrees(template, validated.discount_type)
+        self._ensure_template_agrees(template, validated.discount_type, validated.discount_value)
         code_owner = self.repository.get_by_code_and_restaurant(validated.code, restaurant_id)
         if code_owner is not None and code_owner.id != coupon.id:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Código de cupom já existe neste restaurante")
@@ -541,32 +542,70 @@ class CouponService:
         return coupon.template
 
     @staticmethod
-    def _ensure_template_agrees(template: CouponTemplate, discount_type: str) -> None:
+    def _ensure_template_agrees(
+        template: CouponTemplate,
+        discount_type: str,
+        discount_value: Decimal,
+    ) -> None:
         """O template e a ARTE que o cliente ve; o cupom e a conta que ele paga.
 
-        `template.discount_type` nao e lido por linha nenhuma do calculo — quem
-        desconta e sempre `coupon.discount_type`. Entao um cupom `percent`
-        pendurado numa arte de frete gratis anuncia "Frete gratis" na vitrine e
-        tira 10% no checkout: nada falha, nada e logado, e quem descobre e o
-        cliente na tela de pagamento.
+        Nada do template e lido pelo calculo — quem desconta e sempre o par
+        `coupon.discount_type` / `coupon.discount_value`. Entao a arte e a conta
+        podem divergir em DOIS eixos, e os dois mentem para o cliente do mesmo
+        jeito: nada falha, nada e logado, e quem descobre e ele na tela de
+        pagamento.
+
+        - **tipo:** um cupom `percent` pendurado numa arte de frete gratis
+          anuncia "Frete gratis" na vitrine e tira 10% no checkout;
+        - **valor:** um cupom de 7% pendurado na arte de "10% OFF" anuncia dez
+          e tira sete.
+
+        O valor entrou aqui em 23/08/2026, e a lacuna era so essa: o tipo ja era
+        conferido, o valor nao era conferido por linha nenhuma. Nao havia par
+        errado gravado em producao porque o PAINEL copia o valor da arte ao
+        montar o POST — o que e uma protecao de TELA, e some no dia em que
+        aquela tela ganhar um campo de desconto editavel.
+
+        Nao ha ramo para `template.discount_value` nulo porque a coluna e
+        `numeric(10,2) DEFAULT 0 NOT NULL` no banco (conferido no
+        `schema_baseline.sql`). O `Decimal | None` do model e do schema e mais
+        frouxo que o banco, e nao o contrario.
 
         A recusa fica do lado do CUPOM, e nao do template, de proposito. Fazer o
-        template IMPOR o tipo pareceria mais esperto e seria pior: o POST do
-        painel passaria a gravar calado um valor diferente do que mandou, e o
-        lojista veria o campo que ele preencheu voltar trocado.
+        template IMPOR o tipo e o valor pareceria mais esperto e seria pior: o
+        POST do painel passaria a gravar calado um valor diferente do que
+        mandou, e o lojista veria o campo que ele preencheu voltar trocado.
+
+        As duas divergencias saem JUNTAS na mesma lista quando acontecem juntas
+        (trocar so a arte diverge nos dois eixos de uma vez). Uma por vez faria
+        o lojista consertar o tipo, tomar 422 de novo pelo valor, e concluir que
+        a tela esta quebrada.
         """
-        if template.discount_type == discount_type:
-            return
-        CouponService._raise_unprocessable([
-            {
+        divergencias = []
+        if template.discount_type != discount_type:
+            divergencias.append({
                 "loc": ["body", "discount_type"],
                 "msg": (
                     f"Tipo de desconto do cupom ({discount_type}) não confere com o do "
                     f"template ({template.discount_type})"
                 ),
                 "type": "coupon_template_discount_type_mismatch",
-            }
-        ])
+            })
+        # `to_decimal` nos dois lados porque as colunas tem escalas diferentes:
+        # `numeric(10,2)` no template e `numeric(12,2)` no cupom. A comparacao
+        # de `Decimal` ja e numerica (10 == 10.00), e a conversao so garante que
+        # o outro lado nao chegue como int ou float de um teste.
+        if to_decimal(template.discount_value) != to_decimal(discount_value):
+            divergencias.append({
+                "loc": ["body", "discount_value"],
+                "msg": (
+                    f"Valor do desconto do cupom ({discount_value}) não confere com o do "
+                    f"template ({template.discount_value})"
+                ),
+                "type": "coupon_template_discount_value_mismatch",
+            })
+        if divergencias:
+            CouponService._raise_unprocessable(divergencias)
 
     @staticmethod
     def _aware(value: datetime) -> datetime:

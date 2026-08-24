@@ -1,4 +1,37 @@
+"""A cadeia do Rapi de texto, e o cliente HTTP que ela reusa.
+
+O CLIENTE HTTP E UM SO POR MODELO NO PROCESSO, e isso e o que importa neste
+arquivo. E o mesmo conserto que `embedding_service.py` ja fez para a busca,
+pelo mesmo motivo e com a mesma forma — la esta a medicao original (mediana
+de 654 ms para 340 ms, 314 ms de diferenca em 11 de 12 pares intercalados).
+
+O caminho do LLM tinha ficado de fora daquele conserto: `ChatLLMService()` e
+construido por REQUISICAO, e cada construcao trazia um `ChatOpenAI` novo, com
+um cliente HTTP novo, com um pool de conexoes novo — ou seja, handshake TLS
+com a OpenAI em toda pergunta do cliente.
+
+Medido em 24/08/2026, em producao, sobre oito turnos quentes:
+
+    llm_call_ms = 1023 ms fixos + 14,2 ms por token de saida   (R2 = 0,94)
+
+Os 1023 ms sao o que se paga ANTES do primeiro token, e o handshake estava
+dentro deles. Contra a ENTRADA a mesma regressao da R2 = 0,19 — o tamanho do
+prompt nao explica a espera, o custo fixo e o comprimento da resposta
+explicam.
+
+A CHAVE DO CACHE E O NOME DO MODELO, e nao "nenhuma chave". `MODEL_NAME` sai
+do ambiente justamente para poder mudar sem deploy; um cache sem chave
+congelaria o primeiro modelo visto no processo e a variavel voltaria a ser
+configuracao morta — que e o defeito que `test_chat_llm_model.py` existe para
+impedir.
+
+`lru_cache` e nao um objeto de modulo, pelo mesmo motivo de `get_engine` em
+`src/db/session.py`: construido no import, ele congelaria `settings` no
+instante em que qualquer modulo de `src` fosse importado.
+"""
+
 import logging
+from functools import lru_cache
 from time import perf_counter
 from typing import Any
 
@@ -12,6 +45,19 @@ from src.core.config import settings
 logger = logging.getLogger("uvicorn.error")
 
 
+@lru_cache
+def get_chat_client(model: str) -> ChatOpenAI:
+    """O cliente daquele modelo no processo. Um so, criado na primeira pergunta."""
+    return ChatOpenAI(
+        api_key=settings.OPENAI_API_KEY,
+        model=model,
+        reasoning_effort="minimal",
+        verbosity="low",
+        max_completion_tokens=300,
+        use_responses_api=True,
+    )
+
+
 class ChatLLMService:
     """LCEL chat service for Rapi structured responses."""
 
@@ -21,14 +67,7 @@ class ChatLLMService:
         # de uma indisponibilidade da OpenAI — nao pode exigir deploy. O
         # default de `MODEL_NAME` em `config.py` e o mesmo valor que estava
         # fixo aqui, entao nada muda para quem nao define a variavel.
-        self.llm = ChatOpenAI(
-            api_key=settings.OPENAI_API_KEY,
-            model=settings.MODEL_NAME,
-            reasoning_effort="minimal",
-            verbosity="low",
-            max_completion_tokens=300,
-            use_responses_api=True,
-        )
+        self.llm = get_chat_client(settings.MODEL_NAME)
 
     def build_chain(self):
         """Build the Prompt -> ChatOpenAI structured output LCEL chain.

@@ -36,6 +36,7 @@ from src.api.endpoints import (
 )
 from src.core.config import settings
 from src.core.startup_checks import validate_settings
+from src.core.warmup import warm_up
 
 
 @asynccontextmanager
@@ -43,6 +44,9 @@ async def lifespan(_: FastAPI):
     # Falha aqui derruba o boot com mensagem explicita, em vez de deixar a
     # API subir e recusar silenciosamente todo pedido de entrega.
     validate_settings(settings)
+    # E aqui NAO derruba, de proposito — a ordem das duas linhas e a diferenca
+    # entre configuracao e desempenho. Ver `src/core/warmup.py`.
+    warm_up()
     yield
 
 

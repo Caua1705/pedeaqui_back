@@ -41,6 +41,10 @@ from sqlalchemy.orm import Session
 # `import src.*` e lê o ambiente uma única vez. Depois disso, tarde demais.
 for _variavel, _valor_falso in {
     "GOOGLE_MAPS_ROUTES_API_KEY": "chave-de-teste-nao-usada",
+    # O warmup do lifespan chama a OpenAI de verdade. Desligado aqui pelo
+    # mesmo motivo da linha acima: nenhum teste da suite fala com servico
+    # externo, e este e o unico ponto do BOOT que falaria.
+    "AI_WARMUP_ENABLED": "false",
 }.items():
     os.environ.setdefault(_variavel, _valor_falso)
 

@@ -74,6 +74,16 @@ class Settings(BaseSettings):
     # SEMPRE zero produtos, porque o teto medido foi 0,66.
     AI_SEARCH_MIN_SIMILARITY: float = 0.30
 
+    # Aquecimento no boot: uma consulta ao banco e uma chamada de embedding,
+    # para o primeiro cliente do dia nao pagar a abertura das conexoes. Medido
+    # em 24/08/2026: `embedding_ms=3534` na primeira requisicao do processo,
+    # contra ~400 nas seguintes. Ver `src/core/warmup.py`.
+    #
+    # Desligado, a API sobe igual e o custo volta para a primeira pergunta.
+    # `tests/conftest.py` o desliga: nenhum teste da suite chama servico
+    # externo, e o warmup e a unica coisa do boot que chamaria.
+    AI_WARMUP_ENABLED: bool = True
+
     # Atendimento por voz em tempo real (src/ai/voice/, rotas sob /voice).
     #
     # Desligado, as rotas nao existem — nem no /docs. Ligado, elas sobem com

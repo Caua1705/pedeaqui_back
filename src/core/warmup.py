@@ -23,19 +23,23 @@ fora do ar, a API tem que subir do mesmo jeito — o cardapio, o pedido e o
 pagamento nao dependem dela, e derrubar a plataforma inteira porque o
 assistente nao aqueceu seria trocar um problema pequeno por um enorme.
 
-**Sincrono, dentro do lifespan.** Sao ~3,5 s uma vez por processo, e o
-`docker-entrypoint.sh` ja roda `alembic upgrade head` antes do Uvicorn — o
-boot ja nao e instantaneo. Jogar isto para segundo plano economizaria
-segundos no boot ao preco de uma corrida entre o aquecimento e a primeira
-requisicao, que e exatamente o caso que se quer resolver.
+**Sincrono, dentro do lifespan, com teto por etapa.** O boot espera, porque
+jogar tudo para segundo plano criaria uma corrida entre o aquecimento e a
+primeira requisicao — que e exatamente o caso que se quer resolver. Mas
+espera no MAXIMO `AI_WARMUP_TIMEOUT_SECONDS` por etapa, e desistir de esperar
+nao cancela o aquecimento: ver `_with_timeout`.
 
-**O cliente do LLM e so CONSTRUIDO, sem chamada.** Aquecer o TLS dele de
-verdade exigiria uma geracao de verdade — dinheiro e ~2 s a cada restart,
-por um ganho que a medicao nao isola. O que da para fazer de graca e tirar a
-construcao do objeto do caminho quente, e e o que se faz.
+**As TRES chamadas sao de verdade.** A primeira versao deste arquivo so
+construia o cliente do LLM e registrava "pronto em 2.36 ms" — que era a prova
+de que nada tinha sido aquecido, porque construir o `ChatOpenAI` nao fala com
+a rede. A medicao seguinte mostrou o handshake inteiro ainda no primeiro
+turno: 3616 ms para 85 tokens de saida contra 1744 ms para 67 no turno
+seguinte, ~1,8 s que nao cabem na geracao. Hoje o LLM leva uma geracao
+minima, cobrada uma vez por deploy e por worker.
 """
 
 import logging
+import threading
 from time import perf_counter
 
 from sqlalchemy import text
@@ -51,58 +55,107 @@ logger = logging.getLogger("uvicorn.error")
 # Frase curta e sem sentido de negocio: o vetor dela e jogado fora, o que
 # importa e a conexao que a chamada deixa aberta.
 _FRASE_DE_AQUECIMENTO = "aquecimento"
+# Curto de proposito: o que importa e a conexao que a chamada deixa aberta,
+# nao a resposta. Pedir brevidade explicitamente segura o custo por deploy.
+_PROMPT_DE_AQUECIMENTO = "Responda apenas: ok"
 _SELECT_1 = text("SELECT 1")
 
 
 def warm_up() -> None:
-    """Aquece banco e OpenAI. Nunca levanta."""
+    """Aquece banco e OpenAI. Nunca levanta e nunca pendura o boot."""
     if not settings.AI_WARMUP_ENABLED:
         logger.info("[warmup] desligado por AI_WARMUP_ENABLED=false")
         return
 
-    _warm_up_database()
-    _warm_up_embeddings()
-    _warm_up_chat_client()
+    _with_timeout("banco", _open_database_connection)
+    _with_timeout("embedding", _call_embeddings)
+    _with_timeout("llm", _call_chat_model)
 
 
-def _warm_up_database() -> None:
-    started_at = perf_counter()
-    try:
-        with SessionLocal() as db:
-            db.execute(_SELECT_1)
-    except Exception:
-        logger.warning("[warmup] banco nao aqueceu", exc_info=True)
-        return
-    logger.info("[warmup] banco pronto em %.2f ms", (perf_counter() - started_at) * 1000)
+def _with_timeout(nome: str, aquecer) -> None:
+    """Roda o aquecimento numa thread e desiste de ESPERAR, nao de aquecer.
 
+    POR QUE THREAD, E NAO O `timeout` DO CLIENTE. O que precisa ser aquecido e
+    o pool de conexoes do cliente COMPARTILHADO — e o `lru_cache` de
+    `get_chat_client` / `get_embeddings_client` que a requisicao do cliente vai
+    reusar. Um cliente descartavel com timeout proprio abriria a conexao dele,
+    aqueceria o pool dele e nao serviria para nada. Configurar o timeout no
+    cliente compartilhado tambem nao serve: passaria a valer para as
+    requisicoes de producao, que e mudanca de comportamento sem relacao com
+    boot.
 
-def _warm_up_embeddings() -> None:
-    """A chamada de verdade — e a unica que precisa ser de verdade.
+    E DESISTIR DE ESPERAR E MELHOR QUE ABORTAR. A thread e `daemon` e continua
+    rodando: se a chamada estava so lenta, ela termina depois do boot, o pool
+    fica quente do mesmo jeito e o cliente seguinte se beneficia. Um timeout
+    que CANCELA deixaria o pior dos dois mundos — boot atrasado e conexao
+    ainda fria.
 
-    Construir o `OpenAIEmbeddings` nao abre conexao; quem abre e o
-    `embed_query`. Sem uma chamada real, o `lru_cache` guardaria um cliente
-    que ainda pagaria DNS e TLS na primeira pergunta, e os 3,5 s
-    continuariam no lugar onde estao hoje.
+    O TIMEOUT E 15 s POR ETAPA (`AI_WARMUP_TIMEOUT_SECONDS`), e o numero saiu
+    da medicao: o aquecimento do embedding levou 4844 ms em producao, num boot
+    normal. Um teto perto disso dispararia em rede meramente lenta — e
+    disparar e o pior desfecho, porque loga um aviso alarmante sobre algo que
+    ia funcionar. 15 s da ~3x de folga sobre o pior caso observado.
+
+    O teto do BOOT e o que limita por cima: 3 etapas x 15 s = 45 s no caso
+    patologico, somados ao `alembic upgrade head` que o `docker-entrypoint.sh`
+    ja roda antes do Uvicorn. Cabe porque o servico da API **nao tem
+    healthcheck** no `docker-compose.yml` (so o Redis tem) e o `restart:
+    always` so dispara quando o processo MORRE — boot lento vira 502 no
+    Traefik por alguns segundos, nunca loop de restart (armadilha 5). Se um
+    healthcheck for acrescentado a API um dia, este numero passa a depender do
+    `start_period` dele.
     """
-    started_at = perf_counter()
-    try:
-        get_embeddings_client().embed_query(_FRASE_DE_AQUECIMENTO)
-    except Exception:
-        logger.warning("[warmup] embedding nao aqueceu", exc_info=True)
+    resultado: dict[str, float] = {}
+
+    def alvo() -> None:
+        started_at = perf_counter()
+        try:
+            aquecer()
+        except Exception:
+            logger.warning("[warmup] %s nao aqueceu", nome, exc_info=True)
+            return
+        resultado["ms"] = (perf_counter() - started_at) * 1000
+
+    thread = threading.Thread(target=alvo, name=f"warmup-{nome}", daemon=True)
+    thread.start()
+    thread.join(settings.AI_WARMUP_TIMEOUT_SECONDS)
+
+    if thread.is_alive():
+        logger.warning(
+            "[warmup] %s passou de %.0f s; o boot seguiu e o aquecimento continua",
+            nome,
+            settings.AI_WARMUP_TIMEOUT_SECONDS,
+        )
         return
-    logger.info(
-        "[warmup] embedding pronto em %.2f ms", (perf_counter() - started_at) * 1000
-    )
+    if "ms" in resultado:
+        logger.info("[warmup] %s pronto em %.2f ms", nome, resultado["ms"])
 
 
-def _warm_up_chat_client() -> None:
-    started_at = perf_counter()
-    try:
-        get_chat_client(settings.MODEL_NAME)
-    except Exception:
-        logger.warning("[warmup] cliente do LLM nao aqueceu", exc_info=True)
-        return
-    logger.info(
-        "[warmup] cliente do LLM pronto em %.2f ms",
-        (perf_counter() - started_at) * 1000,
-    )
+def _open_database_connection() -> None:
+    with SessionLocal() as db:
+        db.execute(_SELECT_1)
+
+
+def _call_embeddings() -> None:
+    """Construir o `OpenAIEmbeddings` nao abre conexao; quem abre e o `embed_query`."""
+    get_embeddings_client().embed_query(_FRASE_DE_AQUECIMENTO)
+
+
+def _call_chat_model() -> None:
+    """Uma geracao MINIMA de verdade — construir o objeto nao era aquecer nada.
+
+    A primeira versao so chamava `get_chat_client(...)` e registrava
+    "pronto em 2.36 ms". Os 2,36 ms eram a prova de que nada tinha sido
+    aquecido: construir o `ChatOpenAI` nao fala com a rede, e o handshake
+    continuava inteiro no primeiro turno. A medicao mostra o tamanho dele —
+    turno 1 gastou 3616 ms para 85 tokens de saida, turno 2 gastou 1744 ms
+    para 67; a diferenca nao cabe na geracao.
+
+    O prompt e minusculo e a resposta tambem, mas o custo NAO e zero: e uma
+    geracao cobrada por deploy, por worker. E o preco de o primeiro cliente
+    depois de cada deploy nao pagar ~1,8 s.
+
+    Vai pelo cliente compartilhado de proposito, e nao por um `ChatOpenAI`
+    proprio: e o pool DELE que a requisicao seguinte vai reusar.
+    """
+    get_chat_client(settings.MODEL_NAME).invoke(_PROMPT_DE_AQUECIMENTO)

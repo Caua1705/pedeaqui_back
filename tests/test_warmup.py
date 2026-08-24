@@ -14,6 +14,9 @@ numa refatoracao, a OpenAI fora do ar passa a derrubar cardapio, pedido e
 pagamento junto — que nao dependem dela.
 """
 
+import threading
+import time
+
 import pytest
 
 from src.core import warmup
@@ -23,6 +26,20 @@ from src.core.config import settings
 class ExplodeAoAquecer:
     def __call__(self, *args, **kwargs):
         raise RuntimeError("a OpenAI esta fora do ar")
+
+
+class ClienteQueRegistraAChamada:
+    """Finge o cliente compartilhado e anota que a chamada REAL aconteceu."""
+
+    def __init__(self, chamadas: list, rotulo: str):
+        self.chamadas = chamadas
+        self.rotulo = rotulo
+
+    def embed_query(self, _texto):
+        self.chamadas.append(self.rotulo)
+
+    def invoke(self, _prompt):
+        self.chamadas.append(self.rotulo)
 
 
 class TestNuncaDerrubaOBoot:
@@ -64,6 +81,138 @@ class TestNuncaDerrubaOBoot:
             warmup.warm_up()
 
         assert "nao aqueceu" in caplog.text
+
+
+class TestAChamadaEDeVerdade:
+    """O item B: construir o objeto NAO e aquecer.
+
+    A primeira versao so chamava `get_chat_client(...)` e registrava "pronto
+    em 2.36 ms" — o proprio numero denunciava que nada tinha ido a rede. O
+    handshake continuou inteiro no primeiro turno de producao: 3616 ms para 85
+    tokens contra 1744 ms para 67 no seguinte.
+    """
+
+    def test_o_llm_recebe_uma_geracao_e_nao_so_a_construcao(self, monkeypatch):
+        chamadas: list = []
+        monkeypatch.setattr(settings, "AI_WARMUP_ENABLED", True)
+        monkeypatch.setattr(warmup, "SessionLocal", ExplodeAoAquecer())
+        monkeypatch.setattr(warmup, "get_embeddings_client", ExplodeAoAquecer())
+        monkeypatch.setattr(
+            warmup,
+            "get_chat_client",
+            lambda _m: ClienteQueRegistraAChamada(chamadas, "llm.invoke"),
+        )
+
+        warmup.warm_up()
+
+        assert chamadas == ["llm.invoke"]
+
+    def test_o_embedding_recebe_um_embed_query(self, monkeypatch):
+        chamadas: list = []
+        monkeypatch.setattr(settings, "AI_WARMUP_ENABLED", True)
+        monkeypatch.setattr(warmup, "SessionLocal", ExplodeAoAquecer())
+        monkeypatch.setattr(warmup, "get_chat_client", ExplodeAoAquecer())
+        monkeypatch.setattr(
+            warmup,
+            "get_embeddings_client",
+            lambda: ClienteQueRegistraAChamada(chamadas, "embedding.embed_query"),
+        )
+
+        warmup.warm_up()
+
+        assert chamadas == ["embedding.embed_query"]
+
+    def test_a_chamada_vai_pelo_cliente_compartilhado(self, monkeypatch):
+        """O pool aquecido tem que ser o que a requisicao seguinte reusa.
+
+        Um `ChatOpenAI` proprio do warmup abriria a conexao dele, aqueceria o
+        pool dele e nao serviria para nada.
+        """
+        modelos: list = []
+        monkeypatch.setattr(settings, "AI_WARMUP_ENABLED", True)
+        monkeypatch.setattr(settings, "MODEL_NAME", "gpt-5-mini")
+        monkeypatch.setattr(warmup, "SessionLocal", ExplodeAoAquecer())
+        monkeypatch.setattr(warmup, "get_embeddings_client", ExplodeAoAquecer())
+        monkeypatch.setattr(
+            warmup,
+            "get_chat_client",
+            lambda modelo: modelos.append(modelo) or ClienteQueRegistraAChamada([], "x"),
+        )
+
+        warmup.warm_up()
+
+        assert modelos == ["gpt-5-mini"]
+
+
+class TestTimeout:
+    def test_o_boot_nao_espera_alem_do_teto(self, monkeypatch):
+        """A propriedade que o item B pediu: warmup lento nao pendura o boot."""
+        monkeypatch.setattr(settings, "AI_WARMUP_ENABLED", True)
+        monkeypatch.setattr(settings, "AI_WARMUP_TIMEOUT_SECONDS", 0.1)
+        monkeypatch.setattr(warmup, "SessionLocal", ExplodeAoAquecer())
+        monkeypatch.setattr(warmup, "get_chat_client", ExplodeAoAquecer())
+
+        pendurado = threading.Event()
+
+        def nunca_responde():
+            pendurado.wait(30)
+
+        monkeypatch.setattr(
+            warmup,
+            "get_embeddings_client",
+            lambda: type("C", (), {"embed_query": lambda _s, _t: nunca_responde()})(),
+        )
+
+        started_at = time.perf_counter()
+        warmup.warm_up()
+        decorrido = time.perf_counter() - started_at
+        pendurado.set()
+
+        assert decorrido < 3
+
+    def test_estourar_o_teto_nao_cancela_o_aquecimento(self, monkeypatch):
+        """Desistir de ESPERAR e diferente de desistir de aquecer.
+
+        A thread e daemon e continua: se a chamada estava so lenta, o pool
+        fica quente do mesmo jeito e o cliente seguinte se beneficia. Abortar
+        deixaria o pior dos dois mundos — boot atrasado E conexao fria.
+        """
+        monkeypatch.setattr(settings, "AI_WARMUP_ENABLED", True)
+        monkeypatch.setattr(settings, "AI_WARMUP_TIMEOUT_SECONDS", 0.1)
+        monkeypatch.setattr(warmup, "SessionLocal", ExplodeAoAquecer())
+        monkeypatch.setattr(warmup, "get_chat_client", ExplodeAoAquecer())
+
+        terminou = threading.Event()
+
+        def lento():
+            time.sleep(0.4)
+            terminou.set()
+
+        monkeypatch.setattr(
+            warmup,
+            "get_embeddings_client",
+            lambda: type("C", (), {"embed_query": lambda _s, _t: lento()})(),
+        )
+
+        warmup.warm_up()
+
+        assert terminou.wait(3) is True
+
+    def test_o_estouro_sai_como_warning(self, monkeypatch, caplog):
+        monkeypatch.setattr(settings, "AI_WARMUP_ENABLED", True)
+        monkeypatch.setattr(settings, "AI_WARMUP_TIMEOUT_SECONDS", 0.1)
+        monkeypatch.setattr(warmup, "SessionLocal", ExplodeAoAquecer())
+        monkeypatch.setattr(warmup, "get_chat_client", ExplodeAoAquecer())
+        monkeypatch.setattr(
+            warmup,
+            "get_embeddings_client",
+            lambda: type("C", (), {"embed_query": lambda _s, _t: time.sleep(0.4)})(),
+        )
+
+        with caplog.at_level("WARNING", logger="uvicorn.error"):
+            warmup.warm_up()
+
+        assert "o boot seguiu e o aquecimento continua" in caplog.text
 
 
 class TestDesligado:

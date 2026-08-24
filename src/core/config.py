@@ -84,6 +84,17 @@ class Settings(BaseSettings):
     # externo, e o warmup e a unica coisa do boot que chamaria.
     AI_WARMUP_ENABLED: bool = True
 
+    # Quanto o boot espera POR ETAPA do aquecimento (banco, embedding, LLM).
+    # Estourar nao cancela a chamada — a thread e daemon e segue aquecendo o
+    # pool; o boot so para de esperar por ela. Ver `_with_timeout`.
+    #
+    # 15 s saiu da medicao: o aquecimento do embedding levou 4844 ms num boot
+    # normal de producao, e um teto perto disso dispararia em rede meramente
+    # lenta. O teto do BOOT e 3 x este valor, e cabe porque o servico da API
+    # nao tem healthcheck no compose — boot lento vira 502 no Traefik por
+    # alguns segundos, nunca loop de restart.
+    AI_WARMUP_TIMEOUT_SECONDS: float = 15.0
+
     # Atendimento por voz em tempo real (src/ai/voice/, rotas sob /voice).
     #
     # Desligado, as rotas nao existem — nem no /docs. Ligado, elas sobem com

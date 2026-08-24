@@ -58,13 +58,26 @@ verdade é o índice que está vazio.
 
 ## 5. Abra a bancada
 
-```
-http://localhost:8000/voice/test
+**A bancada é externa ao repositório**, e é de propósito: ela é descartável,
+mexe em três rotas que já existem e não tem por que versionar junto do
+backend. Ela mora em `bancada-assistente/bancada.html`, ao lado deste projeto,
+e se serve sozinha:
+
+```bash
+cd ../bancada-assistente
+python -m http.server 5500
 ```
 
-Cole o `restaurant_id` e o **token do cliente** (a emissão exige login;
-`POST /auth/login` devolve o `access_token`), clique em **Falar**, dê permissão ao microfone e
-pergunte algo como *"o que tem de sobremesa?"*.
+E abra <http://localhost:5500/bancada.html>. As portas 5500, 5501 e 5173 já
+estão liberadas no CORS do `main.py` — não é preciso mexer em nada aqui.
+
+`GET /voice/test` **não existe mais** (removida em 24/08/2026). Ela servia uma
+cópia interna que foi apagada em `bd1f164` e ficou respondendo 500. Se você
+veio de um link antigo, é a bancada externa que você quer.
+
+Cole o `restaurant_id`, a filial e o **token do cliente** (a emissão exige
+login; `POST /auth/login` devolve o `access_token`), clique em **Falar**, dê
+permissão ao microfone e pergunte algo como *"o que tem de sobremesa?"*.
 
 `localhost` é contexto seguro, então o microfone funciona sem HTTPS. De outra
 máquina na rede **não** funciona: o navegador recusa o microfone em `http://`
@@ -93,7 +106,7 @@ junto das cotas.
 Emitir a credencial (`POST /voice/session`) não custa nada — o relógio começa
 quando o navegador abre a sessão de áudio. **Aba esquecida não fatura mais
 para sempre:** a sessão encerra sozinha no teto de duração, na inatividade e
-quando a aba sai de vista. Ver `page.html` e `session_service.py`.
+quando a aba sai de vista. Ver a bancada externa e `session_service.py`.
 
 ### Quanto foi de verdade, por restaurante
 
@@ -119,7 +132,7 @@ o rateio dela.
 | login de cliente | `src/api/voice.py`, `get_current_customer` |
 | rate limit por IP (3/min, 20/h) | `src/api/voice.py`, `VOICE_SESSION_RATE_LIMIT` |
 | cota por cliente e por restaurante | `session_service.py` |
-| teto de duração, inatividade, aba escondida | `page.html` |
+| teto de duração, inatividade, aba escondida | a bancada (cliente) |
 | desligamento pelo servidor | `realtime_client.hangup_call` |
 
 A última só funciona quando o navegador reporta o `call_id` — ver o cabeçalho

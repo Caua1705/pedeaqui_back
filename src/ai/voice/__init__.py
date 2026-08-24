@@ -10,7 +10,9 @@ de busca. O audio nao passa por aqui.
     src/ai/voice/session_service.py         livro-razao, cotas e corte
     src/ai/voice/search_service.py          a ferramenta de busca
     src/repositories/voice_session_repository.py
-    src/ai/voice/page.html                  bancada de teste, em /voice/test
+
+Nao ha bancada dentro do pacote. A que existia (`page.html`, em `/voice/test`)
+saiu em 24/08/2026; a viva e externa ao repositorio — ver `COMO-RODAR.md`.
 
 Nasceu como experimento na branch `experimento/voz` e a leitura de origem
 esta em `docs/auditoria-voz-vs-texto.md` — o que este agente compartilha com o

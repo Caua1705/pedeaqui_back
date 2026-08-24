@@ -414,17 +414,13 @@ devolva a ele um `function_call_output` com um texto curto de falha (ex.:
 
 ---
 
-### 4.5 `GET /voice/test` — bancada de teste
+### 4.5 `GET /voice/test` — **removida**
 
-Página HTML de teste do backend, servida pela própria API. **Não é para o
-front consumir** — é bancada interna, feia de propósito, e o app do cliente não
-deve linkar para ela.
+Existiu até 24/08/2026 e servia uma bancada de teste interna. O HTML dela foi
+apagado do repositório, a rota passou a responder 500, e as duas coisas foram
+removidas juntas em vez de consertadas: a bancada viva é externa ao backend.
 
-> **Esta rota está quebrada no momento.** Ela procura o HTML num caminho que
-> não existe mais depois de uma reorganização de pastas, e responde **500**. Não
-> afeta nenhuma das outras quatro rotas. Está reportado ao backend.
-
-Não implemente nada em cima dela.
+**São quatro rotas em `/voice`, não cinco.** Nada mudou nas outras.
 
 ---
 

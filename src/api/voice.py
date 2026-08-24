@@ -1,6 +1,5 @@
 """As rotas do atendimento por voz. Nenhuma sobe sem `VOICE_ENABLED`.
 
-    GET  /voice/test                       bancada de teste
     POST /voice/session                    emite a credencial efemera
     POST /voice/session/{id}/connected     o navegador reporta o call_id
     POST /voice/session/{id}/ended         o navegador reporta o fim
@@ -10,18 +9,18 @@ Fica ao lado de `src/api/chat.py` de proposito: sao os dois agentes da mesma
 casa, um por texto e outro por voz, e a simetria da rota e a primeira coisa
 que quem chega procura.
 
-A bancada e servida por AQUI, e nao aberta como arquivo do disco, por um
-motivo pratico: `file://` tem origem `null`, e o CORS desta API exige origem
-conhecida com credenciais. Servida na propria origem, ela nao depende de
-mexer na lista de origens do `main.py`.
+NAO HA MAIS BANCADA SERVIDA DAQUI. `GET /voice/test` existiu e foi removida em
+24/08/2026: o HTML dela morava no repositorio, foi apagado por engano em
+`bd1f164`, e a rota passou a responder 500 lendo um arquivo que nao existia.
+A bancada viva e externa (`bancada-assistente/bancada.html`, servida em
+`localhost:5500`), e as portas 5500, 5501 e 5173 ja estao na lista de origens
+do `main.py` — nao ha nada a servir daqui.
 """
 
 import uuid
 from decimal import Decimal
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -30,7 +29,6 @@ from src.api.dependencies.database import get_db
 from src.api.rate_limit import VOICE_SESSION_RATE_LIMIT, limiter
 from src.core.config import settings
 from src.models.customer_model import Customer
-from src.ai import voice as pacote_de_voz
 from src.ai.voice.search_service import VoiceSearchService
 from src.ai.voice.session_service import UsoReportado, VoiceSessionService
 from src.ai.voice.voice_prompt import branch_context_for
@@ -38,12 +36,6 @@ from src.services.chat_service import ChatService
 
 
 router = APIRouter(prefix="/voice", tags=["experimento"])
-
-# A bancada mora com o resto do pacote de voz (`src/ai/voice/`), e nao ao lado
-# desta rota: o HTML e da bancada, nao da API. O caminho sai do proprio pacote
-# em vez de subir diretorios contados a mao — mover ESTE arquivo nao pode
-# quebrar a pagina de novo.
-PAGINA = Path(pacote_de_voz.__file__).resolve().parent / "page.html"
 
 
 class SessaoRequest(BaseModel):
@@ -81,13 +73,6 @@ class BuscaRequest(BaseModel):
     # `gt=0` porque teto zero ou negativo esvazia a busca inteira, e o modelo
     # e quem preenche este campo.
     preco_maximo: Decimal | None = Field(default=None, gt=0)
-
-
-@router.get("/test", response_class=HTMLResponse)
-def pagina() -> HTMLResponse:
-    """Lida do disco a cada requisicao, de proposito: da para editar o HTML e
-    dar F5 sem reiniciar a API."""
-    return HTMLResponse(PAGINA.read_text(encoding="utf-8"))
 
 
 @router.post("/session")

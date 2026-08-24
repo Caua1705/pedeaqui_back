@@ -1540,3 +1540,46 @@ Correlato, para spike de comportamento de biblioteca: dublar o **transporte**
 (o cliente HTTP, o socket) e deixar a biblioteca real por cima é o que separa
 "medi o LangChain" de "medi a minha lembrança do LangChain". Um dublê alto
 demais testa o dublê.
+
+---
+
+## 43. A transcrição da fala do cliente NÃO é o que o modelo de voz ouviu
+
+Contraintuitivo, e engana rápido: no `/voice` o log mostra "eu falei: *quero o
+bairro mesmo*" quando a pessoa disse "quero o **baião** mesmo", e a conclusão
+óbvia — "o áudio virou texto errado antes de o modelo ver" — **está errada**.
+
+O `gpt-realtime-mini` é *speech-to-speech*: **ele consome o áudio direto**, em
+tokens de áudio. A transcrição da entrada é um serviço SEPARADO, que roda em
+paralelo e não está no caminho da resposta. A documentação do próprio SDK diz
+isso, em `openai/types/realtime/realtime_audio_config_input.py` (conferido no
+`openai==3.3.1`, o do lock):
+
+> *Input audio transcription is not native to the model, since the model
+> consumes audio directly. Transcription runs asynchronously through the
+> /audio/transcriptions endpoint and should be treated as guidance of input
+> audio content rather than precisely what the model heard.*
+
+**O que isso muda na prática:**
+
+- **Melhorar a transcrição melhora a TELA, e nada mais.** Vocabulário do
+  cardápio no `prompt`/`keywords`, `language: "pt"`, trocar `whisper-1` por
+  `gpt-transcribe` — tudo isso deixa o log mais fiel e **não muda uma palavra
+  da resposta falada**. É gasto que não compra qualidade de atendimento.
+- **O sinal real do que o modelo entendeu é o argumento da ferramenta.** A
+  linha `[tool] buscar_no_cardapio {"consulta":"..."}` é o modelo dizendo, com
+  as palavras dele, o que ele acha que foi pedido. É ela que separa "ele
+  ouviu errado" de "ele ouviu certo e a busca trouxe lixo" — e são consertos
+  diferentes. Olhe essa linha ANTES de mexer em transcrição.
+- **O lever que muda o que ele entende é o prefixo de texto** (as
+  `instructions` da sessão): nome que ele nunca viu escrito ele tem mais
+  dificuldade de reconhecer falado. Mas isso é reenviado em TODA resposta —
+  o cardápio do Júnior tem 136 produtos, ~2.000 tokens por resposta. Se um dia
+  entrar, é uma lista curta dos mais pedidos, e com medição antes.
+- **A transcrição é cobrada à parte, por minuto.** O backend não a liga (não
+  precisa dela); quem liga é a bancada, por `session.update`, só para mostrar
+  "o que eu falei". Medição de custo limpa se faz com ela desligada.
+
+O mesmo vale ao contrário: `response.output_audio_transcript.done` é a
+transcrição do que o assistente falou, e serve para conferir de olho — não é
+o que o cliente ouviu.

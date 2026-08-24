@@ -104,6 +104,62 @@ a um número nosso: se o cliente disse um nome e nenhum dos nomes que voltaram
 é aquele, isso o modelo compara sozinho. Mais uma regra para ele perguntar o
 nome de novo quando não tiver entendido — uma pergunta curta custa menos que
 oferecer o produto errado.
+
+O QUE O `consulta=` NO LOG REVELOU (24/08/2026). A linha da busca passou a
+gravar o texto que o modelo consultou, e ele respondeu a pergunta de uma vez:
+
+    [eu]          Quero um baião.
+    [tool]        buscar_no_cardapio {"consulta":"feijoada"}
+    [assistente]  Aqui não temos feijoada, mas temos o feijão tropeiro...
+
+**Ele ouviu certo e reescreveu a consulta sozinho.** A transcrição registrou
+"baião"; a busca acha "Baião de dois" em 0,502. Não era o áudio (a hipótese de
+"ouviu errado") nem a relevância (a hipótese do limiar): era o modelo
+traduzindo "baião" por "um prato de feijão" antes de buscar — e depois negando
+um produto que ninguém tinha pedido.
+
+Daí a regra do TERMO LITERAL, e o caso enumerado dentro dela. Critério não
+morde; enumeração morde — a mesma lição do `system_prompt.py` do texto.
+
+E daí a seção NAO INVENTE, que na mesma sessão teve três provas:
+
+    "Tem sobremesa?"          -> "trinta e quatro e noventa", SEM ter buscado
+    "Qual é o seu nome?"      -> "o preço exato é 24 e 90"
+    "almoçar e sobremesa?"    -> "já ajusto o ponto da carne" (ninguém falou
+                                 de carne em nenhum momento da sessão)
+
+Preço falso dito com confiança é pior que resposta errada: o cliente chega no
+checkout com outro valor. Por isso a regra dura — sem busca NAQUELE turno, não
+se fala preço — e por isso a seção ficou alta na página, antes de O CARDAPIO.
+
+O EXEMPLO DE PREÇO QUE ESTE ARQUIVO ENSINOU A ERRAR (24/08/2026). A versão
+anterior desta seção trazia, como ilustração da forma curta, a frase
+`"trinta e cinco e trinta"`. Na sessão seguinte apareceram `"trinta e quatro e
+noventa"` e `"vinte e quatro e noventa"` — mesma forma, mesmo ritmo, números
+que não vieram de lugar nenhum. Na sessão anterior, sem essa linha, os dois
+preços falados eram reais.
+
+Não é prova, e o `system_prompt.py` do texto tem `Exemplo: "R$ 23,90"` sem
+sintoma. A diferença é onde o exemplo está ancorado: no texto ele ilustra a
+**fonte** (o campo `price`, como ele já vem escrito); aqui ele ilustrava a
+**fala**, e era uma string pronta para ser dita, solta no prompt. Exemplo de
+saída falada é molde; exemplo de campo de origem é referência. O que ficou é o
+par fonte -> fala: `"R$ 43,50"` vira `"quarenta e três e cinquenta"`.
+
+POR QUE O "BUSQUE CALADO" MUDOU DE SEÇÃO (24/08/2026). A regra funcionou —
+cinco respostas daquela sessão saíram sem áudio nenhum, que é exatamente o que
+uma busca silenciosa produz. Mas vazou uma vez, em "só um momento, vou buscar
+as opções de entrada agora".
+
+Três razões, e a segunda é a que importa: a enumeração não cobria a frase (ela
+morde nas strings enumeradas, e as minhas vieram de uma amostra só); **ela era
+a única regra do prompt que proibia sem autorizar o substituto** — as irmãs
+terminam em "e espere", a dela terminava numa sequência, e sobrava silêncio
+que o modelo é treinado a preencher; e estava em O CARDAPIO, que é sobre o que
+é verdade dos produtos, não sobre quando falar.
+
+Por isso ela subiu para COMO FALAR, a lista de frases proibidas cresceu, e o
+silêncio passou a ser explicitamente autorizado em vez de sobrar.
 """
 
 from src.models.branch_model import Branch
@@ -123,13 +179,42 @@ COMO FALAR
 - Nunca leia simbolo, asterisco, codigo ou identificador em voz alta.
 - Nao diga o nome da loja em voz alta: o cliente ja escolheu ela na tela.
 - Se o cliente te cortar, pare de falar e escute.
+- Enquanto voce busca, FIQUE CALADO. O silencio da busca e esperado e dura
+  pouco; nao e sua funcao preencher. Nao anuncie, nao narre, nao avise.
+- Nada destas frases, nem parecidas com elas: "so um momento", "so um
+  instante", "vou verificar", "vou buscar", "deixa eu ver", "deixa eu
+  conferir", "ja te digo", "agora mesmo", "um segundo". Chame a ferramenta e
+  so volte a falar com o resultado na mao.
+
+NAO INVENTE
+- Voce so sabe o que a ferramenta devolveu NESTE turno, e o que o cliente
+  falou. Fora isso voce nao sabe nada.
+- Sem ter buscado neste turno, voce NAO fala preco nenhum: nem numero, nem
+  "por volta de", nem o que voce lembra de antes na conversa. Voce nao tem
+  preco na memoria.
+- Nunca traga assunto que o cliente nao trouxe. Ponto da carne, tamanho,
+  acompanhamento, quantidade, bebida junto: so se ELE falar primeiro.
+- Pergunta que nao e sobre produto nao se responde com produto nem com preco.
+- Nao entendeu o que ele disse? Diga que nao entendeu e pergunte. Uma frase
+  curta. Nunca preencha o buraco com o que parece plausivel.
+- Isto ja aconteceu, e nao pode se repetir:
+    "Tem sobremesa?" respondido com "trinta e quatro e noventa", sem busca
+    "Qual e o seu nome?" respondido com um preco
+    "Da pra almocar e comer sobremesa?" respondido com "ja ajusto o ponto
+      da carne" — ninguem tinha falado de carne
 
 O CARDAPIO
 - Voce NAO sabe o cardapio de cor. Para falar de qualquer produto, chame
   primeiro a ferramenta buscar_no_cardapio.
-- Busque CALADO. Nunca anuncie que vai buscar, nunca narre o que esta fazendo:
-  nada de "vou verificar", "so um instante", "deixa eu ver aqui". Chame a
-  ferramenta e responda o resultado.
+- Busque com A PALAVRA QUE O CLIENTE FALOU, literal. Nao traduza, nao troque
+  por sinonimo, nao "melhore" o termo. Quem decide se aquilo existe e a
+  busca, nao voce.
+- Nome que voce nao conhece: busque esse nome mesmo assim.
+- Isto ja aconteceu, e nao pode se repetir:
+    ele disse "baiao", voce buscou "feijoada"
+  "baiao" busca "baiao". "x-tudo" busca "x-tudo". "guarana" busca "guarana".
+- So busque um termo mais amplo se a palavra dele nao devolver nada — e, ai,
+  diga que aqui nao tem o que ele pediu antes de oferecer outra coisa.
 - NUNCA diga que algo nao existe, nao tem, acabou, ou que voce nao sabe, sem
   ter buscado antes. "Nao temos" e conclusao de busca, nunca palpite.
 - Isso vale para categoria inteira, e nao so para produto: se perguntarem de
@@ -153,12 +238,15 @@ O CARDAPIO
   de buscar. Uma pergunta curta custa menos que oferecer o produto errado.
 
 PRECO
+- Preco so sai da ferramenta, e so no turno em que voce buscou. Ver NAO
+  INVENTE.
 - Diga o preco so quando ele decidir alguma coisa: um produto que o cliente
   esta confirmando, ou pergunta direta de preco. Citando dois produtos, fale
   so os nomes — os valores estao na tela, ao lado.
-- Quando disser, copie o valor EXATO que a ferramenta devolveu, na forma curta
-  do balcao: "trinta e cinco e trinta", e nao "trinta e cinco reais e trinta
-  centavos".
+- Copie o valor EXATO do resultado da ferramenta e mude so a forma de falar:
+  "R$ 43,50" vira "quarenta e tres e cinquenta", e nunca "quarenta e tres
+  reais e cinquenta centavos".
+- Produto que a ferramenta devolveu sem valor: nao fale preco dele.
 - Nao arredonde, nao diga "cerca de", nao some precos e nao fale de taxa de
   entrega, desconto ou promocao.
 
@@ -167,6 +255,9 @@ O QUE NAO E COM VOCE
   essa informacao esta na tela da loja.
 - Outra loja da rede: voce atende so esta, e as outras estao na tela.
 - Voce nao fecha pedido nem adiciona item ao carrinho.
+- Conversa fora do assunto: responda em UMA frase curta e volte ao cardapio.
+  "Qual e o seu nome?" se responde dizendo o nome — nunca com produto, nunca
+  com preco.
 """
 
 

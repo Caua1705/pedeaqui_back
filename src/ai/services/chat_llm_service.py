@@ -1,4 +1,3 @@
-import json
 import logging
 from time import perf_counter
 from typing import Any
@@ -131,26 +130,29 @@ class ChatLLMService:
         o cliente ja tem o texto dele. Um formato que mude do lado da OpenAI
         vira uma linha dizendo que nao veio, nao um 500.
         """
-        usage = getattr(raw, "usage_metadata", None)
-        if not usage:
-            logger.info(
-                "[AI /chat usage] usage_indisponivel=true | model=%s",
-                self.llm.model_name,
-            )
-            return
+        try:
+            usage = getattr(raw, "usage_metadata", None)
+            if not usage:
+                logger.info(
+                    "[AI /chat usage] usage_indisponivel=true | model=%s",
+                    self.llm.model_name,
+                )
+                return
 
-        input_details = usage.get("input_token_details") or {}
-        output_details = usage.get("output_token_details") or {}
-        logger.info(
-            "[AI /chat usage] model=%s | input_tokens=%s | cached_input_tokens=%s "
-            "| output_tokens=%s | reasoning_tokens=%s | total_tokens=%s",
-            self.llm.model_name,
-            usage.get("input_tokens"),
-            input_details.get("cache_read", 0),
-            usage.get("output_tokens"),
-            output_details.get("reasoning", 0),
-            usage.get("total_tokens"),
-        )
+            input_details = usage.get("input_token_details") or {}
+            output_details = usage.get("output_token_details") or {}
+            logger.info(
+                "[AI /chat usage] model=%s | input_tokens=%s | cached_input_tokens=%s "
+                "| output_tokens=%s | reasoning_tokens=%s | total_tokens=%s",
+                self.llm.model_name,
+                usage.get("input_tokens"),
+                input_details.get("cache_read", 0),
+                usage.get("output_tokens"),
+                output_details.get("reasoning", 0),
+                usage.get("total_tokens"),
+            )
+        except Exception:
+            logger.warning("[AI /chat usage] usage_log_falhou=true", exc_info=True)
 
     @staticmethod
     def _log_prompt_size(
@@ -171,20 +173,33 @@ class ChatLLMService:
         Caracteres e nao tokens de proposito: contar token exigiria carregar o
         tiktoken so para o log, e a proporcao entre as secoes — que e o que se
         quer aqui — e a mesma nas duas unidades.
+
+        A MEDIDA E `str()`, E ISSO NAO E DETALHE. Este log ja derrubou o
+        `/chat` em producao uma vez, com `json.dumps`: os produtos vem da
+        busca com `id` em `UUID` (e `similarity_search` que devolve assim, e e
+        por isso que `_validate_selected_product_ids` faz `uuid.UUID(str(...))`),
+        e o `json.dumps` recusa `UUID` com `TypeError`. Um log de medicao
+        levou o caminho quente junto.
+
+        `str()` conserta as DUAS coisas de uma vez, e a segunda e a que
+        importa mais: alem de nao ter como falhar sobre `UUID`, ela e a
+        medida CERTA. O `ChatPromptTemplate` interpola `{retrieved_products}`
+        e `{conversation}` com `str()`, entao o que entra no prompt e o `repr`
+        da lista de dicionarios — nao JSON. O `json.dumps` media um texto que
+        nunca foi enviado a OpenAI.
         """
-        conversation_chars = sum(
-            len(str(message.get("content", ""))) for message in conversation
-        )
-        products_chars = len(json.dumps(retrieved_products, ensure_ascii=False))
-        logger.info(
-            "[AI /chat prompt] system_chars=%d | context_chars=%d "
-            "| conversation_chars=%d | conversation_messages=%d "
-            "| products_chars=%d | products_count=%d | user_chars=%d",
-            len(SYSTEM_PROMPT),
-            len(restaurant_context),
-            conversation_chars,
-            len(conversation),
-            products_chars,
-            len(retrieved_products),
-            len(user_message),
-        )
+        try:
+            logger.info(
+                "[AI /chat prompt] system_chars=%d | context_chars=%d "
+                "| conversation_chars=%d | conversation_messages=%d "
+                "| products_chars=%d | products_count=%d | user_chars=%d",
+                len(SYSTEM_PROMPT),
+                len(restaurant_context),
+                len(str(conversation)),
+                len(conversation),
+                len(str(retrieved_products)),
+                len(retrieved_products),
+                len(user_message),
+            )
+        except Exception:
+            logger.warning("[AI /chat prompt] prompt_size_log_falhou=true", exc_info=True)

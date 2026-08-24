@@ -233,10 +233,10 @@ class TestRegister:
     @pytest.mark.parametrize(
         ("overrides", "detail"),
         [
-            ({"email": "nao-e-email"}, "Email invalido"),
+            ({"email": "nao-e-email"}, "Email inválido"),
             ({"password": "curta12"}, "Senha fraca"),
             ({"password": "x" * 73}, "Senha muito longa"),
-            ({"privacy_accepted": False}, "Aceite de privacidade obrigatorio"),
+            ({"privacy_accepted": False}, "Aceite de privacidade obrigatório"),
         ],
     )
     def test_the_refusals(self, overrides, detail):
@@ -248,7 +248,7 @@ class TestRegister:
 
     @pytest.mark.parametrize(
         ("campo", "detail"),
-        [("email", "Email ja cadastrado"), ("phone", "Telefone ja cadastrado")],
+        [("email", "Email já cadastrado"), ("phone", "Telefone já cadastrado")],
     )
     def test_a_duplicate_is_409_naming_the_field(self, campo, detail):
         repository = FakeCustomerRepository(customer=make_customer())
@@ -276,18 +276,18 @@ class TestRegister:
         with pytest.raises(HTTPException) as exc:
             make_service(repository=repository).register(make_register_payload())
 
-        assert exc.value.detail == "Email e Telefone ja cadastrados"
+        assert exc.value.detail == "Email e Telefone já cadastrados"
 
     def test_a_single_conflict_keeps_the_singular(self):
         """A concordancia importa porque a mensagem vai para a tela: um
-        "ja cadastrado(s)" resolveria o plural e entregaria a costura."""
+        "já cadastrado(s)" resolveria o plural e entregaria a costura."""
         repository = FakeCustomerRepository(customer=make_customer())
         repository.conflict_on = {"email"}
 
         with pytest.raises(HTTPException) as exc:
             make_service(repository=repository).register(make_register_payload())
 
-        assert exc.value.detail == "Email ja cadastrado"
+        assert exc.value.detail == "Email já cadastrado"
 
     def test_a_failure_while_saving_rolls_back(self):
         db = FakeDb(falha=RuntimeError("banco caiu"))
@@ -329,7 +329,7 @@ class TestVerifyEmailCode:
         with pytest.raises(HTTPException) as exc:
             service.verify_email_code(VerifyEmailCodeRequest(email="joana@exemplo.com", code=CODIGO))
 
-        assert exc.value.detail == "Codigo expirado"
+        assert exc.value.detail == "Código expirado"
 
     def test_too_many_attempts_is_429(self):
         """O teto de tentativas e o que impede varrer os 10^6 codigos de 6
@@ -349,7 +349,7 @@ class TestVerifyEmailCode:
         with pytest.raises(HTTPException) as exc:
             service.verify_email_code(VerifyEmailCodeRequest(email="joana@exemplo.com", code=CODIGO))
 
-        assert exc.value.detail == "Codigo expirado"
+        assert exc.value.detail == "Código expirado"
 
     def test_a_wrong_code_counts_the_attempt_and_commits_it(self):
         """A tentativa errada e GRAVADA antes de responder. Se o incremento
@@ -361,7 +361,7 @@ class TestVerifyEmailCode:
         with pytest.raises(HTTPException) as exc:
             service.verify_email_code(VerifyEmailCodeRequest(email="joana@exemplo.com", code="000000"))
 
-        assert exc.value.detail == "Codigo invalido"
+        assert exc.value.detail == "Código inválido"
         assert code_row.attempts_count == 3
         assert "commit" in db.events
 
@@ -465,7 +465,7 @@ class TestLogin:
             service.login(LoginRequest(login="joana@exemplo.com", password="errada"))
 
         assert exc.value.status_code == 401
-        assert exc.value.detail == "Credenciais invalidas"
+        assert exc.value.detail == "Credenciais inválidas"
 
     def test_an_inactive_account_is_403(self):
         service = make_service(repository=FakeCustomerRepository(customer=make_customer(is_active=False)))
@@ -618,7 +618,7 @@ class TestResetPassword:
     @pytest.mark.parametrize(
         ("new", "confirm", "detail"),
         [
-            ("nova-senha-123", "outra-coisa", "Confirmacao de senha nao confere"),
+            ("nova-senha-123", "outra-coisa", "Confirmação de senha não confere"),
             ("curta12", "curta12", "Senha fraca"),
             ("x" * 73, "x" * 73, "Senha muito longa"),
         ],
@@ -643,13 +643,13 @@ class TestResetPassword:
                 ResetPasswordRequest(reset_token="token-que-nao-existe", new_password=new, confirm_password=confirm)
             )
 
-        assert exc.value.detail == "Token invalido ou expirado"
+        assert exc.value.detail == "Token inválido ou expirado"
         assert exc.value.detail != detail
 
     @pytest.mark.parametrize(
         ("new", "confirm", "detail"),
         [
-            ("nova-senha-123", "outra-coisa", "Confirmacao de senha nao confere"),
+            ("nova-senha-123", "outra-coisa", "Confirmação de senha não confere"),
             ("curta12", "curta12", "Senha fraca"),
             ("x" * 73, "x" * 73, "Senha muito longa"),
         ],
@@ -689,7 +689,7 @@ class TestResetPassword:
                 )
             )
 
-        assert exc.value.detail == "Token invalido ou expirado"
+        assert exc.value.detail == "Token inválido ou expirado"
 
     def test_an_already_used_token_is_refused(self):
         customer = make_customer()
@@ -704,7 +704,7 @@ class TestResetPassword:
                 )
             )
 
-        assert exc.value.detail == "Token invalido ou expirado"
+        assert exc.value.detail == "Token inválido ou expirado"
 
     def test_an_expired_token_is_refused(self):
         customer = make_customer()
@@ -719,7 +719,7 @@ class TestResetPassword:
                 )
             )
 
-        assert exc.value.detail == "Token invalido ou expirado"
+        assert exc.value.detail == "Token inválido ou expirado"
 
     def test_a_token_that_does_not_match_the_stored_hash_is_refused(self):
         customer = make_customer()
@@ -735,7 +735,7 @@ class TestResetPassword:
                 )
             )
 
-        assert exc.value.detail == "Token invalido ou expirado"
+        assert exc.value.detail == "Token inválido ou expirado"
 
 
 # ---------------------------------------------------------------------------
@@ -749,7 +749,7 @@ class TestGetCustomerFromTokenOrError:
             make_service().get_customer_from_token_or_error("nao.e.jwt")
 
         assert exc.value.status_code == 401
-        assert exc.value.detail == "Token invalido"
+        assert exc.value.detail == "Token inválido"
 
     def test_an_expired_token_says_so(self):
         """"Expirado" e "invalido" respondem os dois 401, com mensagens

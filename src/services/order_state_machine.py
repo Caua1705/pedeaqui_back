@@ -120,7 +120,7 @@ def ensure_order_transition_allowed(
     if new_status == "out_for_delivery" and order_type != "delivery":
         raise HTTPException(
             status_code=http_status.HTTP_409_CONFLICT,
-            detail="Pedido de retirada nao sai para entrega.",
+            detail="Pedido de retirada não sai para entrega.",
         )
 
 

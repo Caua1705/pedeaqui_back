@@ -56,7 +56,7 @@ class CreateOrderReviewRequest(BaseModel):
         """
         if self.problem_tag is not None and self.rating > LOW_RATING_CEILING:
             raise ValueError(
-                f"problem_tag so e aceito com rating ate {LOW_RATING_CEILING}"
+                f"problem_tag só é aceito com rating até {LOW_RATING_CEILING}"
             )
         return self
 

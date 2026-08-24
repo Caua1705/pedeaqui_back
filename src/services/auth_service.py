@@ -59,7 +59,7 @@ RESEND_COOLDOWN_SECONDS = 60
 CODE_TTL_MINUTES = 10
 RESEND_WINDOW_MINUTES = 15
 
-RESEND_EMAIL_CODE_MESSAGE = "Se este e-mail estiver cadastrado, enviaremos um codigo de verificacao."
+RESEND_EMAIL_CODE_MESSAGE = "Se este e-mail estiver cadastrado, enviaremos um código de verificação."
 FORGOT_PASSWORD_MESSAGE = "Enviamos um código de recuperação para o seu e-mail."
 # Piso de latencia para que o tempo de resposta nao denuncie se o e-mail existe.
 FORGOT_PASSWORD_MIN_SECONDS = 0.6
@@ -72,8 +72,8 @@ def _conflict_message(conflicts: list[str]) -> str:
     "ja cadastrado(s)" resolveria o plural e entregaria a costura junto.
     """
     if len(conflicts) == 1:
-        return f"{conflicts[0]} ja cadastrado"
-    return f"{' e '.join(conflicts)} ja cadastrados"
+        return f"{conflicts[0]} já cadastrado"
+    return f"{' e '.join(conflicts)} já cadastrados"
 
 
 def codes_retention_cutoff(now: datetime) -> datetime:
@@ -164,10 +164,10 @@ class AuthService:
         phone = normalize_digits(payload.phone)
 
         if not is_valid_email(email):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email invalido")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email inválido")
         password_hash = _hash_new_password(payload.password)
         if not payload.privacy_accepted:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Aceite de privacidade obrigatorio")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Aceite de privacidade obrigatório")
 
         conflicts = self._registration_conflicts(email=email, phone=phone)
         if conflicts:
@@ -206,22 +206,22 @@ class AuthService:
         email = normalize_email(payload.email)
         customer = self.customer_repository.get_by_email(email)
         if not customer:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cliente nao encontrado")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cliente não encontrado")
 
         code_row = self.customer_repository.latest_unused_email_code(email)
         if not code_row:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Codigo expirado")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Código expirado")
 
         if code_row.attempts_count >= MAX_CODE_ATTEMPTS:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Muitas tentativas")
         if code_row.expires_at < utcnow():
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Codigo expirado")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Código expirado")
 
         if not verify_verification_code(payload.code, code_row.code_hash):
             code_row.attempts_count += 1
             self.db.add(code_row)
             self.db.commit()
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Codigo invalido")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Código inválido")
 
         customer.email_verified_at = utcnow()
         code_row.used_at = utcnow()
@@ -267,7 +267,7 @@ class AuthService:
         customer = self.customer_repository.get_by_email_or_phone(email=email, phone=phone)
 
         if not customer or not verify_password(payload.password, customer.password_hash):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciais invalidas")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciais inválidas")
         if not customer.is_active:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Conta inativa")
         if not customer.email_verified_at:
@@ -335,17 +335,17 @@ class AuthService:
     def verify_reset_code(self, payload: VerifyResetCodeRequest) -> VerifyResetCodeResponse:
         code_row = self.customer_repository.latest_unused_password_reset_code(normalize_email(payload.email))
         if not code_row:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Codigo invalido ou expirado")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Código inválido ou expirado")
         if code_row.attempts_count >= MAX_CODE_ATTEMPTS:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Muitas tentativas")
         if code_row.expires_at < utcnow():
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Codigo expirado")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Código expirado")
 
         if not verify_verification_code(payload.code, code_row.code_hash):
             code_row.attempts_count += 1
             self.db.add(code_row)
             self.db.commit()
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Codigo invalido")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Código inválido")
 
         reset_token = generate_reset_token()
         code_row.reset_token_hash = hash_reset_token(reset_token)
@@ -365,14 +365,14 @@ class AuthService:
         # token inventado ja pagava esse custo no servidor.
         code_row = self.customer_repository.get_password_reset_by_token_hash(hash_reset_token(payload.reset_token))
         if not self._valid_reset_token(code_row, payload.reset_token):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token invalido ou expirado")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token inválido ou expirado")
 
         customer = self.customer_repository.get_by_id(code_row.customer_id)
         if not customer:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token invalido ou expirado")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token inválido ou expirado")
 
         if payload.new_password != payload.confirm_password:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confirmacao de senha nao confere")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confirmação de senha não confere")
         password_hash = _hash_new_password(payload.new_password)
 
         customer.password_hash = password_hash
@@ -407,9 +407,9 @@ class AuthService:
         except TokenExpiredError as exc:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expirado") from exc
         except TokenInvalidError as exc:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalido") from exc
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido") from exc
         if not customer:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalido")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido")
         if not customer.is_active:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Conta inativa")
         return customer

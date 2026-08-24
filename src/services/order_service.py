@@ -446,12 +446,12 @@ class OrderService:
         if not operation.is_open:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="A loja esta fechada no momento",
+                detail="A loja está fechada no momento",
             )
         if order_type == "delivery" and not operation.accepts_delivery:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Esta loja nao esta aceitando entrega",
+                detail="Esta loja não está aceitando entrega",
             )
         if order_type == "delivery" and not operation.accepts_delivery_now:
             # A pausa temporaria precisa ser conferida AQUI, e nao so na
@@ -463,12 +463,12 @@ class OrderService:
             # que pausou para nao receber.
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="A entrega esta pausada no momento",
+                detail="A entrega está pausada no momento",
             )
         if order_type == "pickup" and not operation.accepts_pickup:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Esta loja nao esta aceitando retirada",
+                detail="Esta loja não está aceitando retirada",
             )
 
     def _resolve_payment_flow(self, branch_id: UUID, payment_method: str | None) -> str:
@@ -486,12 +486,12 @@ class OrderService:
         if not payment_method:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Forma de pagamento obrigatoria",
+                detail="Forma de pagamento obrigatória",
             )
         if payment_method not in PAYMENT_METHODS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Forma de pagamento invalida",
+                detail="Forma de pagamento inválida",
             )
 
         enabled_methods = self.branch_repository.list_enabled_payment_methods(branch_id)
@@ -503,7 +503,7 @@ class OrderService:
         if not flows:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Esta filial nao aceita esta forma de pagamento",
+                detail="Esta filial não aceita esta forma de pagamento",
             )
         # A filial pode oferecer o mesmo metodo nos dois fluxos (pix pelo
         # gateway e pix na entrega, por exemplo). Sem um campo no pedido para
@@ -515,7 +515,7 @@ class OrderService:
     def _validate_customer_snapshot(self, payload: CreateOrderRequest, current_customer: Customer | None) -> None:
         if current_customer or payload.customer:
             return
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Cliente autenticado obrigatorio")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Cliente autenticado obrigatório")
 
     def _validate_delivery_address(self, payload: CreateOrderRequest, address) -> None:
         if payload.order_type != "delivery":
@@ -528,11 +528,11 @@ class OrderService:
 
     def _resolve_order_address(self, payload: CreateOrderRequest, current_customer: Customer | None):
         if payload.customer_address_id and not current_customer:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Cliente autenticado obrigatorio")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Cliente autenticado obrigatório")
         if current_customer and payload.customer_address_id:
             address = self.customer_repository.get_address(current_customer.id, payload.customer_address_id)
             if not address:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endereco nao encontrado")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endereço não encontrado")
             return address
         return payload.address
 
@@ -566,7 +566,7 @@ class OrderService:
         if not estimate.serviceable:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=estimate.message or estimate.reason or "Endereco fora da area de entrega",
+                detail=estimate.message or estimate.reason or "Endereço fora da área de entrega",
             )
         return estimate
 
@@ -692,7 +692,7 @@ class OrderService:
             if not group:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Grupo de opcao invalido para este produto",
+                    detail="Grupo de opção inválido para este produto",
                 )
             option = next(
                 (option for option in group.options if option.id == selected.option_id and option.is_active),
@@ -701,12 +701,12 @@ class OrderService:
             if not option:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Opcao invalida para este grupo",
+                    detail="Opção inválida para este grupo",
                 )
             if option.id in {item.id for item in selected_by_group[group.id]}:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Opcao duplicada no mesmo produto",
+                    detail="Opção duplicada no mesmo produto",
                 )
             selected_by_group[group.id].append(option)
 
@@ -728,17 +728,17 @@ class OrderService:
             if selected_count < required_min:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Opcao obrigatoria nao selecionada: {group.name}",
+                    detail=f"Opção obrigatória não selecionada: {group.name}",
                 )
             if selected_count and selected_count < min_select:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Selecione pelo menos {min_select} opcoes em {group.name}",
+                    detail=f"Selecione pelo menos {min_select} opções em {group.name}",
                 )
             if max_select and selected_count > max_select:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Selecione no maximo {max_select} opcoes em {group.name}",
+                    detail=f"Selecione no máximo {max_select} opções em {group.name}",
                 )
 
         return [
@@ -804,7 +804,7 @@ class OrderService:
         if current_customer is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Cliente autenticado obrigatorio para usar cashback",
+                detail="Cliente autenticado obrigatório para usar cashback",
             )
         return self.cashback_service.amount_to_redeem(
             customer=current_customer,

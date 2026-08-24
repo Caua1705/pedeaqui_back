@@ -1286,7 +1286,7 @@ O estrago:
 ```
 antes do deploy   chave X reservada, fingerprint gravado = A
 depois do deploy  MESMO corpo, MESMA chave  ->  fingerprint = B
-                  B != A  ->  422 "Idempotency-Key ja utilizada com um corpo diferente"
+                  B != A  ->  422 "Idempotency-Key já utilizada com um corpo diferente"
 ```
 
 **Por 24h, um retry legítimo de um pedido idêntico é recusado.** Nada no
@@ -1299,9 +1299,9 @@ pega este caso. Os dois convivem na mesma rota e querem coisas diferentes:
 
 | Código | Quando | O que o app faz |
 |---|---|---|
-| **422** `Idempotency-Key ja utilizada com um corpo diferente` | fingerprint diferente do gravado — inclusive o campo novo do deploy | **gera chave nova** e refaz |
-| **409** `Requisicao em andamento` | reserva ainda aberta | espera e tenta a MESMA chave |
-| **409** `A resposta original ... versao anterior da API` | resposta gravada não valida mais (armadilha 7) | **gera chave nova** |
+| **422** `Idempotency-Key já utilizada com um corpo diferente` | fingerprint diferente do gravado — inclusive o campo novo do deploy | **gera chave nova** e refaz |
+| **409** `Requisição em andamento` | reserva ainda aberta | espera e tenta a MESMA chave |
+| **409** `A resposta original ... versão anterior da API` | resposta gravada não valida mais (armadilha 7) | **gera chave nova** |
 
 `tests/test_idempotency.py::test_same_key_with_different_body_is_rejected_with_422`
 e `::test_in_progress_is_rejected_with_409` travam os dois.

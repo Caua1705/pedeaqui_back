@@ -74,12 +74,12 @@ class TestRequiredGroupWithoutActiveOptions:
         # 1. nao selecionar nada
         with pytest.raises(HTTPException) as sem_escolha:
             service()._validate_selected_options(produto, [])
-        assert sem_escolha.value.detail == "Opcao obrigatoria nao selecionada: Escolha o tamanho"
+        assert sem_escolha.value.detail == "Opção obrigatória não selecionada: Escolha o tamanho"
 
         # 2. mandar a opcao desativada
         with pytest.raises(HTTPException) as com_opcao_morta:
             service()._validate_selected_options(produto, [selecao(grupo, morta)])
-        assert com_opcao_morta.value.detail == "Opcao invalida para este grupo"
+        assert com_opcao_morta.value.detail == "Opção inválida para este grupo"
 
     def test_an_inactive_group_does_not_block(self):
         """Grupo obrigatorio DESATIVADO nao exige nada — o lojista desligou o
@@ -116,7 +116,7 @@ class TestTheChecksThatDidNotChange:
         with pytest.raises(HTTPException) as exc:
             service()._validate_selected_options(make_product([grupo]), [])
 
-        assert exc.value.detail == "Opcao obrigatoria nao selecionada: Escolha o tamanho"
+        assert exc.value.detail == "Opção obrigatória não selecionada: Escolha o tamanho"
 
     def test_an_inactive_option_is_still_refused(self):
         """A permissao do grupo vazio nao virou permissao para VENDER opcao
@@ -128,7 +128,7 @@ class TestTheChecksThatDidNotChange:
         with pytest.raises(HTTPException) as exc:
             service()._validate_selected_options(produto, [selecao(grupo, morta)])
 
-        assert exc.value.detail == "Opcao invalida para este grupo"
+        assert exc.value.detail == "Opção inválida para este grupo"
 
     def test_the_max_select_ceiling_still_applies(self):
         a, b = make_option(), make_option()
@@ -138,7 +138,7 @@ class TestTheChecksThatDidNotChange:
         with pytest.raises(HTTPException) as exc:
             service()._validate_selected_options(produto, [selecao(grupo, a), selecao(grupo, b)])
 
-        assert "no maximo" in exc.value.detail
+        assert "no máximo" in exc.value.detail
 
     def test_a_duplicated_option_is_still_refused(self):
         a = make_option()
@@ -148,7 +148,7 @@ class TestTheChecksThatDidNotChange:
         with pytest.raises(HTTPException) as exc:
             service()._validate_selected_options(produto, [selecao(grupo, a), selecao(grupo, a)])
 
-        assert exc.value.detail == "Opcao duplicada no mesmo produto"
+        assert exc.value.detail == "Opção duplicada no mesmo produto"
 
     def test_an_option_from_another_product_is_still_refused(self):
         grupo = make_group(options=[make_option()])
@@ -160,4 +160,4 @@ class TestTheChecksThatDidNotChange:
                 produto, [selecao(outro_grupo, outro_grupo.options[0])]
             )
 
-        assert exc.value.detail == "Grupo de opcao invalido para este produto"
+        assert exc.value.detail == "Grupo de opção inválido para este produto"

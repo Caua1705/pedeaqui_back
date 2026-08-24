@@ -109,18 +109,28 @@ class IdempotencyService:
             # como conflito e mais seguro que criar um pedido duplicado.
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Requisicao em andamento. Tente novamente em instantes.",
+                detail="Requisição em andamento. Tente novamente em instantes.",
             )
 
         if existing.request_fingerprint != request_fingerprint:
             # Mesma chave, corpo diferente: o cliente esta reciclando a
             # chave. Devolver a resposta antiga seria mentir sobre o que foi
             # gravado, entao recusamos.
+            #
+            # AS TRES RECUSAS DESTE METODO PEDEM COISAS DIFERENTES AO APP, e
+            # duas delas compartilham o 409: "Requisicao em andamento" quer que
+            # ele espere e repita a MESMA chave, e a de resposta gravada por
+            # versao anterior quer que ele gere uma NOVA. O 422 daqui tambem
+            # quer chave nova. Nao ha codigo de erro que as separe — hoje so o
+            # texto as distingue, e por isso mexer nele nao e refatoracao: se um
+            # dia o app precisar decidir entre os dois 409, o caminho e um enum
+            # `str, Enum` no corpo, como o `PaymentErrorCode` (armadilha 16), e
+            # nao um `if` sobre a frase.
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=(
-                    "Idempotency-Key ja utilizada com um corpo diferente. "
-                    "Gere uma nova chave para uma nova requisicao."
+                    "Idempotency-Key já utilizada com um corpo diferente. "
+                    "Gere uma nova chave para uma nova requisição."
                 ),
             )
 
@@ -132,7 +142,7 @@ class IdempotencyService:
             # ja encontram completed.
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Requisicao em andamento. Tente novamente em instantes.",
+                detail="Requisição em andamento. Tente novamente em instantes.",
             )
 
         if existing.status == IDEMPOTENCY_COMPLETED and existing.response_body is not None:
@@ -145,7 +155,7 @@ class IdempotencyService:
 
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Requisicao em andamento. Tente novamente em instantes.",
+            detail="Requisição em andamento. Tente novamente em instantes.",
         )
 
     @staticmethod
@@ -172,8 +182,8 @@ class IdempotencyService:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
-                    "A resposta original desta requisicao foi gravada por uma "
-                    "versao anterior da API. Gere uma nova Idempotency-Key."
+                    "A resposta original desta requisição foi gravada por uma "
+                    "versão anterior da API. Gere uma nova Idempotency-Key."
                 ),
             ) from None
 
@@ -224,7 +234,7 @@ def normalize_idempotency_key(raw: str | None) -> str | None:
         if settings.IDEMPOTENCY_REQUIRED:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Header Idempotency-Key e obrigatorio.",
+                detail="Header Idempotency-Key é obrigatório.",
             )
         logger.warning("[Idempotency] requisicao sem Idempotency-Key, seguindo sem protecao")
         return None

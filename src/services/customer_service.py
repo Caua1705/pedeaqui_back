@@ -140,14 +140,14 @@ class CustomerService:
         if email_owner and email_owner.id != customer.id:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="E-mail ja esta em uso",
+                detail="E-mail já está em uso",
             )
 
         phone_owner = self.customer_repository.get_by_phone(payload.phone)
         if phone_owner and phone_owner.id != customer.id:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Telefone ja esta em uso",
+                detail="Telefone já está em uso",
             )
 
         alteracoes = {
@@ -171,7 +171,7 @@ class CustomerService:
             detail = self._conflict_detail(customer, payload)
             # Nenhum dos dois campos unicos e o culpado: o IntegrityError veio
             # de outra coisa (FK, check, uma constraint nova). Antes, este
-            # caminho respondia "Telefone ja esta em uso" POR ELIMINACAO — o
+            # caminho respondia "Telefone já está em uso" POR ELIMINACAO — o
             # cliente ia trocar um telefone que estava certo, o erro de
             # verdade nunca aparecia no log como erro, e ninguem descobria a
             # causa. Deixar subir e o que faz o defeito ser visto.
@@ -201,11 +201,11 @@ class CustomerService:
         """
         email_owner = self.customer_repository.get_by_email(payload.email)
         if email_owner and email_owner.id != customer.id:
-            return "E-mail ja esta em uso"
+            return "E-mail já está em uso"
 
         phone_owner = self.customer_repository.get_by_phone(payload.phone)
         if phone_owner and phone_owner.id != customer.id:
-            return "Telefone ja esta em uso"
+            return "Telefone já está em uso"
 
         return None
 
@@ -325,7 +325,7 @@ class CustomerService:
             self.db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Nao foi possivel salvar o endereco",
+                detail="Não foi possível salvar o endereço",
             ) from exc
         except Exception:
             self.db.rollback()
@@ -337,7 +337,7 @@ class CustomerService:
         values = payload.model_dump(exclude_unset=True)
         for required_field in ("street", "number", "neighborhood"):
             if required_field in values and not values[required_field]:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Endereco incompleto")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Endereço incompleto")
 
         try:
             if values.pop("is_default", None):
@@ -353,7 +353,7 @@ class CustomerService:
             self.db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Nao foi possivel atualizar o endereco",
+                detail="Não foi possível atualizar o endereço",
             ) from exc
         except Exception:
             self.db.rollback()
@@ -376,7 +376,7 @@ class CustomerService:
             self.db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Nao foi possivel remover o endereco",
+                detail="Não foi possível remover o endereço",
             ) from exc
         except Exception:
             self.db.rollback()
@@ -396,7 +396,7 @@ class CustomerService:
             self.db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Nao foi possivel definir o endereco padrao",
+                detail="Não foi possível definir o endereço padrão",
             ) from exc
         except Exception:
             self.db.rollback()
@@ -417,7 +417,7 @@ class CustomerService:
             self.db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Conflito ao importar enderecos",
+                detail="Conflito ao importar endereços",
             ) from exc
         except Exception:
             self.db.rollback()
@@ -545,7 +545,7 @@ class CustomerService:
     def _get_owned_address(self, customer: Customer, address_id: UUID) -> CustomerAddress:
         address = self.customer_repository.get_address(customer.id, address_id)
         if not address:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endereco nao encontrado")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endereço não encontrado")
         return address
 
     @classmethod

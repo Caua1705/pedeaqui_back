@@ -47,7 +47,7 @@ class BranchAvailabilityRequest(BaseModel):
     @model_validator(mode="after")
     def validate_address_source(self):
         if self.address_id is not None and self.address is not None:
-            raise ValueError("Informe no maximo um entre address_id e address")
+            raise ValueError("Informe no máximo um entre address_id e address")
         return self
 
 

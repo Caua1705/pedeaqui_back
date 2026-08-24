@@ -166,7 +166,7 @@ nova.
 **O código é 422, e não 409** — a armadilha 37 dizia 409 e estava errada nisso
 (o 409 daquela rota é "requisição em andamento", que quer o oposto: tentar de
 novo com a MESMA chave). O corpo é
-`{"detail": "Idempotency-Key ja utilizada com um corpo diferente. Gere uma nova chave para uma nova requisicao."}`.
+`{"detail": "Idempotency-Key já utilizada com um corpo diferente. Gere uma nova chave para uma nova requisição."}`.
 
 Do lado da resposta não há custo: `cashback_redeemed_amount` já existe em
 `CreateOrderResponse` e em `OrderDetailResponse`, e a comanda já imprime a

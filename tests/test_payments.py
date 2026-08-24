@@ -858,7 +858,7 @@ class StartPaymentErrorTests(unittest.TestCase):
         self.assertEqual(exc.detail["provider_error_code"], "4051")
 
     def test_rejected_credential_is_definitive_for_the_client(self):
-        # Token invalido ou revogado: quem resolve e o lojista, no painel
+        # Token inválido ou revogado: quem resolve e o lojista, no painel
         # dele. O cliente insistindo nao troca credencial nenhuma.
         exc = self._failing_service(
             PaymentGatewayCredentialError("Mercado Pago recusou a credencial (status 401)")

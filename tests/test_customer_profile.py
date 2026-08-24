@@ -359,12 +359,12 @@ class TestUpdateMe:
             service.update_me(make_customer(), make_update_payload())
 
         assert exc.value.status_code == 409
-        assert exc.value.detail == "E-mail ja esta em uso"
+        assert exc.value.detail == "E-mail já está em uso"
 
     def test_an_integrity_error_from_neither_field_is_not_blamed_on_the_phone(self):
         """O `else` do tratamento era "entao foi o telefone" — por eliminacao,
         sem conferir. Qualquer IntegrityError que nao fosse de e-mail (uma FK,
-        um CHECK, uma constraint nova) respondia "Telefone ja esta em uso".
+        um CHECK, uma constraint nova) respondia "Telefone já está em uso".
 
         O cliente ia corrigir um campo que estava certo, e o erro de verdade
         nunca aparecia como erro em lugar nenhum. Agora o IntegrityError sobe:
@@ -392,7 +392,7 @@ class TestUpdateMe:
             service.update_me(make_customer(), make_update_payload())
 
         assert exc.value.status_code == 409
-        assert exc.value.detail == "Telefone ja esta em uso"
+        assert exc.value.detail == "Telefone já está em uso"
         # A prova de que passou pelo except: a segunda leitura aconteceu.
         assert repository.leituras_de_telefone == 2
 
@@ -603,7 +603,7 @@ class TestAddressErrorPaths:
             service.update_address(customer, endereco.id, UpdateCustomerAddressRequest(street=""))
 
         assert exc.value.status_code == 400
-        assert exc.value.detail == "Endereco incompleto"
+        assert exc.value.detail == "Endereço incompleto"
 
     def test_an_update_that_does_not_touch_the_required_fields_goes_through(self):
         from src.schemas.customer_schema import UpdateCustomerAddressRequest

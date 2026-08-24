@@ -173,12 +173,12 @@ class PaymentService:
         if order.payment_flow != "online":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Este pedido e pago na entrega e nao tem cobranca online.",
+                detail="Este pedido é pago na entrega e não tem cobrança online.",
             )
         if order.payment_status not in PAYABLE_STATUSES:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Pagamento em '{order.payment_status}': nao ha o que cobrar.",
+                detail=f"Pagamento em '{order.payment_status}': não há o que cobrar.",
             )
 
         # Valores copiados ANTES do commit: depois dele o objeto do
@@ -255,7 +255,7 @@ class PaymentService:
             if order.payment_status not in PAYABLE_STATUSES:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Pagamento em '{order.payment_status}': nao ha o que cobrar.",
+                    detail=f"Pagamento em '{order.payment_status}': não há o que cobrar.",
                 )
             self.order_repository.attach_payment_intent(
                 order,
@@ -688,7 +688,7 @@ class PaymentService:
             logger.warning("[Pagamento] webhook com assinatura invalida provider=%s", provider)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Assinatura do webhook invalida",
+                detail="Assinatura do webhook inválida",
             )
 
     def _create_payment_at_gateway(

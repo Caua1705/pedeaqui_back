@@ -119,7 +119,7 @@ class ImportCustomerAddressesRequest(BaseModel):
     @model_validator(mode="after")
     def validate_single_default(self):
         if sum(address.is_default for address in self.addresses) > 1:
-            raise ValueError("Apenas um endereco pode ser definido como padrao")
+            raise ValueError("Apenas um endereço pode ser definido como padrão")
         return self
 
 

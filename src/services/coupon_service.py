@@ -85,7 +85,7 @@ class CouponService:
         elif coupon.discount_type == "free_delivery":
             discount = delivery_fee
         else:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de desconto invalido")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de desconto inválido")
         return quantize_money(max(discount, ZERO))
 
     def evaluate(
@@ -175,7 +175,7 @@ class CouponService:
     ) -> AvailableCouponsResponse:
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
         if order_type is not None and order_type not in ORDER_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de pedido invalido")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de pedido inválido")
         products_subtotal = quantize_money(to_decimal(subtotal))
         fee = quantize_money(to_decimal(delivery_fee))
         if order_type == "pickup":
@@ -231,7 +231,7 @@ class CouponService:
     ) -> CouponPreviewResponse:
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
         if payload.order_type not in ORDER_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de pedido invalido")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de pedido inválido")
         effective_delivery_fee = ZERO if payload.order_type == "pickup" else payload.delivery_fee
         coupon = self._find_coupon(
             restaurant.id,
@@ -273,7 +273,7 @@ class CouponService:
         customer: Customer | None,
     ) -> tuple[RestaurantCoupon, Decimal]:
         if customer is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Cliente autenticado obrigatorio para usar cupom")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Cliente autenticado obrigatório para usar cupom")
         coupon = self._find_coupon(
             restaurant_id,
             coupon_id=coupon_id,
@@ -289,7 +289,7 @@ class CouponService:
             require_public=True,
         )
         if not evaluation.valid:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=evaluation.reason or "Cupom invalido")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=evaluation.reason or "Cupom inválido")
         return coupon, evaluation.discount
 
     def create_redemption(self, coupon: RestaurantCoupon, customer: Customer, order_id: UUID, discount: Decimal):
@@ -490,7 +490,7 @@ class CouponService:
             )
         )
         if coupon is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cupom nao encontrado para este restaurante")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cupom não encontrado para este restaurante")
         return coupon
 
     def _get_restaurant(self, restaurant_id: UUID):

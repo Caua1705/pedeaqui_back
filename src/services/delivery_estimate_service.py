@@ -688,7 +688,7 @@ class DeliveryEstimateService:
             if branch is None:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Filial invalida para este restaurante",
+                    detail="Filial inválida para este restaurante",
                 )
             return branch
 
@@ -715,7 +715,7 @@ class DeliveryEstimateService:
             if current_customer is None:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Autenticacao obrigatoria para usar address_id",
+                    detail="Autenticação obrigatória para usar address_id",
                 )
             address = self.customer_repository.get_address(
                 current_customer.id,
@@ -724,7 +724,7 @@ class DeliveryEstimateService:
             if address is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Endereco nao encontrado",
+                    detail="Endereço não encontrado",
                 )
             return address
         return payload.address
@@ -743,7 +743,7 @@ class DeliveryEstimateService:
         if not address:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Local sem endereco ou coordenadas suficientes",
+                detail="Local sem endereço ou coordenadas suficientes",
             )
         return self.maps_client.geocode(address)
 

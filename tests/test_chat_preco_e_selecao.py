@@ -17,6 +17,7 @@ import uuid
 from decimal import Decimal
 from types import SimpleNamespace
 
+from src.ai.prompts.system_prompt import SYSTEM_PROMPT
 from src.ai.services.retrieval_service import RetrievalService
 from src.services import chat_service
 from src.services.chat_service import ChatService
@@ -423,7 +424,29 @@ class TestOTurnoQueTerminaSemCartao:
         assert "nenhum chegou ao cliente" in caplog.text
         assert "sem_cartao=1" in caplog.text
         assert "turnos_com_contexto=1" in caplog.text
-        assert "taxa=100.0%" in caplog.text
+        assert "taxa_teto=100.0%" in caplog.text
+
+    def test_a_taxa_se_chama_TETO_porque_conta_acerto_junto(self, caplog):
+        """Produção, 24/08/2026: "vocês entregam no Papicu?" deu 100%.
+
+        A busca achou cinco produtos por sobreposição lexical, mas a pergunta
+        é de ENTREGA — não ter cartão ali é o comportamento certo, e mesmo
+        assim o turno entra no numerador. O denominador não tem como separar
+        os dois casos: a diferença está na PERGUNTA, e o único sinal que a
+        carregaria é a similaridade da busca, que `_format_retrieved_product`
+        descarta antes do cache.
+
+        Por isso o nome no log é `taxa_teto`, e não `taxa`. Quem trocar de
+        volta faz o número voltar a ser lido como taxa de defeito — que é a
+        leitura errada, e a que faz alguém "consertar" um acerto.
+        """
+        contexto = [retrieved(PUDIM, "Picanha importada")]
+
+        with caplog.at_level("WARNING", logger="uvicorn.error"):
+            chat_service._contar_cartao_do_turno(contexto, [])
+
+        assert "taxa_teto=" in caplog.text
+        assert "Pode ser ACERTO" in caplog.text
 
     def test_cartao_entregue_conta_no_denominador_e_nao_avisa(self, caplog):
         contexto = [retrieved(PUDIM, "Pudim")]
@@ -479,3 +502,76 @@ class TestOTurnoQueTerminaSemCartao:
 
         assert resgatados == [PUDIM]
         assert chat_service._turnos_sem_cartao == 0
+
+
+class TestOTetoDeTresCartoes:
+    """Produção, 24/08/2026: "quanto custa a picanha?" devolveu CINCO cartões.
+
+    Importada, suína, black angus, suína 400g e completa — o cardápio do
+    Júnior tem cinco cortes, a busca traz `top_k=5`, e o modelo listou os
+    cinco. São eles que levaram o turno a 237 tokens de saída (o pico do
+    prompt anterior era 189, e o teto que vigorava até então era 300: aquele
+    turno teria quebrado).
+
+    O teto mora em DOIS lugares, e os dois fazem coisas diferentes:
+
+        `SYSTEM_PROMPT`     encurta a RESPOSTA — é ele que economiza token
+        `_limitar_cartoes`  alinha o CARROSSEL ao texto — não economiza nada
+
+    Estes testes são do segundo. Quando ele corta, o modelo já gerou e já
+    cobrou os uuids; o que se evita é o cliente ler três produtos e ver cinco
+    cartões.
+    """
+
+    def test_quatro_selecionados_viram_tres(self):
+        quatro = [PUDIM, BROWNIE, TORTA, uuid.uuid4()]
+
+        assert len(chat_service._limitar_cartoes(quatro)) == 3
+
+    def test_o_corte_e_pelos_PRIMEIROS(self):
+        """A ordem da seleção é a ordem do TEXTO — o prompt manda, e
+        `_validate_selected_product_ids` preserva. Cortar pelo fim tiraria
+        justamente os produtos que o modelo explicou primeiro."""
+        quarto = uuid.uuid4()
+
+        cortado = chat_service._limitar_cartoes([PUDIM, BROWNIE, TORTA, quarto])
+
+        assert cortado == [PUDIM, BROWNIE, TORTA]
+        assert quarto not in cortado
+
+    def test_tres_ou_menos_passam_intactos_e_nao_avisam(self, caplog):
+        """O caso esperado não escreve linha nenhuma: turno em que o prompt
+        pegou é turno silencioso."""
+        tres = [PUDIM, BROWNIE, TORTA]
+
+        with caplog.at_level("WARNING", logger="uvicorn.error"):
+            assert chat_service._limitar_cartoes(tres) == tres
+            assert chat_service._limitar_cartoes([PUDIM]) == [PUDIM]
+            assert chat_service._limitar_cartoes([]) == []
+
+        assert caplog.text == ""
+
+    def test_o_corte_avisa_com_o_numero_QUE_VEIO(self, caplog):
+        """O WARNING é o ponto da função.
+
+        Ele é o único jeito de saber se a regra do prompt está pegando sem
+        reler as nove respostas à mão — turno cortado aqui é turno em que o
+        modelo desobedeceu lá. E ele carrega quantos vieram, não quantos
+        sobraram: cinco e quatro são desobediências de tamanhos diferentes, e
+        "cortado para 3" não separa as duas.
+        """
+        cinco = [PUDIM, BROWNIE, TORTA, uuid.uuid4(), uuid.uuid4()]
+
+        with caplog.at_level("WARNING", logger="uvicorn.error"):
+            chat_service._limitar_cartoes(cinco)
+
+        assert "acima do teto" in caplog.text
+        assert "selecionados=5 | teto=3" in caplog.text
+
+    def test_o_prompt_e_o_codigo_concordam_no_numero(self):
+        """A única costura entre os dois lugares onde o teto está escrito.
+
+        Sem ela, mudar `_MAX_CARTOES` para 4 deixa o `SYSTEM_PROMPT` mandando
+        o modelo escrever 3 — e o número que o cliente lê é o do prompt.
+        """
+        assert f"NO MAXIMO {chat_service._MAX_CARTOES} PRODUTOS" in SYSTEM_PROMPT

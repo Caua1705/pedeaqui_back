@@ -1,4 +1,4 @@
-"""A bateria de nove perguntas do Rapi, antes e depois de mexer no prompt.
+"""A bateria de dez perguntas do Rapi, antes e depois de mexer no prompt.
 
 EXISTE PORQUE O PROMPT DOMINA A LATENCIA. A decomposicao medida em 24/08/2026,
 em producao, sobre oito turnos quentes:
@@ -56,10 +56,10 @@ novo escrever uma frase de aviso que o prompt velho nao escrevia. A rodada
 script RECUSA rodar com a loja fechada, e a checagem usa
 `ChatService._build_branch_state` — o proprio codigo sob medicao.
 
-**3. Uma sessao para as nove.** As perguntas sao uma CONVERSA, na ordem: a
+**3. Uma sessao para as dez.** As perguntas sao uma CONVERSA, na ordem: a
 regra "no maximo um turno com pergunta a cada tres" so tem o que medir se o
-historico existir, e a nona repete a quarta de proposito. Nove sessoes
-separadas mediriam nove primeiros turnos.
+historico existir, e a nona repete a quarta de proposito. Dez sessoes
+separadas mediriam dez primeiros turnos.
 
 **4. Um turno de aquecimento antes da primeira.** `get_chat_client` tem
 `lru_cache` por processo: a primeira chamada paga o handshake TLS com a
@@ -78,7 +78,21 @@ que se espera ver identico. Se o texto dele mudar, alguma coisa saiu do lugar.
 ## LE PRODUCAO, ESCREVE UM ARQUIVO E MAIS NADA
 
 Nenhum INSERT, UPDATE ou DDL. O que ele gasta e uma chamada de embedding e uma
-de LLM por pergunta — dez de cada por rodada, contando o aquecimento.
+de LLM por pergunta — onze de cada por rodada, contando o aquecimento (a
+saudacao do turno 1 nao gasta nenhuma das duas).
+
+## ESTE SCRIPT ESTA QUEBRADO — 24/08/2026
+
+Nao o use para medir. `docker exec` sobe um processo SEPARADO, que nao passa
+pelo Uvicorn, entao as linhas de `[AI /chat perf]` que ele produz nao caem no
+log que o parser le. Resultado: `SEM MODELO | total=0.0 ms` nos nove turnos, um
+JSON de zeros gravado no disco, e a palavra "gravado" impressa na tela — a
+falha mais cara que um medidor pode ter, porque ela parece sucesso.
+
+Quem mede hoje e a bancada (`bancada.html`), que bate no `/chat` real por HTTP
+e por isso passa pelo Uvicorn. Consertar isto nao e prioridade. O que continua
+valendo daqui e a REGUA abaixo: ela e a lista versionada de perguntas, e a
+bancada roda essa mesma lista, nessa mesma ordem.
 """
 
 import argparse
@@ -106,6 +120,12 @@ from src.services.chat_service import ChatService
 #
 # A ordem importa: e uma conversa. E a nona repete a quarta DE PROPOSITO —
 # e o teste do cache de busca, que deve responder em ~16 ms na segunda vez.
+#
+# A DECIMA E O PIOR CASO CONHECIDO, e por isso ela e a ultima e nao sai daqui.
+# Medida na bancada em 24/08/2026: 6670 ms, contra 946 ms do "oi" na MESMA
+# sessao. E pergunta aberta — o modelo olha tudo o que a busca trouxe e monta
+# uma recomendacao —, entao ela e onde o teto de tres produtos morde mais, e o
+# `output_tokens` dela e o numero que diz se o teto funcionou onde importa.
 PERGUNTAS_PADRAO = (
     "oi",
     "qual o horário de vocês?",
@@ -116,6 +136,7 @@ PERGUNTAS_PADRAO = (
     "qual a diferença entre a picanha importada e a black angus?",
     "vocês têm sushi?",
     "quanto custa a picanha?",
+    "o que você recomenda pra mim",
 )
 
 # Uma pergunta que nao esta na regua, so para pagar o handshake e o pool.
@@ -184,7 +205,7 @@ def _inteiro(bruto):
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="A bateria de nove perguntas do Rapi, antes e depois do prompt."
+        description="A bateria de dez perguntas do Rapi, antes e depois do prompt."
     )
     parser.add_argument(
         "--compara",

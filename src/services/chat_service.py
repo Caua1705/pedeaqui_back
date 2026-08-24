@@ -32,6 +32,11 @@ logger = logging.getLogger("uvicorn.error")
 _MAX_SESSION_MESSAGES = 20
 _SESSION_TTL = timedelta(hours=1)
 
+# O teto de cartoes por turno. O MESMO numero esta escrito no `SYSTEM_PROMPT`,
+# na secao "NO MAXIMO 3 PRODUTOS POR RESPOSTA", e e aquele que decide o que o
+# cliente LE — este aqui so decide quantos cartoes saem. Ver `_limitar_cartoes`.
+_MAX_CARTOES = 3
+
 
 class SessionMessage(TypedDict):
     role: str
@@ -326,6 +331,7 @@ class ChatService:
             retrieved_products=retrieved_products,
             selected_product_ids=selected_product_ids,
         )
+        selected_product_ids = _limitar_cartoes(selected_product_ids)
         products = self._hydrate_products(branch.id, selected_product_ids)
         _contar_cartao_do_turno(retrieved_products, products)
         self._log_price_divergence(retrieved_products, products)
@@ -865,6 +871,54 @@ def _contar_turno_com_llm(houve_resgate: bool) -> tuple[int, int]:
     return _resgates_por_nome, _turnos_com_llm
 
 
+def _limitar_cartoes(selected_product_ids: list[uuid.UUID]) -> list[uuid.UUID]:
+    """No maximo tres cartoes por turno, e o corte e pelos PRIMEIROS.
+
+    Producao, 24/08/2026: "quanto custa a picanha?" devolveu CINCO produtos —
+    importada, suina, black angus, suina 400g, completa. O cliente nao le
+    cinco, le dois ou tres e toca; e sao os cinco uuids, a ~26 tokens cada,
+    que levaram aquele turno a 237 tokens de saida (com o teto velho de 300,
+    ele teria quebrado).
+
+    QUEM ENCURTA A RESPOSTA E O PROMPT, NAO ESTA FUNCAO. Quando ela corta, o
+    modelo ja gerou e ja cobrou os cinco uuids: o que ela evita e o carrossel
+    divergir do texto, nunca o custo. Achar que este corte resolveu o token e
+    o erro que ele convida.
+
+    O QUE ELA FECHA e o meio-termo, que e o caso que o cliente ve: o modelo
+    cita tres produtos no texto e seleciona cinco. Ai o texto fala de tres e
+    o carrossel mostra cinco, e nada em `_validate_selected_product_ids` ou
+    em `_rescue_products_named_in_text` impede isso — a primeira so descarta
+    id inventado, e a segunda so age com a selecao VAZIA.
+
+    O CORTE E PELOS PRIMEIROS porque a ordem da selecao e a ordem do TEXTO (o
+    prompt manda, `_validate_selected_product_ids` preserva). Cortar pelo fim
+    tiraria justamente os produtos que o modelo explicou primeiro.
+
+    E ela roda DEPOIS do resgate, de proposito: o resgate so age com a
+    selecao vazia, e nada impede que ele traga quatro nomes citados no texto.
+
+    O WARNING e o ponto desta funcao. Ele e o unico jeito de saber se a regra
+    do prompt esta pegando sem reler as respostas a mao — turno cortado aqui
+    e turno em que o modelo desobedeceu la. O grep no radar:
+    `acima do teto`.
+
+    Nao alcanca a voz: `VoiceSearchService.buscar` nao passa por `_answer`, e
+    la nao ha selecao de modelo para limitar — a lista que aparece e a propria
+    busca.
+    """
+    if len(selected_product_ids) <= _MAX_CARTOES:
+        return selected_product_ids
+
+    logger.warning(
+        "[AI /chat] o modelo selecionou produtos acima do teto. "
+        "Carrossel cortado pelos primeiros. | selecionados=%d | teto=%d",
+        len(selected_product_ids),
+        _MAX_CARTOES,
+    )
+    return selected_product_ids[:_MAX_CARTOES]
+
+
 def _contar_cartao_do_turno(retrieved_products: list[dict], products: list) -> None:
     """A busca achou produto e o cliente ficou sem cartao. Com que frequencia?
 
@@ -899,6 +953,22 @@ def _contar_cartao_do_turno(retrieved_products: list[dict], products: list) -> N
     baterias anteriores e nenhum nesta, e sem contador isso so aparece para
     quem estava olhando a tela naquela hora.
 
+    O DENOMINADOR CONTA ACERTO JUNTO COM DEFEITO, e e por isso que a taxa se
+    chama `taxa_teto` no log: ela e um TETO do defeito, nunca a medida dele.
+    Producao, 24/08/2026 — "voces entregam no Papicu?" disparou
+    `sem_cartao=1 | turnos_com_contexto=1 | taxa_teto=100.0%`. A busca achou
+    cinco produtos por sobreposicao lexical, mas a pergunta e de ENTREGA: nao
+    ter cartao ali e a resposta CERTA, e o contador reportou 100% por acerto.
+
+    O que separaria os dois casos e a SIMILARIDADE da busca — pergunta de
+    cardapio traz produto por proximidade, pergunta de entrega traz por
+    coincidencia de palavra. Ela nao chega ate aqui:
+    `RetrievalService._format_retrieved_product` a descarta antes do cache.
+    Poe-la no denominador e mudanca no payload do cache de busca mais uma
+    bateria para calibrar a barra — e uma barra chutada seria pior que o teto
+    honesto que esta ai. Ate la o numero vale para o que sempre valeu:
+    comparar a MESMA bateria entre dois deploys. Subiu, olhe as perguntas.
+
     Vale o mesmo que vale para `_contar_turno_com_llm`: vive no processo,
     zera no deploy, e e por worker.
     """
@@ -915,7 +985,8 @@ def _contar_cartao_do_turno(retrieved_products: list[dict], products: list) -> N
     _turnos_sem_cartao += 1
     logger.warning(
         "[AI /chat] a busca achou %d produto(s) e nenhum chegou ao cliente. "
-        "| sem_cartao=%d | turnos_com_contexto=%d | taxa=%.1f%%",
+        "Pode ser ACERTO — confira a pergunta. "
+        "| sem_cartao=%d | turnos_com_contexto=%d | taxa_teto=%.1f%%",
         len(retrieved_products),
         _turnos_sem_cartao,
         _turnos_com_contexto,

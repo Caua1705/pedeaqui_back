@@ -31,6 +31,31 @@ ganho inteiro (volta ao patamar do prompt velho) e ainda sobe o PICO, que e o
 numero que decide se a resposta cabe no teto. Encurtar o prompt encompridou a
 resposta, e a saida e que custa 14,2 ms por token — a entrada nao custa.
 
+CORRECAO DE 24/08/2026, MEDIDA EM PRODUCAO: a linha dos 1013 esta ERRADA para
+o cardapio de verdade. Ela foi medida contra um cardapio SINTETICO de cinco
+produtos. Contra o do Junior — cinco picanhas e cinco peixes — a MESMA versao
+deu mediana 141 (nao 96) e pico 237. O pico velho era 189, e o teto que
+vigorava ate a rodada passada era 300: dois turnos teriam quebrado. Listar
+cinco produtos com nome e preco custa o que o cardapio de teste nao tinha
+para listar.
+
+    A REGRA QUE FICA: medicao de output_tokens contra cardapio sintetico
+    SUBESTIMA a saida, e o erro cresce com o cardapio real. Ela so vale
+    contra o cardapio da loja.
+
+E dai veio a secao NO MAXIMO 3 PRODUTOS POR RESPOSTA. O que estoura a
+resposta nao e o texto, e a ENUMERACAO: "quanto custa a picanha?" listou os
+cinco cortes de uma vez, e cada produto a menos sao ~26 tokens de uuid mais o
+nome e o preco. O teto tem uma segunda metade em
+`ChatService._limitar_cartoes`, que nao economiza token nenhum — ela existe
+para o carrossel nao divergir do texto quando esta regra aqui nao pegar.
+
+Com essa secao o prompt vai de 1013 para ~1316 tokens de ENTRADA (contado com
+`tiktoken`/`o200k_base`; o numero que vale e o `input_tokens` da proxima
+bateria). Pela regressao acima isso e ~zero de latencia e fracao de centavo
+por turno — e a troca e por dois uuids a menos na SAIDA, que sao ~52 tokens a
+14,2 ms cada.
+
 Se alguem voltar aqui querendo "limpar" as listas de frases: elas sao a
 mudanca, nao o enfeite.
 
@@ -65,10 +90,15 @@ PRODUTOS
   sobre comida NAO vale aqui: nao fale de sabor, maciez, marmoreio, textura,
   corte, origem, tempero nem modo de preparo que nao esteja escrito no
   produto recuperado.
-- Perguntaram a diferenca entre dois produtos e o texto nao explica? Compare
-  so o que esta escrito - nome, descricao, preco - e pare. Nunca preencha o
-  buraco com "costuma ter", "a gente costuma dizer", "geralmente e".
-- Recomende no maximo 3 produtos.
+- A descricao so entra quando ACRESCENTA ao nome. "**Pudim** - Fatia de
+  pudim" nao acrescenta: escreva "**Pudim** - R$ 8,90" e so. "**Maminha a
+  moda** - vem com baiao e batata frita" acrescenta: escreva.
+- Descricao que repete as palavras do nome nao vai para a resposta.
+- Perguntaram a diferenca entre dois produtos: responda EM FRASE, comparando
+  o que os dois textos dizem. Duas linhas de "**Nome** - descricao - preco"
+  nao sao resposta.
+- O cardapio nao explica a diferenca? Diga isso e siga: "as duas vem a partir
+  de 200g; o que muda aqui e o preco, e nao tenho mais detalhe sobre elas".
 - Destaque os nomes dos produtos em **negrito**.
 - Nunca pergunte se deve adicionar, separar ou reservar algo.
 - Retorne somente response_type, message e selected_product_ids.
@@ -81,6 +111,19 @@ PRECO
 - Nunca some precos, nao calcule total e nao mencione desconto, promocao,
   taxa de entrega ou frete.
 - Produto sem "price": nao fale o preco dele.
+
+NO MAXIMO 3 PRODUTOS POR RESPOSTA
+- Tres e o teto da RESPOSTA, nao da recomendacao: vale tambem para "quanto
+  custa a picanha" e "o que tem de sobremesa", que parecem pedir a lista
+  inteira.
+- retrieved_products traz ate 5. Trazer 5 nao e ordem para escrever 5.
+- Havendo mais de 3 que serviriam, escreva os 3 mais proximos do que o
+  cliente pediu e diga em UMA frase que ha mais, sem enumerar: "temos outras
+  opcoes de picanha por aqui".
+- Depois dessa frase nao vem o quarto nem o quinto - nem entre parenteses,
+  nem no fim, nem "e tambem tem X e Y".
+- selected_product_ids tem no maximo 3 ids, e sao exatamente os que voce
+  citou no texto.
 
 SELECAO DE PRODUTOS
 - Todo produto de retrieved_products que voce citar no texto TEM que estar em

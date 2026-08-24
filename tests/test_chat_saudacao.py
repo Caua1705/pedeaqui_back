@@ -163,7 +163,12 @@ class TestPipeline:
         assert buscas[0]["branch_id"] == filial.id
 
     def test_a_saudacao_e_registrada_no_log(self, monkeypatch, caplog):
-        """Sem esta linha, um turno rapido e um turno com busca sao iguais no log."""
+        """Sem esta linha, um turno rapido e um turno com busca sao iguais no log.
+
+        A mensagem mudou junto com o desvio: antes o turno pulava so a busca
+        ("busca no cardapio ignorada"), hoje pula tambem o modelo. Ver
+        `tests/test_chat_saudacao_enlatada.py`.
+        """
         buscas: list = []
         service, restaurante, filial = self._servico(monkeypatch, "oi", buscas)
 
@@ -175,4 +180,4 @@ class TestPipeline:
                 message="oi",
             )
 
-        assert "busca no cardapio ignorada | motivo=saudacao" in caplog.text
+        assert "saudacao | resposta enlatada, sem busca e sem modelo" in caplog.text

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from src.ai.schemas.chat_response_schema import ChatResponse
 from src.ai.services.chat_llm_service import ChatLLMService
-from src.ai.services.greeting import is_greeting
+from src.ai.services.greeting import greeting_reply, is_greeting
 from src.ai.services.retrieval_service import RetrievalService
 from src.repositories.ai_feedback_repository import AIFeedbackRepository
 from src.repositories.branch_repository import BranchRepository
@@ -226,7 +226,16 @@ class ChatService:
         conversation = _get_session_conversation(session_id)
         session_ms = (perf_counter() - session_started_at) * 1000
         logger.info("[AI /chat perf] session_ms=%.2f", session_ms)
-        logger.info("[AI /chat cache] final_response_cache_hit=false")
+
+        if is_greeting(message):
+            return self._greeting_answer(
+                restaurant=restaurant,
+                session_id=session_id,
+                message=message,
+                now=now,
+                guard_ms=guard_ms,
+                session_ms=session_ms,
+            )
 
         # O tempo de PAREDE da recuperacao, medido de fora. As etapas de
         # dentro dela (embedding, busca, preco vigente) tem cronometro
@@ -303,27 +312,66 @@ class ChatService:
         )
         return response
 
-    def _retrieve_menu_products(self, restaurant, branch, message: str) -> list[dict]:
-        """Os produtos do cardapio para esta mensagem — vazio quando ela nao pede um.
+    def _greeting_answer(
+        self,
+        restaurant,
+        session_id: str,
+        message: str,
+        now: datetime,
+        guard_ms: float,
+        session_ms: float,
+    ) -> ChatResponse:
+        """Saudacao respondida sem busca e SEM MODELO.
 
-        Ate 24/08/2026 a busca rodava em TODO turno, e o "oi" respondido com
-        "temos H2O R$ 7,05" saiu dai: a agua veio no prompt e o prompt manda
-        oferecer o que chega. A saudacao tambem pagava o embedding, com
-        mediana medida de ~400 ms.
+        A primeira versao deste desvio (24/08/2026) so pulava a busca, e o
+        turno continuava indo ao modelo: medido em producao, `llm_call_ms=3616`
+        para produzir 85 tokens de "oi, tudo bem?". Pagar uma geracao depois de
+        ja ter DECIDIDO que a mensagem e uma saudacao e pagar o modelo para
+        confirmar o que o portao concluiu de graca.
 
-        O criterio de `is_greeting` erra de proposito para o lado de BUSCAR —
-        os dois erros nao custam o mesmo, e o motivo esta no docstring de
-        `greeting.py`.
+        O que se perde: a saudacao deixa de variar com o que a pessoa escreveu.
+        Como as entradas possiveis sao as catorze de `GREETINGS` e as tres
+        respostas ja cobrem qualquer uma delas, o que se perde e variacao que
+        ninguem consegue provocar.
 
-        Devolver `[]` e o caminho que o resto do pipeline ja sabia percorrer:
-        sem produto recuperado, `_validate_selected_product_ids` nao aprova
-        nada, o resgate pelo nome nao acha nada e `_response_type` cai em
-        "text". Nenhuma etapa abaixo precisou saber deste desvio.
+        O turno continua sendo GRAVADO no historico. Sem isso, a proxima
+        pergunta da sessao chegaria ao modelo sem o "oi" e sem a resposta, e
+        um "e o preco desse?" logo depois perderia o unico contexto que tinha.
+
+        As etapas puladas saem ZERADAS na linha de fechamento, e nao ausentes:
+        um turno sem `retrieval_total_ms` no log e indistinguivel de um turno
+        que quebrou antes de chegar la.
         """
-        if is_greeting(message):
-            logger.info("[AI /chat] busca no cardapio ignorada | motivo=saudacao")
-            return []
+        logger.info("[AI /chat] saudacao | resposta enlatada, sem busca e sem modelo")
+        response = ChatResponse(
+            response_type="text",
+            message=greeting_reply(restaurant.name),
+            products=[],
+        )
+        _store_session_turn(session_id, message, response.message, now)
 
+        logger.info(
+            "[AI /chat perf] etapas | guard_ms=%.2f | session_ms=%.2f "
+            "| retrieval_total_ms=0.00 | context_build_ms=0.00 "
+            "| llm_total_ms=0.00 | post_ms=0.00 | soma_ms=%.2f",
+            guard_ms,
+            session_ms,
+            guard_ms + session_ms,
+        )
+        logger.info(
+            "[AI /chat] Retorno final | response_type=%s | products_count=0",
+            response.response_type,
+        )
+        return response
+
+    def _retrieve_menu_products(self, restaurant, branch, message: str) -> list[dict]:
+        """Os produtos do cardapio para esta mensagem.
+
+        O portao de saudacao vive em `_answer`, e nao aqui, desde que a
+        saudacao passou a nao chamar o modelo: com o desvio la em cima, um
+        segundo `is_greeting` neste ponto seria codigo inalcancavel se
+        passasse, e uma segunda definicao de "o que e saudacao" se divergisse.
+        """
         return self.retrieval_service.retrieve_products(
             restaurant_id=restaurant.id,
             branch_id=branch.id,

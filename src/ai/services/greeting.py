@@ -38,6 +38,7 @@ proxima pessoa nao saber mais qual e o criterio de entrada. Se valer a pena,
 entra como lista propria.
 """
 
+import random
 import re
 
 from src.utils.normalization import fold_for_match
@@ -78,3 +79,41 @@ def is_greeting(message: str) -> bool:
     folded = fold_for_match(message)
     words_only = _ONLY_WORDS_RE.sub(" ", folded)
     return _WHITESPACE_RE.sub(" ", words_only).strip() in GREETINGS
+
+
+# As tres respostas de saudacao. Duas restricoes as moldaram, e nenhuma e
+# estetica:
+#
+# **Nenhuma cita nome de cliente, e nao por escolha de tom.** `POST /chat` NAO
+# TEM AUTENTICACAO — nem opcional. O Rapi existe para quem ainda nao tem
+# conta, entao nao ha cliente na requisicao de onde tirar um nome. Uma frase
+# com `{cliente}` aqui nao teria o que interpolar; e o mesmo motivo pelo qual
+# `ai_feedback` nao tem `customer_id` e depende de retencao para apagar dado
+# pessoal (ver `feedback_retention_cutoff`).
+#
+# **O nome da casa nunca vem depois de artigo.** "do {restaurant}" quebra em
+# "Pizzaria Bella" ("do Pizzaria Bella") e "da {restaurant}" quebra em "Junior
+# da Picanha". Nao ha genero conhecido para o nome de um restaurante, entao as
+# tres frases o colocam em posicao que dispensa a concordancia. Frase nova
+# obedece a mesma regra, senao a casa aparece com o artigo errado para sempre.
+GREETING_REPLIES = (
+    "Oi! Aqui é {restaurant}. Posso ajudar com o cardápio?",
+    "Olá! Aqui é {restaurant}. Quer ajuda para escolher alguma coisa?",
+    "Oi! {restaurant} por aqui. Me diz o que você procura no cardápio.",
+)
+
+
+def greeting_reply(restaurant_name: str) -> str:
+    """Uma das tres saudacoes, sorteada, com o nome da casa.
+
+    O sorteio existe para o Rapi nao repetir a mesma frase para a mesma
+    pessoa em duas sessoes seguidas — e o unico jeito de uma resposta fixa
+    nao soar gravada. Nao ha memoria do que ja saiu: guardar isso exigiria
+    estado por sessao para um ganho que ninguem percebe, e o historico do
+    chat ja e a estrutura em memoria que nao sobrevive a mais de um worker
+    (armadilha 20).
+
+    Serve ao chat e a VOZ: nada aqui depende de HTTP, de sessao ou do
+    `ChatService`. O agente de voz importa esta funcao e fala a mesma frase.
+    """
+    return random.choice(GREETING_REPLIES).format(restaurant=restaurant_name)

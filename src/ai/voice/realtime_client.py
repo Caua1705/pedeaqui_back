@@ -85,6 +85,39 @@ SEARCH_TOOL = {
 }
 
 
+# A ENTRADA DE AUDIO, e por que ela deixou de ser o padrao (24/08/2026). Sem
+# esta secao a sessao roda no `server_vad` de fabrica — limiar 0,5 e nenhuma
+# reducao de ruido — e a bancada mostrou, num ambiente real, o que isso
+# produz: ruido de fundo virando fala, transcrito como frase solta em outro
+# idioma ("Thank you.", "Bye!", "MBC ..."), ABRINDO TURNO PAGO, com o modelo
+# respondendo a ninguem.
+#
+# O segundo estrago do mesmo falso positivo e mais caro que o turno: como
+# `interrupt_response` nasce ligado, todo ruido detectado como comeco de fala
+# CANCELA a resposta em curso. No log e `output_audio_buffer.cleared` dezenas
+# de vezes numa sessao; no ouvido do cliente e a frase pela metade — "vinte e
+# quatro e", "cinqu", "Certo, agora que voce ja".
+#
+# `far_field` porque o cliente fala com o CELULAR NA MAO, e nao com fone: o
+# microfone pega a rua, a televisao e a mesa ao lado. `threshold` acima do
+# padrao exige audio mais alto para abrir turno. E `silence_duration_ms` sobe
+# de 500 para 700 porque a pausa curta do meio da frase fechava o turno antes
+# da hora — custa 200 ms a mais no fim de cada fala, e latencia nao e o
+# problema desta frente (a primeira palavra sai em 390-720 ms).
+#
+# Os tres numeros ficam AQUI, e nao em `settings`, pelo mesmo motivo das
+# ferramentas: e o servidor que decide a sessao. Variavel de ambiente aqui
+# seria producao rodando com um valor que nunca foi medido.
+AUDIO_INPUT = {
+    "noise_reduction": {"type": "far_field"},
+    "turn_detection": {
+        "type": "server_vad",
+        "threshold": 0.6,
+        "silence_duration_ms": 700,
+    },
+}
+
+
 def issue_client_secret(
     restaurant_id: uuid.UUID,
     restaurant_context: str,
@@ -107,7 +140,10 @@ def issue_client_secret(
             "type": "realtime",
             "model": settings.VOICE_MODEL,
             "instructions": instructions_for(restaurant_context, branch_context),
-            "audio": {"output": {"voice": settings.VOICE_NAME}},
+            "audio": {
+                "input": AUDIO_INPUT,
+                "output": {"voice": settings.VOICE_NAME},
+            },
             "tools": [SEARCH_TOOL],
             "tool_choice": "auto",
         }

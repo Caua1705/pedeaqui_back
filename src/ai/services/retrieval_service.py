@@ -110,7 +110,18 @@ class RetrievalService:
             self.agent,
             str(retrieval_cache_hit).lower(),
         )
+        # A terceira etapa desta funcao, e a unica que nao tinha cronometro.
+        # Ela e uma consulta ao banco que roda SEMPRE — cache de busca nenhum
+        # a evita, de proposito (ver o docstring dela) —, entao ela e piso, e
+        # nao pico. Sem medi-la, o custo dela aparecia diluido dentro do
+        # `retrieval_ms` de quem estivesse lendo o log de longe.
+        prices_started_at = perf_counter()
         retrieved_products = self._with_current_prices(branch_id, retrieved_products)
+        logger.info(
+            "[AI %s perf] current_prices_ms=%.2f",
+            self.agent,
+            (perf_counter() - prices_started_at) * 1000,
+        )
         logger.info("[AI %s perf] context_products=%d", self.agent, len(retrieved_products))
         return retrieved_products
 

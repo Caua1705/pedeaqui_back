@@ -40,6 +40,9 @@ class SessionState(TypedDict):
 
 _SESSION_HISTORY: dict[str, SessionState] = {}
 
+# Ver `_take_cold_start_flag`.
+_cold_start_pending = True
+
 
 # Por quanto tempo o voto do cliente sobre uma resposta do Rapi continua no
 # banco. Ver `feedback_retention_cutoff`.
@@ -125,6 +128,7 @@ class ChatService:
         message: str,
     ) -> ChatResponse:
         started_at = perf_counter()
+        cold_start = _take_cold_start_flag()
         # A mensagem do usuario e dado pessoal e nao vai para o log.
         # O digest permite correlacionar requisicoes sem expor o conteudo.
         logger.info(
@@ -136,6 +140,13 @@ class ChatService:
             len(message),
             _message_digest(message),
         )
+        # A primeira requisicao do processo paga tudo que e construido sob
+        # demanda e depois fica guardado: a conexao com o Postgres, o cliente
+        # HTTP da OpenAI do embedding (`get_embeddings_client`, com
+        # `lru_cache`) e o handshake TLS de cada um. Sem esta marca, o turno
+        # frio se mistura aos quentes na mesma amostra e o piso medido sai
+        # maior do que e — foi o que fez "oi" parecer a pergunta mais lenta.
+        logger.info("[AI /chat perf] cold_start=%s", str(cold_start).lower())
 
         # Barra restaurante inexistente/inativo antes de gastar chamada de
         # embedding e de LLM com um restaurant_id qualquer. Fica fora do try
@@ -144,11 +155,31 @@ class ChatService:
         # A linha carregada daqui segue para `_answer`: e dela que sai o nome
         # da casa que vai no prompt, e reler o restaurante la seria uma
         # segunda consulta para o mesmo dado.
+        # Estas duas consultas sao o PRIMEIRO toque no banco da requisicao, e
+        # e por isso que elas sao cronometradas separadas em vez de juntas num
+        # `guard_ms`. A primeira paga o checkout do pool — que num processo
+        # recem-subido significa abrir conexao com o Postgres do zero (TCP +
+        # TLS), e a cada checkout significa o round trip do `pool_pre_ping`.
+        # A segunda ja pega a conexao quente. A diferenca entre as duas, no
+        # primeiro turno do processo, e exatamente o que a conexao custou.
+        guard_started_at = perf_counter()
+        restaurant_started_at = perf_counter()
         restaurant = self._get_active_restaurant(restaurant_id)
+        logger.info(
+            "[AI /chat perf] restaurant_lookup_ms=%.2f",
+            (perf_counter() - restaurant_started_at) * 1000,
+        )
+
+        branch_started_at = perf_counter()
         branch = self._get_active_branch(restaurant.id, branch_id)
+        logger.info(
+            "[AI /chat perf] branch_lookup_ms=%.2f",
+            (perf_counter() - branch_started_at) * 1000,
+        )
+        guard_ms = (perf_counter() - guard_started_at) * 1000
 
         try:
-            return self._answer(restaurant, branch, session_id, message)
+            return self._answer(restaurant, branch, session_id, message, guard_ms)
         except Exception:
             logger.exception(
                 "[AI /chat] Erro no pipeline | restaurant_id=%s | session_id=%s",
@@ -168,8 +199,17 @@ class ChatService:
         branch,
         session_id: str,
         message: str,
+        guard_ms: float,
     ) -> ChatResponse:
         """Busca, pergunta ao modelo, confere o que ele devolveu e responde.
+
+        `guard_ms` chega de fora e serve so para a linha de fechamento. Ele e
+        medido no `chat`, que e onde a barreira do restaurante e da filial
+        acontece, e sem ele a soma das etapas nao bateria com o `total_ms` —
+        faltaria justamente a primeira consulta ao banco da requisicao, que e
+        a que paga a conexao. Parametro e nao atributo de instancia porque o
+        `_answer` ja recebe tudo o que usa; guardar num `self` faria a soma
+        depender de uma escrita feita em outro metodo.
 
         Separada do `chat` para que aquele fique com o que e enquadramento —
         o log de entrada, a barreira do restaurante e o tratamento de erro —
@@ -180,21 +220,44 @@ class ChatService:
         # registro deste turno precisam concordar sobre que horas sao, senao
         # uma sessao pode ser limpa e regravada no mesmo pedido.
         now = _utc_now()
+        session_started_at = perf_counter()
         _cleanup_inactive_sessions(now)
         conversation = _get_session_conversation(session_id)
+        session_ms = (perf_counter() - session_started_at) * 1000
+        logger.info("[AI /chat perf] session_ms=%.2f", session_ms)
         logger.info("[AI /chat cache] final_response_cache_hit=false")
 
+        # O tempo de PAREDE da recuperacao, medido de fora. As etapas de
+        # dentro dela (embedding, busca, preco vigente) tem cronometro
+        # proprio no `RetrievalService`; este numero existe para a linha de
+        # fechamento poder somar as etapas e bater com o `total_ms` — sem ele,
+        # a soma teria um buraco e nao daria para saber se ele e uma etapa
+        # nao medida ou erro de conta.
+        retrieval_started_at = perf_counter()
         retrieved_products = self.retrieval_service.retrieve_products(
             restaurant_id=restaurant.id,
             branch_id=branch.id,
             question=message,
         )
+        retrieval_total_ms = (perf_counter() - retrieval_started_at) * 1000
+        logger.info("[AI /chat perf] retrieval_total_ms=%.2f", retrieval_total_ms)
+
+        context_started_at = perf_counter()
+        restaurant_context = self._build_restaurant_context(restaurant)
+        context_ms = (perf_counter() - context_started_at) * 1000
+        logger.info("[AI /chat perf] context_build_ms=%.2f", context_ms)
+
+        llm_started_at = perf_counter()
         llm_response = self._invoke_llm(
-            restaurant_context=self._build_restaurant_context(restaurant),
+            restaurant_context=restaurant_context,
             conversation=conversation,
             retrieved_products=retrieved_products,
             message=message,
         )
+        llm_total_ms = (perf_counter() - llm_started_at) * 1000
+        logger.info("[AI /chat perf] llm_total_ms=%.2f", llm_total_ms)
+
+        post_started_at = perf_counter()
         selected_product_ids = self._validate_selected_product_ids(
             retrieved_products=retrieved_products,
             selected_product_ids=llm_response.selected_product_ids,
@@ -216,6 +279,26 @@ class ChatService:
         # deixar a pergunta no historico sem a resposta, senao ela envenena o
         # proximo prompt daquela sessao.
         _store_session_turn(session_id, message, response.message, now)
+        post_ms = (perf_counter() - post_started_at) * 1000
+
+        # UMA linha com o turno inteiro, e nao so as oito espalhadas. As
+        # espalhadas continuam (ninguem perde grep), mas cada uma sozinha
+        # responde "quanto custou esta etapa" e nenhuma responde "onde foi o
+        # tempo desta requisicao" — que e a pergunta. Junta-las depois, no
+        # log, exige casar linhas por proximidade, e com duas pessoas
+        # conversando ao mesmo tempo isso deixa de funcionar.
+        logger.info(
+            "[AI /chat perf] etapas | guard_ms=%.2f | session_ms=%.2f "
+            "| retrieval_total_ms=%.2f | context_build_ms=%.2f "
+            "| llm_total_ms=%.2f | post_ms=%.2f | soma_ms=%.2f",
+            guard_ms,
+            session_ms,
+            retrieval_total_ms,
+            context_ms,
+            llm_total_ms,
+            post_ms,
+            guard_ms + session_ms + retrieval_total_ms + context_ms + llm_total_ms + post_ms,
+        )
         logger.info(
             "[AI /chat] Retorno final | response_type=%s | products_count=%d",
             response.response_type,
@@ -306,16 +389,33 @@ class ChatService:
         retrieved_products: list[dict],
         message: str,
     ):
-        llm_started_at = perf_counter()
-        llm_response = ChatLLMService().invoke(
+        """`llm_ms` VIROU `llm_total_ms`, e ganhou tres partes por baixo.
+
+        A linha antiga media uma coisa so e chamava tudo de "o LLM": a
+        construcao do `ChatOpenAI`, a montagem da cadeia e a chamada de rede.
+        As tres acontecem a cada requisicao e so uma delas e a OpenAI
+        respondendo — entao o numero que se olhava para decidir "o modelo esta
+        lento" nao era o modelo.
+
+        A construcao ganha cronometro proprio aqui porque ela e a suspeita
+        nomeada: `ChatLLMService()` monta um `ChatOpenAI` NOVO por requisicao,
+        e com ele um cliente HTTP novo, que abre conexao nova com a OpenAI. E
+        exatamente o caso que `embedding_service.py` ja mediu e resolveu com
+        `lru_cache` (mediana de 654 ms para 340 ms). Medir antes de repetir a
+        solucao e o ponto desta rodada.
+        """
+        client_started_at = perf_counter()
+        llm_service = ChatLLMService()
+        logger.info(
+            "[AI /chat perf] llm_client_build_ms=%.2f",
+            (perf_counter() - client_started_at) * 1000,
+        )
+
+        llm_response = llm_service.invoke(
             restaurant_context=restaurant_context,
             conversation=conversation,
             retrieved_products=retrieved_products,
             user_message=message,
-        )
-        logger.info(
-            "[AI /chat perf] llm_ms=%.2f",
-            (perf_counter() - llm_started_at) * 1000,
         )
         logger.info(
             "[AI /chat] Structured Output | response_type=%s",
@@ -605,6 +705,23 @@ def _store_session_turn(
     )
     session["messages"] = session["messages"][-_MAX_SESSION_MESSAGES:]
     session["last_interaction"] = now
+
+
+def _take_cold_start_flag() -> bool:
+    """True uma unica vez por processo, na primeira requisicao de `/chat`.
+
+    Um `global` e nao um contador de turnos: a pergunta nao e "quantas
+    requisicoes ja passaram", e sim "esta e a que paga a construcao do que
+    fica guardado depois" — a conexao do pool, o cliente de embedding do
+    `lru_cache`, os handshakes TLS dos dois. Com mais de um worker cada
+    processo tem o seu, o que esta certo: cada um paga o proprio aquecimento,
+    e o cliente que cair no worker frio espera de novo (armadilha 20).
+    """
+    global _cold_start_pending
+    if not _cold_start_pending:
+        return False
+    _cold_start_pending = False
+    return True
 
 
 def _message_digest(message: str) -> str:

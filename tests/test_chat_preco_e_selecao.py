@@ -394,3 +394,88 @@ class TestATaxaDeResgate:
             ChatService._rescue_products_named_in_text("Recomendo o Brownie.", contexto, [BROWNIE])
 
         assert "turnos_com_llm" not in caplog.text
+
+
+class TestOTurnoQueTerminaSemCartao:
+    """O irmão do resgate — e o que a rede de segurança NÃO alcança.
+
+    Produção, 24/08/2026: "vocês têm sushi?" voltou `products_count=0` com um
+    texto que se oferecia para mostrar os peixes da casa **sem escrever o nome
+    de nenhum**. Sem nome no texto não há o que resgatar, então
+    `_rescue_products_named_in_text` saiu calado — e, pior, contabilizou
+    aquele turno como limpo no placar do resgate.
+
+    O mesmo turno trouxe 2 ou 3 cartões nas duas baterias anteriores. É
+    intermitência, não latência, e sem contador ela só é vista por quem estava
+    olhando a tela naquela hora.
+    """
+
+    def setup_method(self):
+        chat_service._turnos_com_contexto = 0
+        chat_service._turnos_sem_cartao = 0
+
+    def test_busca_com_produto_e_zero_cartao_e_o_caso(self, caplog):
+        contexto = [retrieved(PUDIM, "Pudim"), retrieved(BROWNIE, "Brownie")]
+
+        with caplog.at_level("WARNING", logger="uvicorn.error"):
+            chat_service._contar_cartao_do_turno(contexto, [])
+
+        assert "nenhum chegou ao cliente" in caplog.text
+        assert "sem_cartao=1" in caplog.text
+        assert "turnos_com_contexto=1" in caplog.text
+        assert "taxa=100.0%" in caplog.text
+
+    def test_cartao_entregue_conta_no_denominador_e_nao_avisa(self, caplog):
+        contexto = [retrieved(PUDIM, "Pudim")]
+
+        with caplog.at_level("WARNING", logger="uvicorn.error"):
+            chat_service._contar_cartao_do_turno(contexto, [SimpleNamespace(id=PUDIM)])
+
+        assert chat_service._turnos_com_contexto == 1
+        assert chat_service._turnos_sem_cartao == 0
+        assert caplog.text == ""
+
+    def test_busca_vazia_fica_INTEIRA_fora_da_conta(self, caplog):
+        """"Vocês abrem domingo?" termina sem cartão porque não havia cartão.
+
+        Contar isso no denominador misturaria acerto com defeito e faria a
+        taxa cair sozinha toda vez que alguém perguntasse sobre horário.
+        """
+        with caplog.at_level("WARNING", logger="uvicorn.error"):
+            chat_service._contar_cartao_do_turno([], [])
+
+        assert chat_service._turnos_com_contexto == 0
+        assert chat_service._turnos_sem_cartao == 0
+        assert caplog.text == ""
+
+    def test_a_taxa_e_sobre_os_turnos_com_contexto(self):
+        contexto = [retrieved(PUDIM, "Pudim")]
+        cartao = [SimpleNamespace(id=PUDIM)]
+
+        for _ in range(3):
+            chat_service._contar_cartao_do_turno(contexto, cartao)
+        chat_service._contar_cartao_do_turno(contexto, [])
+        chat_service._contar_cartao_do_turno([], [])
+
+        assert chat_service._turnos_com_contexto == 4
+        assert chat_service._turnos_sem_cartao == 1
+
+    def test_o_turno_resgatado_NAO_conta_como_sem_cartao(self):
+        """A fronteira entre os dois placares, num teste só.
+
+        O resgate roda antes da hidratação: quando ele age, o cartão sai, e
+        este contador vê um turno normal. `sem_cartao` conta o que ESCAPA da
+        rede — se ele passasse a contar também o que ela pega, os dois números
+        mediriam a mesma coisa e nenhum diria onde está o buraco.
+        """
+        contexto = [retrieved(PUDIM, "Pudim")]
+
+        resgatados = ChatService._rescue_products_named_in_text(
+            "Temos **Pudim**.", contexto, []
+        )
+        chat_service._contar_cartao_do_turno(
+            contexto, [SimpleNamespace(id=pid) for pid in resgatados]
+        )
+
+        assert resgatados == [PUDIM]
+        assert chat_service._turnos_sem_cartao == 0

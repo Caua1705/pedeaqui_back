@@ -7,8 +7,18 @@
 # tambem fala com a OpenAI e tambem aparece em investigacao de log — ficaria
 # sem a versao.
 #
-# `${GIT_SHA:-}` vazio cai no default do `Dockerfile` (`nao-carimbado`) e a API
-# avisa no boot. O deploy que carimba esta em `docs/operacao.md`:
+# `${GIT_SHA:-}` com a variavel ausente NAO cai no default do `Dockerfile`, ao
+# contrario do que este comentario dizia ate 24/08/2026. Ele expande para
+# string vazia, o compose manda `--build-arg GIT_SHA=`, e um valor explicito
+# (mesmo vazio) sobrepoe o `ARG GIT_SHA=nao-carimbado`. A imagem nascia com
+# `ENV GIT_SHA=""`, o boot escrevia `git_sha=` e o aviso de "imagem sem
+# carimbo" ficava mudo — os dois sintomas que apareceram no deploy daquele dia.
+#
+# Quem normaliza hoje e `Settings._sha_vazio_e_sha_ausente`, e o motivo de
+# estar la e nao aqui esta no docstring dele. Este comentario fica para que
+# ninguem "simplifique" o validador achando que o `:-` ja resolve.
+#
+# O deploy que carimba esta em `docs/operacao.md`:
 #
 #     GIT_SHA=$(git rev-parse --short HEAD) docker compose up -d --build
 #

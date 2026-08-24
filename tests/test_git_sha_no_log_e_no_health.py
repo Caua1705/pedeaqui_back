@@ -31,7 +31,7 @@ from types import SimpleNamespace
 import pytest
 
 import main as main_module
-from src.core.config import GIT_SHA_NAO_CARIMBADO, settings
+from src.core.config import GIT_SHA_NAO_CARIMBADO, Settings, settings
 from src.services import chat_service as chat_module
 from src.services.chat_service import _SESSION_HISTORY, ChatService
 
@@ -174,3 +174,58 @@ class TestOHealth:
         monkeypatch.setattr(settings, "GIT_SHA", GIT_SHA_NAO_CARIMBADO)
 
         assert client.get("/health").json()["git_sha"] == GIT_SHA_NAO_CARIMBADO
+
+
+class TestOSHaVindoDoAMBIENTE:
+    """O buraco por onde o carimbo escapou — e ele estava ANTES de tudo acima.
+
+    Em 24/08/2026 um deploy saiu com `git_sha=` VAZIO no boot e **sem** o
+    WARNING. Nenhum teste deste arquivo pegou, e o motivo e estrutural: todos
+    eles fazem `monkeypatch.setattr(settings, "GIT_SHA", ...)`, quer dizer,
+    comecam DEPOIS da unica etapa que falhou — a leitura do ambiente.
+
+    O caminho real: `docker-compose.yml` manda `GIT_SHA: "${GIT_SHA:-}"`, que
+    com a variavel ausente vira `--build-arg GIT_SHA=` (string vazia, nao
+    ausencia). Valor explicito sobrepoe o `ARG GIT_SHA=nao-carimbado` do
+    `Dockerfile`, a imagem nasce com `ENV GIT_SHA=""`, e o default do campo
+    nunca vale porque para o pydantic o campo estava PRESENTE.
+
+    A licao que fica, e que vale para qualquer campo de `Settings` com
+    sentinela de default: **dublar o valor final testa a metade que nao
+    quebrou.** O que precisa ser testado e o ambiente entrando.
+    """
+
+    def test_variavel_vazia_no_ambiente_vira_nao_carimbado(self, monkeypatch):
+        monkeypatch.setenv("GIT_SHA", "")
+
+        assert Settings().GIT_SHA == GIT_SHA_NAO_CARIMBADO
+
+    def test_so_espaco_tambem_conta_como_ausente(self, monkeypatch):
+        """Um espaco sobrando na linha do `.env` nao pode virar "carimbado"."""
+        monkeypatch.setenv("GIT_SHA", "   ")
+
+        assert Settings().GIT_SHA == GIT_SHA_NAO_CARIMBADO
+
+    def test_sha_de_verdade_atravessa_intacto(self, monkeypatch):
+        """A contraprova: sem ela, um validador que devolvesse sempre a
+        sentinela passaria nos dois testes acima e apagaria o carimbo real."""
+        monkeypatch.setenv("GIT_SHA", SHA_FALSO)
+
+        assert Settings().GIT_SHA == SHA_FALSO
+
+    def test_o_ambiente_vazio_faz_o_boot_gritar(self, monkeypatch, caplog):
+        """As duas metades ligadas: e o WARNING que faltou no deploy real.
+
+        Os testes de `TestOBoot` provam que a sentinela gera o aviso; estes
+        provam que o ambiente vazio gera a sentinela. Este aqui e o unico que
+        cobre o percurso inteiro, que e onde o defeito morava.
+        """
+        monkeypatch.setenv("GIT_SHA", "")
+        monkeypatch.setattr(main_module, "settings", Settings())
+
+        with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+            main_module._log_versao_da_imagem()
+
+        avisos = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(avisos) == 1
+        assert f"git_sha={GIT_SHA_NAO_CARIMBADO}" in avisos[0].getMessage()

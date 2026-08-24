@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -313,6 +314,41 @@ class Settings(BaseSettings):
         if self.ENABLE_API_DOCS is not None:
             return self.ENABLE_API_DOCS
         return not self.is_production
+
+    @field_validator("GIT_SHA", mode="before")
+    @classmethod
+    def _sha_vazio_e_sha_ausente(cls, valor: object) -> object:
+        """String vazia vira `nao-carimbado`. O default do campo NAO faz isso.
+
+        O BUG QUE ISTO FECHA, visto em producao em 24/08/2026: o boot escreveu
+        `git_sha=` — vazio — e o aviso de "imagem sem carimbo" NAO disparou.
+        Os dois sintomas sao a mesma causa, e ela atravessa tres arquivos:
+
+            docker-compose.yml   args: GIT_SHA: "${GIT_SHA:-}"
+            Dockerfile           ARG GIT_SHA=nao-carimbado
+
+        `${GIT_SHA:-}` com a variavel ausente nao omite o build arg: expande
+        para STRING VAZIA e o compose manda `--build-arg GIT_SHA=`. Um valor
+        explicito, ainda que vazio, **sobrepoe** o default do `ARG` — entao a
+        imagem nasce com `ENV GIT_SHA=""`, a variavel EXISTE no ambiente, e o
+        default deste campo (`GIT_SHA_NAO_CARIMBADO`) nunca chega a valer.
+        Pydantic so aplica default de campo AUSENTE, e este estava presente.
+
+        Depois disso, `main.py` compara `settings.GIT_SHA == "nao-carimbado"`,
+        recebe `"" == "nao-carimbado"` e segue em frente calado. O aviso que
+        existia justamente para gritar "voce nao sabe que codigo esta rodando"
+        ficou mudo no unico deploy em que precisava falar.
+
+        POR QUE AQUI E NAO NO COMPOSE. Consertar o `:-` faria o caminho do
+        compose funcionar e deixaria todos os outros abertos — `GIT_SHA=`
+        exportado a mao, outro orquestrador, um `docker run -e GIT_SHA=`. O
+        campo e quem sabe o que "sem carimbo" significa, entao a normalizacao
+        mora nele. O comentario errado do `docker-compose.yml` foi corrigido
+        junto, porque era ele que ensinava o modelo mental errado.
+        """
+        if isinstance(valor, str) and not valor.strip():
+            return GIT_SHA_NAO_CARIMBADO
+        return valor
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -49,6 +49,10 @@ _cold_start_pending = True
 _resgates_por_nome = 0
 _turnos_com_llm = 0
 
+# Ver `_contar_cartao_do_turno`.
+_turnos_com_contexto = 0
+_turnos_sem_cartao = 0
+
 
 # Por quanto tempo o voto do cliente sobre uma resposta do Rapi continua no
 # banco. Ver `feedback_retention_cutoff`.
@@ -291,6 +295,7 @@ class ChatService:
             selected_product_ids=selected_product_ids,
         )
         products = self._hydrate_products(branch.id, selected_product_ids)
+        _contar_cartao_do_turno(retrieved_products, products)
         self._log_price_divergence(retrieved_products, products)
         response = self._build_response(
             llm_response=llm_response,
@@ -743,6 +748,64 @@ def _contar_turno_com_llm(houve_resgate: bool) -> tuple[int, int]:
     if houve_resgate:
         _resgates_por_nome += 1
     return _resgates_por_nome, _turnos_com_llm
+
+
+def _contar_cartao_do_turno(retrieved_products: list[dict], products: list) -> None:
+    """A busca achou produto e o cliente ficou sem cartao. Com que frequencia?
+
+    POR QUE O CONTADOR DO RESGATE NAO RESPONDE ISSO — e por que ele, sozinho,
+    ATRAPALHA. O caso de producao de 24/08/2026: "voces tem sushi?" voltou
+    `response_type=text | products_count=0`, e o texto oferecia mostrar os
+    peixes da casa sem escrever o nome de nenhum. Sem nome no texto,
+    `_rescue_products_named_in_text` nao tinha o que resgatar e saiu pelo
+    caminho de `houve_resgate=False` — quer dizer, aquele turno entrou no
+    placar do resgate como um turno LIMPO, e ainda diluiu a taxa dele.
+
+    A DIFERENCA ENTRE OS DOIS PLACARES E A REDE DE SEGURANCA NO MEIO:
+
+        `resgates`      o modelo nao selecionou, MAS escreveu os nomes
+                        -> a rede pegou, o cartao saiu
+        `sem_cartao`    o modelo nao selecionou e nao escreveu nome nenhum
+                        -> nao ha o que pegar, o cliente ficou sem cartao
+
+    Sao o pedaco pego e o pedaco que escapa do MESMO defeito. Por isso os
+    dois placares ficam, e por isso nenhum deles substitui o outro.
+
+    O DENOMINADOR SO CONTA TURNO COM CONTEXTO. Pergunta cuja busca nao trouxe
+    nada ("voces abrem domingo?") termina sem cartao porque nao havia cartao a
+    mostrar, e conta-la aqui misturaria acerto com defeito. `retrieved_products`
+    vazio sai antes de somar qualquer coisa.
+
+    E UM NUMERO PARA COMPARAR, NAO UM ALARME. Taxa diferente de zero e
+    esperada: em "nao temos sushi" a busca devolve peixe acima do piso de
+    similaridade e o modelo pode, com razao, nao querer oferecer cartao
+    nenhum. O que este placar serve para responder e se a MESMA bateria
+    piorou entre dois deploys — o mesmo turno trouxe 2 ou 3 cartoes nas duas
+    baterias anteriores e nenhum nesta, e sem contador isso so aparece para
+    quem estava olhando a tela naquela hora.
+
+    Vale o mesmo que vale para `_contar_turno_com_llm`: vive no processo,
+    zera no deploy, e e por worker.
+    """
+    global _turnos_com_contexto, _turnos_sem_cartao
+
+    # A busca nao trouxe nada: zero cartao e a resposta CERTA, nao um caso.
+    if not retrieved_products:
+        return
+
+    _turnos_com_contexto += 1
+    if products:
+        return
+
+    _turnos_sem_cartao += 1
+    logger.warning(
+        "[AI /chat] a busca achou %d produto(s) e nenhum chegou ao cliente. "
+        "| sem_cartao=%d | turnos_com_contexto=%d | taxa=%.1f%%",
+        len(retrieved_products),
+        _turnos_sem_cartao,
+        _turnos_com_contexto,
+        100.0 * _turnos_sem_cartao / _turnos_com_contexto,
+    )
 
 
 def _products_named_in(message: str, retrieved_products: list[dict]) -> list[uuid.UUID]:

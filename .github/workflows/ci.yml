@@ -49,8 +49,17 @@ jobs:
           # produção em outra faz o verde aqui não valer nada lá.
           python-version: "3.12"
           cache: pip
+          # Sem isto o cache do pip continua chaveado pelo `requirements.txt`,
+          # que agora quase nao muda — e uma versao nova no lock reaproveitaria
+          # o cache da anterior.
+          cache-dependency-path: |
+            requirements.lock.txt
+            requirements-dev.txt
 
-      - run: pip install -r requirements.txt -r requirements-dev.txt
+      # O lock, pelo mesmo motivo do Dockerfile: CI que resolve versao
+      # sozinho testa uma arvore de dependencias que producao nao tem, e o
+      # verde daqui deixa de valer la.
+      - run: pip install -r requirements.lock.txt -r requirements-dev.txt
 
       # `src.core.config` é importado na cadeia de qualquer teste, e as
       # variáveis sem default derrubam o import com ValidationError. Os
@@ -90,6 +99,13 @@ jobs:
       - name: Conferir se o openapi.json acompanha o codigo
         run: python scripts/export_openapi.py --check
 
+      # Dependencia declarada e fora do lock nao entra na imagem: o sintoma
+      # seria `ModuleNotFoundError` no boot do container, em producao, depois
+      # do deploy. Este passo e o que faz o segundo passo (regerar o lock) ser
+      # cobrado em vez de lembrado.
+      - name: Conferir se o lock cobre o requirements.txt
+        run: python scripts/check_lockfile.py
+
   banco:
     name: Testes contra o Postgres
     runs-on: ubuntu-latest
@@ -127,8 +143,14 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: |
+            requirements.lock.txt
+            requirements-dev.txt
 
-      - run: pip install -r requirements.txt -r requirements-dev.txt
+      # O lock, pelo mesmo motivo do Dockerfile: CI que resolve versao
+      # sozinho testa uma arvore de dependencias que producao nao tem, e o
+      # verde daqui deixa de valer la.
+      - run: pip install -r requirements.lock.txt -r requirements-dev.txt
 
       # Mesmo .env do job da API, e o DATABASE_URL continua fictício de
       # propósito: quem aponta para o Postgres de verdade é TEST_DATABASE_URL,

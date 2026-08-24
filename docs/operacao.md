@@ -284,7 +284,95 @@ docker exec pedeaqui-api python scripts/error_reports.py
 
 ---
 
-## 5. Quando não sobe
+## 5. Dependências
+
+**O que a produção instala é `requirements.lock.txt`**, não `requirements.txt`.
+São ~70 linhas `nome==versão`, transitivas incluídas, congeladas de um
+`pip freeze` do container que está no ar. `requirements.txt` continua sendo a
+lista do que o projeto **usa**, com o motivo de cada escolha ao lado —
+`Dockerfile` e CI não o instalam mais.
+
+Por que existe: até 23/08/2026 só três pacotes estavam pinados, e o pip
+resolvia os outros quarenta **a cada `--build`**. Foi assim que a VPS chegou ao
+`starlette 1.6.0` sem ninguém escolher, e o estrago não foi um 500 — foi a
+auditoria de papéis das rotas `/admin` desligar em produção, calada, por
+semanas. Qualquer um dos quarenta podia fazer o mesmo.
+
+### Atualizar uma dependência
+
+A ordem é sempre **decidir aqui, congelar de lá**. Nunca o contrário: congelar
+antes de subir grava uma versão que ninguém serviu.
+
+**1.** Declare no `requirements.txt`: versão nova, pacote novo. Se for pino,
+escreva ao lado **por que** aquela versão importa — é a única coisa que aquele
+arquivo tem e o lock não.
+
+**2.** Resolva o lock novo num container limpo. É aqui que a versão é
+escolhida, e é fora da produção de propósito: um `pip install` na máquina de
+desenvolvimento traria o Python e as wheels dela.
+
+```bash
+docker run --rm -v "$PWD":/app -w /app python:3.12-slim   sh -c "pip install -q -r requirements.txt && pip freeze" > requirements.lock.txt
+```
+
+**3.** Recoloque o marcador de plataforma do `uvloop` — o freeze não o escreve,
+e o comentário na linha dele explica. Depois:
+
+```bash
+python scripts/check_lockfile.py
+```
+
+**4.** Suíte inteira na máquina, com o lock instalado (`pip install -r
+requirements.lock.txt -r requirements-dev.txt`). Commit dos **dois** arquivos
+juntos: eles nunca viajam separados.
+
+**5.** Deploy normal (`docker compose up -d --build`). Com o serviço de pé,
+congele o que de fato subiu e compare com o arquivo commitado:
+
+```bash
+docker exec pedeaqui-api pip freeze
+```
+
+O passo 5 não é cerimônia. Ele é o que transforma o lock em **registro do que
+está no ar** em vez de intenção: se as listas divergirem, quem manda é a
+produção, e o arquivo é corrigido para ela — foi errando essa direção que a
+primeira tentativa de pino quase rebaixou três frameworks para os da máquina de
+desenvolvimento.
+
+**O CI cobra a metade que é fácil de esquecer.** `scripts/check_lockfile.py`
+recusa dependência declarada em `requirements.txt` que não esteja no lock — o
+sintoma sem ele seria `ModuleNotFoundError` no boot do container, em produção,
+depois do deploy.
+
+### Descobrir que existe versão nova
+
+Nada avisa sozinho: um lock que ninguém revisa é uma foto que envelhece. O
+comando é este, no container que está no ar:
+
+```bash
+docker exec pedeaqui-api pip list --outdated
+```
+
+A saída é `pacote  versão-atual  versão-nova  tipo`. Ela **não** é uma lista de
+tarefas — a maioria das linhas não vale um deploy. O que vale olhar:
+
+- **`cryptography`, `requests`, `urllib3`, `starlette`, `fastapi`** e qualquer
+  coisa que fale rede ou cripto: aqui versão nova pode ser correção de
+  segurança, e vale ler o changelog na hora.
+- **major nova** (`2.x` → `3.x`) de qualquer coisa: não suba junto com outra
+  mudança. Um commit só dela, com a suíte inteira.
+- **o resto**: junte e suba de uma vez, de tempos em tempos, com a suíte
+  fechando o commit.
+
+Quem quiser o aviso automático liga o **Dependabot** (`.github/dependabot.yml`,
+ecossistema `pip`): ele abre PR por atualização e o CI já roda em PR. Ficou de
+fora hoje de propósito — PR automático em repositório de uma pessoa só vira
+fila que ninguém lê, e a fila silenciosa é pior que o comando acima rodado de
+vez em quando.
+
+---
+
+## 6. Quando não sobe
 
 Em ordem.
 
@@ -346,7 +434,7 @@ produção: `ENABLE_API_DOCS=true`.
 
 ---
 
-## 6. Testes
+## 7. Testes
 
 ```powershell
 py -m pytest -q                        # 614 testes da API, ~11s

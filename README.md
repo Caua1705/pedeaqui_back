@@ -16,13 +16,20 @@ FastAPI + SQLAlchemy sobre PostgreSQL (Supabase).
 ```powershell
 py -m venv venv
 venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements.lock.txt
 copy .env.example .env     # e preencha os segredos
 uvicorn main:app --reload
 ```
 
 Linux/macOS: `python3 -m venv venv && source venv/bin/activate` no lugar das duas
 primeiras linhas.
+
+**O lock, e não o `requirements.txt`** — é o mesmo arquivo que o `Dockerfile` e
+o CI instalam, congelado do que a produção tem de pé, e é o que faz "passa aqui"
+e "passa lá" serem a mesma frase. `requirements.txt` é a lista do que o projeto
+usa, com o motivo de cada escolha; instalá-lo deixaria o pip resolver versão
+sozinho. Para atualizar dependência:
+[`docs/operacao.md`](docs/operacao.md#5-dependências).
 
 Sanidade: `curl http://localhost:8000/health`
 Docs interativas: `http://localhost:8000/docs` — desligadas quando

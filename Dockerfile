@@ -5,9 +5,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements.txt .
+# O LOCK, e nao o `requirements.txt`: e ele que fixa as ~70 versoes, com as
+# transitivas. Instalar a declaracao deixaria o pip resolver de novo a cada
+# build, que e o sorteio que o lock veio acabar (a historia esta no cabecalho
+# dos dois arquivos).
+#
+# Copiado sozinho, antes do `COPY . .`, para a camada de instalacao so
+# invalidar quando as versoes mudarem — e nao a cada linha de codigo.
+COPY requirements.lock.txt .
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.lock.txt
 
 COPY . .
 

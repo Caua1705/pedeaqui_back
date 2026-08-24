@@ -1,0 +1,112 @@
+# LOCKFILE. Nao edite a mao: esta lista e a saida de `pip freeze` do container
+# de PRODUCAO, e o valor dela e exatamente esse — ser o registro do que esta no
+# ar, e nao uma resolucao nova feita na maquina de alguem.
+#
+# Quem declara o que o projeto USA e o `requirements.txt`, com o motivo de cada
+# escolha escrito ao lado. Este arquivo e a outra metade: a lista fechada,
+# transitivas incluidas, que o `Dockerfile` e o CI instalam. Os dois nao podem
+# divergir, e quem cobra isso e `scripts/check_lockfile.py`, num passo do CI.
+#
+# POR QUE ELE EXISTE. Ate 23/08/2026 o `requirements.txt` tinha tres pinos —
+# fastapi, starlette e pydantic — e outros quarenta pacotes soltos. `pip` entao
+# resolvia a versao mais nova de cada um A CADA `docker compose up --build`, e
+# foi assim que a VPS chegou ao `starlette 1.6.0` sem ninguem ter escolhido.
+# O estrago daquela vez nao foi um 500: foi o `include_router` deixar de copiar
+# as rotas para `app.routes`, o que desligou a AUDITORIA DE PAPEIS em producao
+# sem nada ficar vermelho. Os tres pinos fecharam o caso concreto; os quarenta
+# restantes continuavam sendo o mesmo sorteio, uma vez por build.
+#
+# COMO REGERAR. Nunca a partir da maquina de desenvolvimento — foi esse o erro
+# de 23/08/2026, quando a primeira tentativa de pino quase REBAIXOU os tres
+# frameworks da producao para os da maquina de quem escreve. A ordem e sempre
+# producao primeiro:
+#
+#     docker exec pedeaqui-api pip freeze > requirements.lock.txt
+#
+# E depois disso, RECOLOQUE o marcador de plataforma do `uvloop` — o freeze
+# nao o escreve, e sem ele o arquivo deixa de instalar no Windows. O
+# comentario na propria linha explica.
+#
+# E depois de uma ATUALIZACAO deliberada, o inverso: mexeu no
+# `requirements.txt`, construiu, subiu, conferiu de pe — e so entao congela o
+# que subiu. O fluxo inteiro esta em `docs/operacao.md`.
+#
+# Congelado de: container `pedeaqui-api` (python:3.12-slim), 23/08/2026.
+alembic==1.19.1
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.14.2
+bcrypt==4.0.1
+certifi==2026.7.22
+cffi==2.1.1
+charset-normalizer==3.5.1
+click==8.4.2
+cryptography==50.0.0
+Deprecated==1.3.1
+distro==1.9.0
+fastapi==0.141.1
+greenlet==3.5.5
+h11==0.16.0
+httpcore==1.0.9
+httpcore2==2.12.0
+httptools==0.8.0
+httpx==0.28.1
+httpx2==2.12.0
+idna==3.19
+jiter==0.16.0
+jsonpatch==1.33
+jsonpointer==3.1.1
+langchain-core==1.6.0
+langchain-openai==1.6.0
+langchain-protocol==0.0.18
+langsmith==0.11.1
+limits==5.8.0
+Mako==1.4.1
+MarkupSafe==3.0.3
+openai==3.3.1
+orjson==3.12.0
+packaging==26.3
+passlib==1.7.4
+psycopg==3.3.4
+psycopg-binary==3.3.4
+psycopg2-binary==2.9.12
+pycparser==3.0
+pydantic==2.13.4
+pydantic-settings==2.15.0
+pydantic_core==2.46.4
+PyJWT==2.13.0
+python-dotenv==1.2.3
+python-multipart==0.0.32
+PyYAML==6.0.3
+redis==8.1.0
+regex==2026.7.19
+requests==2.34.2
+requests-toolbelt==1.0.0
+resend==2.39.0
+slowapi==0.1.10
+sniffio==1.3.1
+SQLAlchemy==2.0.52
+starlette==1.6.0
+tenacity==9.1.4
+tiktoken==0.14.0
+truststore==0.10.4
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+urllib3==2.7.0
+uuid_utils==0.17.0
+uvicorn==0.52.4
+# A UNICA LINHA COM MARCADOR ACRESCENTADO A MAO, e ela precisa voltar a cada
+# regeracao. `pip freeze` nao escreve marcador de plataforma: ele lista o que
+# esta instalado NAQUELE container, que e Linux. O `uvloop` nao tem wheel para
+# Windows — sem o marcador, `pip install -r requirements.lock.txt` na maquina
+# de desenvolvimento falha na hora de compilar, e o unico caminho seria voltar
+# a instalar o `requirements.txt` la, que e justamente a divergencia
+# maquina-x-producao que este arquivo veio acabar.
+#
+# O marcador e o mesmo que o extra `[standard]` do uvicorn ja usa para ele.
+uvloop==0.22.1 ; sys_platform != "win32"
+watchfiles==1.2.0
+websockets==17.0.1
+wrapt==2.3.0
+xxhash==4.0.1
+zstandard==0.25.0

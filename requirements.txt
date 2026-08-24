@@ -1,36 +1,48 @@
-# O TRIO DO FRAMEWORK ENTRA PINADO, NAS VERSOES QUE A PRODUCAO JA RODA. O
-# resto deste arquivo continua solto de proposito — o que se quer travar aqui
-# e o que ja quebrou, nao tudo.
+# O QUE ESTE ARQUIVO E: a lista do que o projeto USA, com o motivo de cada
+# escolha escrito ao lado. Ele NAO e mais o que o `Dockerfile` e o CI instalam
+# — quem eles instalam e o `requirements.lock.txt`, a lista fechada, com as
+# transitivas, congelada do que a PRODUCAO tem de pe.
 #
-# O QUE ACONTECEU EM 23/08/2026. Este arquivo nao tinha pino nenhum, e o
-# `Dockerfile` constroi a partir dele: cada `docker compose up --build`
-# instalava o que o pip resolvesse NAQUELE DIA. Foi assim que a VPS chegou ao
-# `starlette 1.6.0` sem ninguem ter escolhido — e foi assim que se descobriu,
-# porque no starlette 1.6 o `include_router` DEIXOU DE COPIAR as rotas para
-# `app.routes`: onde havia 126 objetos `Route` passou a haver 28, sendo 24
-# `_IncludedRouter`.
+# Os dois andam juntos, e `scripts/check_lockfile.py` recusa que divirjam: todo
+# nome declarado aqui tem que existir la, e toda faixa daqui (`==`, `>=`) tem
+# que ser satisfeita pela versao de la. O CI roda esse check.
+#
+# ENTAO ACRESCENTAR DEPENDENCIA SAO DOIS PASSOS: declarar aqui e regerar o
+# lock. Um passo so deixa o pacote fora da imagem, e o sintoma seria
+# `ModuleNotFoundError` no boot do container. O check para antes disso, no CI.
+# O fluxo inteiro — atualizar, e descobrir que ha versao nova — esta em
+# `docs/operacao.md`.
+#
+# O QUE ACONTECEU EM 23/08/2026, E POR QUE O LOCK EXISTE. Este arquivo nao
+# tinha pino nenhum, e o `Dockerfile` construia a partir dele: cada
+# `docker compose up --build` instalava o que o pip resolvesse NAQUELE DIA. Foi
+# assim que a VPS chegou ao `starlette 1.6.0` sem ninguem ter escolhido — e foi
+# assim que se descobriu, porque no starlette 1.6 o `include_router` DEIXOU DE
+# COPIAR as rotas para `app.routes`: onde havia 126 objetos `Route` passou a
+# haver 28, sendo 24 `_IncludedRouter`.
 #
 # A API nao quebrou com isso, e e o que torna o caso perigoso: o app sobe, as
 # rotas respondem, os pedidos entram, o `app.openapi()` sai completo com os
 # 100 caminhos. Quem parou foi a INTROSPECCAO — e com ela
-# `tests/test_papeis_das_rotas.py`, a auditoria que confere o papel exigido
-# por cada rota /admin. A trava que impede rota nova de nascer aberta ao
-# `print_agent` ficou desligada em producao ate o commit que acompanha estes
-# pinos, que ensinou os tres testes a atravessar o `_IncludedRouter`.
+# `tests/test_papeis_das_rotas.py`, a auditoria que confere o papel exigido por
+# cada rota /admin. A trava que impede rota nova de nascer aberta ao
+# `print_agent` ficou desligada em producao ate o commit que pinou os tres.
 #
-# POR QUE O PINO E NA VERSAO NOVA, E NAO NA ANTIGA. A primeira tentativa
-# pinou o trio na versao da maquina de desenvolvimento (0.116.1 / 0.47.3 /
-# 2.11.7), que era a que passava nos testes. Estava errado: a producao ja
-# rodava a nova, e o pino a faria DESCER tres frameworks no proximo
-# `--build`. Pino nao e escolha de versao — e o registro do que ESTA no ar.
-# Trocar de versao e outro trabalho, com os testes indo junto.
+# Aqueles tres pinos fecharam o caso concreto. Os outros quarenta pacotes
+# continuavam soltos — o mesmo sorteio, uma vez por build, com qualquer um
+# deles no papel do starlette. E o que o lock fecha.
 #
-# `starlette` aparece aqui embora seja dependencia transitiva do FastAPI: e
-# ELE que muda o comportamento, e deixa-lo implicito seria pinar a causa pelo
-# sintoma.
+# POR QUE O PINO E NA VERSAO NOVA, E NAO NA ANTIGA. A primeira tentativa pinou
+# o trio na versao da maquina de desenvolvimento (0.116.1 / 0.47.3 / 2.11.7),
+# que era a que passava nos testes. Estava errado: a producao ja rodava a nova,
+# e o pino a faria DESCER tres frameworks no proximo `--build`. Pino nao e
+# escolha de versao — e o registro do que ESTA no ar. Vale para o lock inteiro,
+# e por isso ele nasce de `pip freeze` da producao, nunca daqui.
 #
-# Subir esses tres continua sendo um commit deliberado, com o que introspecta
-# rota conferido junto e o repositorio ficando verde no mesmo commit.
+# O trio continua com `==` explicito mesmo com o lock existindo, e nao e
+# redundancia inutil: e aqui que se le POR QUE estas tres versoes importam, e o
+# check transforma a repeticao em conferencia — se um `pip freeze` novo trouxer
+# outro starlette sem ninguem ter decidido, o CI para.
 fastapi==0.141.1
 starlette==1.6.0
 # Exigida pelo FastAPI para ler multipart/form-data. Sem ela, a rota de

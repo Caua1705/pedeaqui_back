@@ -263,7 +263,7 @@ class ChatCache:
         return f"{restaurant_id}:{branch_id}:g{generation}{teto}:{self.normalize_message(message)}"
 
     def get_embedding(self, key: str) -> tuple[list[float] | None, str | None]:
-        """O vetor e DE ONDE ele veio: `"memoria"`, `"redis"` ou `(None, None)`.
+        """O vetor e DE ONDE ele veio. Quatro origens, e o MISS tem tres delas.
 
         A origem faz parte do retorno porque ela e o unico jeito de saber se o
         item 1 desta frente funcionou. `embedding_cache_hit=true` nao
@@ -274,17 +274,45 @@ class ChatCache:
 
         Redis serve so de segundo nivel: acerto dele repovoa a memoria, para
         o proximo turno do mesmo processo nao pagar nem a ida a rede.
+
+        =====================================================================
+        POR QUE O MISS NAO PODE SER UMA ORIGEM SO
+        =====================================================================
+
+        Ate 24/08/2026 todo miss devolvia `None`, e o log do `/chat` escrevia
+        `embedding_cache_origem=nenhuma` para TRES situacoes que pedem tres
+        acoes diferentes:
+
+        | origem          | o que aconteceu                  | o que fazer         |
+        |-----------------|----------------------------------|---------------------|
+        | `sem_redis`     | `REDIS_URL` ausente no ambiente  | conferir o `.env`   |
+        | `redis_falhou`  | Redis recusou ou nao respondeu   | senha, host, rede   |
+        | `nenhuma`       | Redis respondeu e nao tinha      | nada: cache frio    |
+
+        As duas primeiras sao DEFEITO DE CONFIGURACAO e a terceira e o
+        funcionamento normal de uma pergunta inedita. Sem separa-las, uma
+        bateria de perguntas distintas contra um Redis que nunca esteve
+        ligado produz exatamente o mesmo log de uma bateria contra um Redis
+        saudavel — que foi o que custou a investigacao de 24/08/2026. O
+        `.env` desta VPS ja perdeu configuracao duas vezes, e um cache que
+        some sem dizer nada nao tem como ser notado: ele nao quebra resposta
+        nenhuma, so volta a cobrar ~400 ms e uma chamada paga por pergunta.
+
+        O aviso de boot correspondente esta em
+        `collect_configuration_warnings` (`src/core/startup_checks.py`) — os
+        dois cobrem instantes diferentes: o aviso pega o `.env` incompleto
+        antes do primeiro cliente, a origem pega o Redis que caiu depois.
         """
         value = self._get(self._embeddings, key)
         if value is not None:
             return list(value), "memoria"
 
-        value = self._ler_embedding_do_redis(key)
+        value, origem = self._ler_embedding_do_redis(key)
         if value is None:
-            return None, None
+            return None, origem
 
         self._set(self._embeddings, key, value, self.embedding_ttl_seconds)
-        return list(value), "redis"
+        return list(value), origem
 
     def set_embedding(self, key: str, embedding: list[float]) -> None:
         """Grava nos dois niveis. Falha no Redis nao impede a gravacao em memoria."""
@@ -296,25 +324,45 @@ class ChatCache:
         )
         self._gravar_embedding_no_redis(key, embedding)
 
-    def _ler_embedding_do_redis(self, key: str) -> list[float] | None:
-        """Le e desempacota. Qualquer problema vira `None`, nunca excecao.
+    def _ler_embedding_do_redis(
+        self, key: str
+    ) -> tuple[list[float] | None, str | None]:
+        """Le, desempacota, e diz POR QUE nao trouxe nada quando nao trouxe.
 
         Um Redis fora do ar, um valor truncado ou um formato que mudou tem que
         significar "pague o embedding de novo" — que custa ~400 ms —, e nunca
         derrubar a resposta do cliente. O cache e desempenho; a pergunta dele,
-        nao.
+        nao. Nenhum caminho daqui levanta.
+
+        Devolve a origem junto porque quem chama nao tem como distinguir os
+        casos sozinho: da altura do `get_embedding`, "nao havia Redis" e
+        "havia e a chave nao estava la" sao os dois um `None`. A tabela das
+        tres origens de miss esta no docstring dele.
+
+        O acerto tambem sai por aqui (`"redis"`), para o `set` da memoria
+        continuar sendo responsabilidade de um lugar so.
         """
         redis_client = cliente_redis()
         if redis_client is None:
-            return None
+            return None, "sem_redis"
         try:
             raw = redis_client.get(key)
         except Exception:
             logger.warning("[AI cache] embedding_redis_read_failed=true")
-            return None
+            return None, "redis_falhou"
         if not raw:
-            return None
-        return self._desempacotar(raw)
+            return None, None
+
+        # Valor truncado ou gravado noutro formato continua sendo um miss (ver
+        # `_desempacotar`), mas NAO e cache frio: alguem gravou 6 KB de lixo
+        # naquela chave, ou o empacotamento mudou sem a versao da chave subir.
+        # Sai como `redis_falhou` para nao se esconder entre as perguntas
+        # ineditas.
+        vetor = self._desempacotar(raw)
+        if vetor is None:
+            logger.warning("[AI cache] embedding_redis_formato_invalido=true")
+            return None, "redis_falhou"
+        return vetor, "redis"
 
     def _gravar_embedding_no_redis(self, key: str, embedding: list[float]) -> None:
         """`SETEX`, e o TTL nao e opcional.

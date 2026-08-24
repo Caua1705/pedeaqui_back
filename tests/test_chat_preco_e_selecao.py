@@ -18,6 +18,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from src.ai.services.retrieval_service import RetrievalService
+from src.services import chat_service
 from src.services.chat_service import ChatService
 from src.utils.money import format_money_br
 
@@ -299,3 +300,97 @@ class TestOResgateVirandoCartao:
         llm = SimpleNamespace(response_type="text", selected_product_ids=[])
 
         assert ChatService._response_type(llm, [], []) == "text"
+
+
+# ---------------------------------------------------------------------------
+# 3. Com que frequência a rede de segurança precisa agir
+# ---------------------------------------------------------------------------
+
+
+class TestATaxaDeResgate:
+    """Uma rede que trabalha em 1 de cada 9 turnos não é mais uma rede.
+
+    Foi o que a bateria de 24/08/2026 mostrou em produção: um WARNING de
+    resgate em nove turnos. O aviso sozinho não diz isso — ele conta os
+    acionamentos e nunca os turnos em que a seleção veio bem, então "vi três
+    avisos hoje" não separa três em trinta de três em nove. Sem o
+    denominador não há como saber se mexer no `SYSTEM_PROMPT` melhorou ou
+    piorou, que é a única decisão que este número serve para tomar.
+    """
+
+    def setup_method(self):
+        """O contador é estado de MÓDULO: sem zerar, um teste conta o outro.
+
+        Mesma razão da fixture `cache_limpo` em
+        `tests/test_chat_cache_de_embedding_no_redis.py` — e o resto deste
+        arquivo chama `_rescue_products_named_in_text` doze vezes, então o
+        vazamento seria garantido, não hipotético.
+        """
+        chat_service._resgates_por_nome = 0
+        chat_service._turnos_com_llm = 0
+
+    def test_o_denominador_conta_o_turno_que_nao_precisou_de_resgate(self):
+        contexto = [retrieved(PUDIM, "Pudim"), retrieved(BROWNIE, "Brownie")]
+
+        ChatService._rescue_products_named_in_text("Recomendo o Brownie.", contexto, [BROWNIE])
+
+        assert chat_service._turnos_com_llm == 1
+        assert chat_service._resgates_por_nome == 0
+
+    def test_texto_sem_produto_nenhum_tambem_conta_como_turno(self):
+        """O modelo não citar produto é ele acertando, não um turno a ignorar.
+
+        Contar só os turnos que citaram produto inflaria a taxa: o
+        denominador viraria "turnos em que havia o que resgatar", e a
+        pergunta que se quer responder é sobre TODOS os turnos que chamaram
+        o modelo.
+        """
+        contexto = [retrieved(PUDIM, "Pudim")]
+
+        ChatService._rescue_products_named_in_text("Olá! Como posso ajudar?", contexto, [])
+
+        assert chat_service._turnos_com_llm == 1
+        assert chat_service._resgates_por_nome == 0
+
+    def test_o_resgate_soma_nos_dois_contadores(self):
+        contexto = [retrieved(PUDIM, "Pudim")]
+
+        ChatService._rescue_products_named_in_text("Temos **Pudim**.", contexto, [])
+
+        assert chat_service._turnos_com_llm == 1
+        assert chat_service._resgates_por_nome == 1
+
+    def test_o_aviso_carrega_o_placar_e_a_taxa(self, caplog):
+        """O que se lê no radar: numerador, denominador e a divisão pronta.
+
+        A taxa vai calculada porque quem lê o log às duas da manhã com a
+        operação de pé não vai dividir 3 por 27 de cabeça — e é a taxa, não
+        o numerador, que decide se o `SYSTEM_PROMPT` precisa de atenção.
+        """
+        contexto = [retrieved(PUDIM, "Pudim"), retrieved(BROWNIE, "Brownie")]
+
+        # Três turnos limpos e um que precisou da rede: 1 em 4.
+        for _ in range(3):
+            ChatService._rescue_products_named_in_text("Recomendo o Brownie.", contexto, [BROWNIE])
+
+        with caplog.at_level("WARNING", logger="uvicorn.error"):
+            ChatService._rescue_products_named_in_text("Temos **Pudim**.", contexto, [])
+
+        assert "Resgatados pelo nome." in caplog.text
+        assert "resgates=1" in caplog.text
+        assert "turnos_com_llm=4" in caplog.text
+        assert "taxa=25.0%" in caplog.text
+
+    def test_turno_limpo_nao_escreve_linha_nenhuma(self, caplog):
+        """O denominador viaja no próximo aviso, e não num log por turno.
+
+        Uma linha em INFO a cada turno para dizer "nada aconteceu" é ruído no
+        caminho quente, e o `/chat` já escreve dezenas de linhas por
+        requisição.
+        """
+        contexto = [retrieved(BROWNIE, "Brownie")]
+
+        with caplog.at_level("INFO", logger="uvicorn.error"):
+            ChatService._rescue_products_named_in_text("Recomendo o Brownie.", contexto, [BROWNIE])
+
+        assert "turnos_com_llm" not in caplog.text

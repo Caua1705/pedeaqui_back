@@ -45,6 +45,10 @@ _SESSION_HISTORY: dict[str, SessionState] = {}
 # Ver `_take_cold_start_flag`.
 _cold_start_pending = True
 
+# Ver `_contar_turno_com_llm`.
+_resgates_por_nome = 0
+_turnos_com_llm = 0
+
 
 # Por quanto tempo o voto do cliente sobre uma resposta do Rapi continua no
 # banco. Ver `feedback_retention_cutoff`.
@@ -569,16 +573,22 @@ class ChatService:
         um produto cujo nome o cliente acabou de ler.
         """
         if selected_product_ids:
+            _contar_turno_com_llm(houve_resgate=False)
             return selected_product_ids
 
         rescued = _products_named_in(message, retrieved_products)
         if not rescued:
+            _contar_turno_com_llm(houve_resgate=False)
             return selected_product_ids
 
+        resgates, turnos = _contar_turno_com_llm(houve_resgate=True)
         logger.warning(
             "[AI /chat] o modelo citou %d produto(s) no texto e nao selecionou nenhum. "
-            "Resgatados pelo nome.",
+            "Resgatados pelo nome. | resgates=%d | turnos_com_llm=%d | taxa=%.1f%%",
             len(rescued),
+            resgates,
+            turnos,
+            100.0 * resgates / turnos,
         )
         return rescued
 
@@ -692,6 +702,47 @@ class ChatService:
             return "text"
 
         return llm_response.response_type
+
+
+def _contar_turno_com_llm(houve_resgate: bool) -> tuple[int, int]:
+    """Soma este turno ao placar do resgate por nome, e devolve o par atual.
+
+    O QUE ESTE NUMERO RESPONDE. `_rescue_products_named_in_text` e rede de
+    seguranca: ela so age quando o modelo escreveu nomes de produto no texto
+    e devolveu `selected_product_ids` vazio. Uma rede que trabalha de vez em
+    quando esta certa; uma que trabalha em 1 de cada 9 turnos esta cobrindo um
+    defeito do prompt, e a diferenca entre as duas so aparece na TAXA. A linha
+    de WARNING sozinha nao a dava: ela conta os acionamentos e nunca os turnos
+    em que a selecao veio bem, entao "vi tres avisos hoje" nao distingue tres
+    em trinta de tres em nove.
+
+    O DENOMINADOR SAO OS TURNOS QUE CHAMARAM O MODELO, nao as requisicoes do
+    `/chat`. Saudacao responde enlatada e volta antes daqui (ver
+    `_answer`), e conta-la diluiria a taxa com turnos em que o modelo nunca
+    teve chance de errar — quanto mais gente cumprimentar o Rapi, melhor
+    pareceria o prompt.
+
+    TRES LIMITES, e nenhum deles e conserto pendente:
+
+    - **Vive no processo.** Zera a cada deploy, como `_SESSION_HISTORY` e
+      `_cold_start_pending`. Para a pergunta que ele responde — "a taxa
+      mudou depois que eu mexi no prompt?" — isso e util e nao atrapalha: o
+      contador reinicia justamente no deploy que muda a variavel.
+    - **E por worker.** Com N workers saem N placares independentes, cada um
+      com o seu denominador. Nenhum deles esta errado; somar os numeros de
+      duas linhas de log diferentes e que estaria.
+    - **So aparece quando a rede age.** Turno limpo nao escreve linha
+      nenhuma, de proposito: um log por turno em INFO para dizer "nada
+      aconteceu" e ruido no caminho quente. O denominador viaja junto do
+      proximo aviso, que e quando alguem tem motivo para olhar.
+
+    O grep que vale no radar: `Resgatados pelo nome`.
+    """
+    global _resgates_por_nome, _turnos_com_llm
+    _turnos_com_llm += 1
+    if houve_resgate:
+        _resgates_por_nome += 1
+    return _resgates_por_nome, _turnos_com_llm
 
 
 def _products_named_in(message: str, retrieved_products: list[dict]) -> list[uuid.UUID]:

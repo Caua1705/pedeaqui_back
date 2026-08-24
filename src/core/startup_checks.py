@@ -171,6 +171,29 @@ def collect_configuration_warnings(settings: Settings) -> list[str]:
             "chamadas ao Google Maps."
         )
 
+    if not settings.REDIS_URL:
+        # Aviso PROPRIO, e nao uma frase acrescentada aos dois acima, pelo
+        # mesmo criterio que separa aqueles dois: cada consequencia da mesma
+        # variavel ausente tem um dono, um sintoma e um custo diferentes, e
+        # quem le o boot precisa achar o seu sem ler os outros.
+        #
+        # ESTE E O QUE MAIS SOME EM SILENCIO. Rate limit e estimativa de
+        # entrega degradam para memoria e continuam CORRETOS num worker so; o
+        # cache de embedding degrada para um `dict` que morre a cada deploy e
+        # nunca viu duas pessoas — e o ganho inteiro dele e justamente o
+        # acerto entre clientes. Sem Redis ele nao erra resposta nenhuma:
+        # so volta a cobrar ~400 ms e uma chamada paga de embedding por
+        # pergunta, indefinidamente, sem nada no log do `/chat` alem de um
+        # miss que parece cache frio.
+        warnings.append(
+            "REDIS_URL nao definida: o cache de embedding do Rapi (/chat e "
+            "/voice) fica so no dict do processo — morre a cada deploy e nao "
+            "e compartilhado entre workers nem entre clientes, entao a mesma "
+            "pergunta de duas pessoas paga dois embeddings (~400 ms e uma "
+            "chamada cobrada cada). No log do /chat isso aparece como "
+            "embedding_cache_origem=sem_redis."
+        )
+
     if not settings.SUPABASE_SERVICE_ROLE_KEY:
         # Warning e nao erro: sem a chave so o upload de imagem do painel
         # para de funcionar (responde 503). Todo o resto da API, inclusive

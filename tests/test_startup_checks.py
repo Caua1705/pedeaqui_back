@@ -14,6 +14,7 @@ from src.core.config import settings
 from src.core.startup_checks import (
     StartupConfigurationError,
     collect_configuration_errors,
+    collect_configuration_warnings,
     collect_runtime_warnings,
     detect_worker_count,
     validate_settings,
@@ -219,3 +220,70 @@ class TestArgvSobreviveAoWorker:
         processo.join(timeout=60)
 
         assert fila.get(timeout=10) == 4
+
+
+class TestOAvisoDoCacheDeEmbedding:
+    """`REDIS_URL` ausente tem TRES consequencias, e a terceira nao tinha voz.
+
+    O caso concreto, de 24/08/2026: o cache de embedding do Rapi foi para o
+    Redis, e uma bateria em producao mostrou que ele nao estava acertando.
+    Nao havia como saber, sem entrar na VPS, se a variavel tinha sumido do
+    `.env` — que ja aconteceu duas vezes — ou se o cache so estava frio.
+
+    O aviso de rate limit e o de estimativa de entrega ja existiam e nao
+    servem de substituto: quem grepa o boot atras do Rapi nao procura por
+    "Google Maps". O molde e o de `RATE_LIMIT_CLIENT_IP_HEADER` — a
+    dependencia fica escrita onde alguem le no deploy.
+    """
+
+    def test_sem_redis_o_cache_de_embedding_avisa(self, monkeypatch):
+        _settings_with(monkeypatch, REDIS_URL=None)
+
+        warnings = collect_configuration_warnings(settings)
+
+        assert any("cache de embedding" in warning for warning in warnings)
+
+    def test_o_aviso_diz_o_que_procurar_no_log_do_chat(self, monkeypatch):
+        """Sem isto, o aviso de boot e a origem no log seriam duas ilhas.
+
+        Quem le "embedding_cache_origem=sem_redis" no `/chat` tem que chegar
+        no `.env`, e quem le o boot tem que saber qual linha do `/chat`
+        confirma o diagnostico. O nome da origem e a ponte, e ele so serve se
+        estiver escrito nos dois lados — ver
+        `tests/test_chat_cache_de_embedding_no_redis.py::TestOMissDizPorQue`.
+        """
+        _settings_with(monkeypatch, REDIS_URL=None)
+
+        aviso = next(
+            warning
+            for warning in collect_configuration_warnings(settings)
+            if "cache de embedding" in warning
+        )
+
+        assert "embedding_cache_origem=sem_redis" in aviso
+
+    def test_com_redis_o_aviso_some(self, monkeypatch):
+        _settings_with(monkeypatch, REDIS_URL="redis://:senha@redis:6379/0")
+
+        warnings = collect_configuration_warnings(settings)
+
+        assert not any("cache de embedding" in warning for warning in warnings)
+
+    def test_as_tres_consequencias_saem_em_avisos_separados(self, monkeypatch):
+        """Uma variavel, tres donos: rate limit, entrega e o Rapi.
+
+        Juntar as tres numa frase so economizaria duas linhas de boot e faria
+        cada um dos tres times ter de ler as consequencias dos outros dois
+        para achar a sua.
+        """
+        _settings_with(
+            monkeypatch, REDIS_URL=None, RATE_LIMIT_ENABLED=True
+        )
+
+        warnings = collect_configuration_warnings(settings)
+        sobre_redis = [w for w in warnings if "REDIS_URL nao definida" in w]
+
+        assert len(sobre_redis) == 3
+        assert any("rate limiting" in w for w in sobre_redis)
+        assert any("estimativa de entrega" in w for w in sobre_redis)
+        assert any("cache de embedding" in w for w in sobre_redis)

@@ -217,6 +217,15 @@ class TestOReusoEntreClientes:
         assert redis_falso.leituras == 0
 
     def test_pergunta_nunca_vista_nao_acerta_nada(self, redis_falso):
+        """Miss de cache FRIO — e a unica situacao que ainda devolve origem nenhuma.
+
+        O Redis respondeu, e a resposta dele foi "nao tenho". Isso e o
+        funcionamento normal de uma pergunta inedita e nao pede acao de
+        ninguem, entao e o unico miss que continua saindo no log como
+        `embedding_cache_origem=nenhuma`. Os outros dois — sem Redis e Redis
+        que falhou — sao defeito de configuracao e tem nome proprio desde
+        24/08/2026 (ver `TestOMissDizPorQue`).
+        """
         cache = ChatCache()
         chave = cache.embedding_key(uuid.uuid4(), "pergunta inedita")
 
@@ -256,7 +265,11 @@ class TestOEmpacotamento:
         chave = cache.embedding_key(uuid.uuid4(), PERGUNTA)
         redis_falso.dados[chave] = struct.pack("<3f", 0.1, 0.2, 0.3)[:-1]
 
-        assert cache.get_embedding(chave) == (None, None)
+        # `redis_falhou` e nao `None`: alguem gravou lixo naquela chave, ou o
+        # empacotamento mudou sem a versao da chave subir. Continua sendo um
+        # miss para o cliente, mas nao pode se esconder entre as perguntas
+        # ineditas no log.
+        assert cache.get_embedding(chave) == (None, "redis_falhou")
 
     def test_ler_lixo_da_chave_nao_levanta_no_caminho_do_cliente(self, redis_falso):
         """Byte arbitrario cujo tamanho FECHA em float32 nao vira excecao.
@@ -294,7 +307,7 @@ class TestQuandoORedisNaoEsta:
         monkeypatch.setattr(cache_module, "cliente_redis", lambda: RedisQuebrado())
         cache = ChatCache()
 
-        assert cache.get_embedding("emb:v1:m:r:h") == (None, None)
+        assert cache.get_embedding("emb:v1:m:r:h") == (None, "redis_falhou")
 
     def test_redis_quebrado_nao_derruba_a_escrita_nem_perde_a_memoria(self, monkeypatch):
         """A gravacao em memoria acontece ANTES da do Redis, e sobrevive a ela."""
@@ -369,3 +382,71 @@ class TestOContadorDeGeracao:
 
     def test_sem_redis_a_geracao_fica_em_zero(self, sem_redis):
         assert cache_module.MenuGeneration().current(uuid.uuid4()) == 0
+
+
+class TestOMissDizPorQue:
+    """As tres origens de miss, e por que colapsa-las custou uma investigacao.
+
+    Em 24/08/2026 uma bateria de nove perguntas em producao devolveu
+    `embedding_cache_origem=nenhuma` em oito turnos, e nao havia como saber,
+    do log, se aquilo era (a) `REDIS_URL` ausente no `.env` da VPS — que ja
+    perdeu configuracao duas vezes —, (b) o Redis recusando conexao, ou (c)
+    nove perguntas distintas contra um cache legitimamente frio. As tres
+    produziam a mesma linha.
+
+    O caso (c) e o unico que nao pede acao nenhuma. Os outros dois deixam o
+    Rapi pagando ~400 ms e uma chamada cobrada de embedding por pergunta,
+    para sempre, sem quebrar resposta nenhuma — que e exatamente o defeito
+    que ninguem nota.
+    """
+
+    def test_sem_redis_o_miss_se_identifica(self, sem_redis):
+        """`REDIS_URL` ausente: o par com o aviso de boot de `startup_checks`."""
+        cache = ChatCache()
+        chave = cache.embedding_key(uuid.uuid4(), PERGUNTA)
+
+        assert cache.get_embedding(chave) == (None, "sem_redis")
+
+    def test_redis_fora_do_ar_nao_se_confunde_com_cache_frio(self, monkeypatch):
+        """Senha errada, host errado, rede caida — todos chegam por aqui."""
+        monkeypatch.setattr(cache_module, "cliente_redis", lambda: RedisQuebrado())
+        cache = ChatCache()
+        chave = cache.embedding_key(uuid.uuid4(), PERGUNTA)
+
+        assert cache.get_embedding(chave) == (None, "redis_falhou")
+
+    def test_as_tres_origens_de_miss_sao_distintas(self, monkeypatch):
+        """A propriedade que este item existe para garantir, num assert so.
+
+        Se um dia as tres voltarem a colapsar num `None`, e este teste que
+        avisa — nao a proxima bateria em producao.
+        """
+        chave = ChatCache().embedding_key(uuid.uuid4(), PERGUNTA)
+
+        monkeypatch.setattr(cache_module, "cliente_redis", lambda: None)
+        _, sem = ChatCache().get_embedding(chave)
+
+        monkeypatch.setattr(cache_module, "cliente_redis", lambda: RedisQuebrado())
+        _, quebrado = ChatCache().get_embedding(chave)
+
+        monkeypatch.setattr(cache_module, "cliente_redis", lambda: RedisFalso())
+        _, frio = ChatCache().get_embedding(chave)
+
+        assert len({sem, quebrado, frio}) == 3
+
+    def test_o_log_do_chat_carimba_a_origem_de_quem_nao_tem_redis(
+        self, sem_redis, caplog
+    ):
+        """A linha que se le no radar, e nao so o retorno da funcao.
+
+        `retrieval_service` escreve `cache_origin or "nenhuma"`. O valor novo
+        so vale se chegar inteiro ate la — um `sem_redis` que virasse
+        `nenhuma` no log nao teria consertado nada.
+        """
+        restaurante = uuid.uuid4()
+        filial = uuid.uuid4()
+
+        with caplog.at_level("INFO", logger="uvicorn.error"):
+            servico().retrieve_products(restaurante, filial, PERGUNTA)
+
+        assert "embedding_cache_origem=sem_redis" in caplog.text

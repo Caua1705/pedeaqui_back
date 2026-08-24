@@ -45,7 +45,7 @@ a UI precisar dele.
 
 ```
 1. POST  /voice/session                       (nosso backend, com Bearer)
-      → guarda: sessao_id, credencial.value, limites
+      → guarda: sessao_id, credencial.value, limites, saudacao
 
 2. getUserMedia({audio:true})                 (navegador)
 
@@ -60,6 +60,10 @@ a UI precisar dele.
 
 5. setRemoteDescription(answer)               (navegador)
       → a conversa começa; liga os temporizadores do passo 8
+
+5b. no `onopen` do data channel:                (OpenAI, pelo canal)
+      response.create com { response: { instructions: "...saudacao..." } }
+      → o atendente cumprimenta o cliente pelo nome, sozinho (§6.4)
 
 6. durante a conversa, a cada tool call:
    POST  /voice/search                        (nosso backend)
@@ -79,6 +83,7 @@ a UI precisar dele.
 | `sessao_id` | resposta do passo 1 | montar as URLs dos passos 4 e 7 |
 | `credencial.value` | resposta do passo 1 | o `Bearer` do passo 3, **e só dele** |
 | `limites` | resposta do passo 1 | os temporizadores do passo 8 |
+| `saudacao` | resposta do passo 1 | o texto do passo 5b |
 | `call_id` | cabeçalho `Location` do passo 3 | o corpo do passo 4 |
 | `restaurant_id` | o contexto da tela | corpo dos passos 1 e 6 |
 | `branch_id` | a filial que o cliente escolheu | corpo dos passos 1 e 6, **obrigatório nos dois** |
@@ -149,6 +154,7 @@ não há tela onde o cliente pudesse notar. Ver
     "expires_at": 1786805373,
     "session": { "type": "realtime", "model": "gpt-realtime-mini", "...": "..." }
   },
+  "saudacao": "Olá, João! Como posso te ajudar hoje?",
   "limites": {
     "duracao_maxima_s": 300,
     "inatividade_s": 45,
@@ -164,6 +170,7 @@ não há tela onde o cliente pudesse notar. Ver
 | `credencial.value` | string | o segredo efêmero. Começa com `ek_`. É o `Bearer` da chamada à OpenAI |
 | `credencial.expires_at` | número (unix epoch, segundos) | quando o **segredo** expira — medido em ~585 s. É a janela para **abrir** a conexão, **não** o teto da conversa |
 | `credencial.session` | objeto | a configuração da sessão (modelo, voz, ferramentas, instruções). Informativo; o front não precisa usar |
+| `saudacao` | string | a frase que o atendente fala **sozinho** na abertura, com o primeiro nome do cliente já dentro. Ver §6.4 |
 | `limites` | objeto | os tetos que o front tem de aplicar |
 | `limites.duracao_maxima_s` | número (segundos) | teto absoluto da sessão |
 | `limites.inatividade_s` | número (segundos) | silêncio que encerra |
@@ -189,6 +196,11 @@ front** — eles podem mudar sem deploy do app.
 | 429 | `{"detail":"O atendimento por voz deste restaurante atingiu o limite do dia."}` | **cota do restaurante** |
 | 502 | `{"detail":"A OpenAI recusou a emissao da credencial"}` | a OpenAI respondeu erro |
 | 503 | `{"detail":"Nao consegui falar com a OpenAI"}` | rede/timeout falando com a OpenAI |
+
+**`saudacao` nunca vem vazia.** Quando o cadastro não entrega um primeiro
+nome que dê para falar — o campo é texto livre, e há `"12345"` e e-mail
+inteiro dentro dele — vem uma variação sem nome, e não a frase com um buraco
+onde o nome estaria. O front não decide isso e não monta essa frase.
 
 **Os três 429 têm o mesmo código e corpos diferentes.** Se a UI precisar
 distinguir, é pelo texto de `detail` — não há campo de código de erro. Vale
@@ -501,6 +513,40 @@ Se `headers.get("Location")` devolver `null`:
 
 Se isso acontecer sempre, avise o backend — muda a estratégia de controle de
 custo.
+
+### 6.4 A saudação, no `onopen` do data channel
+
+O atendente **cumprimenta primeiro**, antes de o cliente falar. Quem dispara é
+o front, no `onopen` do canal, com o texto que veio no passo 1:
+
+```js
+canal.onopen = () => {
+  if (!saudacao) { return; }
+  canal.send(JSON.stringify({
+    type: "response.create",
+    response: {
+      instructions: "Cumprimente o cliente falando exatamente isto, e nada mais: " + saudacao,
+    },
+  }));
+};
+```
+
+Três detalhes que não são estilo:
+
+- **A frase vem do backend, e o front não a monta.** O nome é do cliente que o
+  token autenticou; a página não tem por que saber quem é ele, e uma frase
+  escolhida no javascript seria o cliente escolhendo como o atendente o chama.
+- **Vai em `response.instructions`, e não no prompt da sessão.** Instrução de
+  uma resposta só não entra no prefixo que a OpenAI mantém em cache — o nome
+  muda a cada sessão, e nome dentro do prefixo é cache nenhum. O outro motivo
+  está no cabeçalho de `src/ai/voice/voice_prompt.py`: frase pronta dentro das
+  instruções da sessão vira molde, e o modelo passa a preencher o molde
+  sozinho depois.
+- **É uma resposta como qualquer outra**, e portanto um turno faturado. Ela
+  entra na conta de `response.done` junto com o resto.
+
+Se o cliente começar a falar por cima, a saudação é interrompida pelo VAD e a
+conversa segue — é o comportamento desejado, e não precisa de tratamento.
 
 ---
 

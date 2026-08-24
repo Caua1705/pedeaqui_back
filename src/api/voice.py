@@ -31,7 +31,7 @@ from src.core.config import settings
 from src.models.customer_model import Customer
 from src.ai.voice.search_service import VoiceSearchService
 from src.ai.voice.session_service import UsoReportado, VoiceSessionService
-from src.ai.voice.voice_prompt import branch_context_for
+from src.ai.voice.voice_prompt import branch_context_for, saudacao_para
 from src.services.chat_service import ChatService
 
 
@@ -116,6 +116,14 @@ def criar_sessao(
     return {
         "sessao_id": str(sessao.id),
         "credencial": credencial,
+        # A frase que o atendente fala SOZINHO, antes de o cliente falar. Ela
+        # vem daqui, e nao do prompt, por duas razoes que estao no cabecalho
+        # de `voice_prompt.py` — o nome quebraria o cache do prefixo, e frase
+        # pronta dentro do prompt vira molde (armadilha 44).
+        #
+        # Ela NAO vai para o log: e o primeiro nome do cliente, e log deste
+        # repositorio nao leva dado pessoal.
+        "saudacao": saudacao_para(cliente.name),
         "limites": {
             "duracao_maxima_s": settings.VOICE_MAX_SESSION_SECONDS,
             "inatividade_s": settings.VOICE_IDLE_SECONDS,

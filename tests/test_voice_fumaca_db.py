@@ -86,6 +86,10 @@ def test_a_voz_emite_credencial_e_a_ferramenta_devolve_produto(db, monkeypatch):
     # Os tetos vêm do SERVIDOR junto com a credencial: página que escolhe o
     # próprio teto não é teto.
     assert sessao.json()["limites"]["duracao_maxima_s"] > 0
+    # A saudação sai daqui e não do prompt, e o nome dela vem do cliente que
+    # o token autenticou. Sem este campo a página fica sem o que falar na
+    # abertura — e o silêncio inicial é justamente o que ela veio corrigir.
+    assert "Cliente" in sessao.json()["saudacao"]
     # E a emissão virou linha no livro-razão — é dela que a cota e a
     # conciliação de custo dependem.
     assert db.get(AIVoiceSession, uuid.UUID(sessao.json()["sessao_id"])) is not None

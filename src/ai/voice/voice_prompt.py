@@ -160,7 +160,31 @@ que o modelo é treinado a preencher; e estava em O CARDAPIO, que é sobre o que
 
 Por isso ela subiu para COMO FALAR, a lista de frases proibidas cresceu, e o
 silêncio passou a ser explicitamente autorizado em vez de sobrar.
+
+A SAUDAÇÃO AUTOMÁTICA, E POR QUE ELA NÃO ESTÁ NO PROMPT (24/08/2026). Quando o
+cliente aperta o botão de falar, o atendente cumprimenta sozinho, antes de a
+pessoa dizer qualquer coisa. A frase sai daqui (`saudacao_para`), viaja na
+resposta do `/voice/session` e é falada por um `response.create` que a página
+dispara com a instrução daquele turno só.
+
+**Ela não entra no `VOICE_INSTRUCTIONS`, e são duas razões.**
+
+A primeira é a armadilha 44 deste repositório: frase pronta no prompt é molde,
+e molde o modelo preenche sozinho depois — foi assim que `"trinta e cinco e
+trinta"` virou preço inventado na sessão seguinte. Instrução de turno único
+não fica no prefixo, e por isso não vira formulário para o resto da conversa.
+
+A segunda é o nome do cliente, que muda a cada sessão. O prefixo das
+instruções é justamente o que a OpenAI mantém em cache — numa sessão medida,
+33.920 dos 35.742 tokens de texto de entrada — e nome dentro do prefixo é um
+prefixo diferente por cliente, ou seja, cache nenhum.
+
+E ela é CURTA porque é áudio de saída, o item mais caro da conta, em toda
+sessão — inclusive nas que o cliente abandona no segundo seguinte.
 """
+
+import random
+import re
 
 from src.models.branch_model import Branch
 
@@ -259,6 +283,63 @@ O QUE NAO E COM VOCE
   "Qual e o seu nome?" se responde dizendo o nome — nunca com produto, nunca
   com preco.
 """
+
+
+SAUDACOES_COM_NOME = (
+    "Olá, {nome}! Como posso te ajudar hoje?",
+    "Oi, {nome}! O que vai ser hoje?",
+    "{nome}, tudo bem? Como posso te ajudar?",
+)
+
+# A QUEDA, para cadastro que não entrega um primeiro nome dizível. Ela existe
+# porque `customers.name` é texto livre: há espaço em branco, há "12345", há
+# e-mail inteiro e há quem tenha digitado no campo errado. Falar isso em voz
+# alta é pior do que não falar nome nenhum.
+SAUDACOES_SEM_NOME = (
+    "Olá! Como posso te ajudar hoje?",
+    "Oi! O que vai ser hoje?",
+    "Tudo bem? Como posso te ajudar?",
+)
+
+# Letra (com acento), podendo ter hífen ou apóstrofo NO MEIO: "Ana", "João",
+# "Jean-Pierre", "D'Angelo" passam. Dígito, arroba e pontuação solta ficam de
+# fora — é o formato do lixo, não o de um nome.
+NOME_DIZIVEL = re.compile(r"^[^\W\d_]+(?:[-'][^\W\d_]+)*$")
+TAMANHO_MAXIMO_DO_NOME = 20
+
+
+def primeiro_nome_dizivel(nome_cadastrado: str | None) -> str | None:
+    """O primeiro nome do cliente, ou `None` quando não dá para falá-lo.
+
+    `None` não é erro: é a porta para a variação sem nome. Ver
+    SAUDACOES_SEM_NOME para o que mora nesse campo de verdade.
+    """
+    if not nome_cadastrado:
+        return None
+
+    partes = nome_cadastrado.strip().split()
+    if not partes:
+        return None
+
+    primeiro = partes[0]
+    if not 2 <= len(primeiro) <= TAMANHO_MAXIMO_DO_NOME:
+        return None
+    if not NOME_DIZIVEL.match(primeiro):
+        return None
+    return primeiro
+
+
+def saudacao_para(nome_cadastrado: str | None) -> str:
+    """A frase que o atendente fala sozinho, antes de o cliente falar.
+
+    Sorteada entre três para a segunda sessão do mesmo cliente não soar
+    gravada. O porquê de ela não morar no `VOICE_INSTRUCTIONS` está no
+    cabeçalho deste arquivo.
+    """
+    primeiro = primeiro_nome_dizivel(nome_cadastrado)
+    if primeiro is None:
+        return random.choice(SAUDACOES_SEM_NOME)
+    return random.choice(SAUDACOES_COM_NOME).format(nome=primeiro)
 
 
 def branch_context_for(branch: Branch) -> str:

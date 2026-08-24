@@ -11,7 +11,14 @@ restaurante inteiro, em audio, para um cliente que nao tem tela onde conferir.
 """
 
 from src.ai.voice.search_service import VoiceSearchService
-from src.ai.voice.voice_prompt import branch_context_for, instructions_for
+from src.ai.voice.voice_prompt import (
+    SAUDACOES_COM_NOME,
+    SAUDACOES_SEM_NOME,
+    branch_context_for,
+    instructions_for,
+    primeiro_nome_dizivel,
+    saudacao_para,
+)
 from src.models.branch_model import Branch
 
 
@@ -49,3 +56,77 @@ def test_a_negativa_do_prompt_e_a_da_ferramenta_falam_a_mesma_lingua():
     assert "AQUI nao temos" in instrucoes
     assert "aqui nao temos" in instrucoes
     assert VoiceSearchService.resumo_para_o_modelo([]) == "Nenhum produto encontrado nesta loja."
+
+
+# --------------------------------------------------------------------------
+# A SAUDACAO
+#
+# Ela e falada em TODA sessao, antes de o cliente dizer qualquer coisa — e o
+# unico texto do produto que sai da boca do atendente sem ninguem ter pedido.
+# O que estes testes travam nao e a redacao: e o campo `customers.name` ser
+# texto livre, e o que ha nele nem sempre ser um nome.
+# --------------------------------------------------------------------------
+
+
+def test_o_primeiro_nome_e_so_o_primeiro():
+    assert primeiro_nome_dizivel("Joao da Silva Sauro") == "Joao"
+
+
+def test_nome_composto_por_hifen_ou_apostrofo_continua_dizivel():
+    """Nao e caso de borda inventado: e como se escreve meio Nordeste."""
+    assert primeiro_nome_dizivel("Jean-Pierre Aragao") == "Jean-Pierre"
+    assert primeiro_nome_dizivel("D'Angelo Souza") == "D'Angelo"
+
+
+def test_o_que_nao_da_para_falar_vira_none():
+    """O que esta listado aqui esta no banco de verdade. Falar "um dois tres
+    quatro cinco" em voz alta e pior do que nao falar nome nenhum."""
+    assert primeiro_nome_dizivel(None) is None
+    assert primeiro_nome_dizivel("") is None
+    assert primeiro_nome_dizivel("   ") is None
+    assert primeiro_nome_dizivel("12345") is None
+    assert primeiro_nome_dizivel("maria@exemplo.com") is None
+    assert primeiro_nome_dizivel("J") is None
+    assert primeiro_nome_dizivel("A" * 21) is None
+
+
+def test_a_saudacao_com_nome_diz_o_nome():
+    saudacao = saudacao_para("Maria Aparecida")
+
+    assert "Maria" in saudacao
+    assert "Aparecida" not in saudacao
+
+
+def test_cadastro_com_lixo_cai_na_variacao_sem_nome():
+    """A queda tem que ser uma saudacao INTEIRA, e nao a frase com um buraco
+    onde o nome estaria."""
+    assert saudacao_para("12345") in SAUDACOES_SEM_NOME
+
+
+def test_toda_variacao_com_nome_tem_onde_por_o_nome():
+    """Uma variacao sem `{nome}` sairia sorteada de vez em quando, e o cliente
+    seria cumprimentado pelo nome so as vezes — sintoma que ninguem liga ao
+    sorteio."""
+    for variacao in SAUDACOES_COM_NOME:
+        assert "{nome}" in variacao
+    for variacao in SAUDACOES_SEM_NOME:
+        assert "{nome}" not in variacao
+
+
+def test_a_saudacao_e_curta():
+    """Ela e audio de SAIDA, o item mais caro da conta, e acontece em toda
+    sessao — inclusive nas que o cliente abandona no segundo seguinte. O teto
+    e generoso de proposito: o que ele barra e a frase que cresceu sem
+    ninguem notar."""
+    for variacao in SAUDACOES_COM_NOME + SAUDACOES_SEM_NOME:
+        assert len(variacao) <= 45
+
+
+def test_a_saudacao_nao_esta_no_prompt():
+    """O par fonte -> saida da armadilha 44: frase pronta dentro das
+    instrucoes e molde, e molde o modelo preenche sozinho depois. A saudacao
+    viaja na instrucao de UM turno, e o prompt nao a conhece."""
+    instrucoes = instructions_for("Nome do restaurante: Junior da Picanha", "Loja: Centro")
+
+    for variacao in SAUDACOES_COM_NOME + SAUDACOES_SEM_NOME:
+        assert variacao not in instrucoes

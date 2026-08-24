@@ -1,4 +1,30 @@
-fastapi
+# O TRIO DO FRAMEWORK ENTRA PINADO. O resto deste arquivo continua solto de
+# proposito — o que se quer travar aqui e o que ja quebrou, nao tudo.
+#
+# O QUE ACONTECEU EM 23/08/2026. Este arquivo nao tinha pino nenhum, e o
+# `Dockerfile` constroi a partir dele: cada `docker compose up --build`
+# instalava o que o pip resolvesse NAQUELE DIA. Naquele dia o pip passou a
+# resolver `starlette 1.6.0` — um salto de major que ninguem escolheu — e no
+# starlette 1.6 o `include_router` DEIXOU DE COPIAR as rotas para
+# `app.routes`: onde havia 126 objetos `Route` passou a haver 28, sendo 24
+# `_IncludedRouter` com `path` nulo.
+#
+# A aplicacao continua funcionando assim (o `app.openapi()` sai completo, com
+# os 100 caminhos). Quem quebra e quem INTROSPECTA as rotas — e isso e
+# `tests/test_papeis_das_rotas.py`, a auditoria que confere o papel exigido
+# por cada rota /admin. Ou seja: a atualizacao silenciosa nao derrubava a
+# API, derrubava a trava que impede rota nova de nascer aberta ao
+# `print_agent`.
+#
+# `starlette` aparece aqui embora seja dependencia transitiva do FastAPI: e
+# ELE que muda o comportamento, e deixa-lo implicito seria pinar a causa pelo
+# sintoma. A faixa que a fastapi 0.116.1 declara e `>=0.40.0,<0.48.0`, entao
+# o pino esta dentro dela.
+#
+# Subir esses tres e um commit deliberado, com os testes de introspeccao
+# adaptados junto e o repositorio ficando verde no mesmo commit.
+fastapi==0.116.1
+starlette==0.47.3
 # Exigida pelo FastAPI para ler multipart/form-data. Sem ela, a rota de
 # upload de imagem do painel (POST /admin/products/{id}/image) derruba o
 # boot com "Form data requires python-multipart".
@@ -6,7 +32,7 @@ python-multipart
 uvicorn[standard]
 sqlalchemy
 psycopg[binary]
-pydantic
+pydantic==2.11.7
 pydantic-settings
 python-dotenv
 resend

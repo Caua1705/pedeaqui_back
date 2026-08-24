@@ -125,12 +125,12 @@ class AdminCustomerService:
         if last_order_from and last_order_to and last_order_from > last_order_to:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="last_order_from nao pode ser depois de last_order_to.",
+                detail="last_order_from não pode ser depois de last_order_to.",
             )
         if min_ticket is not None and max_ticket is not None and min_ticket > max_ticket:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="min_ticket nao pode ser maior que max_ticket.",
+                detail="min_ticket não pode ser maior que max_ticket.",
             )
 
         return CustomerListFilters(

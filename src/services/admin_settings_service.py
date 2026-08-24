@@ -137,7 +137,7 @@ class AdminSettingsService:
         if restaurant is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Restaurante nao encontrado",
+                detail="Restaurante não encontrado",
             )
         return restaurant
 
@@ -464,8 +464,8 @@ class AdminSettingsService:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
-                    "A filial esta fora do horario de funcionamento agora; "
-                    "nao ha faixa de horario para ajustar"
+                    "A filial está fora do horário de funcionamento agora; "
+                    "não há faixa de horário para ajustar"
                 ),
             )
 
@@ -502,7 +502,7 @@ class AdminSettingsService:
             # cliente, e desabilitar uma nao tiraria a outra da tela.
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Esta forma de pagamento ja esta cadastrada nesta filial",
+                detail="Esta forma de pagamento já está cadastrada nesta filial",
             )
 
         method = BranchPaymentMethod(branch_id=branch_id, **payload.model_dump())
@@ -572,7 +572,7 @@ class AdminSettingsService:
         )
         if branch is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Filial nao encontrada"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Filial não encontrada"
             )
         return branch
 
@@ -585,7 +585,7 @@ class AdminSettingsService:
         if method is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Forma de pagamento nao encontrada",
+                detail="Forma de pagamento não encontrada",
             )
         # A juncao do repositorio ja conferiu o restaurante; falta a filial,
         # que so da para conferir depois de ler `method.branch_id`.
@@ -615,8 +615,8 @@ class AdminSettingsService:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail=(
-                        f"Dia {weekday}: no maximo {MAX_PERIODS_PER_WEEKDAY} "
-                        "faixas de horario"
+                        f"Dia {weekday}: no máximo {MAX_PERIODS_PER_WEEKDAY} "
+                        "faixas de horário"
                     ),
                 )
             open_periods = [period for period in day_periods if not period.is_closed]
@@ -627,7 +627,7 @@ class AdminSettingsService:
                 # como fechado.
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Dia {weekday}: nao misture faixa fechada com faixa aberta",
+                    detail=f"Dia {weekday}: não misture faixa fechada com faixa aberta",
                 )
             self._ensure_no_overlap(weekday, open_periods)
 
@@ -654,7 +654,7 @@ class AdminSettingsService:
             if current_start < previous_end:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Dia {weekday}: as faixas de horario se sobrepoem",
+                    detail=f"Dia {weekday}: as faixas de horário se sobrepõem",
                 )
 
     @staticmethod
@@ -673,8 +673,8 @@ class AdminSettingsService:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
-                    "Esta faixa de horario nao tem tempo de preparo cadastrado; "
-                    "envie prep_time_min e prep_time_max antes de usar o ajuste rapido"
+                    "Esta faixa de horário não tem tempo de preparo cadastrado; "
+                    "envie prep_time_min e prep_time_max antes de usar o ajuste rápido"
                 ),
             )
         return (
@@ -687,7 +687,7 @@ class AdminSettingsService:
         if minimum is not None and maximum is not None and maximum < minimum:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="estimated_delivery_time_max nao pode ser menor que o minimo",
+                detail="estimated_delivery_time_max não pode ser menor que o mínimo",
             )
 
     def _commit(self, before_commit=None) -> None:

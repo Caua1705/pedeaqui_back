@@ -104,7 +104,7 @@ class CategoryReorderRequest(BaseModel):
     @model_validator(mode="after")
     def validate_no_duplicates(self):
         if len(set(self.category_ids)) != len(self.category_ids):
-            raise ValueError("category_ids nao pode repetir a mesma categoria")
+            raise ValueError("category_ids não pode repetir a mesma categoria")
         return self
 
 
@@ -131,7 +131,7 @@ class ProductReorderRequest(BaseModel):
     @model_validator(mode="after")
     def validate_no_duplicates(self):
         if len(set(self.product_ids)) != len(self.product_ids):
-            raise ValueError("product_ids nao pode repetir o mesmo produto")
+            raise ValueError("product_ids não pode repetir o mesmo produto")
         return self
 
 
@@ -335,12 +335,12 @@ class AdminOptionGroupFields(BaseModel):
     @model_validator(mode="after")
     def validate_selection_limits(self):
         if self.max_select < self.min_select:
-            raise ValueError("max_select nao pode ser menor que min_select")
+            raise ValueError("max_select não pode ser menor que min_select")
         # Um grupo obrigatorio com min_select=0 e uma armadilha: o pedido
         # seria recusado na criacao (order_service valida obrigatoriedade)
         # sem que o cardapio conseguisse explicar o que falta escolher.
         if self.is_required and self.min_select < 1:
-            raise ValueError("grupo obrigatorio precisa de min_select maior que zero")
+            raise ValueError("grupo obrigatório precisa de min_select maior que zero")
         return self
 
 

@@ -60,11 +60,11 @@ from src.utils.security import (
 
 logger = logging.getLogger("uvicorn.error")
 
-USUARIO_NAO_ENCONTRADO = "Usuario nao encontrado"
+USUARIO_NAO_ENCONTRADO = "Usuário não encontrado"
 # Mensagem unica para e-mail repetido, sem dizer de qual restaurante ele e. O
 # UNIQUE e global, entao qualquer resposta ja revela que o e-mail existe na
 # plataforma; o que esta mensagem evita e revelar ONDE.
-EMAIL_EM_USO = "Este e-mail ja esta em uso"
+EMAIL_EM_USO = "Este e-mail já está em uso"
 
 
 class AdminUserService:
@@ -227,7 +227,7 @@ class AdminUserService:
             return
         if self.branch_repository.get_by_id_and_restaurant(branch_id, restaurant_id) is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Filial nao encontrada"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Filial não encontrada"
             )
 
     @staticmethod
@@ -249,7 +249,7 @@ class AdminUserService:
             return
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Voce nao pode desativar a propria conta",
+            detail="Você não pode desativar a própria conta",
         )
 
     def _ensure_keeps_an_active_owner(
@@ -278,7 +278,7 @@ class AdminUserService:
         acao = "desativar" if desativando else "rebaixar"
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Nao da para {acao} o unico dono ativo do restaurante",
+            detail=f"Não dá para {acao} o único dono ativo do restaurante",
         )
 
     @staticmethod

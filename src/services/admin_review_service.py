@@ -134,12 +134,12 @@ class AdminReviewService:
         if end_date < start_date:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="end_date nao pode ser anterior a start_date",
+                detail="end_date não pode ser anterior a start_date",
             )
         if (end_date - start_date).days + 1 > MAX_REVIEW_PERIOD_DAYS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Periodo maximo da consulta: {MAX_REVIEW_PERIOD_DAYS} dias",
+                detail=f"Período máximo da consulta: {MAX_REVIEW_PERIOD_DAYS} dias",
             )
 
         start_at = datetime.combine(start_date, time.min, tzinfo=REVIEW_PANEL_TIMEZONE)

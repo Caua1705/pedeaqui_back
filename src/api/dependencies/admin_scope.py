@@ -111,7 +111,7 @@ class AdminScope:
         """
         if self.branch_id is not None and self.branch_id != branch_id:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Filial nao encontrada"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Filial não encontrada"
             )
 
     def resolve_branch_filter(self, requested_branch_id: uuid.UUID | None) -> uuid.UUID | None:
@@ -159,7 +159,7 @@ def ensure_role(admin_user: AdminUser, papeis: tuple[str, ...]) -> None:
         return
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="Seu perfil de acesso nao permite esta acao",
+        detail="Seu perfil de acesso não permite esta ação",
     )
 
 
@@ -212,7 +212,7 @@ def ensure_pode_ler_dinheiro(scope: AdminScope, branch_filter: uuid.UUID | None)
         return
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="Informe branch_id: seu perfil le o relatorio de uma filial por vez",
+        detail="Informe branch_id: seu perfil lê o relatório de uma filial por vez",
     )
 
 

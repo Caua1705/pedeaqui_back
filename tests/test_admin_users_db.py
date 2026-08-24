@@ -251,7 +251,7 @@ def test_ninguem_desativa_a_propria_conta(db):
         AdminUserService(db).update(escopo(dono), dono.id, AdminUserUpdate(is_active=False))
 
     assert erro.value.status_code == 400
-    assert "propria conta" in erro.value.detail
+    assert "própria conta" in erro.value.detail
 
 
 def test_o_atendente_tambem_nao_se_desativa(db):
@@ -312,7 +312,7 @@ def test_a_guarda_tambem_vale_para_a_desativacao_de_outro_dono(db):
         AdminUserService(db).update(escopo(ator), dono.id, AdminUserUpdate(is_active=False))
 
     assert erro.value.status_code == 400
-    assert "unico dono" in erro.value.detail
+    assert "único dono" in erro.value.detail
 
 
 def test_um_dono_rebaixa_o_outro_quando_ha_dois(db):

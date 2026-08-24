@@ -223,7 +223,7 @@ class AdminPrintingService:
         category = self.menu_repository.get_category(category_id, scope.restaurant_id)
         if category is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Categoria nao encontrada"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Categoria não encontrada"
             )
         scope.ensure_branch_allowed(category.branch_id)
         sector = self._resolve_sector(scope, payload.printing_sector_id)
@@ -560,7 +560,7 @@ class AdminPrintingService:
             return
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="O setor de impressao e de outra filial",
+            detail="O setor de impressão é de outra filial",
         )
 
     def _get_sector(self, scope: AdminScope, sector_id: uuid.UUID) -> PrintingSector:
@@ -575,7 +575,7 @@ class AdminPrintingService:
         sector = self.repository.get(sector_id, scope.restaurant_id)
         if sector is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Setor de impressao nao encontrado"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Setor de impressão não encontrado"
             )
         scope.ensure_branch_allowed(sector.branch_id)
         return sector
@@ -587,7 +587,7 @@ class AdminPrintingService:
         )
         if branch is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Filial nao encontrada"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Filial não encontrada"
             )
         return branch
 
@@ -602,7 +602,7 @@ class AdminPrintingService:
         product = self.menu_repository.get_product(product_id, scope.restaurant_id)
         if product is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Produto nao encontrado"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Produto não encontrado"
             )
         scope.ensure_branch_allowed(product.branch_id)
         return product
@@ -618,7 +618,7 @@ class AdminPrintingService:
         if self.repository.get_by_name(name, branch_id) is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Ja existe um setor com esse nome nesta filial",
+                detail="Já existe um setor com esse nome nesta filial",
             )
 
     def _commit(self, before_commit=None) -> None:

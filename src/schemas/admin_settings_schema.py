@@ -308,7 +308,7 @@ class DeliveryTimeBandInput(BaseModel):
     @model_validator(mode="after")
     def validate_range(self):
         if self.delivery_time_max < self.delivery_time_min:
-            raise ValueError("delivery_time_max nao pode ser menor que delivery_time_min")
+            raise ValueError("delivery_time_max não pode ser menor que delivery_time_min")
         return self
 
 
@@ -335,7 +335,7 @@ class DeliveryTimeBandsReplaceRequest(BaseModel):
             # Dois tetos iguais nao sao ambiguidade de apresentacao: sao duas
             # respostas diferentes para a mesma distancia, e a que vale
             # mudaria entre duas consultas identicas.
-            raise ValueError("nao pode haver duas faixas com o mesmo max_distance_km")
+            raise ValueError("não pode haver duas faixas com o mesmo max_distance_km")
         return self
 
 
@@ -483,7 +483,7 @@ class AdminBranchDeliveryRules(BaseModel):
             and self.delivery_max_fee is not None
             and self.delivery_max_fee < self.delivery_min_fee
         ):
-            raise ValueError("delivery_max_fee nao pode ser menor que delivery_min_fee")
+            raise ValueError("delivery_max_fee não pode ser menor que delivery_min_fee")
         return self
 
 
@@ -537,13 +537,13 @@ class BusinessHourInput(BaseModel):
         if self.opens_at is not None and self.opens_at == self.closes_at:
             # Sem isso a faixa nao cobre instante nenhum e a filial fica
             # "aberta" sem nunca aceitar pedido.
-            raise ValueError("opens_at e closes_at nao podem ser iguais")
+            raise ValueError("opens_at e closes_at não podem ser iguais")
         if (
             self.prep_time_min is not None
             and self.prep_time_max is not None
             and self.prep_time_max < self.prep_time_min
         ):
-            raise ValueError("prep_time_max nao pode ser menor que prep_time_min")
+            raise ValueError("prep_time_max não pode ser menor que prep_time_min")
         return self
 
 
@@ -609,14 +609,14 @@ class BranchPrepTimeAdjustRequest(BaseModel):
             # Os dois juntos nao tem resposta obvia: o delta se aplicaria
             # sobre o valor novo ou sobre o que estava no banco?
             raise ValueError(
-                "Informe delta_minutes ou o par prep_time_min/prep_time_max, nao os dois"
+                "Informe delta_minutes ou o par prep_time_min/prep_time_max, não os dois"
             )
         if self.delta_minutes is None and not has_absolute:
             raise ValueError("Informe delta_minutes ou o par prep_time_min/prep_time_max")
         if has_absolute and any(value is None for value in absolute_fields):
             raise ValueError("prep_time_min e prep_time_max andam juntos")
         if has_absolute and self.prep_time_max < self.prep_time_min:
-            raise ValueError("prep_time_max nao pode ser menor que prep_time_min")
+            raise ValueError("prep_time_max não pode ser menor que prep_time_min")
         return self
 
 

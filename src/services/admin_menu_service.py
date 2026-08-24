@@ -172,7 +172,7 @@ class AdminMenuService:
         unknown = sent_ids - existing_ids
         if unknown:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Categoria nao encontrada"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Categoria não encontrada"
             )
         if existing_ids - sent_ids:
             raise HTTPException(
@@ -223,7 +223,7 @@ class AdminMenuService:
         if sent_ids - existing_ids:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Produto nao encontrado nesta categoria",
+                detail="Produto não encontrado nesta categoria",
             )
         if existing_ids - sent_ids:
             raise HTTPException(
@@ -299,7 +299,7 @@ class AdminMenuService:
         product = self.repository.get_product_with_options(product_id, scope.restaurant_id)
         if product is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Produto nao encontrado"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Produto não encontrado"
             )
         scope.ensure_branch_allowed(product.branch_id)
         return AdminProductDetailResponse(
@@ -415,7 +415,7 @@ class AdminMenuService:
         restaurant = self.restaurant_repository.get_by_id(scope.restaurant_id)
         if restaurant is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Restaurante nao encontrado"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Restaurante não encontrado"
             )
 
         # O sufixo aleatorio existe para o CDN: reusar o mesmo caminho
@@ -434,12 +434,12 @@ class AdminMenuService:
         except SupabaseStorageNotConfiguredError as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Upload de imagem indisponivel: storage nao configurado",
+                detail="Upload de imagem indisponível: storage não configurado",
             ) from exc
         except SupabaseStorageError as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Nao foi possivel enviar a imagem agora",
+                detail="Não foi possível enviar a imagem agora",
             ) from exc
 
         product.image_path = object_path
@@ -558,7 +558,7 @@ class AdminMenuService:
         )
         if branch is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Filial nao encontrada"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Filial não encontrada"
             )
         return branch
 
@@ -566,7 +566,7 @@ class AdminMenuService:
         category = self.repository.get_category(category_id, scope.restaurant_id)
         if category is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Categoria nao encontrada"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Categoria não encontrada"
             )
         scope.ensure_branch_allowed(category.branch_id)
         return category
@@ -575,7 +575,7 @@ class AdminMenuService:
         product = self.repository.get_product(product_id, scope.restaurant_id)
         if product is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Produto nao encontrado"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Produto não encontrado"
             )
         scope.ensure_branch_allowed(product.branch_id)
         return product
@@ -584,7 +584,7 @@ class AdminMenuService:
         group = self.repository.get_option_group(group_id, scope.restaurant_id)
         if group is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Grupo de opcoes nao encontrado"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Grupo de opções não encontrado"
             )
         # O grupo nao tem filial: ele chega a ela pelo produto. Reconferir
         # pelo produto e o que impede um gerente do Centro de editar os
@@ -596,7 +596,7 @@ class AdminMenuService:
         option = self.repository.get_option(option_id, scope.restaurant_id)
         if option is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Opcao nao encontrada"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Opção não encontrada"
             )
         self._get_option_group(option.option_group_id, scope)
         return option
@@ -619,14 +619,14 @@ class AdminMenuService:
         if category.branch_id != product.branch_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="A categoria e de outra filial; produto nao muda de filial",
+                detail="A categoria é de outra filial; produto não muda de filial",
             )
 
     def _ensure_category_slug_is_free(self, slug: str, branch_id: uuid.UUID) -> None:
         if self.repository.get_category_by_slug(slug, branch_id) is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Ja existe uma categoria com esse nome nesta filial",
+                detail="Já existe uma categoria com esse nome nesta filial",
             )
 
     def _ensure_product_slug_is_free(self, slug: str, branch_id: uuid.UUID) -> None:
@@ -641,7 +641,7 @@ class AdminMenuService:
         if self.repository.get_product_by_slug(slug, branch_id) is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Ja existe um produto com esse nome nesta filial",
+                detail="Já existe um produto com esse nome nesta filial",
             )
 
     def _ensure_catalog_key_is_free(
@@ -669,7 +669,7 @@ class AdminMenuService:
             return
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Ja existe um produto com essa chave de catalogo nesta filial",
+            detail="Já existe um produto com essa chave de catálogo nesta filial",
         )
 
     def _commit(self, before_commit=None) -> None:
@@ -708,14 +708,14 @@ class AdminMenuService:
             limit_mb = settings.MAX_IMAGE_UPLOAD_BYTES / 1_048_576
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"A imagem excede o tamanho maximo de {limit_mb:.0f} MB",
+                detail=f"A imagem excede o tamanho máximo de {limit_mb:.0f} MB",
             )
 
         extension = detect_image_extension(content)
         if extension is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Formato invalido: envie JPEG, PNG ou WEBP",
+                detail="Formato inválido: envie JPEG, PNG ou WEBP",
             )
         return extension
 
@@ -727,7 +727,7 @@ class AdminMenuService:
             # publica do cardapio ficaria quebrada.
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="O nome precisa ter ao menos uma letra ou numero",
+                detail="O nome precisa ter ao menos uma letra ou número",
             )
         return slug
 

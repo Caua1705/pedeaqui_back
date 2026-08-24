@@ -689,20 +689,20 @@ class ConflictMessageTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as capturado:
             self.levantar("restaurant_coupons_restaurant_code_unique")
         self.assertEqual(capturado.exception.status_code, 409)
-        self.assertIn("Codigo", capturado.exception.detail)
+        self.assertIn("Código", capturado.exception.detail)
 
     def test_codigo_repetido_em_outra_caixa_fala_de_codigo(self):
         """PROMO10 e promo10 sao o mesmo cupom para quem usa; a mensagem tambem."""
         with self.assertRaises(HTTPException) as capturado:
             self.levantar("uq_restaurant_coupons_restaurant_code_ci")
-        self.assertIn("Codigo", capturado.exception.detail)
+        self.assertIn("Código", capturado.exception.detail)
 
     def test_arte_repetida_fala_de_arte(self):
         with self.assertRaises(HTTPException) as capturado:
             self.levantar("restaurant_coupons_restaurant_template_unique")
         self.assertEqual(capturado.exception.status_code, 409)
         self.assertIn("arte", capturado.exception.detail)
-        self.assertNotIn("Codigo", capturado.exception.detail)
+        self.assertNotIn("Código", capturado.exception.detail)
 
     def test_indice_desconhecido_nao_vira_409_chutado(self):
         """Relanca. Um 409 adivinhado manda mexer num campo que nao colidiu —

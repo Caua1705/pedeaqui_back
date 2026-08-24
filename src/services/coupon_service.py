@@ -41,12 +41,12 @@ from src.utils.storage import build_storage_url
 # tambem para UNIQUE INDEX — nenhum dos tres e CONSTRAINT de tabela —, e isso
 # foi conferido contra o banco antes de o codigo passar a depender disso.
 UNIQUE_INDEX_MESSAGES = {
-    "restaurant_coupons_restaurant_code_unique": "Codigo de cupom ja existe neste restaurante",
+    "restaurant_coupons_restaurant_code_unique": "Código de cupom já existe neste restaurante",
     # O mesmo codigo em outra caixa. A mensagem e a mesma de proposito: para o
     # lojista, PROMO10 e promo10 sao o mesmo cupom, e e assim que a busca trata.
-    "uq_restaurant_coupons_restaurant_code_ci": "Codigo de cupom ja existe neste restaurante",
+    "uq_restaurant_coupons_restaurant_code_ci": "Código de cupom já existe neste restaurante",
     "restaurant_coupons_restaurant_template_unique": (
-        "Esta arte ja esta em uso por outra campanha deste restaurante"
+        "Esta arte já está em uso por outra campanha deste restaurante"
     ),
 }
 
@@ -347,7 +347,7 @@ class CouponService:
         template = self._load_active_template(payload.coupon_template_id)
         self._ensure_template_agrees(template, payload.discount_type)
         if self.repository.get_by_code_and_restaurant(payload.code, restaurant_id):
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codigo de cupom ja existe neste restaurante")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Código de cupom já existe neste restaurante")
         coupon = RestaurantCoupon(restaurant_id=restaurant_id, **payload.model_dump())
         try:
             self.repository.create_coupon(coupon)
@@ -388,7 +388,7 @@ class CouponService:
         self._get_restaurant(restaurant_id)
         coupon = self.repository.get_by_id_and_restaurant(coupon_id, restaurant_id)
         if coupon is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cupom nao encontrado")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cupom não encontrado")
         changes = payload.model_dump(exclude_unset=True)
         merged = {
             field: getattr(coupon, field)
@@ -403,7 +403,7 @@ class CouponService:
         self._ensure_template_agrees(template, validated.discount_type)
         code_owner = self.repository.get_by_code_and_restaurant(validated.code, restaurant_id)
         if code_owner is not None and code_owner.id != coupon.id:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codigo de cupom ja existe neste restaurante")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Código de cupom já existe neste restaurante")
         for field, value in validated.model_dump().items():
             setattr(coupon, field, value)
         try:
@@ -495,7 +495,7 @@ class CouponService:
     def _get_restaurant(self, restaurant_id: UUID):
         restaurant = self.restaurant_repository.get_by_id(restaurant_id)
         if restaurant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Restaurante nao encontrado")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Restaurante não encontrado")
         return restaurant
 
     def _load_active_template(self, template_id: UUID) -> CouponTemplate:
@@ -506,7 +506,7 @@ class CouponService:
         """
         template = self.repository.get_template(template_id)
         if template is None or not template.is_active:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Template de cupom invalido")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Template de cupom inválido")
         return template
 
     def _template_do_patch(self, coupon: RestaurantCoupon, template_id: UUID) -> CouponTemplate:
@@ -561,7 +561,7 @@ class CouponService:
             {
                 "loc": ["body", "discount_type"],
                 "msg": (
-                    f"Tipo de desconto do cupom ({discount_type}) nao confere com o do "
+                    f"Tipo de desconto do cupom ({discount_type}) não confere com o do "
                     f"template ({template.discount_type})"
                 ),
                 "type": "coupon_template_discount_type_mismatch",

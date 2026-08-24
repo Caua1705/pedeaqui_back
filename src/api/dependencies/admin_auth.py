@@ -29,7 +29,7 @@ ROTAS_LIBERADAS_COM_SENHA_TEMPORARIA = frozenset(
     {"/admin/auth/me", "/admin/auth/password"}
 )
 
-TROQUE_A_SENHA = "Troque a senha temporaria antes de usar o painel"
+TROQUE_A_SENHA = "Troque a senha temporária antes de usar o painel"
 
 
 def get_current_admin(

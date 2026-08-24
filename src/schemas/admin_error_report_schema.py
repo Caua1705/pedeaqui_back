@@ -44,7 +44,7 @@ class CreateErrorReportRequest(BaseModel):
         # CHECK, voltando como erro de servidor em vez de erro de campo.
         texto = value.strip()
         if not texto:
-            raise ValueError("description nao pode ser so espacos")
+            raise ValueError("description não pode ser só espaços")
         return texto
 
     @field_validator("error_log", "screen")

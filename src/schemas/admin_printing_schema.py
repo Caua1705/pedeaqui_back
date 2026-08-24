@@ -110,7 +110,7 @@ def clean_footer_message(value: str | None) -> str | None:
     cleaned = normalize_receipt_text(value)
     if cleaned.count("\n") + 1 > MAX_FOOTER_MESSAGE_LINES:
         raise ValueError(
-            f"a mensagem do rodape pode ter no maximo {MAX_FOOTER_MESSAGE_LINES} linhas"
+            f"a mensagem do rodapé pode ter no máximo {MAX_FOOTER_MESSAGE_LINES} linhas"
         )
     return cleaned
 
@@ -303,8 +303,8 @@ class BranchPrintSettingsUpdate(BaseModel):
         for field in COPY_FIELDS:
             if field in self.model_fields_set and getattr(self, field) is None:
                 raise ValueError(
-                    f"{field} nao aceita null: a contagem de vias nao herda "
-                    "nada do restaurante. Para nao imprimir esta via, mande 0."
+                    f"{field} não aceita null: a contagem de vias não herda "
+                    "nada do restaurante. Para não imprimir esta via, mande 0."
                 )
         return self
 

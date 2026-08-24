@@ -368,12 +368,12 @@ class AdminOrderService:
         if start_date and end_date and end_date < start_date:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="end_date nao pode ser anterior a start_date",
+                detail="end_date não pode ser anterior a start_date",
             )
         if start_date and end_date and (end_date - start_date).days + 1 > MAX_LIST_DAYS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Periodo maximo da listagem: {MAX_LIST_DAYS} dias",
+                detail=f"Período máximo da listagem: {MAX_LIST_DAYS} dias",
             )
 
         start_at = (

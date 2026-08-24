@@ -56,7 +56,7 @@ STREAM_TICKET_SECONDS = 30
 # Piso de latencia para que o tempo de resposta nao diga se o e-mail existe,
 # mesmo padrao ja adotado em forgot_password na Fase 0.
 LOGIN_MIN_SECONDS = 0.4
-INVALID_CREDENTIALS = "Credenciais invalidas"
+INVALID_CREDENTIALS = "Credenciais inválidas"
 
 
 class AdminAuthService:
@@ -82,7 +82,7 @@ class AdminAuthService:
             self._pad_latency(started_at)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Usuario inativo",
+                detail="Usuário inativo",
             )
 
         logger.info(
@@ -159,29 +159,29 @@ class AdminAuthService:
             ) from exc
         except TokenInvalidError as exc:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalido"
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido"
             ) from exc
 
         if payload.get("type") != "admin":
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalido"
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido"
             )
 
         try:
             admin_user_id = uuid.UUID(payload["sub"])
         except (KeyError, ValueError) as exc:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalido"
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido"
             ) from exc
 
         admin_user = self.repository.get_by_id(admin_user_id)
         if admin_user is None:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalido"
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido"
             )
         if not admin_user.is_active:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail="Usuario inativo"
+                status_code=status.HTTP_403_FORBIDDEN, detail="Usuário inativo"
             )
         # Alcanca o token de acesso E o ticket de stream, porque os dois
         # passam por aqui: trocar a senha derruba a sessao do painel e a
@@ -222,7 +222,7 @@ class AdminAuthService:
         if payload.new_password != payload.confirm_password:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="As senhas nao conferem",
+                detail="As senhas não conferem",
             )
         if payload.new_password == payload.current_password:
             raise HTTPException(

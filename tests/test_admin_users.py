@@ -50,13 +50,13 @@ class ContaDeMaquinaTests(unittest.TestCase):
     def test_criar_com_print_agent_e_recusado(self):
         with self.assertRaises(ValidationError) as capturado:
             criar(role="print_agent")
-        self.assertIn("instalacao fisica", str(capturado.exception))
+        self.assertIn("instalação física", str(capturado.exception))
 
     def test_editar_para_print_agent_e_recusado(self):
         """A porta lateral: criar como atendente e promover a maquina depois."""
         with self.assertRaises(ValidationError) as capturado:
             AdminUserUpdate(role="print_agent")
-        self.assertIn("instalacao fisica", str(capturado.exception))
+        self.assertIn("instalação física", str(capturado.exception))
 
     def test_a_recusa_diz_o_MOTIVO_e_nao_so_a_lista(self):
         """O Literal sozinho responderia "Input should be 'owner', 'manager'..."

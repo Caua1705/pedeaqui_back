@@ -453,12 +453,12 @@ class AdminReportService:
         if end_date < start_date:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="end_date nao pode ser anterior a start_date",
+                detail="end_date não pode ser anterior a start_date",
             )
         if (end_date - start_date).days + 1 > MAX_REPORT_DAYS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Periodo maximo do relatorio: {MAX_REPORT_DAYS} dias",
+                detail=f"Período máximo do relatório: {MAX_REPORT_DAYS} dias",
             )
 
     @staticmethod

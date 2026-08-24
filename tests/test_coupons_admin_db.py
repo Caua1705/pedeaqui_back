@@ -286,7 +286,7 @@ def test_escolher_uma_arte_aposentada_continua_400(db):
         servico.update_admin(restaurante.id, cupom.id, CouponUpdate(coupon_template_id=aposentada.id))
 
     assert erro.value.status_code == 400
-    assert erro.value.detail == "Template de cupom invalido"
+    assert erro.value.detail == "Template de cupom inválido"
 
 
 def test_a_arte_aposentada_nao_dispensa_a_concordancia_de_tipo(db):
@@ -326,7 +326,7 @@ def test_arte_ja_usada_responde_409_falando_da_arte(db):
 
     assert erro.value.status_code == 409
     assert "arte" in erro.value.detail
-    assert "Codigo" not in erro.value.detail
+    assert "Código" not in erro.value.detail
 
 
 def test_a_mesma_arte_em_restaurantes_diferentes_passa(db):

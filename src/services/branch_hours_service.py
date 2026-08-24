@@ -63,7 +63,7 @@ class BranchHoursService:
         if period is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="A loja esta fechada neste horario",
+                detail="A loja está fechada neste horário",
             )
         return period
 

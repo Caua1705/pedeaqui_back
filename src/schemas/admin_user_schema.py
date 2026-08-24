@@ -36,8 +36,8 @@ from src.utils.normalization import normalize_email
 PapelDePessoa = Literal["owner", "manager", "attendant"]
 
 RECUSA_DE_MAQUINA = (
-    "print_agent e conta de maquina e nasce so pelo scripts/create_admin_user.py: "
-    "criar um agente e parte de uma instalacao fisica, com alguem na loja "
+    "print_agent é conta de máquina e nasce só pelo scripts/create_admin_user.py: "
+    "criar um agente é parte de uma instalação física, com alguém na loja "
     "editando o config.ini"
 )
 
@@ -77,7 +77,7 @@ class AdminUserCreate(BaseModel):
     def normalizar_nome(cls, value: str) -> str:
         nome = value.strip()
         if not nome:
-            raise ValueError("name nao pode ser so espacos")
+            raise ValueError("name não pode ser só espaços")
         return nome
 
 
@@ -101,7 +101,7 @@ class AdminUserUpdate(BaseModel):
             return None
         nome = value.strip()
         if not nome:
-            raise ValueError("name nao pode ser so espacos")
+            raise ValueError("name não pode ser só espaços")
         return nome
 
 

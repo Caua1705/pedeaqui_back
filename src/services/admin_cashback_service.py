@@ -118,7 +118,7 @@ class AdminCashbackService:
         if rule is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Esta filial nao tem regra propria de cashback",
+                detail="Esta filial não tem regra própria de cashback",
             )
         self._commit(lambda: self.repository.delete(rule))
 
@@ -167,7 +167,7 @@ class AdminCashbackService:
         )
         if branch is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Filial nao encontrada"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Filial não encontrada"
             )
         return branch
 

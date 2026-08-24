@@ -64,7 +64,19 @@ URL = f"https://{HOST}/v1/responses"
 # default de 5,0 s — porque abaixo disso quem fecharia a conexao seriamos
 # NOS, e a medicao responderia sobre a nossa propria configuracao em vez de
 # sobre a da OpenAI.
-ESPERAS_OCIOSAS = (6, 15, 30, 60, 120, 240)
+#
+# OS DEGRAUS ENTRE 120 s E 240 s NAO SAO ENFEITE. Medido em 24/08/2026 de uma
+# maquina no Brasil: reuso limpo ate 120 s, e em 240 s a borda da Cloudflare
+# ja tinha fechado — `RemoteProtocolError: Server disconnected`, com `tcp=0` e
+# `tls=0`, porque o cliente so descobre o fechamento ao escrever no socket
+# morto. E o teto que `keepalive_expiry` nao pode encostar: acima dele, cada
+# pergunta esparsa troca ~113 ms de handshake por um retry do SDK
+# (`DEFAULT_MAX_RETRIES=2`, `INITIAL_RETRY_DELAY=0.5`) MAIS o handshake do
+# mesmo jeito. A escada fina existe para achar esse limite na VPS, que pode
+# cair noutro PoP e ter outro numero.
+#
+# Custa ~15 min de relogio. E uma vez.
+ESPERAS_OCIOSAS = (6, 15, 30, 60, 90, 120, 150, 180, 210, 240)
 
 
 def _cronometrar_abertura(repeticoes: int = 5) -> dict[str, list[float]]:

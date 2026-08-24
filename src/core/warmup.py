@@ -90,20 +90,34 @@ def _with_timeout(nome: str, aquecer) -> None:
     que CANCELA deixaria o pior dos dois mundos — boot atrasado e conexao
     ainda fria.
 
-    O TIMEOUT E 15 s POR ETAPA (`AI_WARMUP_TIMEOUT_SECONDS`), e o numero saiu
-    da medicao: o aquecimento do embedding levou 4844 ms em producao, num boot
-    normal. Um teto perto disso dispararia em rede meramente lenta — e
-    disparar e o pior desfecho, porque loga um aviso alarmante sobre algo que
-    ia funcionar. 15 s da ~3x de folga sobre o pior caso observado.
+    O TIMEOUT E 8 s POR ETAPA (`AI_WARMUP_TIMEOUT_SECONDS`), e ele desceu de
+    15 s em 24/08/2026 porque a leitura da medicao estava errada.
 
-    O teto do BOOT e o que limita por cima: 3 etapas x 15 s = 45 s no caso
-    patologico, somados ao `alembic upgrade head` que o `docker-entrypoint.sh`
-    ja roda antes do Uvicorn. Cabe porque o servico da API **nao tem
-    healthcheck** no `docker-compose.yml` (so o Redis tem) e o `restart:
-    always` so dispara quando o processo MORRE — boot lento vira 502 no
-    Traefik por alguns segundos, nunca loop de restart (armadilha 5). Se um
-    healthcheck for acrescentado a API um dia, este numero passa a depender do
-    `start_period` dele.
+    O 15 s vinha de ler os 4844 ms do aquecimento do embedding como "um boot
+    normal" e pedir ~3x de folga sobre ele. Mas 4844 ms **e** o caso lento: a
+    unica chamada que existe no boot e a FRIA, com DNS, TCP e handshake TLS
+    dentro. Nao ha um caso mais lento a que dar folga — 3x sobre o pior
+    observado nao e margem, e um teto que nunca dispara.
+
+    E DISPARAR A TOA E BARATO, o que inverte o calculo. O argumento antigo
+    dizia que estourar "loga um aviso alarmante sobre algo que ia funcionar" —
+    mas o desenho desta funcao e justamente o que tira o preco disso: a thread
+    e daemon, nao e cancelada, e o aquecimento termina alguns segundos depois
+    do boot com o pool quente do mesmo jeito. O que se perde num disparo a toa
+    e uma linha de log. O que se perde em NAO disparar e o boot inteiro
+    pendurado, servindo 502.
+
+    O teto do BOOT e o que limita por cima: 3 etapas x 8 s = 24 s no caso
+    patologico (eram 45 s), somados ao `alembic upgrade head` que o
+    `docker-entrypoint.sh` ja roda antes do Uvicorn. Cabe porque o servico da
+    API **nao tem healthcheck** no `docker-compose.yml` (so o Redis tem) e o
+    `restart: always` so dispara quando o processo MORRE — boot lento vira 502
+    no Traefik por alguns segundos, nunca loop de restart (armadilha 5).
+
+    **A ausencia de healthcheck virou dependencia deste numero, e isso e a
+    armadilha 40.** No dia em que a API ganhar um, o `start_period` dele tem
+    que ser maior que a soma dos tres timeouts, senao o container entra em
+    loop de restart durante o proprio boot.
     """
     resultado: dict[str, float] = {}
 

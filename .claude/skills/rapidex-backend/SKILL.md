@@ -1403,3 +1403,47 @@ para `credit_card`, o webhook marcava como pago e **a comanda imprimia**. O
 fluxo inteiro parecendo funcionar sem dinheiro nenhum ter existido é a pior
 demonstração possível de um meio de pagamento. Cartão só se testa contra a
 credencial de teste do Mercado Pago.
+
+---
+
+## 40. O boot da API cabe porque ela NÃO tem healthcheck — e isso virou dependência
+
+`src/core/warmup.py` roda no lifespan e espera até `AI_WARMUP_TIMEOUT_SECONDS`
+por etapa, em três etapas (banco, embedding, LLM). O teto do boot é a soma:
+**3 × 8 s = 24 s**, somados ao `alembic upgrade head` que o
+`docker-entrypoint.sh` já roda antes do Uvicorn (armadilha 5).
+
+Esse número só é aceitável por um motivo que não está escrito em lugar nenhum
+do `docker-compose.yml`: **o serviço `pedeaqui-api` não tem `healthcheck`.** Só
+o `redis` tem. E `restart: always` dispara quando o processo **morre**, não
+quando ele demora. Boot lento hoje vira 502 no Traefik por alguns segundos, e
+nada mais.
+
+**A armadilha é acrescentar um healthcheck à API sem olhar este número.** É uma
+mudança que parece puro ganho — "o compose passa a saber quando a API está de
+pé" — e o padrão do Docker é `start_period: 0s`. Com isso, o healthcheck começa
+a sondar imediatamente, falha durante o aquecimento, o container é marcado
+`unhealthy`, é reiniciado, e reinicia **antes de terminar de subir**: loop de
+restart permanente, com a API nunca atendendo. O sintoma não aponta para o
+warmup em lugar nenhum — parece healthcheck mal configurado, ou API quebrada.
+
+**A regra, se um healthcheck for acrescentado:**
+
+```yaml
+healthcheck:
+  # start_period > 3 × AI_WARMUP_TIMEOUT_SECONDS + tempo do alembic,
+  # com folga. Com o teto em 8 s, 24 s é o piso teórico — não o valor a usar.
+  start_period: 60s
+  interval: 10s
+  timeout: 3s
+  retries: 3
+```
+
+E os dois números passam a estar **acoplados**: baixar o `start_period` ou subir
+`AI_WARMUP_TIMEOUT_SECONDS` sem olhar o outro reabre o loop. Se um dia isso
+incomodar, o conserto certo não é encurtar o warmup — é tirá-lo do lifespan e
+deixar a API subir enquanto ele aquece em segundo plano, aceitando a corrida com
+a primeira requisição que o desenho síncrono existe justamente para evitar.
+
+Correlato: `AI_WARMUP_ENABLED=false` zera o teto inteiro, e é a saída de
+emergência se um boot travar em produção por causa disso.

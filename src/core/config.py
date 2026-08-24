@@ -88,12 +88,22 @@ class Settings(BaseSettings):
     # Estourar nao cancela a chamada — a thread e daemon e segue aquecendo o
     # pool; o boot so para de esperar por ela. Ver `_with_timeout`.
     #
-    # 15 s saiu da medicao: o aquecimento do embedding levou 4844 ms num boot
-    # normal de producao, e um teto perto disso dispararia em rede meramente
-    # lenta. O teto do BOOT e 3 x este valor, e cabe porque o servico da API
-    # nao tem healthcheck no compose — boot lento vira 502 no Traefik por
-    # alguns segundos, nunca loop de restart.
-    AI_WARMUP_TIMEOUT_SECONDS: float = 15.0
+    # 8 s, e o numero desceu de 15 s em 24/08/2026 porque a premissa do 15
+    # estava errada. Ela lia os 4844 ms do embedding como "boot normal" e
+    # pedia 3x de folga sobre ele. Mas 4844 ms E o caso lento — e a chamada
+    # FRIA, a unica que existe no boot, DNS e TLS inclusos. Folga de 3x sobre
+    # o pior caso ja observado nao e margem, e teto que nunca dispara.
+    #
+    # E errar para MENOS aqui e barato, justamente por causa do desenho da
+    # thread: estourar nao cancela nada, so para de esperar (ver
+    # `_with_timeout`). O custo de disparar a toa e uma linha de log e um
+    # aquecimento que termina alguns segundos depois do boot. O custo de nao
+    # disparar e o boot pendurado 45 s servindo 502.
+    #
+    # O teto do BOOT e 3 x este valor: 24 s, contra 45 s antes. Ele so cabe
+    # porque o servico da API nao tem healthcheck no compose — ver a
+    # armadilha 40 da skill `rapidex-backend` antes de acrescentar um.
+    AI_WARMUP_TIMEOUT_SECONDS: float = 8.0
 
     # Atendimento por voz em tempo real (src/ai/voice/, rotas sob /voice).
     #

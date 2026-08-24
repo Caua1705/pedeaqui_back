@@ -68,7 +68,13 @@ class RetrievalService:
         )
 
         embedding_started_at = perf_counter()
-        embedding = chat_cache.get_embedding(embedding_cache_key)
+        # A ORIGEM vem junto com o vetor desde que o cache foi para o Redis, e
+        # ela e o numero que interessa: `embedding_cache_hit=true` sozinho nao
+        # separa o acerto que o `dict` do processo ja dava do acerto que so o
+        # Redis pode dar — o de outro cliente, outro worker, depois do deploy.
+        # `origem=redis` e a prova de que o compartilhamento entre clientes
+        # esta acontecendo; `origem=memoria` e o cache antigo.
+        embedding, cache_origin = chat_cache.get_embedding(embedding_cache_key)
         embedding_cache_hit = embedding is not None
         if embedding is None:
             embedding = self.embedding_service.generate_embedding(question)
@@ -79,9 +85,10 @@ class RetrievalService:
             (perf_counter() - embedding_started_at) * 1000,
         )
         logger.info(
-            "[AI %s cache] embedding_cache_hit=%s",
+            "[AI %s cache] embedding_cache_hit=%s | embedding_cache_origem=%s",
             self.agent,
             str(embedding_cache_hit).lower(),
+            cache_origin or "nenhuma",
         )
 
         retrieval_started_at = perf_counter()

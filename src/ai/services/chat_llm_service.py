@@ -34,8 +34,11 @@ import logging
 from functools import lru_cache
 from time import perf_counter
 from typing import Any
+from uuid import UUID
 
+from langchain_core.utils.json import parse_partial_json
 from langchain_openai import ChatOpenAI
+from pydantic import ValidationError
 
 from src.ai.prompts.chat_prompt import build_chat_prompt
 from src.ai.prompts.system_prompt import SYSTEM_PROMPT
@@ -53,7 +56,7 @@ def get_chat_client(model: str) -> ChatOpenAI:
         model=model,
         reasoning_effort="minimal",
         verbosity="low",
-        max_completion_tokens=300,
+        max_completion_tokens=settings.AI_MAX_COMPLETION_TOKENS,
         use_responses_api=True,
     )
 
@@ -118,15 +121,30 @@ class ChatLLMService:
 
         logger.info("[AI LLM] Início da chamada ao LLM")
         call_started_at = perf_counter()
-        result = chain.invoke(
-            {
-                "restaurant_context": restaurant_context,
-                "branch_state": branch_state,
-                "conversation": conversation,
-                "retrieved_products": retrieved_products,
-                "user_message": user_message,
-            }
-        )
+        try:
+            result = chain.invoke(
+                {
+                    "restaurant_context": restaurant_context,
+                    "branch_state": branch_state,
+                    "conversation": conversation,
+                    "retrieved_products": retrieved_products,
+                    "user_message": user_message,
+                }
+            )
+        except ValidationError as erro:
+            # Resposta cortada no teto. Nao ha `result` nenhum aqui — nem
+            # `raw`, nem usage: a excecao sobe de dentro do SDK da OpenAI e
+            # leva a resposta crua junto. Por isso o cronometro e fechado a
+            # mao antes do resgate, senao um turno cortado sairia do log sem
+            # `llm_call_ms` e sumiria da medicao.
+            logger.info(
+                "[AI /chat perf] llm_call_ms=%.2f",
+                (perf_counter() - call_started_at) * 1000,
+            )
+            resgatada = self._resgatar_resposta_cortada(erro)
+            if resgatada is None:
+                raise
+            return resgatada
         logger.info(
             "[AI /chat perf] llm_call_ms=%.2f",
             (perf_counter() - call_started_at) * 1000,
@@ -137,7 +155,137 @@ class ChatLLMService:
         # que nao validou custou os mesmos tokens de uma que validou, e e
         # justamente nela que saber quantos foram explica o porque.
         self._log_usage(result.get("raw"))
+        self._avisar_se_bateu_no_teto(result.get("raw"))
         return self._unwrap(result)
+
+    def _resgatar_resposta_cortada(self, erro: ValidationError) -> ChatLLMResponse | None:
+        """O texto que sobrou de um JSON cortado no meio, ou None.
+
+        O QUE ISTO IMPEDE. Em 24/08/2026, no build `1ca8708`, o `/chat` caiu
+        em producao com `Invalid JSON: EOF while parsing a string at line 1
+        column 629`: a resposta bateu no `max_completion_tokens` no meio da
+        lista de `selected_product_ids`, o JSON chegou cortado e o cliente viu
+        erro na tela. O modelo tinha escrito a resposta INTEIRA em texto — so
+        a lista de ids ficou pela metade — e nos jogamos tudo fora.
+
+        Perder os cartoes e um arranhao; perder o turno e o cliente indo
+        embora. Entao o turno degrada: o texto vai, os cartoes vao se ainda
+        derem, e nada estoura.
+
+        POR QUE ISTO NAO MORA NO `_unwrap`. Era la que parecia o lugar, porque
+        e la que `parsing_error` e tratado. Mas neste modo de falha
+        `parsing_error` **nunca e preenchido**: a `ValidationError` e levantada
+        DENTRO do SDK da OpenAI, em `parse_response`, antes de o
+        `include_raw=True` do langchain ter o que embrulhar. Ela sobe pelo
+        `chain.invoke` inteiro. Por isso o resgate e um `except` em volta da
+        chamada, e nao um `if` no retorno dela — medido em 24/08/2026 contra a
+        API de verdade, forcando o corte com o teto em 140.
+
+        O JSON parcial vem DA PROPRIA EXCECAO: `errors()[0]["input"]` e a
+        string que o Pydantic tentou validar. E o unico lugar onde ela existe,
+        porque a resposta crua morreu junto com a excecao.
+
+        OS IDS BEM FORMADOS SAO PRESERVADOS, e o cortado nao. Um uuid pela
+        metade nao vira `UUID` e `ChatLLMResponse` recusaria o objeto inteiro —
+        o resgate falharia tentando resgatar. Os completos sao legitimos: o
+        modelo os escolheu e eles ainda passam por
+        `_validate_selected_product_ids` do lado de fora, que continua sendo a
+        unica coisa entre uma alucinacao e a tela.
+
+        `response_type` sai como "text" e nao como "products" mesmo havendo
+        ids, porque quem decide isso e `ChatService._response_type`, olhando o
+        que SOBROU da validacao. Dizer "products" aqui seria opinar sobre uma
+        lista que ainda nao foi conferida.
+
+        Devolve None quando nao ha o que resgatar — JSON cortado antes mesmo
+        da `message`, ou erro que nao e de JSON invalido. Ai o chamador levanta
+        a excecao original, que e o comportamento de antes: uma falha que o
+        resgate nao cobre nao pode virar resposta vazia com cara de sucesso.
+        """
+        detalhes = erro.errors()
+        if not detalhes or detalhes[0].get("type") != "json_invalid":
+            return None
+
+        parcial = detalhes[0].get("input")
+        if not isinstance(parcial, str) or not parcial:
+            return None
+
+        try:
+            recuperado = parse_partial_json(parcial)
+        except Exception:
+            return None
+
+        if not isinstance(recuperado, dict):
+            return None
+
+        mensagem = recuperado.get("message")
+        if not isinstance(mensagem, str) or not mensagem.strip():
+            return None
+
+        ids = []
+        for bruto in recuperado.get("selected_product_ids") or []:
+            try:
+                ids.append(UUID(str(bruto)))
+            except (ValueError, AttributeError, TypeError):
+                # O ultimo id da lista e o que costuma vir cortado. Ele para
+                # aqui em silencio de proposito: nao e o modelo desobedecendo
+                # o formato, e a frase acabando no meio.
+                continue
+
+        logger.warning(
+            "[AI /chat] RESPOSTA CORTADA E RESGATADA | json_chars=%d "
+            "| message_chars=%d | ids_recuperados=%d | teto=%d | model=%s. "
+            "O turno foi entregue sem estourar; suba AI_MAX_COMPLETION_TOKENS "
+            "se isto se repetir.",
+            len(parcial),
+            len(mensagem),
+            len(ids),
+            settings.AI_MAX_COMPLETION_TOKENS,
+            self.llm.model_name,
+        )
+        return ChatLLMResponse(
+            message=mensagem,
+            response_type="text",
+            selected_product_ids=ids,
+        )
+
+    def _avisar_se_bateu_no_teto(self, raw: Any) -> None:
+        """Uma linha alta quando a resposta encostou no `max_completion_tokens`.
+
+        ESTA LINHA FALTAVA NO DIA DO INCIDENTE. Bater no teto nao tinha
+        sintoma proprio: aparecia como `ValidationError` de JSON invalido, que
+        parece defeito do modelo ou do schema, e nao "o orcamento acabou". A
+        primeira hipotese levantada foi a errada por isso.
+
+        A comparacao e com `output_tokens`, e nao com o tamanho da `message`,
+        e e essa a licao do incidente: **o teto e cobrado sobre o que o modelo
+        GERA, e o texto que o cliente le e menos da metade disso.** Medido em
+        24/08/2026 contra a API: `output_tokens=129` para uma `message` de 41
+        tokens, porque os dois uuids de `selected_product_ids` custaram 52 e o
+        andaime do structured output, 25. **O uuid custa 26 tokens.**
+
+        Nao e raciocinio — foi a primeira hipotese e ela nao se sustentou:
+        `reasoning` veio 0 em todas as chamadas medidas, e a soma fecha sem
+        ele. Ver a conta inteira em `Settings.AI_MAX_COMPLETION_TOKENS`.
+
+        Os 90% existem porque bater no teto EXATO e raro: o corte acontece
+        alguns tokens antes, quando o proximo campo nao cabe. Avisar so no
+        numero cheio deixaria passar justamente o turno que quase quebrou.
+        """
+        try:
+            usage = getattr(raw, "usage_metadata", None) or {}
+            saida = usage.get("output_tokens")
+            teto = settings.AI_MAX_COMPLETION_TOKENS
+            if saida is None or saida < teto * 0.9:
+                return
+            logger.warning(
+                "[AI /chat] RESPOSTA NO LIMITE DO TETO | output_tokens=%s "
+                "| teto=%d. O proximo turno parecido chega cortado.",
+                saida,
+                teto,
+            )
+        except Exception:
+            logger.warning("[AI /chat] aviso_de_teto_falhou=true", exc_info=True)
 
     @staticmethod
     def _unwrap(result: dict[str, Any]) -> ChatLLMResponse:

@@ -64,6 +64,24 @@ class TestClienteCompartilhado:
         assert llm.reasoning_effort == "minimal"
         # `max_completion_tokens` e apelido de `max_tokens` no langchain-openai:
         # o atributo que sobra no objeto e o segundo nome.
-        assert llm.max_tokens == 300
+        #
+        # Era `== 300` fixo aqui e no codigo ate 24/08/2026, quando o 300
+        # derrubou o `/chat` em producao: o teto e cobrado sobre o que o
+        # modelo GERA (texto + raciocinio), e nao sobre o texto que ele
+        # mostra. Agora o valor sai do ambiente, e o que este teste guarda e
+        # que ele CHEGA ao cliente — um default que nao fosse lido faria a
+        # variavel virar configuracao morta, do mesmo jeito que
+        # `test_chat_llm_model.py` registra para `MODEL_NAME`.
+        assert llm.max_tokens == settings.AI_MAX_COMPLETION_TOKENS
         assert llm.use_responses_api is True
         assert llm.model_name == settings.MODEL_NAME
+
+    def test_o_teto_sai_do_ambiente_e_chega_ao_cliente(self, monkeypatch):
+        """A licao do incidente de 24/08/2026: o unico botao capaz de reabrir
+        o `/chat` naquele momento exigia build e deploy para ser girado."""
+        monkeypatch.setattr(settings, "AI_MAX_COMPLETION_TOKENS", 1234)
+        get_chat_client.cache_clear()
+
+        assert ChatLLMService().llm.max_tokens == 1234
+
+        get_chat_client.cache_clear()

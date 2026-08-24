@@ -78,6 +78,62 @@ class Settings(BaseSettings):
     VOICE_MODEL: str = "gpt-realtime-mini"
     VOICE_NAME: str = "marin"
 
+    # O TETO DA RESPOSTA DO RAPI, E ELE E VALVULA DE SEGURANCA — NAO CONTROLE
+    # DE COMPRIMENTO.
+    #
+    # Ficou em 300 fixo no codigo ate 24/08/2026, e nesse dia derrubou o
+    # `/chat` em producao (build `1ca8708`): a resposta bateu no teto no meio
+    # da lista de `selected_product_ids`, o JSON chegou cortado, o Pydantic
+    # recusou e o cliente viu erro na tela.
+    #
+    # O ERRO DE LEITURA QUE FEZ O 300 PARECER SEGURO era achar que o teto
+    # media o TEXTO da resposta: "o Rapi responde 120 tokens, 300 e o dobro
+    # com folga". O teto mede o que o modelo GERA, e o texto e menos da
+    # metade disso. Medido contra a API em 24/08/2026, com o cardapio do
+    # piloto:
+    #
+    #     output_tokens cobrado                    129
+    #     JSON inteiro, por tiktoken               104
+    #       ├─ message (o texto que o cliente le)   41
+    #       └─ 2 uuids de selected_product_ids      52
+    #     andaime do structured output              25
+    #
+    # **O UUID CUSTA 26 TOKENS, e sao dois a tres por resposta.** Numa
+    # resposta de recomendacao os ids sozinhos passam do texto: 52 contra 41
+    # no exemplo acima. Esse e o item que estoura o teto, e ele nao aparece em
+    # lugar nenhum da tela.
+    #
+    # NAO E RACIOCINIO. Foi a primeira hipotese na investigacao e ela nao se
+    # sustentou: com `reasoning_effort="minimal"`, `reasoning` veio **0** em
+    # todas as dezesseis chamadas medidas, e a soma acima fecha sem ele. Se
+    # alguem trocar o `reasoning_effort` um dia, ai sim ele passa a disputar
+    # este orcamento — e sera preciso refazer a conta.
+    #
+    # A conta do 800, para a resposta mais cheia que o prompt permite:
+    #
+    #     message de 2 paragrafos       ~200 tokens
+    #     3 uuids (o teto de produtos)    78 tokens
+    #     envelope JSON + andaime         35 tokens
+    #                                   -------------
+    #                                   ~315 tokens
+    #
+    # O turno mais longo realmente medido deu **242**, ou 81% dos 300 antigos
+    # — quer dizer, o teto velho nao tinha margem nenhuma, e nao foi a
+    # mudanca do prompt que criou o problema: ela so gastou a folga que ja
+    # estava no fim. 800 e ~2,5x o pior caso.
+    #
+    # NAO CUSTA A MAIS: cobra-se por token GERADO, e o teto so decide onde a
+    # geracao e cortada. Quem controla o comprimento e o prompt ("nunca passe
+    # de 2 paragrafos", "no maximo 3 produtos"); bater aqui deve ser BUG, e
+    # `_avisar_se_bateu_no_teto` passou a gritar quando acontece.
+    #
+    # SAI DO AMBIENTE pelo mesmo motivo de `MODEL_NAME`, e este incidente e a
+    # prova: o unico botao capaz de reabrir o `/chat` naquele momento exigia
+    # build e deploy para ser girado.
+    AI_MAX_COMPLETION_TOKENS: int = 800
+
+
+
     # Piso de similaridade da busca vetorial. Abaixo disto o produto nao chega
     # ao modelo.
     #

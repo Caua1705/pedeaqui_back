@@ -432,6 +432,12 @@ class TestOContextoChegaAoModelo:
         Vale para o restaurante E para a filial: os dois sao carregados do
         banco no comeco do turno (e e la que o 404 acontece), mas o que desce
         para a busca vetorial e so o id.
+
+        A MENSAGEM PRECISA SER PERGUNTA DE CARDAPIO, e isso passou a importar
+        em 24/08/2026. Este teste dizia "oi", que era escolha arbitraria —
+        e desde `greeting.py` saudacao nao chega a busca de proposito, entao
+        o `fake_retrieve` nunca era chamado e a assercao morria em KeyError.
+        O assunto do teste continua sendo qual TIPO desce para a busca.
         """
         recebido = {}
         restaurante = make_restaurant("Junior da Picanha")
@@ -450,7 +456,7 @@ class TestOContextoChegaAoModelo:
             lambda: SimpleNamespace(invoke=lambda **kwargs: make_llm_response("text", "oi")),
         )
 
-        service.chat(uuid.uuid4(), BRANCH_ID, "sessao-1", "oi")
+        service.chat(uuid.uuid4(), BRANCH_ID, "sessao-1", "quanto custa a picanha?")
 
         assert recebido["restaurant_id"] == restaurante.id
         assert recebido["branch_id"] == filial.id

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from src.ai.schemas.chat_response_schema import ChatResponse
 from src.ai.services.chat_llm_service import ChatLLMService
+from src.ai.services.greeting import is_greeting
 from src.ai.services.retrieval_service import RetrievalService
 from src.repositories.ai_feedback_repository import AIFeedbackRepository
 from src.repositories.branch_repository import BranchRepository
@@ -234,11 +235,7 @@ class ChatService:
         # a soma teria um buraco e nao daria para saber se ele e uma etapa
         # nao medida ou erro de conta.
         retrieval_started_at = perf_counter()
-        retrieved_products = self.retrieval_service.retrieve_products(
-            restaurant_id=restaurant.id,
-            branch_id=branch.id,
-            question=message,
-        )
+        retrieved_products = self._retrieve_menu_products(restaurant, branch, message)
         retrieval_total_ms = (perf_counter() - retrieval_started_at) * 1000
         logger.info("[AI /chat perf] retrieval_total_ms=%.2f", retrieval_total_ms)
 
@@ -305,6 +302,33 @@ class ChatService:
             len(response.products),
         )
         return response
+
+    def _retrieve_menu_products(self, restaurant, branch, message: str) -> list[dict]:
+        """Os produtos do cardapio para esta mensagem — vazio quando ela nao pede um.
+
+        Ate 24/08/2026 a busca rodava em TODO turno, e o "oi" respondido com
+        "temos H2O R$ 7,05" saiu dai: a agua veio no prompt e o prompt manda
+        oferecer o que chega. A saudacao tambem pagava o embedding, com
+        mediana medida de ~400 ms.
+
+        O criterio de `is_greeting` erra de proposito para o lado de BUSCAR —
+        os dois erros nao custam o mesmo, e o motivo esta no docstring de
+        `greeting.py`.
+
+        Devolver `[]` e o caminho que o resto do pipeline ja sabia percorrer:
+        sem produto recuperado, `_validate_selected_product_ids` nao aprova
+        nada, o resgate pelo nome nao acha nada e `_response_type` cai em
+        "text". Nenhuma etapa abaixo precisou saber deste desvio.
+        """
+        if is_greeting(message):
+            logger.info("[AI /chat] busca no cardapio ignorada | motivo=saudacao")
+            return []
+
+        return self.retrieval_service.retrieve_products(
+            restaurant_id=restaurant.id,
+            branch_id=branch.id,
+            question=message,
+        )
 
     def _get_active_restaurant(self, restaurant_id: uuid.UUID):
         restaurant = self.restaurant_repository.get_active_by_id(restaurant_id)

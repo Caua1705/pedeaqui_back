@@ -67,7 +67,17 @@ def servico(produtos=None, precos=None):
     """Um `RetrievalService` sem banco e sem OpenAI, contando as chamadas."""
     produto_id = uuid.uuid4()
     produtos = produtos if produtos is not None else [
-        {"id": produto_id, "name": "Picanha", "description": "na chapa", "metadata": {}}
+        # `similarity` faz parte da linha que o SQL devolve (`ai_repository`,
+        # `1 - (embedding <=> ...) AS similarity`), e o dublê a carrega pelo
+        # mesmo motivo de sempre: dublê que devolve menos campo que o real
+        # testa o dublê. `_format_retrieved_product` lê este campo.
+        {
+            "id": produto_id,
+            "name": "Picanha",
+            "description": "na chapa",
+            "metadata": {},
+            "similarity": 0.66,
+        }
     ]
     precos = precos if precos is not None else {produto_id: 8990}
 

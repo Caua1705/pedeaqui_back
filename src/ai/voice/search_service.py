@@ -85,19 +85,55 @@ class VoiceSearchService:
         product_ids = [uuid.UUID(str(produto["id"])) for produto in encontrados]
         produtos = self.chat_service._hydrate_products(branch.id, product_ids)
 
+        # `.get`, e nao `[...]`: o cache de busca dura 20 minutos e guarda o
+        # dict formatado. Nos primeiros 20 minutos depois de um deploy que
+        # acrescente campo, o que volta de la ainda tem o formato antigo — e
+        # uma linha de log nao pode derrubar a ferramenta.
+        similaridades = [
+            produto["similarity"] for produto in encontrados if produto.get("similarity") is not None
+        ]
+        topo = max(similaridades) if similaridades else None
+
         # `restaurant_id` na linha porque sem ele nao ha como atribuir uso de
         # voz a um restaurante — e cada tool call e um pedaco do custo de uma
         # sessao faturada. `branch_id` ao lado por outro motivo: e a unica
-        # forma de conferir DEPOIS que a busca falou da loja certa, ja que a
-        # consulta em si nao vai para o log. O digest da consulta segue a mesma regra do chat de
-        # texto: correlaciona requisicoes sem colocar no log o que a pessoa
-        # falou.
+        # forma de conferir DEPOIS que a busca falou da loja certa.
+        #
+        # A CONSULTA PASSOU A IR EM TEXTO (24/08/2026), e a decisao merece o
+        # paragrafo porque ela afrouxa uma regra que o chat de texto mantem.
+        #
+        # O que forcou: em 24/08/2026 o atendente respondeu "banana a
+        # milanesa" a quem pediu "baiao". As duas explicacoes possiveis eram
+        # opostas — a busca ter trazido lixo, ou o modelo ter consultado outra
+        # palavra — e o log com digest nao separava as duas. A calibracao
+        # depois mostrou que "baiao" acha "Baiao de dois" em 0,502, o topo da
+        # lista: a busca estava certa e o modelo tinha buscado outra coisa.
+        # Isso so foi possivel descobrir com o texto da consulta na mao, e ele
+        # so existia numa aba de navegador que ja tinha sido fechada.
+        #
+        # Por que isto NAO e o mesmo que logar a fala do cliente: esta string
+        # e escrita pelo MODELO, nao pela pessoa. E a reformulacao dele do que
+        # entendeu ("sobremesa de chocolate"), ja limitada a 500 caracteres
+        # pelo schema da rota, e cortada em 120 aqui. A fala crua continua sem
+        # passar por este processo em momento nenhum — o audio vai do
+        # navegador direto para a OpenAI.
+        #
+        # O digest fica ao lado, e nao foi substituido: ele correlaciona estas
+        # linhas com as que foram gravadas antes desta mudanca.
+        #
+        # `topo` e a maior similaridade da busca. Ele existe pelo mesmo
+        # motivo: com a consulta e o topo na mesma linha, "buscou errado" e
+        # "buscou bem e nao havia nada" viram duas leituras diferentes, em
+        # producao, sem bancada.
         logger.info(
-            "[Voz] busca | restaurant_id=%s | branch_id=%s | consulta_digest=%s "
-            "| preco_maximo=%s | encontrados=%d | hidratados=%d",
+            "[Voz] busca | restaurant_id=%s | branch_id=%s | consulta=%.120s "
+            "| consulta_digest=%s | topo=%s | preco_maximo=%s | encontrados=%d "
+            "| hidratados=%d",
             restaurant_id,
             branch_id,
+            consulta,
             _digest(consulta),
+            "-" if topo is None else f"{topo:.3f}",
             preco_maximo,
             len(encontrados),
             len(produtos),

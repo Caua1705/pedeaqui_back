@@ -176,6 +176,19 @@ class RetrievalService:
         compact_product = {
             "id": product["id"],
             "name": product["name"],
+            # Sobrevive ao formato compacto porque a VOZ precisa dele no log:
+            # sem a similaridade gravada em producao nao ha como distinguir
+            # "o modelo buscou outra coisa" de "a busca trouxe lixo", e a
+            # bateria de 24/08/2026 mostrou que os dois parecem iguais de
+            # fora. Entra no cache junto, e e seguro: a chave da busca ja
+            # inclui a pergunta, entao a similaridade e do par
+            # pergunta+produto e nao de um produto sozinho.
+            #
+            # O agente de TEXTO nao pode ver este campo — `retrieved_products`
+            # vai INTEIRO para `{retrieved_products}` no prompt dele
+            # (`chat_prompt.py`). Quem tira e `_retrieve_menu_products`, e e o
+            # unico lugar que tira.
+            "similarity": round(float(product["similarity"]), 4),
             "short_description": (
                 metadata.get("short_description") or product.get("description") or ""
             )[:240],

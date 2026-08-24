@@ -431,12 +431,25 @@ class ChatService:
         saudacao passou a nao chamar o modelo: com o desvio la em cima, um
         segundo `is_greeting` neste ponto seria codigo inalcancavel se
         passasse, e uma segunda definicao de "o que e saudacao" se divergisse.
+
+        AQUI O `similarity` SAI, e este e o unico lugar que o tira. A busca o
+        devolve porque a voz precisa dele (ver `_format_retrieved_product`),
+        mas esta lista vai INTEIRA para `{retrieved_products}` no prompt do
+        texto: deixar passar seria ~10 tokens por produto em todo turno do
+        `/chat` e um campo sobre o qual o `system_prompt` nao diz uma palavra.
+
+        A voz nao passa por esta funcao — ela chama `retrieve_products`
+        direto, em `VoiceSearchService.buscar`.
         """
-        return self.retrieval_service.retrieve_products(
+        produtos = self.retrieval_service.retrieve_products(
             restaurant_id=restaurant.id,
             branch_id=branch.id,
             question=message,
         )
+        return [
+            {chave: valor for chave, valor in produto.items() if chave != "similarity"}
+            for produto in produtos
+        ]
 
     def _get_active_restaurant(self, restaurant_id: uuid.UUID):
         restaurant = self.restaurant_repository.get_active_by_id(restaurant_id)

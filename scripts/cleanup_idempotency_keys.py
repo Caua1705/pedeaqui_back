@@ -90,6 +90,94 @@ from src.services.order_review_service import review_retention_cutoff
 from src.utils.security import utcnow
 
 
+def conferir_despejo_do_redis(redis_client=None) -> int:
+    """Grita se o Redis andou DESPEJANDO chave. Nunca levanta, nunca falha o script.
+
+    ===================================================================
+    POR QUE ISTO MORA NO CONTAINER DE LIMPEZA
+    ===================================================================
+
+    O Redis sobe com `--maxmemory 256mb --maxmemory-policy volatile-lru`, e
+    `volatile-lru` escolhe a vitima entre as chaves **com TTL**. Todas as
+    nossas tem: o contador de rate limit (a janela E o TTL), a estimativa de
+    entrega, e o cache de embedding do Rapi.
+
+    O RISCO CONCRETO E O CACHE DERRUBAR O RATE LIMIT. Um embedding ocupa 6 KB;
+    um contador de limite, algumas dezenas de bytes. Sob pressao, um contador
+    parado ha trinta segundos e "menos recentemente usado" que um embedding
+    lido ha dez — e sai. E sair nao da erro nenhum: o `slowapi` le o contador
+    ausente como zero, o cliente ganha orcamento novo, e o limite deixa de
+    valer **em silencio**. O `in_memory_fallback_enabled` nao ajuda aqui: ele
+    cobre o Redis fora do ar, nao o Redis respondendo com uma chave que foi
+    apagada.
+
+    POR QUE DIARIO, E NAO NO BOOT. `evicted_keys` e um acumulado que so zera
+    quando o **Redis** reinicia, nao quando a API reinicia. Conferir no boot da
+    API mediria uma janela que nao tem relacao com o contador. Aqui roda uma
+    vez por dia, no container que ja existe, com cadencia propria.
+
+    POR QUE NAO E ERRO. Este script esta encadeado com `&&` ao
+    `expire_cashback.py`, que VENCE SALDO DE CLIENTE. Falhar aqui impediria a
+    expiracao de rodar por causa de uma leitura de diagnostico — trocar um
+    aviso por um bug de dinheiro. Devolve sempre 0.
+    """
+    if redis_client is None:
+        from src.ai.services.chat_cache import cliente_redis
+
+        redis_client = cliente_redis()
+    if redis_client is None:
+        print("[redis] sem REDIS_URL; despejo nao conferido.")
+        return 0
+
+    try:
+        info = redis_client.info()
+    except Exception as erro:  # noqa: BLE001
+        print(f"[redis] nao deu para ler o INFO ({type(erro).__name__}); seguindo.")
+        return 0
+
+    def numero(chave: str) -> int:
+        valor = info.get(chave, info.get(chave.encode(), 0))
+        try:
+            return int(valor)
+        except (TypeError, ValueError):
+            return 0
+
+    despejadas = numero("evicted_keys")
+    usada_mb = numero("used_memory") / (1024 * 1024)
+    teto_mb = numero("maxmemory") / (1024 * 1024)
+
+    if despejadas == 0:
+        print(
+            f"[redis] evicted_keys=0 | used_memory={usada_mb:.1f} MB"
+            f" de {teto_mb:.0f} MB. Ok."
+        )
+        return 0
+
+    # O numero esperado e ZERO, para sempre. Diferente disso e um estado que
+    # ninguem projetou, e a linha tem que dizer quem e o suspeito — senao o
+    # aviso vira um numero esperando alguem lembrar dele.
+    # Uma linha por ideia, e cada uma com o prefixo `[redis]`: o stdout deste
+    # container e lido com `docker logs | grep`, e um aviso de quatro linhas
+    # sem prefixo perde tres quartos de si no primeiro grep.
+    for linha in (
+        f"ATENCAO: evicted_keys={despejadas} | "
+        f"used_memory={usada_mb:.1f} MB de {teto_mb:.0f} MB.",
+        "O Redis esta despejando chave por falta de memoria, e `volatile-lru` "
+        "nao distingue as nossas: o CONTADOR DE RATE LIMIT pode estar sendo "
+        "apagado junto, e um contador apagado vira limite que nao vale — sem "
+        "erro e sem log.",
+        "Suspeito principal: o cache de embedding do Rapi (`emb:v1:*`), que "
+        "ocupa ~6 KB por pergunta contra dezenas de bytes de um contador. "
+        "Confira com `redis-cli --bigkeys` e `redis-cli info keyspace`.",
+        "Conserto estrutural: segunda instancia de Redis so para o cache do "
+        "Rapi, com `maxmemory` proprio. Banco separado (`/0` vs `/1`) NAO "
+        "resolve — `maxmemory` e a politica de despejo sao por INSTANCIA. "
+        "Ver a armadilha 41 da skill `rapidex-backend`.",
+    ):
+        print(f"[redis] {linha}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Remove chaves, estimativas, codigos, feedback, comentarios e relatos vencidos."
@@ -148,6 +236,9 @@ def main() -> int:
                 f"seriam removidos e {comentarios} comentario(s) de avaliacao "
                 f"seriam limpos."
             )
+            # Tambem no dry-run: ler o INFO do Redis nao muda nada, e quem
+            # chama o dry-run a mao costuma estar justamente investigando.
+            conferir_despejo_do_redis()
             return 0
 
         removed_keys = IdempotencyRepository(db).delete_expired(now=now)
@@ -164,6 +255,10 @@ def main() -> int:
             f"{removed_reports} relato(s) removidos; {cleared_comments} "
             f"comentario(s) de avaliacao limpos."
         )
+
+    # DEPOIS do commit, e fora do `with`: e diagnostico, nao expurgo, e nao
+    # tem nada que segurar a transacao aberta.
+    conferir_despejo_do_redis()
     return 0
 
 

@@ -1447,3 +1447,96 @@ a primeira requisição que o desenho síncrono existe justamente para evitar.
 
 Correlato: `AI_WARMUP_ENABLED=false` zera o teto inteiro, e é a saída de
 emergência se um boot travar em produção por causa disso.
+
+---
+
+## 41. Banco separado do Redis (`/0` vs `/1`) NÃO isola despejo
+
+O Redis sobe com `--maxmemory 256mb --maxmemory-policy volatile-lru`, e ele é
+**compartilhado**: contador de rate limit, cache de estimativa de entrega e
+cache de embedding do Rapi moram todos ali.
+
+**`volatile-lru` escolhe a vítima entre as chaves COM TTL.** Todas as nossas
+têm — no rate limit, a janela *é* o TTL. E o consumo é assimétrico: um embedding
+ocupa ~6 KB, um contador de limite algumas dezenas de bytes. Sob pressão de
+memória, um contador parado há trinta segundos é "menos recentemente usado" que
+um embedding lido há dez, e sai.
+
+**Contador despejado não dá erro.** O `slowapi` lê a chave ausente como zero, o
+cliente ganha orçamento novo, e o limite deixa de valer em silêncio. O
+`in_memory_fallback_enabled=True` não cobre este caso: ele existe para o Redis
+**fora do ar**, não para o Redis respondendo normalmente sobre uma chave que foi
+apagada.
+
+**A armadilha é achar que separar o banco lógico resolve.** É o primeiro reflexo
+— `REDIS_URL=.../0` para o rate limit, `.../1` para o cache — e não muda nada:
+
+> `maxmemory` e `maxmemory-policy` são configuração **da instância**, não do
+> banco. O despejo varre o keyspace inteiro, todos os `SELECT` juntos.
+> `SWAPDB`, `FLUSHDB` e afins operam por banco; a pressão de memória, não.
+
+O que isola de verdade é **outra instância**, com `maxmemory` próprio:
+
+```yaml
+  redis-ai:
+    image: redis:7-alpine
+    command: [redis-server, --requirepass, ${REDIS_PASSWORD:?}, --maxmemory, 64mb,
+              --maxmemory-policy, volatile-lru, --save, "", --appendonly, "no"]
+```
+
+com `AI_CACHE_REDIS_URL` apontando para ela. A costura já existe no código:
+`cliente_redis()`, em `src/ai/services/chat_cache.py`, é o único lugar que
+constrói o cliente do cache.
+
+**Hoje isso não está montado, de propósito**: `256 MB / 6 KB ≈ 43 mil` perguntas
+distintas dentro da janela de 60 min do TTL, para um restaurante — não acontece
+organicamente, e um flood artificial dispara antes o alarme de custo (cada
+pergunta distinta é uma chamada paga de embedding). O que está montado é a
+**detecção**: `conferir_despejo_do_redis`, em
+`scripts/cleanup_idempotency_keys.py`, roda diariamente no container `limpeza` e
+grita quando `evicted_keys` deixa de ser zero. **O número esperado é zero, para
+sempre.**
+
+E corolário para qualquer chave nova no Redis: **grave sempre com TTL**
+(`SETEX`, nunca `SET` pelado). Chave sem expiração é invisível para
+`volatile-lru` — ela nunca é despejada, e portanto o despejo inteiro recai sobre
+as chaves que se comportaram.
+
+---
+
+## 42. Medição de comportamento de biblioteca só vale no venv do lock
+
+**O primeiro passo de qualquer spike é dizer em que ambiente ele está rodando.**
+Não é cerimônia: em 24/08/2026 um spike sobre streaming do LangChain foi montado
+no interpretador local e quase virou decisão de arquitetura.
+
+O `requirements.lock.txt` — que é o que o `Dockerfile` instala e o que roda em
+produção — fixa `langchain-openai==1.6.0` e `openai==3.3.1`. O interpretador
+local tinha `1.4.1` e `2.52.0`. Medido no dia: **41 pacotes batendo, 24
+divergentes e 3 ausentes**, entre eles `SQLAlchemy`, `psycopg`, `alembic` e a
+pilha HTTP inteira.
+
+O pior era o ausente: `httpx2` e `httpcore2`. A versão do lock do `openai` fala
+com a OpenAI por eles; a versão antiga usa o `httpx` clássico. **Toda conclusão
+sobre pool de conexão, timeout ou keepalive tirada dali valeria para uma
+biblioteca que produção não tem.**
+
+**A causa não foi um venv que envelheceu — não havia venv.** O `README` manda
+criar um e o `.gitignore` o ignora, mas o diretório não existia; `python -m
+pytest` caía no Python global da máquina, que tem o que sobrou de outros
+trabalhos, e não reclamava de nada.
+
+**O CI sempre esteve certo** (`pip install -r requirements.lock.txt` num runner
+limpo). O verde que não valia era o local — que é justamente o que se olha antes
+de abrir o PR.
+
+**A trava:** `tests/test_ambiente_bate_com_o_lock.py` compara
+`importlib.metadata.version` com o lock, respeitando marcador de plataforma.
+Nasce verde no CI, então qualquer vermelho dela é local. Se ela falhar, **pare**
+— nenhuma medição feita naquele ambiente vale, inclusive as que já pareciam
+conclusivas.
+
+Correlato, para spike de comportamento de biblioteca: dublar o **transporte**
+(o cliente HTTP, o socket) e deixar a biblioteca real por cima é o que separa
+"medi o LangChain" de "medi a minha lembrança do LangChain". Um dublê alto
+demais testa o dublê.

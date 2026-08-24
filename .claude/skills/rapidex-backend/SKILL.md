@@ -1583,3 +1583,48 @@ isso, em `openai/types/realtime/realtime_audio_config_input.py` (conferido no
 O mesmo vale ao contrário: `response.output_audio_transcript.done` é a
 transcrição do que o assistente falou, e serve para conferir de olho — não é
 o que o cliente ouviu.
+
+---
+
+## 44. Exemplo em prompt: ancorado na FONTE ensina, solto na SAÍDA vira molde
+
+Em 24/08/2026 o prompt de voz ganhou, como ilustração da forma curta de falar
+preço, a frase:
+
+```
+- Copie o valor EXATO ..., na forma curta do balcao: "trinta e cinco e trinta"
+```
+
+Na sessão seguinte o assistente disse **"trinta e quatro e noventa"** e **"vinte
+e quatro e noventa"** — mesma forma, mesmo ritmo, e **sem ter chamado a
+ferramenta em nenhum dos dois turnos**. Números que não vieram de lugar nenhum.
+Na sessão anterior, sem essa linha, os dois preços falados eram reais.
+
+**A diferença que explica os dois casos** — porque o `system_prompt.py` do texto
+tem `Exemplo: "R$ 23,90"` há muito tempo e não produz isso:
+
+| | onde o exemplo vive | o que o modelo aprende |
+|---|---|---|
+| texto | *"o preço vem em `retrieved_products`, no campo `price`, já escrito como deve aparecer. Exemplo: `R$ 23,90`"* | como **reconhecer** o campo de origem |
+| voz (errado) | *"na forma curta do balcão: `trinta e cinco e trinta`"* | como **produzir** a frase — inclusive sem fonte |
+
+Exemplo ancorado na FONTE é referência: ele descreve um dado que existe fora do
+prompt, e o modelo precisa ir buscar o dado. Exemplo solto da SAÍDA é molde: é
+uma frase pronta, no formato final, e preencher um molde é mais barato para o
+modelo do que chamar uma ferramenta.
+
+**A regra:** todo exemplo de valor num prompt aponta para de onde o valor vem, e
+não para como a resposta soa. Quando a forma de falar precisa mesmo de exemplo,
+escreva o par **fonte → saída**, nunca a saída sozinha:
+
+```
+"R$ 43,50" vira "quarenta e tres e cinquenta"
+```
+
+Vale para os dois agentes, e vale além de preço: quantidade, prazo, distância,
+número de pedido — qualquer campo que o modelo deveria copiar e pode inventar.
+
+**Correlato, e foi o que denunciou este caso:** o argumento da tool call no log
+(`consulta=` em `[Voz] busca`) é o que separa "o modelo inventou" de "o dado
+veio errado". Sem ele, os dois parecem iguais de fora. Ver [[43]] para o outro
+lado dessa mesma linha.

@@ -78,6 +78,23 @@ class Settings(BaseSettings):
     VOICE_MODEL: str = "gpt-realtime-mini"
     VOICE_NAME: str = "marin"
 
+    # O SELETOR DE VOZ DA BANCADA, e ele nasce DESLIGADO de proposito.
+    #
+    # Ligado, `POST /voice/session` aceita um campo `voz` no corpo e a sessao
+    # e emitida com ela em vez de `VOICE_NAME`. Isso existe para uma coisa so:
+    # trocar de voz e ouvir na hora, sem restart — `VOICE_NAME` e lido no
+    # import e um `settings` e construido uma vez por processo.
+    #
+    # Por que ele nao pode ficar ligado depois da escolha: e um parametro da
+    # SESSAO escolhido pelo cliente, e a pagina e do cliente. Nao ha dano de
+    # custo (a voz nao muda a tarifa) nem de dado, mas e a porta aberta que
+    # nao precisa existir — e a VPS onde ele vai rodar e producao.
+    #
+    # A lista fechada esta em `realtime_client.VOZES_DO_REALTIME`, e ela vale
+    # mesmo com a chave ligada: sem ela, um nome qualquer viraria 502 da
+    # OpenAI depois de a rota ja ter gasto consulta de cota.
+    VOICE_ALLOW_VOICE_OVERRIDE: bool = False
+
     # O TETO DA RESPOSTA DO RAPI, E ELE E VALVULA DE SEGURANCA — NAO CONTROLE
     # DE COMPRIMENTO.
     #

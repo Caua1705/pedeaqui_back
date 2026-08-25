@@ -17,11 +17,12 @@ A bancada viva e externa (`bancada-assistente/bancada.html`, servida em
 do `main.py` — nao ha nada a servir daqui.
 """
 
+import logging
 import uuid
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.customer_auth import get_current_customer
@@ -29,11 +30,14 @@ from src.api.dependencies.database import get_db
 from src.api.rate_limit import VOICE_SESSION_RATE_LIMIT, limiter
 from src.core.config import settings
 from src.models.customer_model import Customer
+from src.ai.voice.realtime_client import VOZES_DO_REALTIME
 from src.ai.voice.search_service import VoiceSearchService
 from src.ai.voice.session_service import UsoReportado, VoiceSessionService
 from src.ai.voice.voice_prompt import branch_context_for, saudacao_para
 from src.services.chat_service import ChatService
 
+
+logger = logging.getLogger("uvicorn.error")
 
 router = APIRouter(prefix="/voice", tags=["experimento"])
 
@@ -45,6 +49,25 @@ class SessaoRequest(BaseModel):
     # emitida: uma sessao de voz custa dinheiro por minuto, e nao vale abrir
     # uma para descobrir na primeira busca que a loja nao existe.
     branch_id: uuid.UUID
+    # A VOZ, E ELA E DE BANCADA (24/08/2026). Producao nao manda este campo, e
+    # o padrao continua sendo `VOICE_NAME` do `.env`.
+    #
+    # Ele existe porque escolher timbre exige OUVIR, e `VOICE_NAME` so muda
+    # com restart do processo (`settings` e construido no import). Com o campo,
+    # a bancada troca no `<select>`, aperta Falar, e ouve.
+    #
+    # Duas travas, e as duas precisam ser verdade para a escolha valer:
+    # a lista fechada aqui embaixo, e `VOICE_ALLOW_VOICE_OVERRIDE` na rota.
+    # A validacao fica no SCHEMA porque assim o nome errado morre em 422 antes
+    # de a rota varrer vencidas, contar duas cotas e pagar uma emissao.
+    voz: str | None = None
+
+    @field_validator("voz")
+    @classmethod
+    def _voz_conhecida(cls, valor: str | None) -> str | None:
+        if valor is None or valor in VOZES_DO_REALTIME:
+            return valor
+        raise ValueError(f"voz desconhecida; use uma de: {', '.join(VOZES_DO_REALTIME)}")
 
 
 class ConexaoRequest(BaseModel):
@@ -102,11 +125,13 @@ def criar_sessao(
     # descartado quando a checagem era o unico proposito da chamada.
     branch = chat_service._get_active_branch(restaurant.id, payload.branch_id)
 
+    voz = _voz_da_sessao(payload.voz)
     sessao, credencial = VoiceSessionService(db).abrir(
         restaurant_id=restaurant.id,
         customer_id=cliente.id,
         restaurant_context=chat_service._build_restaurant_context(restaurant),
         branch_context=branch_context_for(branch),
+        voz=voz,
     )
 
     # Os tetos viajam junto com a credencial, e nao ficam escritos no HTML: e o
@@ -124,12 +149,40 @@ def criar_sessao(
         # Ela NAO vai para o log: e o primeiro nome do cliente, e log deste
         # repositorio nao leva dado pessoal.
         "saudacao": saudacao_para(cliente.name),
+        # A voz que REALMENTE valeu, e nao a que foi pedida. Com o seletor
+        # desligado, quem pediu `sage` recebe `marin` e precisa saber disso —
+        # senao a conclusao da bancada e "o seletor nao funciona" quando o que
+        # aconteceu foi a chave estar desligada, que e um estado legitimo.
+        "voz": voz or settings.VOICE_NAME,
         "limites": {
             "duracao_maxima_s": settings.VOICE_MAX_SESSION_SECONDS,
             "inatividade_s": settings.VOICE_IDLE_SECONDS,
             "aviso_antes_s": settings.VOICE_WARN_BEFORE_END_SECONDS,
         },
     }
+
+
+def _voz_da_sessao(pedida: str | None) -> str | None:
+    """A voz escolhida no corpo, ou `None` para cair no `VOICE_NAME`.
+
+    O nome ja veio da lista fechada (`SessaoRequest`); o que falta decidir e se
+    a chave da bancada esta ligada. Desligada, a escolha e IGNORADA e nao vira
+    erro: o campo e de teste, e derrubar a emissao de quem mandou um campo a
+    mais seria transformar experimento em incidente. Quem precisa saber o que
+    valeu le o `voz` da resposta.
+    """
+    if pedida is None:
+        return None
+    if settings.VOICE_ALLOW_VOICE_OVERRIDE:
+        return pedida
+
+    logger.info(
+        "[Voz] voz pedida no corpo e ignorada: seletor desligado "
+        "| pedida=%s | valendo=%s",
+        pedida,
+        settings.VOICE_NAME,
+    )
+    return None
 
 
 @router.post("/session/{sessao_id}/connected")

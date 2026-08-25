@@ -93,6 +93,7 @@ class VoiceSessionService:
         customer_id: uuid.UUID | None,
         restaurant_context: str,
         branch_context: str,
+        voz: str | None = None,
     ) -> tuple[AIVoiceSession, dict]:
         """Varre o que venceu, confere a cota, emite a credencial e registra.
 
@@ -109,7 +110,11 @@ class VoiceSessionService:
         self.encerrar_vencidas()
         self._conferir_cotas(restaurant_id, customer_id)
 
-        credencial = issue_client_secret(restaurant_id, restaurant_context, branch_context)
+        # `voz` atravessa sem ser lida: quem decide se ela vale e a rota, que e
+        # onde a chave `VOICE_ALLOW_VOICE_OVERRIDE` mora. Aqui ela e so carga.
+        credencial = issue_client_secret(
+            restaurant_id, restaurant_context, branch_context, voz=voz
+        )
         expira_em = _agora() + timedelta(seconds=settings.VOICE_MAX_SESSION_SECONDS)
         sessao = self.repository.registrar(
             restaurant_id=restaurant_id,

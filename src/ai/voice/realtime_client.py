@@ -108,6 +108,39 @@ SEARCH_TOOL = {
 # Os tres numeros ficam AQUI, e nao em `settings`, pelo mesmo motivo das
 # ferramentas: e o servidor que decide a sessao. Variavel de ambiente aqui
 # seria producao rodando com um valor que nunca foi medido.
+# AS VOZES QUE A REALTIME ACEITA, e a lista e FECHADA de proposito (24/08/2026).
+#
+# Ela existe porque `POST /voice/session` passou a aceitar a voz no corpo
+# quando `VOICE_ALLOW_VOICE_OVERRIDE` esta ligada — e corpo de requisicao e
+# texto que veio da rua. Sem a lista, "marim" digitado errado viaja ate a
+# OpenAI, volta 400, e o cliente ve 502 depois de a rota ja ter varrido
+# vencidas e conferido duas cotas.
+#
+# Escrita a mao e nao consultada: nao ha rota da OpenAI que liste vozes, e uma
+# lista que se descobre sozinha seria uma chamada de rede a cada emissao para
+# validar um campo de teste. Quando a OpenAI acrescentar voz, esta linha muda
+# junto — e ate la o nome novo e recusado com 422, que e a falha barulhenta e
+# barata.
+#
+# `VOICE_NAME` NAO e validado contra ela, e isso e decisao. Um nome novo da
+# OpenAI posto no `.env` da VPS derrubaria a emissao inteira no boot por causa
+# de uma lista desatualizada no nosso codigo — outage auto-infligida para
+# proteger um campo de bancada. O padrao continua respondendo pela OpenAI: se
+# estiver errado, o 400 dela aparece no log de `issue_client_secret`.
+VOZES_DO_REALTIME = (
+    "alloy",
+    "ash",
+    "ballad",
+    "coral",
+    "echo",
+    "sage",
+    "shimmer",
+    "verse",
+    "marin",
+    "cedar",
+)
+
+
 AUDIO_INPUT = {
     "noise_reduction": {"type": "far_field"},
     "turn_detection": {
@@ -122,6 +155,7 @@ def issue_client_secret(
     restaurant_id: uuid.UUID,
     restaurant_context: str,
     branch_context: str,
+    voz: str | None = None,
 ) -> dict:
     """Pede a OpenAI um segredo de curta duracao para o navegador usar.
 
@@ -134,7 +168,14 @@ def issue_client_secret(
     que todo o resto: a pagina e do cliente e quem quiser edita. Instrucao de
     loja escolhida pelo front seria o modelo falando do cardapio que o
     proprio cliente mandou dizer que era o dele.
+
+    `voz` e a UNICA excecao a essa regra, e ela e de bancada: quando
+    `VOICE_ALLOW_VOICE_OVERRIDE` esta ligada, a rota deixa o corpo escolher
+    entre `VOZES_DO_REALTIME`. `None` — o caminho de producao — cai em
+    `VOICE_NAME`. A escolha nao chega aqui sem passar pela lista fechada; ver
+    `SessaoRequest` em `src/api/voice.py`.
     """
+    voz_da_sessao = voz or settings.VOICE_NAME
     corpo = {
         "session": {
             "type": "realtime",
@@ -142,7 +183,7 @@ def issue_client_secret(
             "instructions": instructions_for(restaurant_context, branch_context),
             "audio": {
                 "input": AUDIO_INPUT,
-                "output": {"voice": settings.VOICE_NAME},
+                "output": {"voice": voz_da_sessao},
             },
             "tools": [SEARCH_TOOL],
             "tool_choice": "auto",
@@ -185,10 +226,14 @@ def issue_client_secret(
     # ligada a um restaurante: depois desta linha a conversa acontece entre o
     # navegador e a OpenAI, e o backend nao ve mais nada. Esta linha e o
     # comeco de qualquer conciliacao de custo que venha a existir.
+    # `voz` na linha porque, com o seletor ligado, ela deixou de ser sempre a
+    # mesma: sem isto nao ha como saber depois com qual voz uma sessao rodou.
     logger.info(
-        "[Voz] credencial emitida | restaurant_id=%s | modelo=%s | expira_em=%s",
+        "[Voz] credencial emitida | restaurant_id=%s | modelo=%s | voz=%s "
+        "| expira_em=%s",
         restaurant_id,
         settings.VOICE_MODEL,
+        voz_da_sessao,
         emitida.get("expires_at"),
     )
     return emitida

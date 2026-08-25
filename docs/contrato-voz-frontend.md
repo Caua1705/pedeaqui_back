@@ -62,7 +62,7 @@ a UI precisar dele.
       → a conversa começa; liga os temporizadores do passo 8
 
 5b. no `onopen` do data channel:                (OpenAI, pelo canal)
-      response.create com { response: { instructions: "...saudacao..." } }
+      conversation.item.create (role system, com a saudacao) + response.create
       → o atendente cumprimenta o cliente pelo nome, sozinho (§6.4)
 
 6. durante a conversa, a cada tool call:
@@ -155,6 +155,7 @@ não há tela onde o cliente pudesse notar. Ver
     "session": { "type": "realtime", "model": "gpt-realtime-mini", "...": "..." }
   },
   "saudacao": "Olá, João! Como posso te ajudar hoje?",
+  "voz": "marin",
   "limites": {
     "duracao_maxima_s": 300,
     "inatividade_s": 45,
@@ -171,6 +172,7 @@ não há tela onde o cliente pudesse notar. Ver
 | `credencial.expires_at` | número (unix epoch, segundos) | quando o **segredo** expira — medido em ~585 s. É a janela para **abrir** a conexão, **não** o teto da conversa |
 | `credencial.session` | objeto | a configuração da sessão (modelo, voz, ferramentas, instruções). Informativo; o front não precisa usar |
 | `saudacao` | string | a frase que o atendente fala **sozinho** na abertura, com o primeiro nome do cliente já dentro. Ver §6.4 |
+| `voz` | string | a voz que a sessão está usando **de verdade**. Informativo; o app não precisa dele. Ver a nota no fim desta seção |
 | `limites` | objeto | os tetos que o front tem de aplicar |
 | `limites.duracao_maxima_s` | número (segundos) | teto absoluto da sessão |
 | `limites.inatividade_s` | número (segundos) | silêncio que encerra |
@@ -190,12 +192,33 @@ front** — eles podem mudar sem deploy do app.
 | 403 | `{"detail":"O atendimento por voz nao esta disponivel neste restaurante."}` | a voz não está ligada nessa loja |
 | 404 | `{"detail":"Restaurante não encontrado"}` | `restaurant_id` inexistente ou restaurante inativo |
 | 404 | `{"detail":"Filial não encontrada para este restaurante"}` | `branch_id` de outra loja ou de outro restaurante. Acontece **antes** de a credencial ser emitida: sessão de voz custa por minuto |
-| 422 | corpo padrão de validação do FastAPI | `restaurant_id` ou `branch_id` ausente, ou não é um UUID |
+| 422 | corpo padrão de validação do FastAPI | `restaurant_id` ou `branch_id` ausente, ou não é um UUID; ou `voz` fora da lista fechada |
 | 429 | `{"detail":"Muitas requisições. Tente novamente em instantes."}` | **rate limit** — mais de 3/min ou 20/h vindos do mesmo IP |
 | 429 | `{"detail":"Voce ja usou 5 conversas por voz nas ultimas 24 horas. Tente mais tarde."}` | **cota do cliente** — o número aparece no texto |
 | 429 | `{"detail":"O atendimento por voz deste restaurante atingiu o limite do dia."}` | **cota do restaurante** |
 | 502 | `{"detail":"A OpenAI recusou a emissao da credencial"}` | a OpenAI respondeu erro |
 | 503 | `{"detail":"Nao consegui falar com a OpenAI"}` | rede/timeout falando com a OpenAI |
+
+**O campo `voz` do corpo do pedido é de bancada, e o app não o manda.** A voz
+sai de `VOICE_NAME`, no `.env` do servidor, e é a mesma para todo mundo.
+
+Existe um campo opcional `voz` no corpo do `POST /voice/session`, aceito só
+quando `VOICE_ALLOW_VOICE_OVERRIDE` está ligada no backend — ele existe porque
+escolher timbre exige **ouvir**, e `VOICE_NAME` só muda com restart do
+processo. Duas travas:
+
+- o nome tem de estar na lista fechada (`alloy`, `ash`, `ballad`, `coral`,
+  `echo`, `sage`, `shimmer`, `verse`, `marin`, `cedar`); fora dela é **422**,
+  antes de a rota gastar cota e uma emissão;
+- com a chave desligada — o estado normal, inclusive em produção — a escolha é
+  **ignorada em silêncio**, e não vira erro.
+
+Por isso a resposta devolve `voz`: é a que valeu de verdade, não a que foi
+pedida. Quem manda `sage` com a chave desligada recebe `"voz": "marin"`, e é
+assim que se distingue "o seletor não funciona" de "a chave está desligada".
+
+Nem toda voz existe em todo modelo. Se a OpenAI recusar a que foi pedida, a
+emissão volta **502** e o corpo do 400 dela fica no log do servidor.
 
 **`saudacao` nunca vem vazia.** Quando o cadastro não entrega um primeiro
 nome que dê para falar — o campo é texto livre, e há `"12345"` e e-mail
@@ -523,11 +546,17 @@ o front, no `onopen` do canal, com o texto que veio no passo 1:
 canal.onopen = () => {
   if (!saudacao) { return; }
   canal.send(JSON.stringify({
-    type: "response.create",
-    response: {
-      instructions: "Cumprimente o cliente falando exatamente isto, e nada mais: " + saudacao,
+    type: "conversation.item.create",
+    item: {
+      type: "message",
+      role: "system",
+      content: [{
+        type: "input_text",
+        text: "Cumprimente o cliente falando exatamente isto, e nada mais: " + saudacao,
+      }],
     },
   }));
+  canal.send(JSON.stringify({ type: "response.create" }));
 };
 ```
 
@@ -536,14 +565,57 @@ Três detalhes que não são estilo:
 - **A frase vem do backend, e o front não a monta.** O nome é do cliente que o
   token autenticou; a página não tem por que saber quem é ele, e uma frase
   escolhida no javascript seria o cliente escolhendo como o atendente o chama.
-- **Vai em `response.instructions`, e não no prompt da sessão.** Instrução de
-  uma resposta só não entra no prefixo que a OpenAI mantém em cache — o nome
-  muda a cada sessão, e nome dentro do prefixo é cache nenhum. O outro motivo
-  está no cabeçalho de `src/ai/voice/voice_prompt.py`: frase pronta dentro das
-  instruções da sessão vira molde, e o modelo passa a preencher o molde
-  sozinho depois.
+- **Item de conversa, e NUNCA `response.instructions`.** Ver §6.5 — este é o
+  ponto que mudou em 24/08/2026, e o motivo vale para toda fala que o front
+  mandar o modelo dizer.
 - **É uma resposta como qualquer outra**, e portanto um turno faturado. Ela
   entra na conta de `response.done` junto com o resto.
+
+### 6.5 Nunca use `response.instructions` para pôr palavra na boca do modelo
+
+Vale para a saudação (§6.4) e para o aviso de inatividade (passo 8) — as duas
+únicas falas que o front pede.
+
+`response.instructions` **substitui** as instruções da sessão naquela resposta.
+E `instructions` é o começo do prompt: trocá-lo troca o token zero, e o cache
+de prefixo da OpenAI só vale até o primeiro token diferente. O turno volta com
+`cached_tokens = 0`.
+
+Medido na bancada, com a saudação em override:
+
+```
+turno 1 (saudação):  input_text_tokens=165    cached=0
+turno 2:             input_text_tokens=1834   cached=0     ← pagou cheio
+turno 3 em diante:   cached entre 1792 e 2368
+```
+
+Na saudação isso quase não custa — o prefixo cheio ia ser cobrado uma vez de
+qualquer jeito, no turno 1 em vez do 2. **O caro é o aviso de inatividade**,
+que dispara no fim da sessão: ali o override joga fora o cache de uma conversa
+inteira (texto *e* áudio já ditos) para dizer uma frase de seis palavras.
+
+O jeito certo é sempre o mesmo par:
+
+```js
+canal.send(JSON.stringify({
+  type: "conversation.item.create",
+  item: { type: "message", role: "system",
+          content: [{ type: "input_text", text: "<a ordem daquele turno>" }] },
+}));
+canal.send(JSON.stringify({ type: "response.create" }));
+```
+
+- **`role: "system"`**, e não `"user"`: é ordem do aplicativo, não fala do
+  cliente. Um item de `user` faz o modelo responder a um cliente que não disse
+  nada.
+- **O prefixo fica intacto**: a ordem entra *depois* das instruções, o cache
+  engata, e o turno seguinte não paga reconstrução.
+- **E continua fora do prompt da sessão.** Frase pronta dentro das instruções
+  vira molde, e o modelo passa a preencher o molde sozinho depois — o caso
+  está no cabeçalho de `src/ai/voice/voice_prompt.py`. Item de conversa é um
+  turno passado, não uma regra permanente.
+- **O `response.create` respeita a fila do §7.1**; o `conversation.item.create`
+  pode ir na hora.
 
 Se o cliente começar a falar por cima, a saudação é interrompida pelo VAD e a
 conversa segue — é o comportamento desejado, e não precisa de tratamento.
@@ -619,12 +691,9 @@ guarde e dispare no `response.done`. O `conversation.item.create` pode ir na
 hora.
 
 Para fazer o modelo dizer uma frase específica (o aviso de inatividade do
-passo 8), use `response.create` com instruções:
-
-```js
-{ type: "response.create",
-  response: { instructions: "Diga exatamente isto, em uma frase e nada mais: vou encerrar por inatividade." } }
-```
+passo 8), **não** use `response.instructions` — use o par
+`conversation.item.create` + `response.create` do §6.5. O override custa o
+cache do prefixo inteiro, e é ali que está a medição.
 
 ### 7.4 Se a busca falhar
 

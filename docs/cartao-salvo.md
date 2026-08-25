@@ -111,6 +111,51 @@ A regra que fica: **a chave pública é pública, e o jeito de mantê-la assim �
 nunca dar à privada um caminho de saída.** Não há nada a esconder na pública;
 há tudo a não construir para a privada.
 
+### E ela NÃO entra no `RestaurantInfoResponse` — decidido em 25/08/2026
+
+A pergunta veio do front, e vai voltar: *"por que a `public_key` não vem junto
+do `GET /restaurants/{slug}/info`, que a tela já chama de qualquer jeito?"*
+
+**Decisão: o front usa o `/payment-config`. A `public_key` não é duplicada no
+`/info`.** Não foi esquecimento de escopo — a seção acima já tratava a chave
+pública como problema resolvido, e ela é a rota corrente para isso, não uma
+sobra de versão anterior.
+
+O que se ganharia é uma requisição a menos na abertura da tela de pagamento.
+É leitura barata, sem efeito e sem rate limit próprio: esse é o ganho inteiro.
+Os três custos do outro lado:
+
+- **não elimina a chamada.** O front não precisa só da chave — precisa de
+  `card_enabled` para saber se deve **oferecer** cartão nesta tela (e de
+  `provider`, porque o sandbox não processa cartão). Com só a `public_key` no
+  `/info`, o `/payment-config` continua sendo chamado; o que muda é passar a
+  haver duas fontes do mesmo valor em vez de uma;
+- **o mesmo campo em dois contratos** é a forma de problema que a armadilha 34
+  registra — duas fontes que um dia divergem, e cada tela acertando por conta
+  própria qual delas ler;
+- **espalharia um decrypt para a rota pública mais quente.**
+  `PaymentCredentialService.get_active_credential` faz **dois**
+  `decrypt_secret` (o access token e o webhook secret) para devolver a
+  `public_key`. Hoje isso acontece uma vez, quando a tela de pagamento abre.
+  No `/info` passaria a acontecer a cada abertura de loja — inclusive para
+  quem vai pagar pix ou na entrega e nunca verá um formulário de cartão.
+
+O terceiro custo tem conserto óbvio (ler `public_key` sem passar pelo serviço
+que decifra), e é justamente por isso que ele merece a linha: **o conserto é
+construir um segundo caminho de leitura da credencial**, para economizar uma
+requisição. É exatamente o que a regra logo acima pede para não fazer — não há
+nada a esconder na pública, há tudo a não construir para a privada.
+
+**Se o incômodo real for latência**, o conserto é do lado do front: disparar
+`/info` e `/payment-config` em paralelo, não em sequência. Duplicar o campo
+não é mais rápido, só mais difícil de manter certo.
+
+**E se um dia isto for reaberto com motivo novo**, a forma menos ruim é levar
+o `PaymentConfigResponse` inteiro como bloco aninhado
+(`payment: {provider, public_key, card_enabled}`), reusando o mesmo schema —
+nunca um campo solto. Um bloco tem uma fonte só e some junto quando a rota
+mudar; um `payment_public_key` avulso é a divergência já plantada.
+
 ---
 
 ## As rotas
@@ -280,3 +325,9 @@ anonimização existe para não fazer.
 - **Cartão salvo no sandbox.** O sandbox não simula cartão, e deixar salvar um
   cartão que nunca poderá ser cobrado é a mesma demonstração falsa que a
   armadilha 39 registra. `503`, alto.
+
+E uma que **não** ficou de fora, apesar de parecer: a `public_key` no
+`RestaurantInfoResponse`. Ela nunca esteve no escopo porque o mecanismo já
+existia — o front usa o `GET /restaurants/{slug}/payment-config`. A decisão e
+os três custos de duplicar o campo estão em *"E ela NÃO entra no
+`RestaurantInfoResponse`"*, na seção da chave pública.

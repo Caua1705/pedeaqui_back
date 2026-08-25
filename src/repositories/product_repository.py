@@ -188,6 +188,23 @@ class ProductRepository:
         de `list_active_by_price`: pergunta sobre o cardapio INTEIRO nao tem
         assunto para a similaridade morder. Listar e SQL.
 
+        O RECORTE E `Product.branch_id`, E NAO `Category.branch_id` (25/08/2026).
+        Esta era a UNICA consulta do arquivo que amarrava a loja pela categoria,
+        e a diferenca so e invisivel enquanto a FK composta `products
+        (branch_id, category_id) -> categories (branch_id, id)` valer para toda
+        linha. Amarrar pelo produto e o mesmo recorte de `get_active_products`,
+        de `list_active_by_ids` e de `sellable_prices_by_id` — e quando a lista
+        de categorias e a busca discordam, discordar por motivo diferente e o
+        que torna o defeito impossivel de ler.
+
+        Vale a honestidade sobre o que ESTA correcao nao provou: ela foi feita
+        por inspecao, sem banco (a suite `db` precisa de Docker). Lista vazia
+        contra um cardapio que existe continua tendo uma segunda explicacao
+        possivel, e ela se separa desta com uma consulta so — comparar
+        `count(*)` agrupado por `products.branch_id` com o mesmo agrupado por
+        `categories.branch_id` na loja que falhou. Numeros diferentes acusam a
+        FK; numeros iguais dizem que o defeito e outro.
+
         CATEGORIA VAZIA NAO ENTRA, e por isso o INNER JOIN em vez de LEFT.
         "Sobremesas" com zero produto vendavel e uma promessa que a busca
         seguinte nao cumpre: o cliente ouve a categoria, pede, e leva um "aqui
@@ -206,9 +223,14 @@ class ProductRepository:
         """
         stmt = (
             select(Category.name, func.count(Product.id))
-            .join(Product, Product.category_id == Category.id)
+            # `select_from(Product)` explicito: sem ele o FROM sairia de
+            # `Category.name`, a primeira coluna do SELECT, e o join seria de
+            # `categories` para ela mesma. E o preco de contar produto e
+            # mostrar categoria na mesma consulta.
+            .select_from(Product)
+            .join(Category, Product.category_id == Category.id)
             .where(
-                Category.branch_id == branch_id,
+                Product.branch_id == branch_id,
                 Category.is_active.is_(True),
                 Product.is_active.is_(True),
                 Product.is_available.is_(True),

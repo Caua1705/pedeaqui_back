@@ -31,7 +31,7 @@ from src.api.rate_limit import VOICE_SESSION_RATE_LIMIT, limiter
 from src.core.config import settings
 from src.models.customer_model import Customer
 from src.ai.voice.realtime_client import VOZES_DO_REALTIME
-from src.ai.voice.search_service import ORDENACOES, VoiceSearchService
+from src.ai.voice.search_service import VoiceSearchService
 from src.ai.voice.session_service import UsoReportado, VoiceSessionService
 from src.ai.voice.voice_prompt import branch_context_for, saudacao_para
 from src.services.chat_service import ChatService
@@ -96,18 +96,14 @@ class BuscaRequest(BaseModel):
     # `gt=0` porque teto zero ou negativo esvazia a busca inteira, e o modelo
     # e quem preenche este campo.
     preco_maximo: Decimal | None = Field(default=None, gt=0)
-    # A ordenacao por preco. Lista fechada, validada aqui pelo mesmo motivo da
-    # `voz`: o campo e preenchido pelo MODELO, e nome inventado tem que morrer
-    # em 422 e nao virar busca silenciosamente sem ordem — que e o formato de
-    # defeito em que o cliente ouve "o mais barato" sobre um produto que nao e.
-    ordenar: str | None = None
-
-    @field_validator("ordenar")
-    @classmethod
-    def _ordenacao_conhecida(cls, valor: str | None) -> str | None:
-        if valor is None or valor in ORDENACOES:
-            return valor
-        raise ValueError(f"ordenacao desconhecida; use uma de: {', '.join(ORDENACOES)}")
+    # `ordenar` SAIU DAQUI em 25/08/2026, e a ausencia e o desenho. Ele era um
+    # enum que o MODELO preenchia; hoje quem le "mais barato" na consulta e
+    # decide a ordenacao e `_reescrever_consulta`, no backend. Um campo a menos
+    # no corpo e uma decisao a menos no modelo.
+    #
+    # Nao ha compatibilidade a manter e nao ha 422 novo: o Pydantic ignora
+    # campo desconhecido por padrao, entao bancada que ainda mande `ordenar`
+    # continua funcionando — e o valor dela deixa de ter efeito, que e o ponto.
 
 
 class CategoriasRequest(BaseModel):
@@ -256,12 +252,25 @@ def buscar(payload: BuscaRequest, db: Session = Depends(get_db)) -> dict:
     """A ferramenta. O navegador chama isto quando o modelo pede uma busca.
 
     Devolve os dois formatos de uma vez: `produtos` vai para a TELA (objeto
-    completo, com preco e imagem do banco) e `resumo` volta para o MODELO
-    (so nome e preco). Separar os dois e o que impede o modelo de falar um
-    preco que o cartao nao mostra — ele nunca ve outro numero.
+    completo, com preco e imagem do banco) e `resumo` volta para o MODELO.
+    Separar os dois e o que impede o modelo de falar um preco que o cartao nao
+    mostra — ele nunca ve outro numero.
 
-    Os dois ja saem recortados pela filial do corpo. O `resumo` vazio diz
-    "nesta loja" por isso: o produto que nao esta aqui pode estar na outra.
+    O `resumo` MUDOU DE FORMA em 25/08/2026: era uma lista de ate cinco linhas
+    para o modelo recortar, e agora vem em dois blocos rotulados — a FRASE
+    pronta para ser dita (com o teto de dois e a regra do preco ja aplicados
+    aqui) e os DADOS para responder pergunta de seguimento. Ver
+    `VoiceSearchService.resultado_para_o_modelo`.
+
+    BUSCA VAZIA PASSA A LEVAR AS CATEGORIAS JUNTO, e essa e a segunda decisao
+    que sai do modelo: "so busque um termo mais amplo se a palavra dele nao
+    devolver nada" era regra de prompt para uma coisa que o backend sabe
+    sozinho. A consulta extra so acontece no caminho vazio, nao gasta embedding
+    (e SQL agregado por filial) e evita o turno em que o cliente ouve so "aqui
+    nao temos" e desliga.
+
+    Os dois ja saem recortados pela filial do corpo. A negativa diz "nesta
+    loja" por isso: o produto que nao esta aqui pode estar na outra.
     """
     service = VoiceSearchService(db)
     produtos = service.buscar(
@@ -269,12 +278,15 @@ def buscar(payload: BuscaRequest, db: Session = Depends(get_db)) -> dict:
         payload.branch_id,
         payload.consulta,
         payload.preco_maximo,
-        payload.ordenar,
     )
+
+    categorias = None
+    if not produtos:
+        categorias = service.listar_categorias(payload.restaurant_id, payload.branch_id)
 
     return {
         "produtos": produtos,
-        "resumo": service.resumo_para_o_modelo(produtos),
+        "resumo": service.resultado_para_o_modelo(produtos, categorias),
     }
 
 

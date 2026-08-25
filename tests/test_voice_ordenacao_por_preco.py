@@ -83,20 +83,18 @@ def test_produto_sem_preco_so_some_no_caminho_ordenado():
 # --------------------------------------------------------------------------
 
 
-def test_a_tabela_e_o_enum_da_ferramenta_dizem_a_mesma_coisa():
-    """Duas listas escritas a mao em arquivos diferentes: uma que o modelo le
-    (o enum da tool) e uma que o servidor executa. Divergindo, o modelo pede
-    uma ordenacao que a rota recusa com 422 — e o sintoma seria "as vezes ele
-    nao responde superlativo"."""
-    parametros = SEARCH_TOOL["parameters"]["properties"]
+def test_a_ordenacao_nao_e_mais_parametro_da_ferramenta():
+    """O enum SAIU da declaracao em 25/08/2026, um dia depois de entrar.
 
-    assert set(parametros["ordenar"]["enum"]) == set(ORDENACOES)
+    Ele existia para o modelo escolher entre quatro valores no meio de uma
+    conversa, e as duas listas escritas a mao (a que ele lia e a que o servidor
+    executava) podiam divergir. Hoje quem escolhe e `_reescrever_consulta`,
+    lendo as palavras que chegaram: uma lista so, e nenhuma escolha do modelo.
 
-
-def test_a_ordenacao_fica_fora_de_required():
-    """Obrigatoria, o modelo teria de escolher uma ordem em toda busca, e o
-    cardapio inteiro sairia ordenado por preco sem ninguem ter pedido. E o
-    mesmo motivo do `preco_maximo`, que ja estava documentado ali."""
+    Este teste e o que impede o enum de voltar por conveniencia — voltando, as
+    duas decisoes passam a existir ao mesmo tempo e a do modelo ganha, porque
+    ela chega preenchida."""
+    assert "ordenar" not in SEARCH_TOOL["parameters"]["properties"]
     assert "ordenar" not in SEARCH_TOOL["parameters"]["required"]
 
 

@@ -51,19 +51,23 @@ SEARCH_TOOL = {
     "type": "function",
     "name": "buscar_no_cardapio",
     "description": (
-        "Busca produtos no cardapio deste restaurante. Use SEMPRE antes de "
-        "falar de qualquer produto, preco ou ingrediente. Os produtos "
-        "encontrados aparecem na tela do cliente automaticamente."
+        "Busca produtos no cardapio desta loja. Use SEMPRE antes de falar de "
+        "qualquer produto, preco ou ingrediente. Devolve a linha FRASE, ja "
+        "pronta para ser dita, e a linha DADOS, que nao se le em voz alta. Os "
+        "produtos encontrados aparecem na tela do cliente automaticamente."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "consulta": {
                 "type": "string",
+                # SEM EXEMPLO DE COMIDA, e a regra e dura: este texto e o mesmo
+                # para todo restaurante da base, e exemplo de prato ensina o
+                # cardapio de um lugar so. Ver o cabecalho do `voice_prompt.py`.
                 "description": (
-                    "O que o cliente quer, em palavras dele. "
-                    "Exemplos: 'sobremesa de chocolate', 'algo vegetariano', "
-                    "'a picanha'."
+                    "O que o cliente quer, nas palavras DELE. Copie o termo "
+                    "que ele usou, sem traduzir e sem trocar por sinonimo, "
+                    "inclusive quando voce nao conhecer a palavra."
                 ),
             },
             # Opcional, e FORA de `required` de proposito: obrigatorio, o
@@ -73,44 +77,26 @@ SEARCH_TOOL = {
             "preco_maximo": {
                 "type": "number",
                 "description": (
-                    "Teto de preco em reais, SO quando o cliente disser um. "
-                    "Exemplos: 'algo ate 50 reais' -> 50; 'o mais barato' -> "
-                    "nao preencher."
+                    "Teto de preco em reais, SO quando o cliente disser um "
+                    "numero ('ate 50 reais' -> 50). Pedido de mais barato ou "
+                    "mais caro NAO e teto: nao preencha, e deixe as palavras "
+                    "dele na consulta."
                 ),
             },
-            # A ORDENACAO, e ela e a resposta ao superlativo (25/08/2026).
-            # "Qual a bebida mais barata?" e "manda o mais caro do cardapio"
-            # ficaram sem resposta numa sessao real, e nao por defeito de
-            # prompt: a busca e por SIGNIFICADO, e os cinco mais parecidos com
-            # "bebida" nao sao as cinco mais baratas.
+            # A ORDENACAO SAIU DAQUI em 25/08/2026, um dia depois de entrar.
             #
-            # Fora de `required` pelo mesmo motivo do `preco_maximo`:
-            # obrigatorio, o modelo teria de escolher uma ordem toda vez, e o
-            # cardapio inteiro passaria a sair ordenado por preco sem ninguem
-            # ter pedido.
+            # Ela entrou como enum de quatro valores que o modelo preenchia, e
+            # o proprio comentario que estava aqui dizia por que: "'_da_busca'
+            # contra '_da_loja' e a distincao que o MODELO precisa fazer".
+            # Precisava porque ninguem mais estava olhando. Hoje quem faz essa
+            # distincao e `_reescrever_consulta`, no backend, lendo as palavras
+            # que chegaram: superlativo com substantivo junto ("a bebida mais
+            # barata") tem assunto e vai para a busca; superlativo sozinho
+            # ("manda o mais caro") nao tem, e vai para o cardapio inteiro.
             #
-            # `_da_busca` contra `_da_loja` e a distincao que o modelo precisa
-            # fazer, e por isso ela esta no NOME de cada valor em vez de num
-            # segundo campo: "a bebida mais barata" tem assunto, "o mais caro
-            # do cardapio" nao tem — e no segundo caso a busca por significado
-            # nao ajuda, porque "cardapio" nao se parece com nada.
-            "ordenar": {
-                "type": "string",
-                "enum": [
-                    "mais_barato_da_busca",
-                    "mais_caro_da_busca",
-                    "mais_barato_da_loja",
-                    "mais_caro_da_loja",
-                ],
-                "description": (
-                    "SO quando o cliente pedir o mais barato ou o mais caro. "
-                    "Use '_da_busca' quando ele disser DE QUE tipo ('a bebida "
-                    "mais barata' -> consulta 'bebida', ordenar "
-                    "'mais_barato_da_busca'). Use '_da_loja' quando for o "
-                    "cardapio inteiro ('manda o mais caro' -> "
-                    "'mais_caro_da_loja'), e ai a consulta e ignorada."
-                ),
-            },
+            # O que se ganha nao e so o enum: sao cinco bullets do prompt e as
+            # ~120 palavras desta descricao, que eram cobradas em toda sessao
+            # para ensinar uma escolha que uma funcao faz sem errar.
         },
         "required": ["consulta"],
         "additionalProperties": False,

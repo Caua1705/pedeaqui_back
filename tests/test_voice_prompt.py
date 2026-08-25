@@ -14,6 +14,7 @@ from src.ai.voice.search_service import VoiceSearchService
 from src.ai.voice.voice_prompt import (
     SAUDACOES_COM_NOME,
     SAUDACOES_SEM_NOME,
+    VOICE_INSTRUCTIONS,
     branch_context_for,
     instructions_for,
     primeiro_nome_dizivel,
@@ -135,10 +136,19 @@ def test_a_saudacao_nao_esta_no_prompt():
 # --------------------------------------------------------------------------
 # OS DOIS TETOS: quantos produtos se FALA, e quando o preco sai junto
 #
-# Nenhum dos dois tem rede do lado de ca. No texto, `_limitar_cartoes` apara o
-# carrossel quando a regra do prompt nao pega; na voz os cartoes saem da NOSSA
-# busca e o modelo nao escolhe nada — nao ha o que aparar. O prompt esta
-# sozinho, e estes testes sao a unica coisa que percebe se a secao sumir.
+# ELES SAIRAM DO PROMPT EM 25/08/2026, e este cabecalho registra a inversao
+# porque ele dizia o contrario. Dizia: "nenhum dos dois tem rede do lado de ca
+# (...) o prompt esta sozinho, e estes testes sao a unica coisa que percebe se
+# a secao sumir".
+#
+# A rede passou a existir. `frase_para_o_modelo` monta a frase com no maximo
+# dois produtos e decide o preco pelo tamanho da lista, entao os dois tetos
+# agora sao codigo — e o que os testa e `test_voice_frase_da_ferramenta.py`,
+# com dados, e nao procurando texto no prompt.
+#
+# O que sobrou aqui e a metade que continua sendo do prompt: que ele NAO
+# carregue mais as regras que se mudaram de lugar. Duas redacoes da mesma
+# regra, uma no codigo e outra no texto, e a chance de discordarem depois.
 # --------------------------------------------------------------------------
 
 
@@ -150,44 +160,32 @@ _INSTRUCOES = instructions_for("Nome do restaurante: Junior da Picanha", "Loja: 
 _CORRIDO = " ".join(_INSTRUCOES.split())
 
 
-def test_o_teto_de_produtos_falados_e_uma_secao_e_nao_um_bullet():
-    """Ele JA era dois, enterrado em O CARDAPIO, e foi desobedecido — o
-    atendente falou tres picanhas. A forma da regra e o que faz ela morder:
-    secao propria com o caso enumerado, como a do `system_prompt.py`."""
-    assert "\nNO MAXIMO DOIS PRODUTOS POR RESPOSTA\n" in _INSTRUCOES
+def test_o_teto_de_produtos_falados_saiu_do_prompt():
+    """A secao inteira gastava 13 linhas pedindo ao modelo que ignorasse tres
+    dos cinco produtos que a ferramenta mandava. Hoje a frase ja vem com dois,
+    e a secao nao pode voltar: com o teto nos dois lugares, quem manda passa a
+    depender de qual dos dois o modelo leu."""
+    assert "NO MAXIMO DOIS PRODUTOS POR RESPOSTA" not in _INSTRUCOES
+    assert "Trazer cinco nao e ordem para falar cinco" not in _INSTRUCOES
 
 
-def test_o_bullet_do_cardapio_aponta_para_a_secao_do_teto():
-    """Duas redacoes do mesmo teto em lugares diferentes e a chance de as duas
-    discordarem depois. O bullet virou ponteiro, e nao uma segunda regra."""
-    assert "Quantos deles voce FALA esta em NO MAXIMO DOIS PRODUTOS POR RESPOSTA." in _INSTRUCOES
+def test_a_regra_de_quando_falar_preco_saiu_do_prompt():
+    """"UM produto na frase: fale o preco. DOIS: so os nomes" era uma regra
+    sobre a frase que o modelo ainda estava montando. Virou o `if` de
+    `frase_para_o_modelo`, e nao pode existir nos dois lugares."""
+    assert "UM produto na frase" not in _INSTRUCOES
+    assert "DOIS produtos na frase" not in _INSTRUCOES
 
-
-def test_o_teto_da_fala_nao_e_o_teto_da_busca():
-    """A ferramenta continua trazendo cinco, e o prompt tem que dizer por que.
-    Sem esta frase, "no maximo dois" convida a cortar a busca — e ai o modelo
-    perde a margem para descartar e para saber o que existe antes de negar."""
-    assert "Trazer cinco nao e ordem para falar cinco" in _INSTRUCOES
-
-
-def test_a_regra_do_preco_conta_produtos_e_nao_o_tipo_da_pergunta():
-    """A versao anterior tinha DOIS criterios que se contradiziam num caso
-    real: "pergunta direta de preco" autorizava, "citando dois produtos"
-    proibia, e "e a picanha quanto custa?" era os dois ao mesmo tempo. Quando
-    o prompt se contradiz, o modelo resolve para o lado de falar."""
-    assert "QUANTOS produtos a sua frase cita, e nao" in _INSTRUCOES
-    assert "UM produto na frase" in _INSTRUCOES
-    assert "DOIS produtos na frase" in _INSTRUCOES
-
-    # E o criterio velho nao pode ter sobrado ao lado do novo.
+    # E o criterio mais velho ainda nao pode ter voltado junto.
     assert "pergunta direta de preco. Citando dois produtos" not in _INSTRUCOES
 
 
-def test_o_preco_de_um_produto_so_continua_sendo_falado():
-    """Calar o preco inteiro seria o erro oposto: quem esta com o telefone no
-    ouvido nao ve a tela, e confirmar um pedido sem dizer o valor e pior do
-    que falar demais."""
-    assert "Confirmar um pedido sem dizer" in _INSTRUCOES
+def test_o_prompt_manda_dizer_a_frase_e_nao_montar_uma():
+    """O que substituiu as duas secoes acima: uma regra, e ela aponta para o
+    dado que chega pronto em vez de descrever como montar a resposta."""
+    assert "FRASE ja esta pronta para ser dita" in _CORRIDO
+    assert "Diga aquilo, palavra por palavra" in _CORRIDO
+    assert "DADOS nao se le em voz alta" in _CORRIDO
 
 
 def test_nenhum_preco_dizivel_entrou_no_prompt():
@@ -252,46 +250,43 @@ def test_a_lista_falada_continua_proibida_pelo_nome():
     assert '"as seguintes opcoes"' in _INSTRUCOES
 
 
-def test_nenhum_exemplo_do_lado_certo_carrega_produto_ou_ingrediente():
-    """A armadilha 44, na leitura precisa: o perigo nao e string dizivel, e
-    string dizivel com FATO dentro. "tem sim" nao pode virar mentira sobre
-    coisa nenhuma; "tem picanha importada" pode — e seria a mesma falha de
-    2026 com outra roupa.
+def test_o_prompt_nao_cita_comida_de_restaurante_nenhum():
+    """A REGRA DURA de 25/08/2026, e ela vale para o prompt INTEIRO — nao mais
+    para uma secao, e sem lista de excecoes.
 
-    A guarda e grosseira de proposito. Ela nao entende portugues: ela procura
-    nome de comida em qualquer lugar do prompt fora dos casos enumerados de
-    FALHA, que sao os unicos autorizados a citar produto.
+    A versao anterior deste teste vigiava so a secao do tom, e autorizava as
+    linhas de caso enumerado a citar produto. Isso deixou o prompt acumular
+    onze mencoes a um corte de carne, tres a um prato de feijao e uma a um
+    refrigerante — todos do cardapio de UM restaurante.
+
+    O problema nao e o molde (esse e o `test_nenhum_preco_dizivel...` ao lado).
+    E que ESTE prompt e o mesmo para toda a base. Numa pizzaria, cada um desses
+    nomes e token pago para ensinar um cardapio que nao existe la, e exemplo
+    que empurra a busca para o lado errado. O que muda por restaurante e o DADO
+    que a ferramenta devolve, nunca o texto do prompt.
     """
     comidas = (
-        "picanha",
-        "baiao",
-        "sobremesa de chocolate",
-        "brownie",
-        "pudim",
-        "feijoada",
-        "black angus",
+        "picanha", "baiao", "baião", "feijoada", "guarana", "guaraná",
+        "x-tudo", "pudim", "brownie", "black angus", "chocolate",
+        "pizza", "hamburguer", "marmoreio",
     )
-    # As linhas que PODEM citar produto: as de caso enumerado (falha real) e
-    # as de exemplo de BUSCA (o termo literal que o cliente falou).
-    permitidas = [
-        linha
-        for linha in _INSTRUCOES.splitlines()
-        if "ja aconteceu" in linha
-        or "voce buscou" in linha
-        or "ele disse" in linha
-        or "respondido com" in linha
-        or "busca " in linha
-        or "quanto custa a picanha" in linha
-        or "tem sobremesa" in linha.lower()
-        or "picanhas seguidas" in linha
-    ]
-    inicio = _INSTRUCOES.index("BALCAO, NAO CALL CENTER")
-    fim = _INSTRUCOES.index("NAO INVENTE", inicio)
-    secao = _INSTRUCOES[inicio:fim]
 
+    # `VOICE_INSTRUCTIONS`, e nao `instructions_for(...)`: o nome do
+    # restaurante e a loja sao DADO, colados no fim, e "Junior da Picanha" ali
+    # esta certo. A regra e sobre o TEXTO, que e o mesmo para todo mundo.
+    estatico = " ".join(VOICE_INSTRUCTIONS.split()).lower()
     for comida in comidas:
-        assert comida not in secao.lower(), f"{comida!r} virou molde na secao do tom"
-    assert permitidas, "a guarda perdeu a referencia das linhas autorizadas"
+        assert comida not in estatico, f"{comida!r} voltou para o prompt generico"
+
+
+def test_o_prompt_nao_enumera_mais_caso_real():
+    """Os treze blocos "Isto ja aconteceu" eram 721 tokens — 18% do prompt — e
+    eram o sedimento da hipotese que nao se sustentou: um caso, uma regra, uma
+    rodada. Todos citavam o cardapio de um restaurante so, e todos eram exemplo
+    de SAIDA ruim, que a armadilha 44 trata como molde.
+
+    Voltar a acrescentar um e voltar para a hipotese."""
+    assert "Isto ja aconteceu" not in _INSTRUCOES
 
 
 def test_a_secao_do_tom_nao_traz_numero_nenhum():
@@ -334,9 +329,18 @@ def test_ordenar_e_comparar_exigem_a_ferramenta_mesmo_com_o_dado_na_conversa():
 
     A regra velha ("sem ordenacao voce nao responde superlativo") ja existia e
     ja falhou, porque ela se lia como "quando faltar dado". O eixo novo nao e
-    ter o dado, e sim a resposta exigir ORDENAR ou COMPARAR."""
-    assert "ORDENAR E COMPARAR NAO SE FAZ DE CABECA" in _INSTRUCOES
-    assert "ter a lista na frente nao te autoriza a ordena-la" in _CORRIDO
+    ter o dado, e sim a resposta exigir ORDENAR ou COMPARAR.
+
+    A ESCOLHA DA ORDENACAO saiu do modelo em 25/08/2026 — quem le "mais
+    barato" e decide e `_reescrever_consulta`. O que sobrou aqui e o que o
+    backend nao alcanca: o modelo precisa CHAMAR a ferramenta com as palavras
+    dele, em vez de ordenar a lista que ja esta na conversa."""
+    assert "Voce NAO ordena nem compara de" in _CORRIDO
+    assert "nem quando os produtos ja estao na conversa" in _CORRIDO
+
+    # E a mecanica que virou codigo nao pode ter sobrado no texto.
+    assert "mais_barato_da_busca" not in _INSTRUCOES
+    assert "_da_loja" not in _INSTRUCOES
 
 
 def test_a_pergunta_de_seguimento_continua_respondendo_do_contexto():
@@ -345,7 +349,7 @@ def test_a_pergunta_de_seguimento_continua_respondendo_do_contexto():
     Forcar busca na LEITURA colidiria com o TERMO LITERAL — o termo literal de
     "essa serve quantas pessoas?" e um pronome — e a segunda busca poderia
     voltar com um conjunto diferente do que esta na tela."""
-    assert "pergunta sobre um produto JA CITADO se responde" in _CORRIDO
+    assert "Pergunta sobre um produto JA CITADO se responde com o DADOS" in _CORRIDO
     assert "Na duvida entre as duas, CHAME" in _CORRIDO
 
 
@@ -365,17 +369,23 @@ def test_o_que_a_comida_E_nao_se_inventa():
     esta regra o buraco e preenchido com o que costuma ser verdade num
     restaurante — que e a NAO INVENTE, na forma mais dificil de flagrar,
     porque "bem macia" nao soa como um fato ate alguem conferir."""
-    for palavra in ("sabor", "maciez", "marmoreio", "textura", "origem", "tempero"):
+    for palavra in ("sabor", "maciez", "textura", "corte", "origem", "tempero"):
         assert palavra in _CORRIDO
 
-    assert "temperinho da casa" in _CORRIDO
+    # "marmoreio" e o exemplo de fala ("bem macia", "temperinho da casa")
+    # sairam com a limpeza de 25/08/2026: marmoreio e vocabulario de
+    # churrascaria, e os dois exemplos eram frases prontas de SAIDA, que a
+    # armadilha 44 trata como molde. A lista de ATRIBUTOS basta, e ela serve
+    # para pizzaria igual.
+    assert "marmoreio" not in _CORRIDO
+    assert "temperinho da casa" not in _CORRIDO
 
 
 def test_o_prompt_manda_copiar_o_preco_falado_em_vez_de_converter():
     """A regra velha ("copie o valor EXATO e mude so a forma de falar")
     mandava fazer duas operacoes e chamava as duas de copia. A segunda era
     traducao de numero para palavras, e foi ela que errou."""
-    assert "JA E o preco escrito como se fala" in _INSTRUCOES
+    assert "sai do segundo campo, copiado palavra por palavra" in _CORRIDO
     assert "Voce nao converte numero nenhum de cabeca" in _CORRIDO
 
     # E a regra velha nao pode ter sobrado ao lado da nova.
@@ -394,8 +404,8 @@ def test_recomendacao_e_excecao_do_termo_literal_e_esta_colada_nele():
     paragrafos depois da regra nao e lida junto dela. Buscar "recomenda" nao
     devolve nada, e sem a excecao ali o modelo devolve a pergunta."""
     literal = _INSTRUCOES.index("Busque com A PALAVRA QUE O CLIENTE FALOU")
-    excecao = _INSTRUCOES.index("pedido de recomendacao")
-    fim_da_secao = _INSTRUCOES.index("\nNO MAXIMO DOIS PRODUTOS")
+    excecao = _INSTRUCOES.index("Pedido de recomendacao")
+    fim_da_secao = _INSTRUCOES.index("\nO QUE NAO E COM VOCE")
 
     assert literal < excecao < fim_da_secao
     assert "Nunca devolva a pergunta" in _INSTRUCOES

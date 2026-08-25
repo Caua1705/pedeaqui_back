@@ -32,6 +32,7 @@ para um lugar compartilhado antes de qualquer outra coisa.
 
 import hashlib
 import logging
+import re
 import uuid
 from decimal import Decimal
 
@@ -40,6 +41,7 @@ from sqlalchemy.orm import Session
 from src.ai.services.retrieval_service import TOP_K_PADRAO
 from src.services.chat_service import ChatService
 from src.utils.money_por_extenso import preco_por_extenso
+from src.utils.normalization import fold_for_match
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -54,17 +56,13 @@ _LIMITE_DA_DESCRICAO = 120
 # "a | b | - | d".
 _VAZIO = "-"
 
-# AS QUATRO ORDENACOES, e por que sao quatro valores num enum so em vez de dois
-# parametros ortogonais (25/08/2026).
+# AS QUATRO ORDENACOES. Cada valor mapeia para (crescente, loja_inteira).
 #
-# "Ordenar por preco" e "sobre o que" sao decisoes independentes, e a modelagem
-# limpa seriam dois campos. Mas quem preenche isto e o modelo de voz, no meio de
-# uma conversa, e dois campos opcionais que interagem sao duas chances de ele
-# acertar um e errar o outro — e o erro silencioso ("mais barato" da busca
-# quando o cliente pediu da loja) devolve um numero que PARECE certo. Um enum de
-# quatro nomes autoexplicativos nao tem interacao para errar.
-#
-# Cada valor mapeia para (crescente, loja_inteira).
+# ELAS DEIXARAM DE SER UM PARAMETRO DO MODELO em 25/08/2026, e a tabela ficou.
+# Antes o enum viajava na declaracao da ferramenta e o modelo escolhia o valor;
+# hoje quem escolhe e `_reescrever_consulta`, lendo as palavras que o cliente
+# usou. A tabela continua sendo o vocabulario interno dos dois caminhos, e o
+# nome de cada valor continua dizendo o que ele faz.
 ORDENACOES = {
     "mais_barato_da_busca": (True, False),
     "mais_caro_da_busca": (False, False),
@@ -89,6 +87,100 @@ _LIMITE_ORDENADO = 5
 # economizar consulta.
 _TETO_DE_CATEGORIAS = 12
 
+# Quantos produtos a FRASE cita. Dois, e o numero e o mesmo de sempre — o que
+# mudou e QUEM o aplica. Ate 25/08/2026 o teto era uma secao inteira do prompt
+# pedindo ao modelo que ignorasse tres dos cinco produtos que a ferramenta
+# mandava; agora a frase ja vem com dois, e a secao saiu.
+_TETO_FALADO = 2
+
+# As expressoes que pedem ORDENACAO, e o que cada uma quer dizer (crescente).
+# Sao reconhecidas na consulta e ARRANCADAS dela: "a bebida mais barata" busca
+# "bebida" ordenado, e nao "bebida mais barata" — o texto do superlativo nao se
+# parece com produto nenhum e so empurra a similaridade para baixo.
+_PALAVRAS_DE_ORDEM = {
+    "mais barato": True,
+    "mais barata": True,
+    "mais baratos": True,
+    "mais baratas": True,
+    "menor preco": True,
+    "mais em conta": True,
+    "sai por menos": True,
+    "mais caro": False,
+    "mais cara": False,
+    "mais caros": False,
+    "mais caras": False,
+    "maior preco": False,
+}
+
+# Palavra que nao nomeia comida. Sai da consulta porque a busca e por
+# significado e nenhuma delas tem significado de prato.
+#
+# E ela faz a SEGUNDA decisao, que e a que importa: se depois de arrancar o
+# superlativo e o ruido nao sobrar palavra nenhuma, o cliente falou do cardapio
+# INTEIRO ("manda o mais caro") e a ordenacao e "_da_loja". Sobrando alguma
+# ("a bebida mais barata"), ha assunto, e e "_da_busca".
+_RUIDO = {
+    "o", "a", "os", "as", "um", "uma", "de", "do", "da", "dos", "das",
+    "em", "no", "na", "que", "qual", "quais", "tem", "voces", "voce",
+    "aqui", "me", "manda", "mandar", "quero", "queria", "gostaria", "ver",
+    "tudo", "todos", "todas", "e", "ai", "cardapio", "menu", "loja",
+    "opcao", "opcoes", "coisa", "produto", "produtos", "por", "pra",
+    "para", "com", "sem",
+}
+
+_NAO_LETRA = re.compile(r"[^0-9a-z]+")
+
+
+def _palavras(texto: str) -> list[str]:
+    """As palavras de `texto`, dobradas para COMPARAR: sem acento, minusculas."""
+    return [palavra for palavra in _NAO_LETRA.split(fold_for_match(texto)) if palavra]
+
+
+def _reescrever_consulta(consulta: str) -> tuple[str, str | None]:
+    """A consulta que vai para a busca, e a ordenacao que o cliente pediu.
+
+    ISTO ERA DUAS DECISOES DO MODELO ate 25/08/2026, e as duas custavam prompt:
+    escolher o valor do enum `ordenar` (que saiu da declaracao da ferramenta) e
+    saber que "mais barato" nao se responde com busca por similaridade. Nenhuma
+    das duas era natural para ele — a segunda precisou de cinco bullets, e o
+    caso que a motivou foi um superlativo respondido de memoria.
+
+    O que o backend consegue fazer e o que o backend faz: ler as palavras que
+    chegaram e decidir sozinho. O que ele NAO consegue e conferir se aquelas
+    palavras sao as que o cliente falou — o audio vai do navegador direto para
+    a OpenAI e nunca passa por aqui. Fidelidade ao termo do cliente continua
+    sendo regra de prompt porque nao ha outro lugar para ela.
+
+    As palavras saem do texto ORIGINAL, com acento. A forma dobrada serve so
+    para RECONHECER: quem busca e o embedding, e "baiao" sem acento nao e a
+    mesma entrada que "baiao" com ele.
+    """
+    dobrada = " ".join(_palavras(consulta))
+
+    crescente = None
+    arrancar: set[str] = set()
+    for expressao, e_crescente in _PALAVRAS_DE_ORDEM.items():
+        if expressao in dobrada:
+            crescente = e_crescente
+            arrancar.update(expressao.split())
+
+    restante = []
+    for original in consulta.split():
+        dobrado = " ".join(_palavras(original))
+        if not dobrado or dobrado in _RUIDO or dobrado in arrancar:
+            continue
+        restante.append(original)
+
+    # Sem superlativo o caminho e o de sempre, e a consulta so perde o ruido.
+    # Consulta que era SO ruido volta inteira: cortar tudo deixaria a busca sem
+    # entrada, e uma pergunta estranha ainda e melhor que uma vazia.
+    if crescente is None:
+        return (" ".join(restante) or consulta.strip()), None
+
+    if not restante:
+        return "", ("mais_barato_da_loja" if crescente else "mais_caro_da_loja")
+    return " ".join(restante), ("mais_barato_da_busca" if crescente else "mais_caro_da_busca")
+
 
 class VoiceSearchService:
     def __init__(self, db: Session):
@@ -108,7 +200,6 @@ class VoiceSearchService:
         branch_id: uuid.UUID,
         consulta: str,
         preco_maximo: Decimal | None = None,
-        ordenar: str | None = None,
     ) -> list:
         """Os produtos que a busca encontrou NAQUELA LOJA, hidratados do banco.
 
@@ -120,12 +211,14 @@ class VoiceSearchService:
         do produto em audio, e o cliente aceita de ouvido — nao ha tela onde
         ele pudesse notar que aquilo e de outra loja.
 
-        `ordenar` ENTROU EM 25/08/2026. Duas perguntas de uma sessao real
-        ficaram sem resposta — "qual a bebida mais barata?" e "manda o mais
-        caro do cardapio" — e nenhuma das duas era defeito de prompt: a busca
-        e por SIGNIFICADO, e os cinco mais parecidos com "bebida" nao sao as
-        cinco mais baratas. Superlativo e ordenacao, e ordenacao nao sai de
-        similaridade.
+        A ORDENACAO NAO E MAIS PARAMETRO: quem a decide e `_reescrever_consulta`,
+        lendo as palavras que chegaram. Ela entrou em 25/08/2026 como enum que o
+        modelo preenchia, e saiu de la no mesmo dia — duas perguntas de uma
+        sessao real ("qual a bebida mais barata?", "manda o mais caro do
+        cardapio") ficaram sem resposta, e nenhuma das duas era defeito de
+        prompt: a busca e por SIGNIFICADO, e os cinco mais parecidos com
+        "bebida" nao sao as cinco mais baratas. Superlativo e ordenacao, e
+        ordenacao nao sai de similaridade.
 
         Sao dois caminhos, e a diferenca esta em `ORDENACOES`:
 
@@ -150,10 +243,12 @@ class VoiceSearchService:
         restaurant = self.chat_service._get_active_restaurant(restaurant_id)
         branch = self.chat_service._get_active_branch(restaurant.id, branch_id)
 
-        # `crescente is None` e a marca de "nao foi pedida ordenacao". Vale
-        # tambem para `ordenar` que o modelo tenha inventado: valor fora do
-        # dicionario cai no caminho de sempre em vez de levantar. A recusa dura
-        # esta no schema da rota, que responde 422 antes de chegar aqui.
+        buscada, ordenar = _reescrever_consulta(consulta)
+
+        # `crescente is None` e a marca de "nao foi pedida ordenacao". O `.get`
+        # com queda continua valendo apesar de a chave agora ser nossa: e o que
+        # mantem a funcao total se alguem acrescentar um valor em
+        # `_PALAVRAS_DE_ORDEM` sem acrescentar o par em `ORDENACOES`.
         crescente, da_loja = ORDENACOES.get(ordenar or "", (None, False))
 
         if da_loja:
@@ -169,7 +264,7 @@ class VoiceSearchService:
             encontrados = self.chat_service.retrieval_service.retrieve_products(
                 restaurant_id=restaurant.id,
                 branch_id=branch.id,
-                question=consulta,
+                question=buscada,
                 top_k=TOP_K_PADRAO if crescente is None else _TOP_K_ORDENADO,
                 max_price=preco_maximo,
             )
@@ -219,13 +314,18 @@ class VoiceSearchService:
         # motivo: com a consulta e o topo na mesma linha, "buscou errado" e
         # "buscou bem e nao havia nada" viram duas leituras diferentes, em
         # producao, sem bancada.
+        # `buscada` ao lado de `consulta` porque a reescrita e um lugar novo
+        # onde a pergunta pode virar outra coisa em silencio. Com as duas na
+        # mesma linha, "o modelo mandou errado" e "nos reescrevemos errado"
+        # sao duas leituras diferentes; com uma so, sao indistinguiveis.
         logger.info(
             "[Voz] busca | restaurant_id=%s | branch_id=%s | consulta=%.120s "
-            "| consulta_digest=%s | ordenar=%s | topo=%s | preco_maximo=%s "
-            "| encontrados=%d | hidratados=%d",
+            "| buscada=%.120s | consulta_digest=%s | ordenar=%s | topo=%s "
+            "| preco_maximo=%s | encontrados=%d | hidratados=%d",
             restaurant_id,
             branch_id,
             consulta,
+            buscada or "-",
             _digest(consulta),
             ordenar or "-",
             "-" if topo is None else f"{topo:.3f}",
@@ -281,6 +381,85 @@ class VoiceSearchService:
 
         linhas = [f"{nome} ({quantos})" for nome, quantos in categorias]
         return "Categorias desta loja:\n" + "\n".join(linhas)
+
+    @staticmethod
+    def frase_para_o_modelo(produtos: list) -> str:
+        """A frase pronta para ser DITA, com o teto de dois ja aplicado.
+
+        ELA EXISTE PARA TIRAR DUAS DECISOES DO MODELO (25/08/2026), e as duas
+        eram secoes inteiras do prompt:
+
+            quantos produtos citar   "NO MAXIMO DOIS PRODUTOS POR RESPOSTA",
+                                     uma secao de 13 linhas cujo trabalho era
+                                     pedir que ele ignorasse tres dos cinco
+                                     produtos que esta mesma ferramenta mandava
+            se fala o preco          "UM produto na frase: fale o preco. DOIS:
+                                     so os nomes" — uma regra sobre a frase que
+                                     ele ainda estava montando
+
+        As duas viraram o mesmo `if` sobre o tamanho de uma lista, aqui. E o
+        terceiro movimento da mesma familia: o preco parou de errar quando
+        `preco_por_extenso` passou a entregar a forma falada, e o superlativo
+        parou de errar quando o banco passou a ordenar. Nos tres, o conserto
+        foi entregar o dado na forma em que ele vai ser usado.
+
+        O RISCO QUE ISTO CRIA, e que nao existia antes: a frase e um MOLDE, e a
+        armadilha 44 registra o que molde faz — em 24/08/2026 um exemplo de
+        saida solto no prompt produziu precos que nunca vieram de busca
+        nenhuma. A diferenca que salva este caso e o lugar: aquele molde vivia
+        no prefixo CACHEADO, abstrato e disponivel a qualquer momento; este
+        chega por turno, ja preenchido com o dado daquele turno. Se der errado,
+        vai dar errado exatamente assim — o modelo repetindo a frase do turno
+        anterior — e e isso que se procura na bancada.
+
+        Vazia quando a busca nao achou nada. Nao ha frase pronta para a
+        negativa: o que dizer depende do que o cliente pediu, e o modelo tem a
+        pergunta dele. O prompt cobre esse caso em uma linha.
+        """
+        if not produtos:
+            return ""
+
+        if len(produtos) == 1:
+            return _frase_de_um(produtos[0])
+
+        nomes = f"{produtos[0].name} e {produtos[1].name}"
+        # "e mais alguns" no lugar de enumerar o resto: os outros ja estao na
+        # TELA, com o preco ao lado. Dizer que ha mais e informacao; recitar
+        # quais e o inventario que o teto existe para nao ler.
+        if len(produtos) > _TETO_FALADO:
+            return f"Tem {nomes}, e mais alguns."
+        return f"Tem {nomes}."
+
+    @staticmethod
+    def resultado_para_o_modelo(
+        produtos: list,
+        categorias: list[tuple[str, int]] | None = None,
+    ) -> str:
+        """O que volta da ferramenta: a frase para dizer, e os dados para consultar.
+
+        DOIS BLOCOS ROTULADOS, e nao um formato posicional. O resumo antigo era
+        quatro campos separados por "|", e o que cada posicao significava estava
+        escrito no prompt — em nove bullets diferentes, que e o que se paga por
+        um contrato implicito. Rotulo custa alguns tokens por busca e devolve
+        essas nove linhas.
+
+        `categorias` so entra quando a busca nao achou NADA, e e o que aposenta
+        a regra "so busque um termo mais amplo se a palavra dele nao devolver
+        nada": quem sabe que a busca voltou vazia e o backend, nao o modelo, e
+        mandar a lista do que a loja TEM junto com o "nao achei" e dado em vez
+        de mais uma instrucao.
+        """
+        frase = VoiceSearchService.frase_para_o_modelo(produtos)
+        linhas = [
+            # Sem espaco sobrando quando nao ha frase: "FRASE: " com um branco
+            # no fim e um rotulo com conteudo invisivel, e o modelo le rotulo.
+            f"FRASE: {frase}" if frase else "FRASE:",
+            "DADOS (nao leia em voz alta; so para responder pergunta sobre produto ja citado):",
+            VoiceSearchService.resumo_para_o_modelo(produtos),
+        ]
+        if not produtos and categorias:
+            linhas.append(VoiceSearchService.resumo_das_categorias(categorias))
+        return "\n".join(linhas)
 
     @staticmethod
     def resumo_para_o_modelo(produtos: list) -> str:
@@ -356,6 +535,21 @@ class VoiceSearchService:
 
         linhas = [_linha_do_produto(produto) for produto in produtos[:5]]
         return "Produtos encontrados nesta loja:\n" + "\n".join(linhas)
+
+
+def _frase_de_um(produto) -> str:
+    """UM produto na frase leva o preco junto; e a regra, aplicada aqui.
+
+    "Confirmar um pedido sem dizer o valor e pior do que falar demais" era um
+    bullet do prompt e agora e esta linha. Produto sem preco vigente sai sem
+    numero nenhum — `preco_por_extenso` devolve `None` para preco ausente,
+    zerado ou fora da faixa, e inventar "por zero reais" seria o atendente
+    oferecendo de graca o que ninguem precificou.
+    """
+    falado = preco_por_extenso(produto.price)
+    if not falado:
+        return f"Tem {produto.name}."
+    return f"Tem {produto.name} por {falado}."
 
 
 def _ordenados_por_preco(produtos: list, crescente: bool) -> list:

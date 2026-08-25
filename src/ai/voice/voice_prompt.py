@@ -781,19 +781,20 @@ O QUE NAO E COM VOCE
 
 
 SAUDACOES_COM_NOME = (
+    "Oi {nome}, tudo bem? Como posso te ajudar?",
     "Olá, {nome}! Como posso te ajudar hoje?",
-    "Oi, {nome}! O que vai ser hoje?",
-    "{nome}, tudo bem? Como posso te ajudar?",
+    "Oi, {nome}! Posso te ajudar com alguma coisa?",
 )
 
 # A QUEDA, para cadastro que não entrega um primeiro nome dizível. Ela existe
 # porque `customers.name` é texto livre: há espaço em branco, há "12345", há
 # e-mail inteiro e há quem tenha digitado no campo errado. Falar isso em voz
 # alta é pior do que não falar nome nenhum.
+
 SAUDACOES_SEM_NOME = (
+    "Oi, tudo bem? Como posso te ajudar?",
     "Olá! Como posso te ajudar hoje?",
-    "Oi! O que vai ser hoje?",
-    "Tudo bem? Como posso te ajudar?",
+    "Oi! Posso te ajudar com alguma coisa?",
 )
 
 # Letra (com acento), podendo ter hífen ou apóstrofo NO MEIO: "Ana", "João",

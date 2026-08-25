@@ -130,3 +130,170 @@ def test_a_saudacao_nao_esta_no_prompt():
 
     for variacao in SAUDACOES_COM_NOME + SAUDACOES_SEM_NOME:
         assert variacao not in instrucoes
+
+
+# --------------------------------------------------------------------------
+# OS DOIS TETOS: quantos produtos se FALA, e quando o preco sai junto
+#
+# Nenhum dos dois tem rede do lado de ca. No texto, `_limitar_cartoes` apara o
+# carrossel quando a regra do prompt nao pega; na voz os cartoes saem da NOSSA
+# busca e o modelo nao escolhe nada — nao ha o que aparar. O prompt esta
+# sozinho, e estes testes sao a unica coisa que percebe se a secao sumir.
+# --------------------------------------------------------------------------
+
+
+_INSTRUCOES = instructions_for("Nome do restaurante: Junior da Picanha", "Loja: Centro")
+
+
+def test_o_teto_de_produtos_falados_e_uma_secao_e_nao_um_bullet():
+    """Ele JA era dois, enterrado em O CARDAPIO, e foi desobedecido — o
+    atendente falou tres picanhas. A forma da regra e o que faz ela morder:
+    secao propria com o caso enumerado, como a do `system_prompt.py`."""
+    assert "\nNO MAXIMO DOIS PRODUTOS POR RESPOSTA\n" in _INSTRUCOES
+
+
+def test_o_bullet_do_cardapio_aponta_para_a_secao_do_teto():
+    """Duas redacoes do mesmo teto em lugares diferentes e a chance de as duas
+    discordarem depois. O bullet virou ponteiro, e nao uma segunda regra."""
+    assert "Quantos deles voce FALA esta em NO MAXIMO DOIS PRODUTOS POR RESPOSTA." in _INSTRUCOES
+
+
+def test_o_teto_da_fala_nao_e_o_teto_da_busca():
+    """A ferramenta continua trazendo cinco, e o prompt tem que dizer por que.
+    Sem esta frase, "no maximo dois" convida a cortar a busca — e ai o modelo
+    perde a margem para descartar e para saber o que existe antes de negar."""
+    assert "Trazer cinco nao e ordem para falar cinco" in _INSTRUCOES
+
+
+def test_a_regra_do_preco_conta_produtos_e_nao_o_tipo_da_pergunta():
+    """A versao anterior tinha DOIS criterios que se contradiziam num caso
+    real: "pergunta direta de preco" autorizava, "citando dois produtos"
+    proibia, e "e a picanha quanto custa?" era os dois ao mesmo tempo. Quando
+    o prompt se contradiz, o modelo resolve para o lado de falar."""
+    assert "QUANTOS produtos a sua frase cita, e nao" in _INSTRUCOES
+    assert "UM produto na frase" in _INSTRUCOES
+    assert "DOIS produtos na frase" in _INSTRUCOES
+
+    # E o criterio velho nao pode ter sobrado ao lado do novo.
+    assert "pergunta direta de preco. Citando dois produtos" not in _INSTRUCOES
+
+
+def test_o_preco_de_um_produto_so_continua_sendo_falado():
+    """Calar o preco inteiro seria o erro oposto: quem esta com o telefone no
+    ouvido nao ve a tela, e confirmar um pedido sem dizer o valor e pior do
+    que falar demais."""
+    assert "Confirmar um pedido sem dizer" in _INSTRUCOES
+
+
+def test_nenhum_preco_dizivel_entrou_no_prompt():
+    """A armadilha 44, que este arquivo ja pagou com "trinta e cinco e
+    trinta": exemplo de SAIDA falada e molde, e o modelo preenche o molde
+    sozinho na sessao seguinte. Os casos enumerados sao a fala do CLIENTE e a
+    FALHA — nunca a resposta certa, nunca um numero pronto para ser dito.
+
+    O unico par que pode existir e fonte -> fala, ancorado no campo `price`.
+    """
+    import re
+
+    dizivel = re.compile(
+        r"\b(zero|um|dois|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|"
+        r"treze|quatorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte|"
+        r"trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa|cem)\s+e\s+"
+        r"(um|dois|tres|quatro|cinco|seis|sete|oito|nove|dez|vinte|trinta|"
+        r"quarenta|cinquenta|sessenta|setenta|oitenta|noventa)\b",
+        re.IGNORECASE,
+    )
+    achados = [
+        trecho.group(0)
+        for trecho in dizivel.finditer(_INSTRUCOES)
+        # A UNICA excecao: o par fonte -> fala da regra de copiar o valor
+        # exato, que ilustra a CONVERSAO e vem colado no "R$ 43,50" de origem.
+        if "R$ 43,50" not in _INSTRUCOES[max(0, trecho.start() - 120) : trecho.start()]
+    ]
+    assert achados == [], f"preco dizivel solto no prompt: {achados}"
+
+
+# --------------------------------------------------------------------------
+# BALCAO, NAO CALL CENTER
+#
+# O eixo que faltava. O prompt ja mandava ser DIRETO (quanto se fala) e nao
+# mandava soar como PESSOA (como se fala) — e o segundo nao sai do primeiro:
+# "temos disponiveis as seguintes opcoes" e empolado E longo.
+#
+# O que estes testes travam nao e a redacao das regras: e o bloco de
+# ENROLACAO, que e a unica parte da secao que pode brigar com a brevidade se
+# alguem a reescrever pensando so em simpatia.
+# --------------------------------------------------------------------------
+
+
+def test_a_naturalidade_e_uma_secao_propria():
+    """Nao entrou como bullet de COMO FALAR de proposito: aquela secao e sobre
+    QUANTO falar, e esta e sobre COMO. A licao do "busque calado", que so
+    passou a morder depois de mudar de secao, e o precedente."""
+    assert "\nBALCAO, NAO CALL CENTER\n" in _INSTRUCOES
+
+
+def test_a_enrolacao_e_enumerada_e_nao_deixada_ao_criterio():
+    """O UNICO ponto em que naturalidade brigaria com brevidade: particula de
+    discurso e natural e e custo puro, em audio de saida, que nunca e
+    cacheado. Criterio nao morde; enumeracao morde."""
+    for particula in ('"olha"', '"entao"', '"pois e"', '"ne"', '"com certeza"', '"perfeito"'):
+        assert particula in _INSTRUCOES, particula
+    assert "Natural NAO e enrolado" in _INSTRUCOES
+
+
+def test_a_lista_falada_continua_proibida_pelo_nome():
+    assert '"primeiro"' in _INSTRUCOES
+    assert '"as seguintes opcoes"' in _INSTRUCOES
+
+
+def test_nenhum_exemplo_do_lado_certo_carrega_produto_ou_ingrediente():
+    """A armadilha 44, na leitura precisa: o perigo nao e string dizivel, e
+    string dizivel com FATO dentro. "tem sim" nao pode virar mentira sobre
+    coisa nenhuma; "tem picanha importada" pode — e seria a mesma falha de
+    2026 com outra roupa.
+
+    A guarda e grosseira de proposito. Ela nao entende portugues: ela procura
+    nome de comida em qualquer lugar do prompt fora dos casos enumerados de
+    FALHA, que sao os unicos autorizados a citar produto.
+    """
+    comidas = (
+        "picanha",
+        "baiao",
+        "sobremesa de chocolate",
+        "brownie",
+        "pudim",
+        "feijoada",
+        "black angus",
+    )
+    # As linhas que PODEM citar produto: as de caso enumerado (falha real) e
+    # as de exemplo de BUSCA (o termo literal que o cliente falou).
+    permitidas = [
+        linha
+        for linha in _INSTRUCOES.splitlines()
+        if "ja aconteceu" in linha
+        or "voce buscou" in linha
+        or "ele disse" in linha
+        or "respondido com" in linha
+        or "busca " in linha
+        or "quanto custa a picanha" in linha
+        or "tem sobremesa" in linha.lower()
+        or "picanhas seguidas" in linha
+    ]
+    inicio = _INSTRUCOES.index("BALCAO, NAO CALL CENTER")
+    fim = _INSTRUCOES.index("NAO INVENTE", inicio)
+    secao = _INSTRUCOES[inicio:fim]
+
+    for comida in comidas:
+        assert comida not in secao.lower(), f"{comida!r} virou molde na secao do tom"
+    assert permitidas, "a guarda perdeu a referencia das linhas autorizadas"
+
+
+def test_a_secao_do_tom_nao_traz_numero_nenhum():
+    """Mesma razao. Um numero solto na secao que ensina a FALAR e um preco
+    esperando para ser dito."""
+    import re
+
+    inicio = _INSTRUCOES.index("BALCAO, NAO CALL CENTER")
+    fim = _INSTRUCOES.index("NAO INVENTE", inicio)
+    assert re.search(r"\d", _INSTRUCOES[inicio:fim]) is None

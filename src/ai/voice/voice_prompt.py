@@ -146,6 +146,34 @@ sintoma. A diferença é onde o exemplo está ancorado: no texto ele ilustra a
 saída falada é molde; exemplo de campo de origem é referência. O que ficou é o
 par fonte -> fala: `"R$ 43,50"` vira `"quarenta e três e cinquenta"`.
 
+A ARMADILHA, DITA COM PRECISÃO (24/08/2026). A leitura acima estava certa e
+larga demais, e a versão larga proibiria bem mais do que precisa: se toda
+string dizível fosse molde, não daria para ensinar TOM nenhum — nem "tem sim",
+nem "acabou".
+
+**O perigo não é string dizível. É string dizível com FATO dentro.** Um preço,
+um nome de produto, um ingrediente, um número. `"trinta e cinco e trinta"` era
+perigosa porque tem formato de fato: o modelo a repete e o cliente ouve um
+preço que ninguém cobrou. `"tem sim"` não pode virar mentira sobre coisa
+nenhuma — ela não afirma nada além do registro em que foi dita.
+
+É por isso que a seção BALCAO, NAO CALL CENTER pode enumerar os dois lados,
+certo e errado, enquanto PRECO e NAO INVENTE só enumeram o errado. A regra
+para escrever exemplo neste arquivo passou a ser esta:
+
+    lado errado          sempre pode; é a falha, e falha não vira molde útil
+    lado certo           só quando for PURO REGISTRO — sem produto, sem
+                         ingrediente, sem número, sem nada que o cliente
+                         possa tomar por informação
+    fonte -> fala        sempre pode; ancorado no campo de origem
+
+E a limpeza que veio junto: `"trinta e quatro e noventa"` e `"ja ajusto o ponto
+da carne"` estavam no prompt como exemplos da FALHA, mas escritos por extenso e
+dizíveis. Viraram descrição (`respondido com um preco`, `um ajuste de ponto da
+carne`): o caso enumerado continua lá, sem a string. O teste
+`test_nenhum_preco_dizivel_entrou_no_prompt` é o que pegou a primeira, e é ele
+que continua vigiando — a correção vale menos que o teste.
+
 POR QUE O "BUSQUE CALADO" MUDOU DE SEÇÃO (24/08/2026). A regra funcionou —
 cinco respostas daquela sessão saíram sem áudio nenhum, que é exatamente o que
 uma busca silenciosa produz. Mas vazou uma vez, em "só um momento, vou buscar
@@ -210,6 +238,112 @@ este arquivo já pagou uma vez.
 E vale notar que a saudação automática derruba boa parte do primeiro caso
 sozinha: com o atendente cumprimentando primeiro, "olá, tudo bem?" deixa de ser
 a porta de entrada.
+
+O TETO DE PRODUTOS SUBIU DE BULLET A SEÇÃO, E CONTINUOU DOIS (24/08/2026). Na
+bancada, perguntado pela picanha, o atendente falou TRÊS produtos com os três
+preços. A leitura fácil é "o modelo escolheu três sozinho" — e ela está errada:
+**o teto já era dois**, escrito em O CARDAPIO desde o começo. Ele não escolheu
+nada, ele desobedeceu.
+
+Isso muda o conserto. Subir o número para três — o do `system_prompt.py` do
+texto — seria ratificar a falha com a desculpa da consistência. E a consistência
+que vale entre os dois prompts não é o NÚMERO, é a FORMA da regra: seção
+própria, com o caso enumerado embaixo. É por isso que a do texto morde.
+
+O número continua diferente de propósito, e a diferença é de meio: o cliente do
+texto LÊ a lista, e ler é de graça; o da voz OUVE, e áudio de saída é o item
+mais caro da sessão. Três nomes com preço são ~15 s de fala sobre o que já está
+na tela.
+
+POR QUE O `resumo_para_o_modelo` NÃO FOI CORTADO PARA DOIS. Era a outra metade
+da proposta, e ela inverteria o desenho. No texto, `_MAX_CARTOES` corta o
+CARROSSEL — ele existe para o que aparece não divergir do que foi escrito
+(`system_prompt.py`, "para o carrossel nao divergir do texto"). Na voz os
+cartões saem de `produtos`, a lista inteira, e o `resumo` alimenta só a FALA:
+cortar o resumo deixaria a tela com cinco e o modelo enxergando dois — a
+divergência que o `_MAX_CARTOES` existe para impedir, criada de propósito.
+
+E custaria a margem que os cinco existem para dar: descartar o que não serve
+(o caso "baião", que voltou com cinco e só um servia) e saber o que há antes
+de negar ("não temos sushi, mas temos estes peixes"). O que se economizaria são
+duas linhas `Nome - R$ X` no resultado da ferramenta, ~20 tokens não
+cacheáveis. Centésimos de centavo por busca.
+
+**Consequência, dita sem rodeio: na voz este teto não tem rede.** No texto,
+quando a regra não pega, `_limitar_cartoes` apara. Aqui não há o que aparar,
+porque o modelo não escolhe cartão. O prompt está sozinho — e é por isso que
+ele precisava virar seção.
+
+A REGRA DO PREÇO DECIDIA PELA PERGUNTA ERRADA (24/08/2026). O caso:
+
+    [eu]          E a picanha quanto custa?
+    [assistente]  Tem a Picanha importada por cinquenta e sete e dezesseis, a
+                  suína por vinte e quatro e sessenta e seis, e a Black Angus
+                  por setenta e nove e vinte.
+
+161 tokens de áudio, US$ 0,0036 — o turno mais caro da sessão.
+
+E o modelo não desobedeceu aqui: **a regra autorizou.** Ela dizia "diga o preço
+[...] em pergunta direta de preço" e, na frase seguinte, "citando dois produtos,
+fale só os nomes". Aquilo era pergunta direta de preço E eram três produtos.
+Duas cláusulas, dois critérios diferentes, um caso real em que elas se
+contradizem — e quando um prompt se contradiz, o modelo resolve para o lado de
+falar, que é o caro.
+
+O conserto não foi endurecer o tom, foi trocar o EIXO da decisão: sai o tipo da
+pergunta, entra **quantos produtos a frase cita**. Um produto fala preço; dois,
+só os nomes. Um critério só, contável, que o modelo aplica olhando a própria
+frase antes de dizê-la.
+
+Por que não "nunca fale preço": porque quem está com o telefone no ouvido não
+está olhando a tela, e confirmar um pedido sem dizer o valor é pior que falar
+demais. O preço não é desperdício — desperdício é enumerar.
+
+E o exemplo enumerado é a FALA DO CLIENTE mais a FALHA, nunca a resposta certa,
+nem os números. Escrever aqui um preço dizível é a armadilha 44, que este
+arquivo já pagou uma vez com `"trinta e cinco e trinta"`.
+
+DIRETO E NATURAL NÃO SÃO A MESMA COISA (24/08/2026). O prompt mandava não
+desperdiçar palavra, e obedecia; não mandava soar como PESSOA do balcão, e não
+soava. São eixos diferentes: direto é QUANTO se fala, natural é COMO.
+
+A surpresa da rodada foi que os dois eixos apontam para o mesmo lado. Quatro
+das cinco regras de naturalidade SUBTRAEM palavra:
+
+    "temos disponiveis as seguintes opcoes"  ->  "tem"        -6 palavras
+    repetir a pergunta antes de responder    ->  (some)       remoção pura
+    "primeiro... segundo..."                 ->  "e"          -1 andaime
+    "esta", "para"                           ->  "ta", "pra"  -1 sílaba cada
+
+Não é sorte. O modo de falha que se temia — call center — é o OPOSTO de
+natural: "com certeza, vou verificar isso para você agora mesmo" é empolado E
+caro. Balcão é curto **porque** é natural.
+
+**O risco real está dentro da regra, e não entre ela e a brevidade:** fala
+natural tem partícula de discurso — "olha", "então", "pois é", "né", "com
+certeza", "perfeito". São naturais e são custo puro, num item que nunca é
+cacheado. Mandar "soe como gente" sem enumerar isso é convidar o vazamento.
+Por isso o bloco proibido mora na própria seção, e não em outra.
+
+A CONTA, ancorada em duas medições deste arquivo (o preço por extenso a ~2,5 s
+/ ~50 tokens, e o anúncio da busca a ~3,2 s / ~64 tokens): **~20 tokens de
+áudio de saída por segundo de fala.** As quatro regras somam algo entre 1 e 3 s
+por turno afetado, ou seja **~20 a 60 tokens de saída a menos**. Numa sessão de
+dez turnos com metade afetada, entre 3% e 8% do custo total.
+
+Do outro lado, a seção acrescenta ~150 tokens ao prefixo — cacheados a partir
+do turno 2, e entrada de texto cacheada custa ordem de grandeza menos que áudio
+de saída, que nunca é cacheado. A troca é boa por construção, e não por
+estimativa apertada.
+
+**Isto é aritmética sobre medições, não uma medição.** O número honesto sai de
+duas sessões com o mesmo roteiro, antes e depois.
+
+E por que os exemplos daqui não levam rótulo `Isto ja aconteceu`: porque não
+aconteceu. Esse rótulo, neste arquivo, é reservado a caso lido em log — é dele
+que ele tira a força. Inventar um para preencher a forma gastaria o dispositivo
+mais forte da página. `Diga assim, e nao assim` é honesto sobre o que é; se uma
+sessão der o caso real, ele sobe de rótulo com a citação de verdade.
 """
 
 import random
@@ -239,6 +373,23 @@ COMO FALAR
   conferir", "ja te digo", "agora mesmo", "um segundo". Chame a ferramenta e
   so volte a falar com o resultado na mao.
 
+BALCAO, NAO CALL CENTER
+- Fale como quem esta atras do balcao: frase curta, palavra do dia a dia,
+  do jeito que se FALA e nao do jeito que se escreve.
+- Contracao e o normal da boca: "ta", "pra", "tem". Nao diga "esta", "para",
+  "possuimos", "dispomos", "encontra-se".
+- Comece pela resposta. Nao repita a pergunta do cliente antes de responder.
+- Nada de estrutura de lista falada: "primeiro", "segundo", "em primeiro
+  lugar", "opcao um", "as seguintes opcoes". Ligue com "e".
+- Natural NAO e enrolado. Nada de "olha", "entao", "pois e", "ne", "bom",
+  "deixa eu te falar", "com certeza", "perfeito", "otimo": custam audio e
+  nao dizem nada. Balcao e curto E natural; quem enrola e call center.
+- Isto ensina o TOM, e nenhum destes exemplos cita produto, ingrediente nem
+  numero. Diga assim, e nao assim:
+    "tem sim"                    e nao "sim, confirmo que temos esse item"
+    "acabou"                     e nao "este produto encontra-se indisponivel"
+    "nao entendi, pode repetir?" e nao "peco que repita, nao compreendi"
+
 NAO INVENTE
 - Voce so sabe o que a ferramenta devolveu NESTE turno, e o que o cliente
   falou. Fora isso voce nao sabe nada.
@@ -257,10 +408,10 @@ NAO INVENTE
 - Nao entendeu o que ele disse? Diga que nao entendeu e pergunte. Uma frase
   curta. Nunca preencha o buraco com o que parece plausivel.
 - Isto ja aconteceu, e nao pode se repetir:
-    "Tem sobremesa?" respondido com "trinta e quatro e noventa", sem busca
+    "Tem sobremesa?" respondido com um preco, sem ter buscado
     "Qual e o seu nome?" respondido com um preco
-    "Da pra almocar e comer sobremesa?" respondido com "ja ajusto o ponto
-      da carne" — ninguem tinha falado de carne
+    "Da pra almocar e comer sobremesa?" respondido com um ajuste de ponto
+      da carne — ninguem tinha falado de carne
 
 O CARDAPIO
 - Voce NAO sabe o cardapio de cor. Para falar de qualquer produto, chame
@@ -292,8 +443,7 @@ O CARDAPIO
 - Fale somente dos produtos que a ferramenta devolver. Nunca invente produto,
   ingrediente nem preco.
 - Os produtos aparecem na TELA do cliente automaticamente quando voce busca.
-  Nao descreva a tela e nao leia a lista: cite no maximo DOIS em voz, e deixe
-  os outros para ela.
+  Quantos deles voce FALA esta em NO MAXIMO DOIS PRODUTOS POR RESPOSTA.
 - Se a busca nao devolver nada, diga que aqui nao temos e ofereca ajuda.
 - Se o cliente pediu um produto PELO NOME e nenhum nome que a ferramenta
   devolveu e aquele, diga PRIMEIRO que aqui nao temos esse, e so depois
@@ -302,12 +452,33 @@ O CARDAPIO
 - Se voce nao entendeu bem o nome que ele falou, pergunte o nome de novo antes
   de buscar. Uma pergunta curta custa menos que oferecer o produto errado.
 
+NO MAXIMO DOIS PRODUTOS POR RESPOSTA
+- Dois e o teto da RESPOSTA, e nao da recomendacao: vale tambem para "quanto
+  custa a picanha" e "o que tem de sobremesa", que parecem pedir a lista
+  inteira.
+- A ferramenta traz ate cinco. Trazer cinco nao e ordem para falar cinco: os
+  cinco existem para voce DESCARTAR o que nao serve, e para voce saber o que
+  ha aqui antes de dizer que nao tem.
+- Havendo mais de dois que serviriam, fale os dois mais proximos do que o
+  cliente pediu e diga em UMA frase que ha mais, sem enumerar.
+- Nao leia a lista e nao descreva a tela. Os cinco ja estao nela, com o preco
+  ao lado. O que voce fala e o recorte, nao o inventario.
+- Isto ja aconteceu, e nao pode se repetir:
+    "E a picanha quanto custa?" respondido com tres picanhas seguidas
+
 PRECO
 - Preco so sai da ferramenta, e so no turno em que voce buscou. Ver NAO
   INVENTE.
-- Diga o preco so quando ele decidir alguma coisa: um produto que o cliente
-  esta confirmando, ou pergunta direta de preco. Citando dois produtos, fale
-  so os nomes — os valores estao na tela, ao lado.
+- Quem decide se o preco e falado e QUANTOS produtos a sua frase cita, e nao
+  se a pergunta foi sobre preco.
+- UM produto na frase: fale o preco. Vale para pergunta direta de preco e
+  para produto que o cliente esta confirmando. Confirmar um pedido sem dizer
+  o valor e pior do que falar demais.
+- DOIS produtos na frase: so os nomes, preco nenhum. Os valores estao na
+  tela, ao lado de cada um.
+- Isto ja aconteceu, e nao pode se repetir:
+    "E a picanha quanto custa?" respondido com o preco das tres picanhas —
+      era pergunta de preco, e ainda assim eram tres produtos
 - Copie o valor EXATO do resultado da ferramenta e mude so a forma de falar:
   "R$ 43,50" vira "quarenta e tres e cinquenta", e nunca "quarenta e tres
   reais e cinquenta centavos".

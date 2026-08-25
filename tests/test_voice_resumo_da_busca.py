@@ -23,49 +23,80 @@ from types import SimpleNamespace
 from src.ai.voice.search_service import VoiceSearchService, _LIMITE_DA_DESCRICAO
 
 
-def _produto(nome: str, preco: str | None, descricao: str | None = None) -> SimpleNamespace:
+def _produto(
+    nome: str,
+    preco: str | None,
+    descricao: str | None = None,
+    serve: int | None = None,
+) -> SimpleNamespace:
     return SimpleNamespace(
         name=nome,
         price=None if preco is None else Decimal(preco),
         description=descricao,
+        serves_people=serve,
     )
 
 
 def test_cada_produto_traz_os_quatro_campos():
     resumo = VoiceSearchService.resumo_para_o_modelo(
-        [_produto("Baiao de dois", "34.40", "Baiao e batata frita. Serve 2 pessoas.")]
+        [_produto("Baiao de dois", "34.40", "Baiao e batata frita.", serve=2)]
     )
 
     assert resumo.splitlines()[1] == (
-        "Baiao de dois | R$ 34,40 | trinta e quatro e quarenta "
-        "| Baiao e batata frita. Serve 2 pessoas."
+        "Baiao de dois | trinta e quatro e quarenta "
+        "| Baiao e batata frita. | serve 2 pessoas"
     )
 
 
-def test_o_preco_falado_e_o_terceiro_campo_e_nao_substitui_os_digitos():
-    """Os digitos ficam porque sao a fonte auditavel e o que o cartao mostra;
-    a forma falada fica porque e o que o modelo copia. Um sem o outro perde
-    metade — sem digitos nao ha como conferir, sem fala ele traduz de novo."""
+def test_o_preco_em_digitos_NAO_vai_mais_para_o_modelo():
+    """A regra que o campo obrigava ("nunca diga os digitos") so existia por
+    causa dele. O modelo nao pode fala-lo, nao pode somar e nao pode
+    arredondar — e a tela ja mostra o valor. O que ele oferecia era uma segunda
+    forma do mesmo numero ao lado da forma pronta, e foi de uma troca entre as
+    duas que saiu "quarenta e quatro e quarenta" para um produto de R$ 34,40."""
     linha = VoiceSearchService.resumo_para_o_modelo([_produto("X", "57.16")]).splitlines()[1]
 
-    assert "R$ 57,16" in linha
+    assert "R$" not in linha
+    assert "57,16" not in linha
     assert "cinquenta e sete e dezesseis" in linha
 
 
 def test_produto_sem_preco_nao_recebe_numero_nem_fala():
-    """"-" nos dois campos, e o prompt manda nao falar preco desse produto.
+    """"-" no campo do preco, e o prompt manda nao falar preco desse produto.
     Um zero aqui viraria "de graca" em audio."""
     linha = VoiceSearchService.resumo_para_o_modelo([_produto("Brinde", None)]).splitlines()[1]
 
     assert linha == "Brinde | - | - | -"
 
 
-def test_a_descricao_do_lojista_chega_inteira_quando_cabe():
+def test_serve_vem_por_extenso_e_concorda_no_singular():
+    """O campo e para ser DITO. "2" obrigaria o modelo a escolher entre "dois"
+    e "duas", que e a decisao que o preco por extenso ja tirou dele."""
+    uma = VoiceSearchService.resumo_para_o_modelo([_produto("X", "10.00", serve=1)])
+    varias = VoiceSearchService.resumo_para_o_modelo([_produto("X", "10.00", serve=4)])
+
+    assert uma.splitlines()[1].endswith("| serve 1 pessoa")
+    assert varias.splitlines()[1].endswith("| serve 4 pessoas")
+
+
+def test_serve_nulo_vira_traco_e_nunca_o_numero_um():
+    """NULO e "o lojista nao disse", e nao "serve uma pessoa". Escrever 1 aqui
+    seria o backend inventando o fato que a coluna existe para parar de
+    inventar — e enquanto o cadastro estiver vazio, e o caso de TODO produto."""
     linha = VoiceSearchService.resumo_para_o_modelo(
-        [_produto("X", "10.00", "Serve 2 pessoas.")]
+        [_produto("X", "10.00", "Uma descricao.")]
     ).splitlines()[1]
 
-    assert linha.endswith("| Serve 2 pessoas.")
+    assert linha.endswith("| -")
+    assert "serve" not in linha
+
+
+def test_a_descricao_do_lojista_chega_inteira_quando_cabe():
+    linha = VoiceSearchService.resumo_para_o_modelo(
+        [_produto("X", "10.00", "Baiao e batata frita.")]
+    ).splitlines()[1]
+
+    assert linha.split(" | ")[2] == "Baiao e batata frita."
 
 
 def test_descricao_longa_e_cortada_no_espaco_e_nao_no_caractere():
@@ -76,7 +107,7 @@ def test_descricao_longa_e_cortada_no_espaco_e_nao_no_caractere():
         [_produto("X", "10.00", descricao)]
     ).splitlines()[1]
 
-    cortada = linha.split(" | ")[3]
+    cortada = linha.split(" | ")[2]
     assert cortada.endswith("...")
     assert len(cortada) <= _LIMITE_DA_DESCRICAO + 3
     assert "palavr..." not in cortada
@@ -88,7 +119,7 @@ def test_descricao_vazia_ou_so_espaco_vira_traco():
         linha = VoiceSearchService.resumo_para_o_modelo(
             [_produto("X", "10.00", vazia)]
         ).splitlines()[1]
-        assert linha.endswith("| -")
+        assert linha.split(" | ")[2] == "-"
 
 
 def test_a_descricao_perde_quebra_de_linha():

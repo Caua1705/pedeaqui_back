@@ -112,6 +112,9 @@ def make_product(**overrides):
         "name": "Pizza Calabresa",
         "slug": "pizza-calabresa",
         "description": None,
+        # NULO e o estado de TODO produto ja cadastrado: a revisao
+        # 20260825_0039 acrescentou a coluna sem backfill, de proposito.
+        "serves_people": None,
         "price": Decimal("49.90"),
         "image_path": None,
         "is_active": True,

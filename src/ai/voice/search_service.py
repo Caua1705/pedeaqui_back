@@ -39,7 +39,6 @@ from sqlalchemy.orm import Session
 
 from src.ai.services.retrieval_service import TOP_K_PADRAO
 from src.services.chat_service import ChatService
-from src.utils.money import format_money_br
 from src.utils.money_por_extenso import preco_por_extenso
 
 
@@ -83,6 +82,12 @@ _TOP_K_ORDENADO = 40
 # Cinco, o mesmo teto do resumo: alem disso seria produto que nunca vai ser dito
 # nem mostrado.
 _LIMITE_ORDENADO = 5
+
+# Quantas categorias `listar_categorias` devolve. Doze cobre o cardapio de uma
+# churrascaria inteira e ja e mais do que cabe numa frase falada — o teto existe
+# para o cardapio grande nao virar trinta segundos de recitacao, e nao para
+# economizar consulta.
+_TETO_DE_CATEGORIAS = 12
 
 
 class VoiceSearchService:
@@ -230,17 +235,70 @@ class VoiceSearchService:
         )
         return produtos
 
+    def listar_categorias(self, restaurant_id: uuid.UUID, branch_id: uuid.UUID) -> list[tuple[str, int]]:
+        """As categorias vendaveis daquela loja, com a contagem de cada uma.
+
+        Mesmas duas barreiras da busca — restaurante ativo e filial daquele
+        restaurante — e pelo mesmo motivo: sao elas que impedem uma sessao de
+        listar o cardapio de uma loja que nao e a dela.
+
+        NAO gasta embedding e nao passa pelo cache de busca. Nao ha pergunta a
+        vetorizar: a lista de categorias de uma filial e a mesma para qualquer
+        forma de perguntar, e e uma consulta agregada indexada por filial.
+        """
+        restaurant = self.chat_service._get_active_restaurant(restaurant_id)
+        branch = self.chat_service._get_active_branch(restaurant.id, branch_id)
+
+        categorias = self.chat_service.product_repository.list_active_categories_with_counts(
+            branch_id=branch.id,
+            limite=_TETO_DE_CATEGORIAS,
+        )
+        logger.info(
+            "[Voz] categorias | restaurant_id=%s | branch_id=%s | devolvidas=%d",
+            restaurant_id,
+            branch_id,
+            len(categorias),
+        )
+        return categorias
+
+    @staticmethod
+    def resumo_das_categorias(categorias: list[tuple[str, int]]) -> str:
+        """O texto que volta para a Realtime como resultado de `listar_categorias`.
+
+        `Nome (N)`, uma por linha. A contagem entre parenteses e nao por
+        extenso porque ela NAO e para ser dita como esta — o prompt manda usar
+        o numero para escolher o que falar, e o preco falado ao lado ja ensina
+        qual campo e literal e qual nao e.
+
+        A NEGATIVA E POR LOJA, igual a do `resumo_para_o_modelo` e pelo mesmo
+        motivo: o modelo le esta string e o prompt junto, e o mais frouxo dos
+        dois e o que ele repete em audio. Loja sem categoria vendavel e loja
+        com o cardapio inteiro esgotado — dizer "este restaurante nao tem
+        cardapio" seria falso sobre a outra unidade.
+        """
+        if not categorias:
+            return "Nenhuma categoria com produto disponivel nesta loja."
+
+        linhas = [f"{nome} ({quantos})" for nome, quantos in categorias]
+        return "Categorias desta loja:\n" + "\n".join(linhas)
+
     @staticmethod
     def resumo_para_o_modelo(produtos: list) -> str:
         """O texto que volta para a Realtime como resultado da ferramenta.
 
         Quatro campos por produto, um produto por linha:
 
-            nome | preco em digitos | preco como se fala | descricao
+            nome | preco como se fala | descricao | serve N pessoas
 
         O que cada campo significa esta escrito no PROMPT, e nao aqui: o
         prompt e cacheado a partir do turno 2, e este texto e cobrado inteiro
         em toda busca. Explicacao de formato e coisa que se diz uma vez.
+
+        O PRECO EM DIGITOS SAIU e o `serve` ENTROU na mesma rodada
+        (25/08/2026). Os dois movimentos sao o mesmo movimento, e o motivo esta
+        em `_linha_do_produto`: entregar o dado na forma em que ele vai ser
+        DITO, e nao entregar duas formas do mesmo dado e torcer para o modelo
+        escolher a certa.
 
         A NEGATIVA E POR LOJA, e nao por restaurante (revisao
         20260820_0026). "Nenhum produto encontrado" foi escrito quando o
@@ -252,10 +310,6 @@ class VoiceSearchService:
 
         Continua sem id, sem imagem e sem grupo de opcao, e no maximo cinco:
         isso esta na tela do cliente, vindo do JSON completo da rota.
-
-        O preco em digitos sai de `format_money_br`, o MESMO do chat de texto.
-        Antes era um `:.2f` local, que produzia "R$ 23.90" com ponto enquanto
-        o texto dizia "R$ 23,90" com virgula.
 
         O PRECO FALADO ENTROU EM 25/08/2026, e o porque esta inteiro no
         cabecalho de `src/utils/money_por_extenso.py`: `R$ 34,40` saiu como
@@ -285,6 +339,17 @@ class VoiceSearchService:
         campo e texto livre do lojista: ha descricao de uma linha e ha
         paragrafo inteiro, e cinco paragrafos por busca sao dezenas de tokens
         cobrados em toda chamada para o modelo ler uma vez.
+
+        E O `serve` VIROU CAMPO PROPRIO em 25/08/2026, o que parece redundante
+        com a descricao e nao e. A descricao resolveu o caso por acidente:
+        funcionava enquanto o lojista tivesse escrito "Serve 2 pessoas" no
+        texto livre. Quem nao escreveu continuava sem resposta, e o modelo nao
+        tinha como distinguir "serve uma pessoa" de "ninguem preencheu" — que
+        e a distincao que decide entre responder e dizer que nao sabe.
+
+        Enquanto a coluna estiver vazia no cadastro, este campo vem "-" e o
+        assistente responde pela descricao, exatamente como antes. A migracao
+        nao faz backfill de proposito (revisao 20260825_0039).
         """
         if not produtos:
             return "Nenhum produto encontrado nesta loja."
@@ -309,16 +374,48 @@ def _ordenados_por_preco(produtos: list, crescente: bool) -> list:
 
 
 def _linha_do_produto(produto) -> str:
-    """`nome | preco | preco falado | descricao`, com "-" no que faltar."""
+    """`nome | preco falado | descricao | serve`, com "-" no que faltar.
+
+    O CAMPO EM DIGITOS SAIU (25/08/2026), e a razao e que ele so servia de
+    tentacao. O modelo nao pode fala-lo (o prompt proibe), nao pode somar e nao
+    pode arredondar; a tela do cliente ja mostra o valor ao lado do produto. O
+    que ele fazia era oferecer uma segunda forma do mesmo numero ao lado da
+    forma pronta para falar — e foi de uma troca entre as duas que saiu
+    "quarenta e quatro e quarenta" para um produto de R$ 34,40.
+
+    E o `serve` entra ANEXADO NO FIM, e nao ao lado da descricao onde ficaria
+    mais bonito. Campo novo no meio renumera todos os outros, e os ordinais
+    ("o terceiro campo e o preco falado") estao escritos em dez pontos do
+    `voice_prompt.py`. Anexar mantem 1..3 estaveis; inserir custa uma varredura
+    inteira do prompt a cada campo novo, e uma contradicao silenciosa em cada
+    bullet que a varredura esquecer.
+    """
     falado = preco_por_extenso(produto.price)
     return " | ".join(
         (
             produto.name,
-            format_money_br(produto.price) if falado else _VAZIO,
             falado or _VAZIO,
             _descricao_curta(produto.description),
+            _serve_quantas_pessoas(produto),
         )
     )
+
+
+def _serve_quantas_pessoas(produto) -> str:
+    """`serve N pessoas`, ou "-" quando o lojista nao disse.
+
+    "-" e o valor NULO da coluna, e o prompt le os dois como a mesma coisa: nao
+    sei. Escrever "serve 1 pessoa" no lugar do nulo seria o backend inventando
+    o fato que a coluna existe para parar de inventar (revisao 20260825_0039).
+
+    Vem escrito por extenso, e nao como numero solto, pelo mesmo motivo do
+    preco falado: o campo e para ser DITO, e "2" obriga o modelo a decidir
+    entre "dois" e "duas". Uma decisao a menos e um erro a menos.
+    """
+    quantas = produto.serves_people
+    if not quantas:
+        return _VAZIO
+    return "serve 1 pessoa" if quantas == 1 else f"serve {quantas} pessoas"
 
 
 def _descricao_curta(descricao: str | None) -> str:

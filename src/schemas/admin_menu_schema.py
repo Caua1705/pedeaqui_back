@@ -29,6 +29,11 @@ from src.utils.normalization import normalize_text
 # um nome e quebre o layout do cardapio publico.
 MAX_NAME_LENGTH = 120
 MAX_DESCRIPTION_LENGTH = 500
+# O teto de sanidade de `serves_people`. O CHECK do banco barra zero e negativo
+# (revisao 20260825_0039); o exagero fica aqui, onde a recusa vira mensagem de
+# tela em vez de erro de banco. Vinte cobre a travessa de churrascaria mais
+# generosa que existe e ainda pega o dedo escorregando no teclado.
+MAX_SERVES_PEOPLE = 20
 # Teto de itens em uma reordenacao. Uma tela de arrastar-e-soltar manda a
 # lista inteira; sem limite, o corpo poderia trazer dez mil ids.
 MAX_REORDER_ITEMS = 200
@@ -169,6 +174,10 @@ class AdminProductResponse(BaseResponse):
     name: str
     slug: str | None = None
     description: str | None = None
+    # Para quantas pessoas serve. NULO e "o lojista nao disse", e nao "serve
+    # para ninguem" — ver a revisao 20260825_0039. Campo novo com default nao
+    # quebra cliente antigo do contrato (armadilha 7).
+    serves_people: int | None = None
     price: float
     image_path: str | None = None
     image_url: str | None = None
@@ -241,6 +250,10 @@ class AdminProductCreate(BaseModel):
     category_id: UUID
     name: str = Field(min_length=1, max_length=MAX_NAME_LENGTH)
     description: str | None = Field(default=None, max_length=MAX_DESCRIPTION_LENGTH)
+    # Opcional, e o normal e vir vazio. Nao ha default 1: o assistente de voz
+    # le nulo como "nao sei" e responde que nao sabe, que e verdade — um
+    # default faria o cadastro afirmar um numero que ninguem digitou.
+    serves_people: int | None = Field(default=None, ge=1, le=MAX_SERVES_PEOPLE)
     # Decimal e nao float: preco entra na conta do pedido, e float acumula
     # erro de centavo (mesma regra do resto do projeto, ver utils/money).
     price: Decimal = Field(ge=0)
@@ -280,6 +293,7 @@ class AdminProductUpdate(BaseModel):
     category_id: UUID | None = None
     name: str | None = Field(default=None, min_length=1, max_length=MAX_NAME_LENGTH)
     description: str | None = Field(default=None, max_length=MAX_DESCRIPTION_LENGTH)
+    serves_people: int | None = Field(default=None, ge=1, le=MAX_SERVES_PEOPLE)
     price: Decimal | None = Field(default=None, ge=0)
     code: str | None = Field(default=None, max_length=60)
     catalog_key: str | None = Field(default=None, max_length=120)

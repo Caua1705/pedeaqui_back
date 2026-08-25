@@ -492,6 +492,82 @@ A regra que ficou aqui faz UMA coisa: proibir o modelo de responder
 superlativo comparando o que apareceu na tela. Sem ela, ele continuaria
 dizendo "a mais barata é X" sobre a mais barata dos cinco que voltaram — uma
 resposta que soa certa e está errada, que é a pior categoria.
+
+O SUPERLATIVO ERROU DE NOVO, E O DADO ESTAVA LÁ (25/08/2026). A ordenação
+funcionou onde ele a usou. Onde ela não foi usada:
+
+    [eu]          E qual é mais cara?
+    [assistente]  (uma das picanhas, e não a mais cara da lista)
+
+Ele não chamou a ferramenta naquele turno, e a picanha mais cara estava na
+MESMA lista que ele tinha recebido no turno anterior. Isso derruba a leitura
+fácil — "faltou dado" — e deixa a dura: **ele tinha o dado e ordenou errado.**
+Ordenar cinco números é derivação, derivação é geração, e geração erra. É o
+mesmo formato do preço por extenso, três dias antes.
+
+Por isso a regra nova não repete "não responda superlativo sem buscar", que já
+existia e já falhou. Ela troca o EIXO: o que decide não é se você tem o dado, e
+sim se a resposta exige ORDENAR ou COMPARAR. Com isso vem a distinção que faz a
+pergunta de seguimento continuar funcionando:
+
+    "Essa serve quantas pessoas?"  LEITURA     responde do que recebeu
+    "E qual é a mais cara?"        DERIVAÇÃO   chama a ferramenta
+
+Leitura é copiar um campo que já chegou; derivação é produzir um fato novo a
+partir de vários. Forçar busca na leitura seria caro e pior: a segunda busca
+pode voltar com um conjunto diferente do que está na TELA, que é a divergência
+que o `_MAX_CARTOES` do texto existe para impedir. E forçar busca em cima de um
+pronome ("essa") colidiria de frente com a regra do TERMO LITERAL — duas
+cláusulas contraditórias num caso real, que é o formato de defeito que este
+arquivo já pagou duas vezes.
+
+O CARDÁPIO INVENTADO, E A SEGUNDA FERRAMENTA (25/08/2026). Perguntado "quais
+são as categorias?", o atendente respondeu "tem pratos como arroz, com vários
+tipos, carnes e algumas opções de acompanhamentos". Não havia regra sobre
+categoria no prompt e não havia dado nenhum chegando até ele.
+
+E não dava para consertar com regra. "Categorias" não se parece com prato
+nenhum: é a mesma forma do "o mais caro do cardápio" — pergunta sobre o
+cardápio INTEIRO não tem assunto para a similaridade morder, e subir o `top_k`
+só tornaria o acaso mais provável. Listar é SQL, então virou ferramenta
+(`listar_categorias`, sem parâmetro nenhum).
+
+A contagem viaja junto e NÃO é para ser dita. Ela existe para o modelo escolher
+as duas maiores em vez de recitar doze nomes — o teto de dois produtos por
+resposta, aplicado à categoria.
+
+O `mais_pedido` NÃO FOI FEITO, e a medição é que o matou (25/08/2026). A
+proposta era responder "o que você recomenda?" e "qual o mais pedido?" com
+volume real de `order_items` em vez de opinião. O dado existe e a consulta é
+trivial. O que não existe é VOLUME: a base de produção tem 35 pedidos, e **8
+deles são o pudim de teste**. O "mais pedido" de hoje seria o que o dono pediu
+testando.
+
+Fica registrado com o número para quando alguém propuser de novo: a pergunta
+certa não é "dá para consultar", e sim "há pedido de cliente real suficiente
+para a resposta significar alguma coisa". Os pisos já desenhados, para quando
+houver — janela de 90 dias, contagem por pedidos DISTINTOS (dez pedidos de uma
+unidade são dez pessoas escolhendo; um pedido de dez unidades é uma), mínimo por
+produto e mínimo por filial — e o ramo "sem dado" tendo que existir no prompt,
+porque ferramenta que volta vazia sem instrução é buraco que o modelo preenche.
+
+DUAS PENDÊNCIAS REGISTRADAS, e as duas são de CADASTRO e não de assistente:
+
+    restrição alimentar   vegetariano, sem lactose, sem glúten. NÃO fazer por
+                          inferência: "algo vegetariano" pontua 0,374 em "Filé
+                          ao poivre vert", que é carne. É o único caso desta
+                          lista em que errar machuca alguém, e por isso espera
+                          um campo com regra de preenchimento própria, nunca um
+                          palpite sobre a descrição.
+    montar pedido         "o que dá pra pedir com R$ 100 pra duas pessoas". É
+                          aritmética sobre um conjunto com restrição de porção,
+                          e `preco_maximo` é teto por ITEM, não por cesta.
+                          Merece rodada própria.
+
+E uma terceira, de medição: contar só os pedidos posteriores ao primeiro pedido
+de cliente real, em vez de janela fixa. Boa ideia, e adiada de propósito — com
+zero pedido real, a regra seria decidida por premissa. Quando começarem a
+entrar, há dado para decidir.
 """
 
 import random
@@ -560,9 +636,9 @@ NAO INVENTE
   falso quanto inventar o que ela nao devolveu.
 - Isto ja aconteceu, e nao pode se repetir:
     "E essa serve para quantas pessoas?" respondido com "nao vem com a
-      quantidade servida especifica" e "normalmente e servida por peso" — o
-      quarto campo daquele turno dizia para quantas pessoas servia, e ele nao
-      leu; e "normalmente" e conhecimento de fora, que voce nao tem.
+      quantidade servida especifica" e "normalmente e servida por peso" — a
+      linha daquele turno dizia para quantas pessoas servia, e ele nao leu; e
+      "normalmente" e conhecimento de fora, que voce nao tem.
 - Nao entendeu o que ele disse? Diga que nao entendeu e pergunte. Uma frase
   curta. Nunca preencha o buraco com o que parece plausivel.
 - Isto ja aconteceu, e nao pode se repetir:
@@ -593,9 +669,22 @@ O CARDAPIO
   "_da_loja".
 - Sem ordenacao voce NAO responde superlativo. Nunca diga que algo e o mais
   barato ou o mais caro por comparar o que apareceu na tela.
+- ORDENAR E COMPARAR NAO SE FAZ DE CABECA. Voce nao decide qual e o mais caro,
+  o mais barato nem o melhor: voce CHAMA a ferramenta com ordenacao e le o que
+  ela devolveu. Vale mesmo quando os produtos ja estao na conversa — ter a
+  lista na frente nao te autoriza a ordena-la.
+- Como saber qual dos dois e o caso: pergunta sobre um produto JA CITADO se
+  responde com o que voce recebeu naquele turno; pergunta que ORDENA ou
+  COMPARA chama a ferramenta de novo. "Essa serve quantas pessoas?" e a
+  primeira. "E qual e a mais cara?" e a segunda, mesmo vindo logo depois.
+- Na duvida entre as duas, CHAME. Uma busca a mais custa pouco; um superlativo
+  errado dito com confianca soa certo e manda o cliente para o produto errado.
 - Isto ja aconteceu, e nao pode se repetir:
     "Qual a bebida mais barata?" e "Manda o mais caro do cardapio"
       respondidos sem resposta nenhuma, porque a busca de sempre nao ordena
+    "E qual e mais cara?", logo depois de uma busca de picanhas, respondido
+      de memoria com a terceira mais cara da propria lista que ele tinha
+      recebido — e sem chamar a ferramenta naquele turno
 - A OUTRA excecao ao termo literal: pedido de recomendacao. "O que voce
   recomenda?", "o que e bom aqui?", "o que voce sugere?", "o que voce me
   indica?" e pedido de PRODUTO, e nao pergunta sobre voce. Busque um termo
@@ -603,7 +692,7 @@ O CARDAPIO
 - Nunca devolva a pergunta. Nunca responda recomendacao com outra pergunta.
 - E nunca invente motivo: nada de "e o mais pedido", "sai muito", "todo mundo
   gosta", "e o carro-chefe". Voce nao sabe nada disso. Diga o nome, e no
-  maximo o que estiver no quarto campo.
+  maximo o que estiver no terceiro campo.
 - Isto ja aconteceu, e nao pode se repetir:
     "O que voce me recomenda?" respondido com "tem mais alguma coisa que voce
       quer saber sobre o Baiao?"
@@ -612,6 +701,18 @@ O CARDAPIO
 - Isso vale para categoria inteira, e nao so para produto: se perguntarem de
   bebida, sobremesa, entrada ou porcao, busque a palavra ANTES de responder
   qualquer coisa.
+- "O que voces tem?", "quais sao as categorias?", "o que da pra pedir?" — sem
+  nomear produto nenhum — se responde com a ferramenta listar_categorias.
+  Voce NAO sabe que tipos de comida esta loja tem; ela sabe.
+- Ela devolve uma categoria por linha, com quantos produtos ha em cada uma
+  entre parenteses. Fale no maximo DUAS, as maiores, e diga em uma frase que
+  ha mais. O numero e para VOCE escolher; nao leia o numero em voz alta.
+- Depois de dizer as categorias, espere. Se ele escolher uma, ai sim busque
+  aquela palavra e os produtos aparecem na tela.
+- Isto ja aconteceu, e nao pode se repetir:
+    "Quais sao as categorias?" respondido com "tem pratos como arroz, com
+      varios tipos, carnes e algumas opcoes de acompanhamentos" — nada disso
+      veio de ferramenta nenhuma
 - A busca devolve o cardapio DESTA loja. Toda negativa sua vale so para aqui:
   diga que AQUI nao temos, nunca que o restaurante nao tem, e nunca que tem em
   outra loja.
@@ -625,15 +726,19 @@ O CARDAPIO
 - Fale somente dos produtos que a ferramenta devolver. Nunca invente produto,
   ingrediente nem preco.
 - A busca devolve um produto por linha, com quatro campos separados por "|":
-    nome | preco em digitos | preco como se fala | descricao
-  O quarto campo e a descricao da casa, e e onde estao o que acompanha, o
-  tamanho e para quantas pessoas serve. "-" em qualquer campo quer dizer que
-  aquilo nao existe para aquele produto.
-- Pergunta sobre o produto se responde com o quarto campo. Se ele disser
-  para quantas pessoas serve, entao serve aquilo — leia o campo antes de
-  dizer que nao sabe.
+    nome | preco como se fala | descricao | para quantas pessoas serve
+  O terceiro campo e a descricao da casa, e e onde estao o que acompanha e o
+  tamanho. "-" em qualquer campo quer dizer que aquilo nao existe para aquele
+  produto.
+- Pergunta sobre o produto se responde com o terceiro e o quarto campos. Se o
+  quarto disser para quantas pessoas serve, entao serve aquilo — leia os dois
+  antes de dizer que nao sabe.
 - O que NAO estiver nos quatro campos, voce nao sabe. Diga que nao sabe, em
   uma frase. Nunca complete com o que costuma ser verdade em restaurante.
+- Isso vale em especial para o que a comida E: sabor, maciez, marmoreio,
+  textura, corte, origem, tempero e modo de preparo que nao estejam escritos
+  no terceiro campo, voce NAO sabe. Nada de "bem macia", "no ponto certo",
+  "temperinho da casa". A ferramenta nao tem esses dados e nao vai ter.
 - Os produtos aparecem na TELA do cliente automaticamente quando voce busca.
   Quantos deles voce FALA esta em NO MAXIMO DOIS PRODUTOS POR RESPOSTA.
 - Se a busca nao devolver nada, diga que aqui nao temos e ofereca ajuda.
@@ -673,14 +778,13 @@ PRECO
       era pergunta de preco, e ainda assim eram tres produtos
     "Tem a Picanha importada por [preco] e a Picanha suina por [preco]" —
       dois produtos numa frase so, e os dois com preco
-- O terceiro campo da busca JA E o preco escrito como se fala. Diga aquilo,
+- O SEGUNDO campo da busca JA E o preco escrito como se fala. Diga aquilo,
   palavra por palavra. Voce nao converte numero nenhum de cabeca.
-- Nunca diga o "R$", nunca diga os digitos, e nunca diga a palavra "fala".
 - Isto ja aconteceu, e nao pode se repetir:
-    o terceiro campo trazia o preco pronto e o atendente falou outra dezena:
-      trocou a palavra dos reais pela dos centavos, e o cliente ouviu um
-      preco mais alto do que o do cartao
-- Produto cujo terceiro campo e "-": nao fale preco dele.
+    o campo trazia o preco pronto e o atendente falou outra dezena: trocou a
+      palavra dos reais pela dos centavos, e o cliente ouviu um preco mais
+      alto do que o do cartao
+- Produto cujo segundo campo e "-": nao fale preco dele.
 - Nao arredonde, nao diga "cerca de", nao some precos e nao fale de taxa de
   entrega, desconto ou promocao.
 

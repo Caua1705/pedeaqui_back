@@ -110,6 +110,20 @@ class BuscaRequest(BaseModel):
         raise ValueError(f"ordenacao desconhecida; use uma de: {', '.join(ORDENACOES)}")
 
 
+class CategoriasRequest(BaseModel):
+    """Restaurante e loja, e mais nada.
+
+    Sem parametro do modelo de proposito: nao ha o que ele possa preencher
+    errado. A lista de categorias de uma filial e a mesma para qualquer forma
+    de perguntar, e um campo aqui — um filtro, um termo — seria mais uma chance
+    de ele acertar a pergunta e errar o argumento, que e o modo de falha que o
+    enum de `ordenar` foi desenhado para nao ter.
+    """
+
+    restaurant_id: uuid.UUID
+    branch_id: uuid.UUID
+
+
 @router.post("/session")
 @limiter.limit(VOICE_SESSION_RATE_LIMIT)
 def criar_sessao(
@@ -262,3 +276,22 @@ def buscar(payload: BuscaRequest, db: Session = Depends(get_db)) -> dict:
         "produtos": produtos,
         "resumo": service.resumo_para_o_modelo(produtos),
     }
+
+
+@router.post("/categories")
+def listar_categorias(payload: CategoriasRequest, db: Session = Depends(get_db)) -> dict:
+    """A segunda ferramenta. O que a loja tem, por categoria, sem busca.
+
+    Existe porque "quais sao as categorias?" e "o que voces tem?" nao tem
+    resposta na busca por significado: nenhuma das duas se parece com prato
+    nenhum. Em 25/08/2026 a primeira foi respondida com um cardapio inventado.
+
+    Devolve so `resumo`, e NAO manda nada para a tela. E a diferenca desta rota
+    para a `/search`: categoria nao e produto, nao tem preco nem imagem, e um
+    cartao de "Carnes" nao e uma coisa que o cliente possa tocar para adicionar.
+    O fluxo desenhado e categoria primeiro (falada), produto depois (na tela,
+    pela busca que vem em seguida).
+    """
+    service = VoiceSearchService(db)
+    categorias = service.listar_categorias(payload.restaurant_id, payload.branch_id)
+    return {"resumo": service.resumo_das_categorias(categorias)}

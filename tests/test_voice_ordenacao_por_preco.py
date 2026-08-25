@@ -72,7 +72,7 @@ def test_produto_sem_preco_so_some_no_caminho_ordenado():
     from src.ai.voice.search_service import VoiceSearchService
 
     resumo = VoiceSearchService.resumo_para_o_modelo(
-        [SimpleNamespace(name="Brinde", price=None, description=None)]
+        [SimpleNamespace(name="Brinde", price=None, description=None, serves_people=None)]
     )
 
     assert "Brinde" in resumo

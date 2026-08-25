@@ -319,7 +319,56 @@ def test_o_prompt_explica_os_quatro_campos_da_busca():
     """A explicacao mora AQUI, e nao no resultado da ferramenta: o prompt e
     cacheado a partir do turno 2, e o resultado e cobrado inteiro em toda
     busca. Ver `test_o_formato_nao_e_explicado_dentro_do_resultado`."""
-    assert "nome | preco em digitos | preco como se fala | descricao" in _INSTRUCOES
+    assert "nome | preco como se fala | descricao | para quantas pessoas serve" in _INSTRUCOES
+
+    # O campo em digitos SAIU em 25/08/2026, e o prompt nao pode continuar
+    # prometendo um campo que a busca nao manda mais: ordinal errado aqui e
+    # contradicao silenciosa, que e o defeito mais caro deste arquivo.
+    assert "preco em digitos" not in _INSTRUCOES
+
+
+def test_ordenar_e_comparar_exigem_a_ferramenta_mesmo_com_o_dado_na_conversa():
+    """O CASO (25/08/2026): "E qual e mais cara?", logo depois de uma busca de
+    picanhas, respondido de memoria — e errado, com a mais cara na MESMA lista
+    que ele tinha recebido.
+
+    A regra velha ("sem ordenacao voce nao responde superlativo") ja existia e
+    ja falhou, porque ela se lia como "quando faltar dado". O eixo novo nao e
+    ter o dado, e sim a resposta exigir ORDENAR ou COMPARAR."""
+    assert "ORDENAR E COMPARAR NAO SE FAZ DE CABECA" in _INSTRUCOES
+    assert "ter a lista na frente nao te autoriza a ordena-la" in _CORRIDO
+
+
+def test_a_pergunta_de_seguimento_continua_respondendo_do_contexto():
+    """A metade que impede a regra acima de virar "busque sempre".
+
+    Forcar busca na LEITURA colidiria com o TERMO LITERAL — o termo literal de
+    "essa serve quantas pessoas?" e um pronome — e a segunda busca poderia
+    voltar com um conjunto diferente do que esta na tela."""
+    assert "pergunta sobre um produto JA CITADO se responde" in _CORRIDO
+    assert "Na duvida entre as duas, CHAME" in _CORRIDO
+
+
+def test_o_cardapio_inteiro_se_responde_com_listar_categorias():
+    """"Quais sao as categorias?" respondido com um cardapio inventado
+    (25/08/2026). Nao ha regra que conserte isso: a busca por significado nao
+    tem assunto para morder numa pergunta sobre o cardapio inteiro."""
+    assert "listar_categorias" in _INSTRUCOES
+    assert "Voce NAO sabe que tipos de comida esta loja tem" in _CORRIDO
+
+    # A contagem e para ELE escolher, e nao para ser dita.
+    assert "nao leia o numero em voz alta" in _CORRIDO
+
+
+def test_o_que_a_comida_E_nao_se_inventa():
+    """A ferramenta nao manda sabor, maciez nem origem, e nao vai mandar. Sem
+    esta regra o buraco e preenchido com o que costuma ser verdade num
+    restaurante — que e a NAO INVENTE, na forma mais dificil de flagrar,
+    porque "bem macia" nao soa como um fato ate alguem conferir."""
+    for palavra in ("sabor", "maciez", "marmoreio", "textura", "origem", "tempero"):
+        assert palavra in _CORRIDO
+
+    assert "temperinho da casa" in _CORRIDO
 
 
 def test_o_prompt_manda_copiar_o_preco_falado_em_vez_de_converter():

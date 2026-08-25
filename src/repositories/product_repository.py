@@ -14,7 +14,7 @@ com produto (e preco) da filial A.
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from src.models.category_model import Category
@@ -168,3 +168,53 @@ class ProductRepository:
             .limit(limite)
         )
         return list(self.db.scalars(stmt).all())
+
+    def list_active_categories_with_counts(
+        self,
+        branch_id: uuid.UUID,
+        limite: int,
+    ) -> list[tuple[str, int]]:
+        """As categorias vendaveis DAQUELA loja, com quantos produtos cada uma tem.
+
+        O CASO QUE PEDIU ISTO (25/08/2026). Perguntado "quais sao as
+        categorias?", o atendente de voz respondeu "tem pratos como arroz, com
+        varios tipos, carnes e algumas opcoes de acompanhamentos". Nao havia
+        regra sobre categoria no prompt e nao havia dado nenhum chegando ate
+        ele: ele descreveu um cardapio de churrascaria plausivel, que e o que
+        um modelo faz quando nao tem o que ler.
+
+        E nao daria para consertar com busca vetorial. "O que voces tem" nao se
+        parece com prato nenhum — e a mesma forma do "o mais caro do cardapio"
+        de `list_active_by_price`: pergunta sobre o cardapio INTEIRO nao tem
+        assunto para a similaridade morder. Listar e SQL.
+
+        CATEGORIA VAZIA NAO ENTRA, e por isso o INNER JOIN em vez de LEFT.
+        "Sobremesas" com zero produto vendavel e uma promessa que a busca
+        seguinte nao cumpre: o cliente ouve a categoria, pede, e leva um "aqui
+        nao temos". Contar so o vendavel (`is_active` e `is_available` do
+        produto, `is_active` da categoria) faz a lista concordar com o que a
+        busca acha depois.
+
+        A CONTAGEM VIAJA JUNTO porque ela e o que transforma a lista numa
+        resposta falavel. Com o numero ao lado o atendente diz "tem carnes, com
+        oito opcoes" em vez de recitar doze nomes — que e justamente o teto de
+        dois produtos por resposta aplicado a categoria.
+
+        `limite` corta em `_TETO_DE_CATEGORIAS` (12). Cardapio com mais que
+        isso existe, e ai a lista sai truncada de proposito: doze nomes ja sao
+        mais do que cabe numa frase falada, e quem precisa do resto pergunta.
+        """
+        stmt = (
+            select(Category.name, func.count(Product.id))
+            .join(Product, Product.category_id == Category.id)
+            .where(
+                Category.branch_id == branch_id,
+                Category.is_active.is_(True),
+                Product.is_active.is_(True),
+                Product.is_available.is_(True),
+            )
+            .group_by(Category.id, Category.name, Category.sort_order)
+            .order_by(Category.sort_order.asc(), Category.name.asc())
+            .limit(limite)
+        )
+        return [(nome, quantos) for nome, quantos in self.db.execute(stmt).all()]

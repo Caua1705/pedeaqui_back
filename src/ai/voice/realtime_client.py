@@ -118,6 +118,40 @@ SEARCH_TOOL = {
 }
 
 
+# A SEGUNDA FERRAMENTA (25/08/2026), e ela existe pelo mesmo motivo estrutural
+# que `ordenar`: ha pergunta de cardapio que a busca por SIGNIFICADO nao alcanca.
+#
+#     "manda o mais caro"      -> ordenacao, e nao similaridade
+#     "quais sao as categorias?" -> listagem, e nao similaridade
+#
+# "Categorias" nao se parece com prato nenhum, entao subir o `top_k` so tornaria
+# o acaso mais provavel. Perguntado isso numa sessao real, o atendente respondeu
+# "tem pratos como arroz, com varios tipos, carnes e algumas opcoes de
+# acompanhamentos" — um cardapio de churrascaria plausivel e inventado, que e o
+# que um modelo produz quando nao ha o que ler.
+#
+# SEM PARAMETRO NENHUM, e isso e decisao. Um filtro ou um termo aqui seria mais
+# uma chance de ele acertar a pergunta e errar o argumento — o modo de falha que
+# o enum de `ordenar` foi desenhado para nao ter. A lista de categorias de uma
+# loja e a mesma para qualquer forma de perguntar.
+CATEGORIES_TOOL = {
+    "type": "function",
+    "name": "listar_categorias",
+    "description": (
+        "Lista os tipos de comida que esta loja tem, com quantos produtos ha "
+        "em cada um. Use quando o cliente perguntar o que a loja tem, quais "
+        "sao as categorias, ou o que da para pedir, SEM nomear um produto. "
+        "Nao mostra nada na tela do cliente."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+}
+
+
 # A ENTRADA DE AUDIO, e por que ela deixou de ser o padrao (24/08/2026). Sem
 # esta secao a sessao roda no `server_vad` de fabrica — limiar 0,5 e nenhuma
 # reducao de ruido — e a bancada mostrou, num ambiente real, o que isso
@@ -218,7 +252,7 @@ def issue_client_secret(
                 "input": AUDIO_INPUT,
                 "output": {"voice": voz_da_sessao},
             },
-            "tools": [SEARCH_TOOL],
+            "tools": [SEARCH_TOOL, CATEGORIES_TOOL],
             "tool_choice": "auto",
         }
     }

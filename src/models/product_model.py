@@ -53,6 +53,13 @@ class Product(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     slug: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
+    # Para quantas pessoas o produto serve (revisao 20260825_0039).
+    #
+    # NULO quer dizer "o lojista nao disse", e nunca "serve para ninguem" — a
+    # diferenca e o que faz o assistente de voz responder ou dizer que nao
+    # sabe. Nao ha default 1 de proposito: seria o banco inventando um fato
+    # sobre todo produto ja cadastrado.
+    serves_people: Mapped[int | None] = mapped_column(Integer)
     price: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
     image_path: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool | None] = mapped_column(Boolean, default=True)

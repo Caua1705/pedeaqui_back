@@ -2575,6 +2575,19 @@
             ],
             "title": "Price"
           },
+          "serves_people": {
+            "anyOf": [
+              {
+                "maximum": 20.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Serves People"
+          },
           "sort_order": {
             "default": 0,
             "minimum": 0.0,
@@ -2713,6 +2726,17 @@
               }
             ],
             "title": "Printing Sector Id"
+          },
+          "serves_people": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Serves People"
           },
           "slug": {
             "anyOf": [
@@ -2901,6 +2925,17 @@
             ],
             "title": "Printing Sector Id"
           },
+          "serves_people": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Serves People"
+          },
           "slug": {
             "anyOf": [
               {
@@ -3041,6 +3076,19 @@
               }
             ],
             "title": "Price"
+          },
+          "serves_people": {
+            "anyOf": [
+              {
+                "maximum": 20.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Serves People"
           },
           "sort_order": {
             "anyOf": [

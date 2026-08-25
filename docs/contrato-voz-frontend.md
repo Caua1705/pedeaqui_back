@@ -65,9 +65,12 @@ a UI precisar dele.
       conversation.item.create (role system, com a saudacao) + response.create
       → o atendente cumprimenta o cliente pelo nome, sozinho (§6.4)
 
-6. durante a conversa, a cada tool call:
-   POST  /voice/search                        (nosso backend)
+6. durante a conversa, a cada tool call — DESPACHE PELO `name`:
+   POST  /voice/search       (buscar_no_cardapio)   (nosso backend)
       → desenha os cartões com `produtos`
+      → devolve `resumo` à OpenAI pelo data channel
+   POST  /voice/categories   (listar_categorias)    (nosso backend)
+      → NÃO mexe nos cartões
       → devolve `resumo` à OpenAI pelo data channel
 
 7. ao encerrar (por qualquer motivo):
@@ -442,31 +445,45 @@ por linha**, com quatro campos separados por `|`:
 
 ```
 Produtos encontrados nesta loja:
-Baião de dois | R$ 34,40 | trinta e quatro e quarenta | Baião e batata frita. Serve 2 pessoas.
-Picanha suína | R$ 24,66 | vinte e quatro e sessenta e seis | Na brasa, com vinagrete.
+Baião de dois | trinta e quatro e quarenta | Baião e batata frita. | serve 2 pessoas
+Picanha suína | vinte e quatro e sessenta e seis | Na brasa, com vinagrete. | -
 Brinde | - | - | -
 ```
 
 | Campo | O que é |
 |---|---|
 | 1 | nome do produto |
-| 2 | preço em dígitos, formato brasileiro (vírgula decimal) |
-| 3 | **o mesmo preço escrito como se fala** |
-| 4 | a descrição do lojista, cortada em 120 caracteres |
+| 2 | **o preço escrito como se fala** |
+| 3 | a descrição do lojista, cortada em 120 caracteres |
+| 4 | para quantas pessoas serve, já por extenso (`serve 2 pessoas`) |
 
 `-` em qualquer campo significa que aquilo não existe para aquele produto.
 Máximo de cinco linhas.
 
-**O terceiro campo entrou em 25/08/2026, e o motivo importa.** `R$ 34,40` foi
+**O preço falado entrou em 25/08/2026, e o motivo importa.** `R$ 34,40` foi
 falado como *"quarenta e quatro e quarenta"* numa sessão real: o modelo
 traduzia o número para palavras de cabeça, e tradução é geração, e geração
 erra. Com a forma falada pronta, ele copia. O front **não** deve converter
 preço nenhum — se precisar da forma falada, ela já está aqui.
 
-**O quarto campo entrou na mesma rodada**, porque o modelo respondeu "não vem
-com a quantidade servida específica" a uma pergunta cuja resposta estava na
-descrição — que até então só viajava em `produtos`, para a tela. Ele não estava
-negando um dado: ele não tinha o dado.
+**O campo em dígitos SAIU em 25/08/2026** (era o campo 2; os ordinais mudaram).
+Ele só servia de tentação: o modelo não pode falá-lo, não pode somar e não pode
+arredondar, e a tela já mostra o valor vindo de `produtos`. Oferecer duas formas
+do mesmo número ao lado da forma pronta foi o que produziu a troca acima. **Se o
+front usava o campo 2 para alguma coisa, use `produtos` — é de lá que o cartão
+sempre veio.**
+
+**A descrição entrou na mesma rodada**, porque o modelo respondeu "não vem com a
+quantidade servida específica" a uma pergunta cuja resposta estava nela — que
+até então só viajava em `produtos`, para a tela. Ele não estava negando um dado:
+ele não tinha o dado.
+
+**E o campo 4 é a segunda metade desse mesmo conserto.** A descrição resolvia o
+caso enquanto o lojista tivesse escrito "Serve 2 pessoas" no texto livre; quem
+não escreveu continuava sem resposta, e o modelo não tinha como distinguir
+"serve uma pessoa" de "ninguém preencheu". Agora é coluna (`serves_people`,
+revisão `20260825_0039`), e **vem `-` enquanto o cadastro estiver vazio** — não
+houve backfill, de propósito.
 
 **A separação entre `produtos` e `resumo` é intencional e importante:** o
 modelo só vê `resumo`, os cartões só usam `produtos`, e os dois vêm da mesma
@@ -484,6 +501,66 @@ partir do que o modelo falou.
 
 **Não há 401, 403 nem 429 aqui.** Esta rota não confere login, não confere se
 a voz está ligada no restaurante e não tem rate limit próprio.
+
+---
+
+### 4.5 `POST /voice/categories` — a ferramenta de categorias
+
+**Não exige autenticação**, pelas mesmas razões da §4.4.
+
+**Entrou em 25/08/2026.** A sessão passou a declarar **duas** ferramentas, e o
+front tem de despachar pelo `name` da tool call. Uma chamada de
+`listar_categorias` que caia no tratador da busca volta em silêncio — e o modelo
+fica esperando um resultado que nunca chega, com o cliente ouvindo o silêncio.
+
+Existe porque "quais são as categorias?" e "o que vocês têm?" não têm resposta
+na busca por significado: nenhuma das duas se parece com prato nenhum. É a
+mesma forma do `ordenar` — pergunta sobre o cardápio **inteiro** não tem assunto
+para a similaridade morder. Perguntado isso numa sessão real, o atendente
+respondeu com um cardápio de churrascaria plausível e inventado.
+
+**Requisição**
+
+```json
+{
+  "restaurant_id": "0f9c8d2e-...",
+  "branch_id": "6a1f...-..."
+}
+```
+
+Restaurante e loja, e mais nada. A tool call **não tem argumento nenhum** — não
+há o que o modelo possa preencher errado.
+
+**Resposta 200**
+
+```json
+{
+  "resumo": "Categorias desta loja:
+Carnes (8)
+Bebidas (3)"
+}
+```
+
+| Campo | Tipo | O que é |
+|---|---|---|
+| `resumo` | string | o texto que volta **para o modelo**. Nunca mostre na tela |
+
+**Não há `produtos`, e isso é decisão.** Categoria não é produto: não tem preço,
+não tem imagem, e um cartão de "Carnes" não é uma coisa em que o cliente possa
+tocar para adicionar. O fluxo desenhado é **categoria primeiro (falada), produto
+depois (na tela, pela busca que vem em seguida)** — então esta rota não mexe nos
+cartões, e o front não deve limpar a tela ao chamá-la.
+
+O número entre parênteses é a contagem de produtos vendáveis da categoria. Ele
+existe para o **modelo** escolher as duas maiores em vez de recitar doze nomes;
+o prompt manda não lê-lo em voz alta. No máximo **12** categorias.
+
+Loja sem nenhuma categoria com produto disponível devolve exatamente
+`"Nenhuma categoria com produto disponivel nesta loja."` — a negativa é da
+**filial**, pelo mesmo motivo da §4.4.
+
+**Erros**: os mesmos 404 da §4.4 (restaurante e filial), e 422 para UUID
+inválido ou ausente. Sem 401, 403 ou 429.
 
 Se a busca falhar por qualquer motivo, **não deixe o modelo esperando calado**:
 devolva a ele um `function_call_output` com um texto curto de falha (ex.:
@@ -699,11 +776,27 @@ como atendido de forma síncrona, antes de qualquer `await`.
 `try`:
 
 ```js
-{ "consulta": "sobremesa", "preco_maximo": 50 }
+{ "consulta": "sobremesa", "preco_maximo": 50, "ordenar": "mais_barato_da_loja" }
 ```
 
-`preco_maximo` pode não vir. `name` sempre será `buscar_no_cardapio` — é a
-única ferramenta declarada.
+`preco_maximo` e `ordenar` podem não vir. **`name` não é mais sempre
+`buscar_no_cardapio`**: desde 25/08/2026 há duas ferramentas, e o despacho é
+pelo `name` (§4.5).
+
+**REPASSE TODOS OS ARGUMENTOS, e este é um caso real (25/08/2026).** O backend
+ganhou o `ordenar`, o modelo passou a preenchê-lo, e a bancada continuou
+montando o corpo do `POST /voice/search` só com `consulta` e `preco_maximo`. O
+campo morria no front.
+
+O que fez isso durar foi o formato do log: a bancada imprime os **argumentos do
+modelo**, então a linha dizia `{"ordenar":"mais_barato_da_loja"}` e a
+funcionalidade parecia estar funcionando. A busca rodava sem ordem nenhuma, e o
+produto que voltava era o mais **parecido**, não o mais barato — uma resposta
+que soa certa.
+
+É o pior formato de defeito deste projeto: a feature aparece funcionando no log
+de quem a testa. Se você logar a tool call, **logue o corpo que você enviou**, e
+não o que o modelo pediu.
 
 ### 7.3 Como devolver o resultado
 

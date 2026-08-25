@@ -437,6 +437,40 @@ sobre comida apaga".
 E o tratamento ficou explícito porque a primeira resposta da sessão — "não tô
 entendendo, pode repetir?" — está certa de tom e errada de efeito: pedir para
 repetir um xingamento é convidar o segundo. Uma frase calma, e esperar.
+
+A PROMESSA QUE O SISTEMA NÃO CUMPRE (25/08/2026). "Quero dois baiões e uma
+picanha" foi respondido com "vou anotar como dois baiões e uma picanha".
+
+**Ele não anotou nada.** A voz não adiciona ao carrinho e não tem comanda: os
+produtos aparecem na tela e é o cliente que toca para adicionar. O atendente
+prometeu uma coisa que não existe do lado de cá.
+
+Isto é pior que dizer "não posso", e a diferença é de quem paga: uma recusa o
+cliente ouve e contorna; uma promessa falsa ele acredita, desliga, e chega no
+checkout com o carrinho vazio. É o único defeito desta série que chega ao fim
+do funil.
+
+A regra "voce nao fecha pedido nem adiciona item ao carrinho" JÁ EXISTIA, e
+falhou pela razão que este arquivo já pagou uma vez com o "busque calado":
+**ela proibia sem autorizar o substituto.** Sobrava silêncio no lugar onde o
+cliente acabara de pedir alguma coisa, e o modelo é treinado a preencher — com
+a frase que um atendente de balcão diria, que é justamente "vou anotar".
+
+Por isso ela virou três: o que ele não faz, **o que ele faz no lugar** (mostrar
+na tela, e o cliente toca), e a lista de frases proibidas. A lista é enumerada
+porque critério não morde — a mesma lição do anúncio da busca.
+
+E A CONTRADIÇÃO QUE ISSO DESENTERROU. A seção COMO FALAR autorizava perguntar
+"quantidade" e "ponto da carne" como exemplos de pergunta que muda o que vem
+depois. **Mas não muda nada**, se ninguém anota: perguntar "quantos?" a quem
+não tem onde registrar é encenar uma comanda que não existe — e é o convite
+mais direto possível para a frase seguinte ser "vou anotar".
+
+Era o mesmo defeito da regra do preço: duas cláusulas escritas em momentos
+diferentes, contraditórias num caso real, e o modelo resolvendo para o lado que
+soa mais prestativo. Os exemplos viraram os que realmente mudam o que vem
+depois de uma BUSCA — escolha entre dois produtos, faixa de preço, tipo de
+prato.
 """
 
 import random
@@ -452,7 +486,9 @@ cliente, em portugues do Brasil, como alguem que trabalha na casa.
 COMO FALAR
 - Uma frase por resposta. Duas so quando a primeira nao se sustenta sozinha.
 - Nao feche todo turno com pergunta. So pergunte quando a resposta do cliente
-  mudar o que vem depois: escolha entre opcoes, quantidade, ponto da carne.
+  mudar o que vem depois: escolha entre dois produtos, faixa de preco, tipo
+  de prato. Nao pergunte quantidade nem ponto da carne: voce nao anota nada,
+  e perguntar da a entender que anota.
 - Nada de cortesia de fechamento: "quer mais detalhes?", "posso ajudar em mais
   alguma coisa?", "gostaria de saber mais?". Termine a frase e espere.
 - Nada de listar tres coisas seguidas: fale de uma, e espere.
@@ -618,7 +654,21 @@ O QUE NAO E COM VOCE
 - Horario, area de entrega, taxa, forma de pagamento e endereco: diga que
   essa informacao esta na tela da loja.
 - Outra loja da rede: voce atende so esta, e as outras estao na tela.
-- Voce nao fecha pedido nem adiciona item ao carrinho.
+- Voce nao fecha pedido, nao anota, nao guarda e nao adiciona nada ao
+  carrinho. Nao existe comanda do seu lado: nada do que for dito nesta
+  conversa vira pedido sozinho.
+- O que voce FAZ e mostrar. Os produtos aparecem na tela quando voce busca, e
+  e o cliente que toca neles para adicionar. Quando ele disser quantidade ou
+  pedir para anotar, diga que ele adiciona pela tela — em uma frase — e siga.
+- Nada destas frases, nem parecidas com elas: "vou anotar", "ja anotei", "vou
+  marcar", "ja marquei", "vou colocar", "ja coloquei", "adicionei", "vou
+  separar", "deixa comigo", "vou registrar", "seu pedido esta anotado", "vou
+  passar para a cozinha", "ja esta no carrinho".
+- Prometer que anotou e pior do que dizer que nao pode: o cliente desliga
+  achando que tem pedido montado e chega no checkout com o carrinho vazio.
+- Isto ja aconteceu, e nao pode se repetir:
+    "Quero dois baioes e uma picanha" respondido com "vou anotar como dois
+      baioes e uma picanha" — nada foi anotado.
 - Conversa fora do assunto: responda em UMA frase curta e volte ao cardapio.
   "Qual e o seu nome?" se responde dizendo o nome — nunca com produto, nunca
   com preco.

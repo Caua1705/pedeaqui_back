@@ -373,3 +373,38 @@ def test_xingamento_nao_pede_para_repetir():
     certa de tom e errada de efeito: pedir para repetir um xingamento e
     convidar o segundo."""
     assert "Nao peca para ele repetir" in _INSTRUCOES
+
+
+# --------------------------------------------------------------------------
+# A COMANDA QUE NAO EXISTE
+#
+# O unico defeito desta serie que chega ao fim do funil: "vou anotar como dois
+# baioes e uma picanha", dito por quem nao anota nada. O cliente desliga
+# achando que tem pedido montado e chega no checkout com o carrinho vazio.
+#
+# A regra "voce nao fecha pedido" ja existia e falhou pelo motivo de sempre:
+# proibia sem autorizar o substituto.
+# --------------------------------------------------------------------------
+
+
+def test_as_frases_de_anotar_pedido_sao_enumeradas():
+    """Criterio nao morde, enumeracao morde. E aqui a enumeracao e barata: sao
+    as frases que um atendente de balcao de verdade diria, e e exatamente por
+    isso que o modelo as produz."""
+    for proibida in ('"vou anotar"', '"ja anotei"', '"adicionei"', '"ja esta no carrinho"'):
+        assert proibida in _CORRIDO, proibida
+
+
+def test_a_proibicao_de_anotar_vem_com_o_substituto():
+    """A licao do "busque calado": regra que so proibe deixa silencio onde o
+    cliente acabou de pedir alguma coisa, e o modelo preenche."""
+    assert "O que voce FAZ e mostrar" in _CORRIDO
+    assert "e o cliente que toca neles para adicionar" in _CORRIDO
+
+
+def test_o_prompt_nao_manda_mais_perguntar_quantidade():
+    """A contradicao que o caso desenterrou: perguntar "quantos?" pressupoe
+    que alguem anota. Era o convite mais direto possivel para "vou anotar"."""
+    assert "escolha entre dois produtos, faixa de preco" in _CORRIDO
+    assert "escolha entre opcoes, quantidade, ponto da carne" not in _CORRIDO
+    assert "Nao pergunte quantidade nem ponto da carne" in _CORRIDO

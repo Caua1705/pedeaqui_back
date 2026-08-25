@@ -78,6 +78,39 @@ SEARCH_TOOL = {
                     "nao preencher."
                 ),
             },
+            # A ORDENACAO, e ela e a resposta ao superlativo (25/08/2026).
+            # "Qual a bebida mais barata?" e "manda o mais caro do cardapio"
+            # ficaram sem resposta numa sessao real, e nao por defeito de
+            # prompt: a busca e por SIGNIFICADO, e os cinco mais parecidos com
+            # "bebida" nao sao as cinco mais baratas.
+            #
+            # Fora de `required` pelo mesmo motivo do `preco_maximo`:
+            # obrigatorio, o modelo teria de escolher uma ordem toda vez, e o
+            # cardapio inteiro passaria a sair ordenado por preco sem ninguem
+            # ter pedido.
+            #
+            # `_da_busca` contra `_da_loja` e a distincao que o modelo precisa
+            # fazer, e por isso ela esta no NOME de cada valor em vez de num
+            # segundo campo: "a bebida mais barata" tem assunto, "o mais caro
+            # do cardapio" nao tem — e no segundo caso a busca por significado
+            # nao ajuda, porque "cardapio" nao se parece com nada.
+            "ordenar": {
+                "type": "string",
+                "enum": [
+                    "mais_barato_da_busca",
+                    "mais_caro_da_busca",
+                    "mais_barato_da_loja",
+                    "mais_caro_da_loja",
+                ],
+                "description": (
+                    "SO quando o cliente pedir o mais barato ou o mais caro. "
+                    "Use '_da_busca' quando ele disser DE QUE tipo ('a bebida "
+                    "mais barata' -> consulta 'bebida', ordenar "
+                    "'mais_barato_da_busca'). Use '_da_loja' quando for o "
+                    "cardapio inteiro ('manda o mais caro' -> "
+                    "'mais_caro_da_loja'), e ai a consulta e ignorada."
+                ),
+            },
         },
         "required": ["consulta"],
         "additionalProperties": False,

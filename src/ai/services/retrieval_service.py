@@ -16,6 +16,14 @@ from src.utils.money import format_money_br
 logger = logging.getLogger("uvicorn.error")
 
 
+# Quantos produtos a busca por significado devolve por padrao. UMA definicao,
+# porque `retrieve_products` a usa duas vezes — como default do parametro e
+# como o valor que NAO entra na chave do cache. Dois literais `5` soltos aqui
+# seriam a chance de mudar um e esquecer o outro, e o sintoma disso e cache
+# servindo conjunto de tamanho errado, que nao levanta erro nenhum.
+TOP_K_PADRAO = 5
+
+
 class RetrievalService:
     """Retrieve restaurant products that are relevant to a user question.
 
@@ -39,7 +47,7 @@ class RetrievalService:
         restaurant_id: uuid.UUID,
         branch_id: uuid.UUID,
         question: str,
-        top_k: int = 5,
+        top_k: int = TOP_K_PADRAO,
         max_price: Decimal | None = None,
     ) -> list[dict[str, Any]]:
         """Os produtos DAQUELA LOJA que respondem a pergunta.
@@ -63,8 +71,15 @@ class RetrievalService:
         # com teto seria servida do cache da mesma pergunta sem teto — e a
         # segunda loja, do cache da primeira.
         embedding_cache_key = chat_cache.embedding_key(restaurant_id, question)
+        # `top_k` so entra na chave quando NAO e o padrao: assim as chaves ja
+        # gravadas continuam validas e o `/chat`, que nunca passa `top_k`,
+        # nao perde o cache num deploy.
         retrieval_cache_key = chat_cache.retrieval_key(
-            restaurant_id, branch_id, question, max_price
+            restaurant_id,
+            branch_id,
+            question,
+            max_price,
+            top_k=None if top_k == TOP_K_PADRAO else top_k,
         )
 
         embedding_started_at = perf_counter()

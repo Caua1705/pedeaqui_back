@@ -126,3 +126,45 @@ class ProductRepository:
             )
         )
         return list(self.db.scalars(stmt).all())
+
+    def list_active_by_price(
+        self,
+        branch_id: uuid.UUID,
+        crescente: bool,
+        limite: int,
+    ) -> list[Product]:
+        """Os vendaveis DAQUELA loja ordenados por preco. O caminho do superlativo.
+
+        POR QUE ISTO NAO E BUSCA VETORIAL (25/08/2026). "Manda o mais caro do
+        cardapio" nao tem resposta na busca por significado, e o motivo e
+        estrutural: ela devolve os N mais PARECIDOS com a pergunta, e o mais
+        caro da casa nao tem nenhuma razao para se parecer com a palavra
+        "cardapio". Aumentar o `top_k` nao conserta — so torna o acaso mais
+        provavel.
+
+        Superlativo sobre o cardapio inteiro e ordenacao, e ordenacao e SQL.
+
+        `price` daqui e o preco vigente da FILIAL, e nao ha o descompasso que
+        `RetrievalService._with_current_prices` existe para corrigir: la o
+        numero vem do indice, que envelhece; aqui vem da linha viva. Ordenar
+        pelo numero do indice devolveria "o mais barato" errado sem erro e sem
+        log — o pior formato de defeito que este repositorio conhece.
+
+        Sem `Decimal` nulo na ordenacao: preco ausente nao e preco zero, e um
+        produto sem valor no topo de "o mais barato" seria o atendente
+        oferecendo de graca o que ninguem precificou.
+        """
+        stmt = (
+            select(Product)
+            .options(selectinload(Product.option_groups).selectinload(ProductOptionGroup.options))
+            .where(
+                Product.branch_id == branch_id,
+                Product.is_active.is_(True),
+                Product.is_available.is_(True),
+                Product.price.is_not(None),
+                Product.price > 0,
+            )
+            .order_by(Product.price.asc() if crescente else Product.price.desc())
+            .limit(limite)
+        )
+        return list(self.db.scalars(stmt).all())

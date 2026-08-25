@@ -239,6 +239,7 @@ class ChatCache:
         branch_id: object,
         message: str,
         max_price: object = None,
+        top_k: object = None,
     ) -> str:
         """Chave dos produtos encontrados. Com a geracao, porque o resultado envelhece.
 
@@ -257,10 +258,29 @@ class ChatCache:
         `max_price` entra pelo mesmo tipo de motivo: muda o CONJUNTO
         devolvido. Sem ele, "sobremesa ate R$ 20" seria servida do cache de
         "sobremesa" sem teto, e o cliente veria produtos acima do que pediu.
+
+        `top_k` ENTROU EM 25/08/2026, e ate esse dia a ausencia dele era
+        inofensiva por acidente: ninguem passava `top_k`, entao toda consulta
+        pedia cinco e todas as chaves descreviam o mesmo conjunto.
+
+        A voz quebrou isso ao pedir uma busca larga para poder ordenar por
+        preco. Sem `top_k` na chave, as duas consultas — a de cinco do `/chat`
+        e a de quarenta da voz — dividem a mesma entrada, e quem chegar
+        primeiro serve o outro pelos 20 minutos seguintes: ou a voz ordena
+        cinco achando que sao quarenta, ou o `/chat` recebe quarenta produtos
+        para escolher tres. Nenhum dos dois levanta erro.
+
+        `None` continua escrevendo a chave curta de antes, entao o `/chat` —
+        que nao passa `top_k` — nao muda de comportamento; a diferenca e que
+        agora isso e escolha, e nao sorte.
         """
         generation = menu_generation.current(restaurant_id)
         teto = "" if max_price is None else f":p{max_price}"
-        return f"{restaurant_id}:{branch_id}:g{generation}{teto}:{self.normalize_message(message)}"
+        quantos = "" if top_k is None else f":k{top_k}"
+        return (
+            f"{restaurant_id}:{branch_id}:g{generation}{teto}{quantos}"
+            f":{self.normalize_message(message)}"
+        )
 
     def get_embedding(self, key: str) -> tuple[list[float] | None, str | None]:
         """O vetor e DE ONDE ele veio. Quatro origens, e o MISS tem tres delas.

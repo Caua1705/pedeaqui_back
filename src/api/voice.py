@@ -31,7 +31,7 @@ from src.api.rate_limit import VOICE_SESSION_RATE_LIMIT, limiter
 from src.core.config import settings
 from src.models.customer_model import Customer
 from src.ai.voice.realtime_client import VOZES_DO_REALTIME
-from src.ai.voice.search_service import VoiceSearchService
+from src.ai.voice.search_service import ORDENACOES, VoiceSearchService
 from src.ai.voice.session_service import UsoReportado, VoiceSessionService
 from src.ai.voice.voice_prompt import branch_context_for, saudacao_para
 from src.services.chat_service import ChatService
@@ -96,6 +96,18 @@ class BuscaRequest(BaseModel):
     # `gt=0` porque teto zero ou negativo esvazia a busca inteira, e o modelo
     # e quem preenche este campo.
     preco_maximo: Decimal | None = Field(default=None, gt=0)
+    # A ordenacao por preco. Lista fechada, validada aqui pelo mesmo motivo da
+    # `voz`: o campo e preenchido pelo MODELO, e nome inventado tem que morrer
+    # em 422 e nao virar busca silenciosamente sem ordem — que e o formato de
+    # defeito em que o cliente ouve "o mais barato" sobre um produto que nao e.
+    ordenar: str | None = None
+
+    @field_validator("ordenar")
+    @classmethod
+    def _ordenacao_conhecida(cls, valor: str | None) -> str | None:
+        if valor is None or valor in ORDENACOES:
+            return valor
+        raise ValueError(f"ordenacao desconhecida; use uma de: {', '.join(ORDENACOES)}")
 
 
 @router.post("/session")
@@ -243,6 +255,7 @@ def buscar(payload: BuscaRequest, db: Session = Depends(get_db)) -> dict:
         payload.branch_id,
         payload.consulta,
         payload.preco_maximo,
+        payload.ordenar,
     )
 
     return {

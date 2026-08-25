@@ -471,6 +471,27 @@ diferentes, contraditórias num caso real, e o modelo resolvendo para o lado que
 soa mais prestativo. Os exemplos viraram os que realmente mudam o que vem
 depois de uma BUSCA — escolha entre dois produtos, faixa de preço, tipo de
 prato.
+
+SUPERLATIVO NÃO SAI DE SIMILARIDADE (25/08/2026). "Qual a bebida mais
+barata?" e "manda o mais caro do cardápio" ficaram sem resposta, e a regra
+nova do prompt é a menor parte do conserto — porque **isto não era defeito de
+prompt**.
+
+A busca devolve os N mais PARECIDOS com a pergunta. Os cinco mais parecidos
+com "bebida" não são as cinco mais baratas, e nenhuma instrução conserta
+isso: o dado para responder não chegava. É o mesmo formato do caso da
+descrição, três dias antes — regra exigindo o que o contrato não entrega.
+
+E o segundo caso é pior que o primeiro. "O mais caro do cardápio" não tem
+assunto: a palavra "cardápio" não se parece com prato nenhum, então **subir o
+`top_k` só tornaria o acaso mais provável**. Superlativo sobre o cardápio
+inteiro é ordenação, e ordenação é SQL — daí os dois caminhos de
+`ORDENACOES` em `search_service.py`, e não um só mais largo.
+
+A regra que ficou aqui faz UMA coisa: proibir o modelo de responder
+superlativo comparando o que apareceu na tela. Sem ela, ele continuaria
+dizendo "a mais barata é X" sobre a mais barata dos cinco que voltaram — uma
+resposta que soa certa e está errada, que é a pior categoria.
 """
 
 import random
@@ -562,6 +583,19 @@ O CARDAPIO
   "baiao" busca "baiao". "x-tudo" busca "x-tudo". "guarana" busca "guarana".
 - So busque um termo mais amplo se a palavra dele nao devolver nada — e, ai,
   diga que aqui nao tem o que ele pediu antes de oferecer outra coisa.
+- Mais barato, mais caro, "qual sai por menos": isso NAO se responde
+  olhando os precos que voltaram de uma busca comum. A busca comum devolve o
+  que mais PARECE com a palavra, e nao o que custa menos. Busque de novo com
+  ordenacao.
+- Ele disse de que tipo ("a bebida mais barata", "a sobremesa mais cara")?
+  Consulta com a palavra dele, e ordenacao "_da_busca". Nao disse tipo
+  nenhum ("manda o mais caro", "o que tem de mais barato ai")? Ordenacao
+  "_da_loja".
+- Sem ordenacao voce NAO responde superlativo. Nunca diga que algo e o mais
+  barato ou o mais caro por comparar o que apareceu na tela.
+- Isto ja aconteceu, e nao pode se repetir:
+    "Qual a bebida mais barata?" e "Manda o mais caro do cardapio"
+      respondidos sem resposta nenhuma, porque a busca de sempre nao ordena
 - A OUTRA excecao ao termo literal: pedido de recomendacao. "O que voce
   recomenda?", "o que e bom aqui?", "o que voce sugere?", "o que voce me
   indica?" e pedido de PRODUTO, e nao pergunta sobre voce. Busque um termo

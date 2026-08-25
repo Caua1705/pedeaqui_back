@@ -37,6 +37,7 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
+from src.ai.services.retrieval_service import TOP_K_PADRAO
 from src.services.chat_service import ChatService
 from src.utils.money import format_money_br
 from src.utils.money_por_extenso import preco_por_extenso
@@ -53,6 +54,35 @@ _LIMITE_DA_DESCRICAO = 120
 # quatro campos posicionais, "a | b |  | d" e mais facil de ler errado do que
 # "a | b | - | d".
 _VAZIO = "-"
+
+# AS QUATRO ORDENACOES, e por que sao quatro valores num enum so em vez de dois
+# parametros ortogonais (25/08/2026).
+#
+# "Ordenar por preco" e "sobre o que" sao decisoes independentes, e a modelagem
+# limpa seriam dois campos. Mas quem preenche isto e o modelo de voz, no meio de
+# uma conversa, e dois campos opcionais que interagem sao duas chances de ele
+# acertar um e errar o outro — e o erro silencioso ("mais barato" da busca
+# quando o cliente pediu da loja) devolve um numero que PARECE certo. Um enum de
+# quatro nomes autoexplicativos nao tem interacao para errar.
+#
+# Cada valor mapeia para (crescente, loja_inteira).
+ORDENACOES = {
+    "mais_barato_da_busca": (True, False),
+    "mais_caro_da_busca": (False, False),
+    "mais_barato_da_loja": (True, True),
+    "mais_caro_da_loja": (False, True),
+}
+
+# Quantos a busca por significado traz quando o pedido e ordenado. Cinco nao
+# serve: ordenar os cinco mais parecidos com "bebida" devolve a mais barata
+# DAQUELES CINCO, que nao e a mais barata das bebidas. Quarenta cobre o cardapio
+# de um restaurante pequeno inteiro e continua sendo uma consulta so.
+_TOP_K_ORDENADO = 40
+
+# Quantos sobram depois de ordenar, e quantos a consulta por preco puro traz.
+# Cinco, o mesmo teto do resumo: alem disso seria produto que nunca vai ser dito
+# nem mostrado.
+_LIMITE_ORDENADO = 5
 
 
 class VoiceSearchService:
@@ -73,6 +103,7 @@ class VoiceSearchService:
         branch_id: uuid.UUID,
         consulta: str,
         preco_maximo: Decimal | None = None,
+        ordenar: str | None = None,
     ) -> list:
         """Os produtos que a busca encontrou NAQUELA LOJA, hidratados do banco.
 
@@ -83,18 +114,65 @@ class VoiceSearchService:
         caminho em que o defeito era mais caro: o modelo FALA o nome e o preco
         do produto em audio, e o cliente aceita de ouvido — nao ha tela onde
         ele pudesse notar que aquilo e de outra loja.
+
+        `ordenar` ENTROU EM 25/08/2026. Duas perguntas de uma sessao real
+        ficaram sem resposta — "qual a bebida mais barata?" e "manda o mais
+        caro do cardapio" — e nenhuma das duas era defeito de prompt: a busca
+        e por SIGNIFICADO, e os cinco mais parecidos com "bebida" nao sao as
+        cinco mais baratas. Superlativo e ordenacao, e ordenacao nao sai de
+        similaridade.
+
+        Sao dois caminhos, e a diferenca esta em `ORDENACOES`:
+
+            ..._da_busca   a busca por significado roda LARGA
+                           (`_TOP_K_ORDENADO`) e o resultado e ordenado por
+                           preco. E o caminho de "a bebida mais barata", onde
+                           o assunto importa.
+
+            ..._da_loja    nao ha busca por significado nenhuma: o SQL ordena
+                           o cardapio vendavel da filial por preco. E o
+                           caminho de "o mais caro do cardapio", onde nao ha
+                           assunto — a palavra "cardapio" nao se parece com
+                           nada, e subir o `top_k` so tornaria o acaso mais
+                           provavel.
+
+        A ORDENACAO ACONTECE DEPOIS DA HIDRATACAO, e isso nao e detalhe de
+        implementacao. O que a busca vetorial devolve traz o preco do INDICE,
+        que envelhece; quem carimba o preco vigente da loja e a hidratacao.
+        Ordenar antes dela devolveria "a mais barata" pelo numero velho — sem
+        erro, sem log, e com cara de resposta certa.
         """
         restaurant = self.chat_service._get_active_restaurant(restaurant_id)
         branch = self.chat_service._get_active_branch(restaurant.id, branch_id)
 
-        encontrados = self.chat_service.retrieval_service.retrieve_products(
-            restaurant_id=restaurant.id,
-            branch_id=branch.id,
-            question=consulta,
-            max_price=preco_maximo,
-        )
-        product_ids = [uuid.UUID(str(produto["id"])) for produto in encontrados]
+        # `crescente is None` e a marca de "nao foi pedida ordenacao". Vale
+        # tambem para `ordenar` que o modelo tenha inventado: valor fora do
+        # dicionario cai no caminho de sempre em vez de levantar. A recusa dura
+        # esta no schema da rota, que responde 422 antes de chegar aqui.
+        crescente, da_loja = ORDENACOES.get(ordenar or "", (None, False))
+
+        if da_loja:
+            # Sem embedding e sem cache de busca: nao ha pergunta a vetorizar.
+            do_banco = self.chat_service.product_repository.list_active_by_price(
+                branch_id=branch.id,
+                crescente=crescente,
+                limite=_LIMITE_ORDENADO,
+            )
+            encontrados = []
+            product_ids = [uuid.UUID(str(produto.id)) for produto in do_banco]
+        else:
+            encontrados = self.chat_service.retrieval_service.retrieve_products(
+                restaurant_id=restaurant.id,
+                branch_id=branch.id,
+                question=consulta,
+                top_k=TOP_K_PADRAO if crescente is None else _TOP_K_ORDENADO,
+                max_price=preco_maximo,
+            )
+            product_ids = [uuid.UUID(str(produto["id"])) for produto in encontrados]
+
         produtos = self.chat_service._hydrate_products(branch.id, product_ids)
+        if crescente is not None and not da_loja:
+            produtos = _ordenados_por_preco(produtos, crescente)[:_LIMITE_ORDENADO]
 
         # `.get`, e nao `[...]`: o cache de busca dura 20 minutos e guarda o
         # dict formatado. Nos primeiros 20 minutos depois de um deploy que
@@ -138,12 +216,13 @@ class VoiceSearchService:
         # producao, sem bancada.
         logger.info(
             "[Voz] busca | restaurant_id=%s | branch_id=%s | consulta=%.120s "
-            "| consulta_digest=%s | topo=%s | preco_maximo=%s | encontrados=%d "
-            "| hidratados=%d",
+            "| consulta_digest=%s | ordenar=%s | topo=%s | preco_maximo=%s "
+            "| encontrados=%d | hidratados=%d",
             restaurant_id,
             branch_id,
             consulta,
             _digest(consulta),
+            ordenar or "-",
             "-" if topo is None else f"{topo:.3f}",
             preco_maximo,
             len(encontrados),
@@ -212,6 +291,21 @@ class VoiceSearchService:
 
         linhas = [_linha_do_produto(produto) for produto in produtos[:5]]
         return "Produtos encontrados nesta loja:\n" + "\n".join(linhas)
+
+
+def _ordenados_por_preco(produtos: list, crescente: bool) -> list:
+    """Ordena pelo preco VIGENTE, e descarta quem nao tem preco.
+
+    Produto sem valor nao e produto de graca: no topo de "o mais barato"
+    ele seria o atendente oferecendo por zero o que ninguem precificou.
+    Fora de uma consulta ordenada ele continua aparecendo normalmente —
+    quem o remove e so este caminho, onde a ausencia de preco nao tem
+    como ser ordenada.
+    """
+    com_preco = [
+        produto for produto in produtos if produto.price is not None and produto.price > 0
+    ]
+    return sorted(com_preco, key=lambda produto: produto.price, reverse=not crescente)
 
 
 def _linha_do_produto(produto) -> str:

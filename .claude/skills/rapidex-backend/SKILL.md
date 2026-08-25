@@ -1628,3 +1628,50 @@ número de pedido — qualquer campo que o modelo deveria copiar e pode inventar
 (`consulta=` em `[Voz] busca`) é o que separa "o modelo inventou" de "o dado
 veio errado". Sem ele, os dois parecem iguais de fora. Ver [[43]] para o outro
 lado dessa mesma linha.
+
+---
+
+## 45. O log da busca mostra o que ela ACHOU, não o que o modelo RECEBEU
+
+Duas linhas diferentes, e confundi-las manda consertar o lugar errado.
+
+Em 25/08/2026 o atendente de voz falou três produtos numa frase, com o teto do
+prompt em dois. O log da sessão trazia:
+
+```
+[Voz] busca | ... | encontrados=5 | hidratados=5
+```
+
+Lido de fora, isso parece dizer "o modelo recebeu cinco e escolheu falar três".
+**Não diz.** `encontrados` e `hidratados` são o que a busca achou e o que o
+banco devolveu — o que chega ao modelo é o `resumo`, que é montado depois, tem
+teto próprio, e não aparece nessa linha.
+
+Naquele caso a busca daquele turno havia devolvido **dois** produtos, e o
+terceiro nome veio da conversa, de um turno anterior. O diagnóstico correto era
+"o teto é da frase e o modelo somou produto de outro turno", e não "o corte
+falhou". A proposta que quase foi implementada — cortar o `resumo` no código —
+atacava um alvo que já estava certo.
+
+**A regra:** ao ler log de agente, separe sempre três coisas que parecem uma só:
+
+| o que a linha diz | onde ela é escrita | o que NÃO prova |
+|---|---|---|
+| o que a busca **achou** | `[Voz] busca`, `[AI /chat perf] context_products` | o que foi enviado |
+| o que o modelo **recebeu** | o `resumo` / o prompt montado | o que ele usou |
+| o que o modelo **falou** | `output_audio_transcript`, a resposta do `/chat` | de onde cada nome veio |
+
+Um produto citado na fala pode ter vindo do **histórico da conversa**, e não da
+busca daquele turno. Em voz isso é regra, não exceção: a sessão inteira está no
+contexto, e o modelo não distingue "o que a ferramenta me deu agora" de "o que
+eu disse há três turnos" sem uma regra explícita mandando distinguir.
+
+**Antes de mexer no código de corte, confira o corte com os olhos** — imprima o
+`resumo` daquele turno, não a contagem da busca. E quando a diferença importar
+para uma decisão, meça o terceiro nível: o contador de produtos citados na fala
+(`[teto]` na bancada) existe exatamente porque nenhuma das duas primeiras linhas
+responde "quantos ele falou?".
+
+Ver [[43]] para o outro lado da mesma confusão — a transcrição da fala do
+cliente não é o que o modelo ouviu — e [[44]] para o caso em que só o argumento
+da tool call separou "inventou" de "veio errado".

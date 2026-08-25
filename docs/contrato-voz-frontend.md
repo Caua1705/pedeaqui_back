@@ -399,9 +399,23 @@ corpo aceita só o que está na tabela acima.
 | `branch_id` | string (UUID) | **sim, desde 20/08/2026** | a mesma filial da sessão |
 | `consulta` | string | sim | 1 a 500 caracteres |
 | `preco_maximo` | número ou `null` | não | se vier, tem de ser **maior que zero** |
+| `ordenar` | string ou `null` | não | um dos quatro valores abaixo |
 
 `preco_maximo` é o valor em reais (`50` = R$ 50,00). Mande `null` ou omita
 quando o modelo não preencher.
+
+**`ordenar` entrou em 25/08/2026**, e quem preenche é o modelo. O front
+repassa o que vier na tool call, sem interpretar. Quatro valores:
+
+| Valor | O que faz |
+|---|---|
+| `mais_barato_da_busca` / `mais_caro_da_busca` | a busca por significado roda larga e o resultado sai ordenado por preço. É "a bebida mais barata" |
+| `mais_barato_da_loja` / `mais_caro_da_loja` | **sem busca por significado**: o cardápio vendável da filial ordenado por preço. A `consulta` é ignorada. É "manda o mais caro" |
+
+Existe porque a busca devolve os mais **parecidos** com a pergunta, e o mais
+caro da casa não se parece com a palavra "cardápio" — superlativo é
+ordenação, e ordenação não sai de similaridade. Produto sem preço não entra
+em resultado ordenado.
 
 **Resposta 200**
 
@@ -466,7 +480,7 @@ partir do que o modelo falou.
 |---|---|---|
 | 404 | `{"detail":"Restaurante não encontrado"}` | `restaurant_id` inexistente ou inativo |
 | 404 | `{"detail":"Filial não encontrada para este restaurante"}` | `branch_id` de outra loja |
-| 422 | corpo padrão de validação | `consulta` vazia ou > 500, `preco_maximo` ≤ 0, `restaurant_id`/`branch_id` não-UUID ou ausente |
+| 422 | corpo padrão de validação | `consulta` vazia ou > 500, `preco_maximo` ≤ 0, `ordenar` fora dos quatro valores, `restaurant_id`/`branch_id` não-UUID ou ausente |
 
 **Não há 401, 403 nem 429 aqui.** Esta rota não confere login, não confere se
 a voz está ligada no restaurante e não tem rate limit próprio.

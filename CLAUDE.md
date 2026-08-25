@@ -51,3 +51,59 @@ os três detalhes não são decorativos:
 Se preferir escopo menor que a sessão inteira, use `monkeypatch.setenv` dentro
 do teste — mas só funciona para variável lida em tempo de execução, não para as
 que `settings` congela no import.
+
+### Dublê de schema ou de model: construa o tipo real
+
+**Nunca dublar um schema Pydantic ou um model do ORM com `SimpleNamespace` (ou
+qualquer objeto de atributos livres).** Construa o tipo de verdade:
+`ProductResponse(...)` quando a função sob teste recebe o schema, uma instância
+**transiente** do model (`Product(...)`, sem sessão e sem banco) quando ela
+recebe o model.
+
+O motivo não é purismo. Um objeto de atributos livres **não tem o contrato que
+o teste diz estar verificando**: ele responde qualquer atributo que o teste
+escrever e nenhum que o teste esquecer. O resultado é um teste que fica verde
+descrevendo um objeto que a aplicação nunca produz.
+
+**O caso que fecha esta porta.** A revisão `20260825_0039` acrescentou
+`serves_people` a `products`. O campo chegou ao `AdminProductResponse` (o do
+painel) e a `_serve_quantas_pessoas` (a voz), e **não** ao `ProductResponse` —
+que é o que `MenuService.product_response` devolve e, portanto, o que a
+hidratação entrega à ferramenta de voz.
+
+Os testes rápidos da voz montavam o produto assim:
+
+```python
+SimpleNamespace(name=nome, price=..., description=None, serves_people=None)
+```
+
+O atributo existia **porque o teste o escreveu**. Os testes passaram, e
+`buscar_no_cardapio` levantava `AttributeError` em **toda** busca falada em
+produção. Quem denunciou foi um teste de fumaça com banco, um dia depois — e o
+lojista, nesse meio-tempo, preenchia o campo no painel para um atendente que
+não conseguia lê-lo.
+
+O que o tipo real dá de graça, e o dublê solto não dá:
+
+- **coluna nova não passada vale `None`**, em vez de estourar — o teste continua
+  falando do que ele veio falar;
+- **atributo que não existe levanta na hora**: `Product(nome_errado=...)` é
+  `TypeError`, e `ProductResponse(...)` sem um campo obrigatório é
+  `ValidationError`. Erro de nome deixa de sobreviver a uma suíte verde;
+- **os tipos são os de verdade.** Foi assim que apareceu que `price` chega ao
+  resumo da voz como `float` e nunca como `None` (a coluna é `NOT NULL`) — o
+  dublê com `Decimal` e `None` descrevia um produto que não existe.
+
+Instância transiente **não precisa de banco**, então isto vale igual na suíte
+rápida: `Product(...)` sem `db.add` é um objeto Python comum. O que ela **não**
+traz é `default=` de coluna, que só é aplicado no INSERT — por isso os fixtures
+continuam escrevendo os campos explicitamente.
+
+`SimpleNamespace` continua certo para o que ele é bom: dublar **colaborador**,
+não dado. Um cliente HTTP (`SimpleNamespace(post=...)`), um serviço de
+embedding, um objeto de resposta de biblioteca externa — nesses não há contrato
+nosso a respeitar. A regra é sobre schema e model deste repositório.
+
+Correlato, do lado das dependências: a armadilha 42 da skill diz a mesma coisa
+sobre biblioteca de terceiro — dublar o transporte e deixar a biblioteca real
+por cima. **Um dublê alto demais testa o dublê.**

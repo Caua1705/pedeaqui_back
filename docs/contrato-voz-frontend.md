@@ -408,7 +408,8 @@ quando o modelo não preencher.
 ```json
 {
   "produtos": [ { "...": "..." } ],
-  "resumo": "Produtos encontrados: Pudim - R$ 12,50; Brownie - R$ 15,00"
+  "resumo": "Produtos encontrados nesta loja:
+Pudim - ..."
 }
 ```
 
@@ -422,9 +423,36 @@ Nesse caso `resumo` é exatamente `"Nenhum produto encontrado nesta loja."`
 — a negativa é da **filial** que você mandou em `branch_id`, e não do
 restaurante: o produto pode existir na outra loja.
 
-Quando há produtos, `resumo` tem o formato
-`"Produtos encontrados: <nome> - R$ <valor>; <nome> - R$ <valor>"`, com no
-máximo cinco itens e o preço em formato brasileiro (vírgula decimal).
+Quando há produtos, `resumo` é uma linha de cabeçalho seguida de **um produto
+por linha**, com quatro campos separados por `|`:
+
+```
+Produtos encontrados nesta loja:
+Baião de dois | R$ 34,40 | trinta e quatro e quarenta | Baião e batata frita. Serve 2 pessoas.
+Picanha suína | R$ 24,66 | vinte e quatro e sessenta e seis | Na brasa, com vinagrete.
+Brinde | - | - | -
+```
+
+| Campo | O que é |
+|---|---|
+| 1 | nome do produto |
+| 2 | preço em dígitos, formato brasileiro (vírgula decimal) |
+| 3 | **o mesmo preço escrito como se fala** |
+| 4 | a descrição do lojista, cortada em 120 caracteres |
+
+`-` em qualquer campo significa que aquilo não existe para aquele produto.
+Máximo de cinco linhas.
+
+**O terceiro campo entrou em 25/08/2026, e o motivo importa.** `R$ 34,40` foi
+falado como *"quarenta e quatro e quarenta"* numa sessão real: o modelo
+traduzia o número para palavras de cabeça, e tradução é geração, e geração
+erra. Com a forma falada pronta, ele copia. O front **não** deve converter
+preço nenhum — se precisar da forma falada, ela já está aqui.
+
+**O quarto campo entrou na mesma rodada**, porque o modelo respondeu "não vem
+com a quantidade servida específica" a uma pergunta cuja resposta estava na
+descrição — que até então só viajava em `produtos`, para a tela. Ele não estava
+negando um dado: ele não tinha o dado.
 
 **A separação entre `produtos` e `resumo` é intencional e importante:** o
 modelo só vê `resumo`, os cartões só usam `produtos`, e os dois vêm da mesma

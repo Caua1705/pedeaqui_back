@@ -144,6 +144,11 @@ def test_a_saudacao_nao_esta_no_prompt():
 
 _INSTRUCOES = instructions_for("Nome do restaurante: Junior da Picanha", "Loja: Centro")
 
+# O mesmo prompt com o espaco normalizado. Regra que cai na quebra de linha
+# nao pode fazer o teste depender de ONDE a linha quebrou: reformatar um
+# paragrafo nao muda a regra, e nao pode quebrar a suite.
+_CORRIDO = " ".join(_INSTRUCOES.split())
+
 
 def test_o_teto_de_produtos_falados_e_uma_secao_e_nao_um_bullet():
     """Ele JA era dois, enterrado em O CARDAPIO, e foi desobedecido — o
@@ -297,3 +302,74 @@ def test_a_secao_do_tom_nao_traz_numero_nenhum():
     inicio = _INSTRUCOES.index("BALCAO, NAO CALL CENTER")
     fim = _INSTRUCOES.index("NAO INVENTE", inicio)
     assert re.search(r"\d", _INSTRUCOES[inicio:fim]) is None
+
+
+# --------------------------------------------------------------------------
+# OS QUATRO CASOS DA SESSAO DE 25/08/2026
+#
+# Todos vieram de log, e e por isso que estao enumerados no prompt sob "Isto
+# ja aconteceu". O que estes testes guardam nao e a redacao: e o par
+# prompt <-> contrato da ferramenta nao se soltar. Duas destas regras falam de
+# CAMPOS que o `resumo_para_o_modelo` produz, e uma regra apontando para campo
+# que nao existe mais e pior do que regra nenhuma.
+# --------------------------------------------------------------------------
+
+
+def test_o_prompt_explica_os_quatro_campos_da_busca():
+    """A explicacao mora AQUI, e nao no resultado da ferramenta: o prompt e
+    cacheado a partir do turno 2, e o resultado e cobrado inteiro em toda
+    busca. Ver `test_o_formato_nao_e_explicado_dentro_do_resultado`."""
+    assert "nome | preco em digitos | preco como se fala | descricao" in _INSTRUCOES
+
+
+def test_o_prompt_manda_copiar_o_preco_falado_em_vez_de_converter():
+    """A regra velha ("copie o valor EXATO e mude so a forma de falar")
+    mandava fazer duas operacoes e chamava as duas de copia. A segunda era
+    traducao de numero para palavras, e foi ela que errou."""
+    assert "JA E o preco escrito como se fala" in _INSTRUCOES
+    assert "Voce nao converte numero nenhum de cabeca" in _CORRIDO
+
+    # E a regra velha nao pode ter sobrado ao lado da nova.
+    assert "mude so a forma de falar" not in _INSTRUCOES
+
+
+def test_negar_o_que_a_busca_devolveu_e_tratado_como_invencao():
+    """A NAO INVENTE ao contrario. Ela so pode ser exigida depois de a
+    descricao passar a viajar no resumo — antes, o modelo nao tinha o dado, e
+    a regra estaria exigindo o que o contrato nao entregava."""
+    assert "tao falso quanto inventar" in _CORRIDO
+
+
+def test_recomendacao_e_excecao_do_termo_literal_e_esta_colada_nele():
+    """A licao do cumprimento, que ja custou uma rodada: excecao lida tres
+    paragrafos depois da regra nao e lida junto dela. Buscar "recomenda" nao
+    devolve nada, e sem a excecao ali o modelo devolve a pergunta."""
+    literal = _INSTRUCOES.index("Busque com A PALAVRA QUE O CLIENTE FALOU")
+    excecao = _INSTRUCOES.index("pedido de recomendacao")
+    fim_da_secao = _INSTRUCOES.index("\nNO MAXIMO DOIS PRODUTOS")
+
+    assert literal < excecao < fim_da_secao
+    assert "Nunca devolva a pergunta" in _INSTRUCOES
+
+
+def test_recomendar_nao_autoriza_inventar_motivo():
+    """O caminho facil de uma recomendacao e a justificativa, e nenhuma delas
+    o modelo tem como saber."""
+    # Espaco normalizado: estas frases caem na quebra de linha do prompt, e um
+    # teste que depende de onde a linha quebrou quebra junto com a reformatacao.
+    for invencao in ('"e o mais pedido"', '"sai muito"', '"todo mundo gosta"'):
+        assert invencao in _CORRIDO, invencao
+
+
+def test_xingamento_tem_tratamento_proprio_e_apaga_o_produto():
+    """"Pergunta nova apaga o produto anterior" nao pegou porque xingamento
+    nao e pergunta — leitura literal, e o modelo leu literal."""
+    assert "Xingamento, agressao ou provocacao" in _INSTRUCOES
+    assert "QUALQUER coisa que nao seja sobre comida apaga" in _CORRIDO
+
+
+def test_xingamento_nao_pede_para_repetir():
+    """A resposta da primeira vez ("nao to entendendo, pode repetir?") esta
+    certa de tom e errada de efeito: pedir para repetir um xingamento e
+    convidar o segundo."""
+    assert "Nao peca para ele repetir" in _INSTRUCOES

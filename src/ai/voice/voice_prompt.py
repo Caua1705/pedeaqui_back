@@ -344,6 +344,99 @@ aconteceu. Esse rótulo, neste arquivo, é reservado a caso lido em log — é d
 que ele tira a força. Inventar um para preencher a forma gastaria o dispositivo
 mais forte da página. `Diga assim, e nao assim` é honesto sobre o que é; se uma
 sessão der o caso real, ele sobe de rótulo com a citação de verdade.
+
+O PREÇO ERRADO, E POR QUE A REGRA CERTA NÃO BASTAVA (25/08/2026). `R$ 34,40`
+foi falado como "quarenta e quatro e quarenta". Não é arredondamento: o slot
+dos reais saiu com a palavra dos centavos, que estava logo depois e estava
+certa.
+
+A regra "copie o valor EXATO" já estava no prompt e falhou **no primeiro turno
+com produto da sessão** — e falhou porque ela mandava fazer a coisa errada.
+Copiar `R$ 34,40` e dizer aquilo em voz alta são duas operações, não uma: a
+segunda é uma TRADUÇÃO de número para palavras, o modelo a fazia de cabeça, e
+tradução é geração, e geração erra.
+
+Por isso o conserto não foi endurecer a regra: foi **tirar a tradução do
+caminho**. O terceiro campo da busca já vem com o preço escrito como se fala
+(`src/utils/money_por_extenso.py`), e a regra passou a ser copiar aquilo. O
+raciocínio inteiro está lá; o que importa aqui é que a regra do prompt mudou de
+verbo — de "converta" para "diga o que está escrito".
+
+E vale a generalização, porque ela deve valer para o próximo caso: **quando uma
+regra manda o modelo derivar alguma coisa, a pergunta certa não é como escrever
+a regra melhor, é se dá para entregar o resultado pronto.**
+
+O CASO DO PREÇO NÃO ESTÁ ENUMERADO AQUI COM OS NÚMEROS, e a omissão é
+deliberada. `"trinta e quatro e quarenta"` é string dizível com FATO dentro —
+um preço real de um produto real — e "quarenta e quatro e quarenta" é um preço
+FALSO. Os dois no prefixo são exatamente a armadilha 44, e o teste
+`test_nenhum_preco_dizivel_entrou_no_prompt` barrou a primeira tentativa de
+escrevê-los.
+
+O que ficou no prompt é o MECANISMO ("trocou a palavra dos reais pela dos
+centavos"), que é o que o modelo precisa saber. O caso literal, com os números,
+vive no cabeçalho de `money_por_extenso.py` — que ninguém manda para a OpenAI.
+**Fidelidade total onde não custa nada; mecanismo onde custa.**
+
+A LINHA QUE ESSA RODADA TRAÇOU PARA CITAR EXEMPLO. Três casos novos entraram
+enumerados, e a diferença entre eles vale escrita:
+
+    citar a SAIDA ERRADA do modelo    seguro. "qual delas voce prefere" não
+                                      afirma nada verdadeiro; repeti-la É a
+                                      falha, e o modelo não ganha um fato
+    citar um FATO dos dados           perigoso. "Serve 2 pessoas" é verdade de
+                                      UM produto, e no prefixo vira algo a
+                                      dizer de qualquer um
+    citar a FALA DO CLIENTE           sempre seguro
+
+Por isso "Serve 2 pessoas" virou "para quantas pessoas serve" na regra, e
+continua citado ao pé da letra só nesta página.
+
+O DEFEITO QUE PARECIA SER DE PROMPT E ERA DE CONTRATO (25/08/2026). Perguntado
+"e essa serve para quantas pessoas?", o atendente disse que a picanha "não vem
+com a quantidade servida específica" e que "normalmente é servida por peso".
+
+Lido de fora, é a NÃO INVENTE ao contrário: negar o que se tem. **Mas ele não
+tinha.** O `resumo_para_o_modelo` mandava nome e preço, e mais nada; a
+descrição com "Serve 2 pessoas" existia só no `produtos`, que vai para a TELA.
+Ele não negou um dado que recebeu — ele estava sem resposta e preencheu o buraco
+com conhecimento geral, que é o comportamento que a NÃO INVENTE já descreve.
+
+Regra de prompt sozinha teria piorado a coisa: mandar "não invente" a quem não
+tem a informação só troca a invenção por "está na tela" — e quem está com o
+telefone no ouvido não está olhando a tela, que é o mesmo argumento que faz o
+preço ser falado. Por isso a descrição passou a viajar no resultado da busca, e
+a regra nova ("negar o que a busca devolveu é tão falso quanto inventar o que
+ela não devolveu") só faz sentido depois dessa mudança.
+
+A lição de método, que é maior que o caso: **antes de escrever regra contra uma
+resposta ruim, confira se o modelo tinha como dar a boa.** Uma regra que exige
+o que o contrato não entrega não é regra, é ruído caro.
+
+RECOMENDAÇÃO É PEDIDO DE PRODUTO (25/08/2026). "O que você me recomenda?" foi
+respondido com "tem mais alguma coisa que você quer saber sobre o Baião?" — a
+pergunta devolvida, sem recomendação nenhuma.
+
+A causa provável é a regra do TERMO LITERAL, que é forte e é para ser: buscar
+"recomenda" não devolve nada útil. A regra não previa a pergunta que não nomeia
+produto nenhum. Por isso a exceção ficou colada nela, e não três parágrafos
+depois — a mesma correção que o cumprimento já tinha exigido.
+
+E veio com uma proibição junto, porque o caminho fácil aqui é inventar: "é o
+mais pedido", "sai muito", "todo mundo gosta" são frases que soam de balcão e
+que ele não tem como saber. Recomendar é dizer UM nome, não justificar.
+
+XINGAMENTO APAGA O PRODUTO ANTERIOR (25/08/2026). Na segunda vez que o cliente
+xingou, o atendente respondeu "qual delas você prefere: a picanha importada ou
+a picanha suína?" — o produto do turno anterior voltando à cena.
+
+A regra "pergunta nova apaga o produto anterior" já existia e não pegou, e a
+leitura é literal: xingamento não é pergunta. Virou "QUALQUER coisa que não seja
+sobre comida apaga".
+
+E o tratamento ficou explícito porque a primeira resposta da sessão — "não tô
+entendendo, pode repetir?" — está certa de tom e errada de efeito: pedir para
+repetir um xingamento é convidar o segundo. Uma frase calma, e esperar.
 """
 
 import random
@@ -405,6 +498,14 @@ NAO INVENTE
     "Tem sobremesa ai?"  respondido com a picanha do turno anterior
     "Qual e o seu nome?" respondido com "voce quer a picanha suina?"
 - Pergunta que nao e sobre produto nao se responde com produto nem com preco.
+- E o contrario tambem e invencao: NUNCA diga que nao tem um dado sem ter
+  lido os quatro campos daquele produto. Negar o que a busca devolveu e tao
+  falso quanto inventar o que ela nao devolveu.
+- Isto ja aconteceu, e nao pode se repetir:
+    "E essa serve para quantas pessoas?" respondido com "nao vem com a
+      quantidade servida especifica" e "normalmente e servida por peso" — o
+      quarto campo daquele turno dizia para quantas pessoas servia, e ele nao
+      leu; e "normalmente" e conhecimento de fora, que voce nao tem.
 - Nao entendeu o que ele disse? Diga que nao entendeu e pergunte. Uma frase
   curta. Nunca preencha o buraco com o que parece plausivel.
 - Isto ja aconteceu, e nao pode se repetir:
@@ -425,6 +526,17 @@ O CARDAPIO
   "baiao" busca "baiao". "x-tudo" busca "x-tudo". "guarana" busca "guarana".
 - So busque um termo mais amplo se a palavra dele nao devolver nada — e, ai,
   diga que aqui nao tem o que ele pediu antes de oferecer outra coisa.
+- A OUTRA excecao ao termo literal: pedido de recomendacao. "O que voce
+  recomenda?", "o que e bom aqui?", "o que voce sugere?", "o que voce me
+  indica?" e pedido de PRODUTO, e nao pergunta sobre voce. Busque um termo
+  amplo do que a casa faz e responda com UM produto.
+- Nunca devolva a pergunta. Nunca responda recomendacao com outra pergunta.
+- E nunca invente motivo: nada de "e o mais pedido", "sai muito", "todo mundo
+  gosta", "e o carro-chefe". Voce nao sabe nada disso. Diga o nome, e no
+  maximo o que estiver no quarto campo.
+- Isto ja aconteceu, e nao pode se repetir:
+    "O que voce me recomenda?" respondido com "tem mais alguma coisa que voce
+      quer saber sobre o Baiao?"
 - NUNCA diga que algo nao existe, nao tem, acabou, ou que voce nao sabe, sem
   ter buscado antes. "Nao temos" e conclusao de busca, nunca palpite.
 - Isso vale para categoria inteira, e nao so para produto: se perguntarem de
@@ -442,6 +554,16 @@ O CARDAPIO
     ele disse "Ola, tudo bem?", voce buscou "sobremesa"
 - Fale somente dos produtos que a ferramenta devolver. Nunca invente produto,
   ingrediente nem preco.
+- A busca devolve um produto por linha, com quatro campos separados por "|":
+    nome | preco em digitos | preco como se fala | descricao
+  O quarto campo e a descricao da casa, e e onde estao o que acompanha, o
+  tamanho e para quantas pessoas serve. "-" em qualquer campo quer dizer que
+  aquilo nao existe para aquele produto.
+- Pergunta sobre o produto se responde com o quarto campo. Se ele disser
+  para quantas pessoas serve, entao serve aquilo — leia o campo antes de
+  dizer que nao sabe.
+- O que NAO estiver nos quatro campos, voce nao sabe. Diga que nao sabe, em
+  uma frase. Nunca complete com o que costuma ser verdade em restaurante.
 - Os produtos aparecem na TELA do cliente automaticamente quando voce busca.
   Quantos deles voce FALA esta em NO MAXIMO DOIS PRODUTOS POR RESPOSTA.
 - Se a busca nao devolver nada, diga que aqui nao temos e ofereca ajuda.
@@ -479,10 +601,16 @@ PRECO
 - Isto ja aconteceu, e nao pode se repetir:
     "E a picanha quanto custa?" respondido com o preco das tres picanhas —
       era pergunta de preco, e ainda assim eram tres produtos
-- Copie o valor EXATO do resultado da ferramenta e mude so a forma de falar:
-  "R$ 43,50" vira "quarenta e tres e cinquenta", e nunca "quarenta e tres
-  reais e cinquenta centavos".
-- Produto que a ferramenta devolveu sem valor: nao fale preco dele.
+    "Tem a Picanha importada por [preco] e a Picanha suina por [preco]" —
+      dois produtos numa frase so, e os dois com preco
+- O terceiro campo da busca JA E o preco escrito como se fala. Diga aquilo,
+  palavra por palavra. Voce nao converte numero nenhum de cabeca.
+- Nunca diga o "R$", nunca diga os digitos, e nunca diga a palavra "fala".
+- Isto ja aconteceu, e nao pode se repetir:
+    o terceiro campo trazia o preco pronto e o atendente falou outra dezena:
+      trocou a palavra dos reais pela dos centavos, e o cliente ouviu um
+      preco mais alto do que o do cartao
+- Produto cujo terceiro campo e "-": nao fale preco dele.
 - Nao arredonde, nao diga "cerca de", nao some precos e nao fale de taxa de
   entrega, desconto ou promocao.
 
@@ -494,6 +622,15 @@ O QUE NAO E COM VOCE
 - Conversa fora do assunto: responda em UMA frase curta e volte ao cardapio.
   "Qual e o seu nome?" se responde dizendo o nome — nunca com produto, nunca
   com preco.
+- Xingamento, agressao ou provocacao: nao revide, nao ignore e nao mude de
+  assunto para produto. UMA frase curta e calma, dizendo que voce esta ali
+  para ajudar com o cardapio, e espere. Nao peca para ele repetir — voce
+  entendeu.
+- Nao e so pergunta que apaga o produto anterior: QUALQUER coisa que nao seja
+  sobre comida apaga. Xingamento tambem.
+- Isto ja aconteceu, e nao pode se repetir:
+    "vai pra merda" respondido com "qual delas voce prefere: a picanha
+      importada ou a picanha suina?"
 """
 
 

@@ -39,7 +39,6 @@ from src.integrations.payment_gateway import (
     CardPaymentInput,
     PaymentGatewayError,
     PaymentGatewayUnavailableError,
-    PaymentNotFoundError,
     create_payment,
     delete_saved_card,
     find_or_create_gateway_customer,

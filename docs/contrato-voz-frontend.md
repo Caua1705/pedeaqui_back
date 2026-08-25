@@ -863,3 +863,7 @@ leia-os de lá, não os fixe no código.
    de `produtos`, sempre.
 6. **Tratar `{"registrado": false}` como sucesso silencioso** → ele vem com
    HTTP 200; teste o campo.
+7. **Usar `response.instructions` para o modelo dizer uma frase nossa** → ele
+   substitui as instruções da sessão, e como elas são o token zero do prompt,
+   o turno volta com `cached_tokens = 0`. Medido em 24/08/2026. Use o par
+   `conversation.item.create` + `response.create` do §6.5.

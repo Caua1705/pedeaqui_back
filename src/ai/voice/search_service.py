@@ -91,7 +91,7 @@ _TETO_DE_CATEGORIAS = 12
 # mudou e QUEM o aplica. Ate 25/08/2026 o teto era uma secao inteira do prompt
 # pedindo ao modelo que ignorasse tres dos cinco produtos que a ferramenta
 # mandava; agora a frase ja vem com dois, e a secao saiu.
-_TETO_FALADO = 2
+TETO_FALADO = 2
 
 # As expressoes que pedem ORDENACAO, e o que cada uma quer dizer (crescente).
 # Sao reconhecidas na consulta e ARRANCADAS dela: "a bebida mais barata" busca
@@ -119,6 +119,17 @@ _PALAVRAS_DE_ORDEM = {
 # superlativo e o ruido nao sobrar palavra nenhuma, o cliente falou do cardapio
 # INTEIRO ("manda o mais caro") e a ordenacao e "_da_loja". Sobrando alguma
 # ("a bebida mais barata"), ha assunto, e e "_da_busca".
+#
+# A PERGUNTA DE PRECO ENTROU EM 25/08/2026, e ela e um grupo proprio dentro da
+# mesma lista. "Quanto custa a picanha?" chegava aqui inteira e ia para o
+# embedding como "quanto custa picanha": a busca deixava de ser pelo produto e
+# passava a ser por uma pergunta sobre ele, e o que volta de uma consulta assim
+# nao e o mesmo que volta de "picanha". Sem erro e sem log — o modelo recebia
+# outros produtos e falava deles.
+#
+# Estas palavras nao pedem ordenacao (quem pede esta em `_PALAVRAS_DE_ORDEM`) e
+# nao mudam o assunto: elas so dizem que a pergunta e sobre o preco daquilo, e
+# o preco ja volta em todo resultado da busca.
 _RUIDO = {
     "o", "a", "os", "as", "um", "uma", "de", "do", "da", "dos", "das",
     "em", "no", "na", "que", "qual", "quais", "tem", "voces", "voce",
@@ -126,6 +137,11 @@ _RUIDO = {
     "tudo", "todos", "todas", "e", "ai", "cardapio", "menu", "loja",
     "opcao", "opcoes", "coisa", "produto", "produtos", "por", "pra",
     "para", "com", "sem",
+    # A pergunta de preco. "vale" ficou DE FORA de proposito: e a unica destas
+    # que aparece em nome de comida ("Vale do Sol"), e arrancar palavra de nome
+    # de produto e pior do que deixar uma palavra a mais na consulta.
+    "quanto", "quantos", "custa", "custam", "custo", "preco", "precos",
+    "valor", "sai", "fica", "ta", "esta",
 }
 
 _NAO_LETRA = re.compile(r"[^0-9a-z]+")
@@ -383,6 +399,64 @@ class VoiceSearchService:
         return "Categorias desta loja:\n" + "\n".join(linhas)
 
     @staticmethod
+    def frase_das_categorias(categorias: list[tuple[str, int]], comeco: int) -> str:
+        """A frase pronta para ser DITA, com duas categorias e nada mais.
+
+        Irma de `frase_para_o_modelo`, e pelo mesmo motivo: ate 25/08/2026 o
+        teto de duas e a escolha de QUAIS duas eram tres linhas de prompt
+        ("fale no maximo DUAS, as maiores, e diga que ha mais; o numero e para
+        voce escolher"), pedindo ao modelo que ignorasse dez das doze linhas
+        que esta mesma ferramenta mandava.
+
+        `comeco` e o que a regra de prompt nao tinha como ter: o cliente que
+        pergunta "e o que mais tem?" quer o que ainda NAO foi dito, e a lista
+        e a mesma nas duas chamadas. Quem guarda o cursor e a sessao (revisao
+        20260825_0042).
+
+        DA A VOLTA no fim da lista para a fatia nunca sair pela metade: numa
+        loja de tres categorias, comecar na terceira devolve a terceira e a
+        primeira. Repetir uma que ele ja ouviu e melhor do que falar so uma
+        quando ha mais.
+
+        Vazia quando a loja nao tem categoria vendavel — mesmo contrato da
+        busca: FRASE vazia quer dizer que nao ha o que oferecer, e o que dizer
+        nesse caso depende da pergunta, que o modelo tem e nos nao.
+        """
+        if not categorias:
+            return ""
+
+        quantas = min(TETO_FALADO, len(categorias))
+        nomes = [categorias[(comeco + passo) % len(categorias)][0] for passo in range(quantas)]
+
+        if len(nomes) == 1:
+            return f"Tem {nomes[0]}."
+        if len(categorias) > len(nomes):
+            return f"Tem {nomes[0]} e {nomes[1]}, e mais uns tipos."
+        return f"Tem {nomes[0]} e {nomes[1]}."
+
+    @staticmethod
+    def resultado_das_categorias(categorias: list[tuple[str, int]], comeco: int) -> str:
+        """O que volta de `listar_categorias`: a frase para dizer, e a lista.
+
+        Os MESMOS dois blocos rotulados do resultado da busca, e isso e
+        deliberado: sao duas ferramentas e um formato so, entao o que o prompt
+        explica sobre FRASE e DADOS vale para as duas sem uma linha a mais.
+
+        A lista inteira continua indo junto — e nao so as duas da frase —
+        porque ela nao serve so para falar. Ela e o que o modelo le antes de
+        dizer que a loja nao tem alguma coisa, e negar sem ter lido e a
+        invencao que a ferramenta existe para fechar.
+        """
+        frase = VoiceSearchService.frase_das_categorias(categorias, comeco)
+        return "\n".join(
+            (
+                f"FRASE: {frase}" if frase else "FRASE:",
+                "DADOS (nao leia em voz alta; so para saber o que ha nesta loja):",
+                VoiceSearchService.resumo_das_categorias(categorias),
+            )
+        )
+
+    @staticmethod
     def frase_para_o_modelo(produtos: list) -> str:
         """A frase pronta para ser DITA, com o teto de dois ja aplicado.
 
@@ -426,7 +500,7 @@ class VoiceSearchService:
         # "e mais alguns" no lugar de enumerar o resto: os outros ja estao na
         # TELA, com o preco ao lado. Dizer que ha mais e informacao; recitar
         # quais e o inventario que o teto existe para nao ler.
-        if len(produtos) > _TETO_FALADO:
+        if len(produtos) > TETO_FALADO:
             return f"Tem {nomes}, e mais alguns."
         return f"Tem {nomes}."
 

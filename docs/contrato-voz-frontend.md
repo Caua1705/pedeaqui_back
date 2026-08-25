@@ -402,23 +402,33 @@ corpo aceita só o que está na tabela acima.
 | `branch_id` | string (UUID) | **sim, desde 20/08/2026** | a mesma filial da sessão |
 | `consulta` | string | sim | 1 a 500 caracteres |
 | `preco_maximo` | número ou `null` | não | se vier, tem de ser **maior que zero** |
-| `ordenar` | string ou `null` | não | um dos quatro valores abaixo |
 
 `preco_maximo` é o valor em reais (`50` = R$ 50,00). Mande `null` ou omita
 quando o modelo não preencher.
 
-**`ordenar` entrou em 25/08/2026**, e quem preenche é o modelo. O front
-repassa o que vier na tool call, sem interpretar. Quatro valores:
+**`ordenar` entrou e saiu em 25/08/2026, e o front não manda esse campo.**
+Ele foi um enum de quatro valores que o MODELO preenchia; hoje quem lê "mais
+caro" e decide a ordenação é o backend, sobre as palavras da `consulta`
+(`_reescrever_consulta`). O corpo não tem o campo, e o Pydantic descarta
+campo desconhecido — quem ainda mandar não recebe erro nenhum, e o valor não
+tem efeito.
 
-| Valor | O que faz |
+A ordenação continua existindo, e continua sendo dos dois tipos abaixo — o
+que mudou é **quem escolhe**:
+
+| O que o cliente falou | O que o backend faz |
 |---|---|
-| `mais_barato_da_busca` / `mais_caro_da_busca` | a busca por significado roda larga e o resultado sai ordenado por preço. É "a bebida mais barata" |
-| `mais_barato_da_loja` / `mais_caro_da_loja` | **sem busca por significado**: o cardápio vendável da filial ordenado por preço. A `consulta` é ignorada. É "manda o mais caro" |
+| "a bebida mais barata" — superlativo **com assunto** | a busca por significado roda larga e o resultado sai ordenado por preço |
+| "manda o mais caro" — superlativo **sozinho** | sem busca por significado: o cardápio vendável da filial ordenado por preço |
 
 Existe porque a busca devolve os mais **parecidos** com a pergunta, e o mais
 caro da casa não se parece com a palavra "cardápio" — superlativo é
 ordenação, e ordenação não sai de similaridade. Produto sem preço não entra
 em resultado ordenado.
+
+**Se numa sessão nova a tool call ainda trouxer `ordenar`**, não é o front: é
+uma sessão aberta contra um backend antigo, que ainda declara o enum para o
+modelo preencher. O valor não chega a nada deste lado.
 
 **Resposta 200**
 
@@ -497,7 +507,7 @@ partir do que o modelo falou.
 |---|---|---|
 | 404 | `{"detail":"Restaurante não encontrado"}` | `restaurant_id` inexistente ou inativo |
 | 404 | `{"detail":"Filial não encontrada para este restaurante"}` | `branch_id` de outra loja |
-| 422 | corpo padrão de validação | `consulta` vazia ou > 500, `preco_maximo` ≤ 0, `ordenar` fora dos quatro valores, `restaurant_id`/`branch_id` não-UUID ou ausente |
+| 422 | corpo padrão de validação | `consulta` vazia ou > 500, `preco_maximo` ≤ 0, `restaurant_id`/`branch_id` não-UUID ou ausente |
 
 **Não há 401, 403 nem 429 aqui.** Esta rota não confere login, não confere se
 a voz está ligada no restaurante e não tem rate limit próprio.
@@ -515,8 +525,8 @@ fica esperando um resultado que nunca chega, com o cliente ouvindo o silêncio.
 
 Existe porque "quais são as categorias?" e "o que vocês têm?" não têm resposta
 na busca por significado: nenhuma das duas se parece com prato nenhum. É a
-mesma forma do `ordenar` — pergunta sobre o cardápio **inteiro** não tem assunto
-para a similaridade morder. Perguntado isso numa sessão real, o atendente
+mesma forma do superlativo — pergunta sobre o cardápio **inteiro** não tem
+assunto para a similaridade morder. Perguntado isso numa sessão real, o atendente
 respondeu com um cardápio de churrascaria plausível e inventado.
 
 **Requisição**
@@ -524,18 +534,38 @@ respondeu com um cardápio de churrascaria plausível e inventado.
 ```json
 {
   "restaurant_id": "0f9c8d2e-...",
-  "branch_id": "6a1f...-..."
+  "branch_id": "6a1f...-...",
+  "sessao_id": "b3d1...-..."
 }
 ```
 
-Restaurante e loja, e mais nada. A tool call **não tem argumento nenhum** — não
-há o que o modelo possa preencher errado.
+| Campo | Tipo | Obrigatório | O que é |
+|---|---|---|---|
+| `restaurant_id` | string (UUID) | sim | — |
+| `branch_id` | string (UUID) | sim | a mesma filial da sessão |
+| `sessao_id` | string (UUID) ou `null` | **não** | o `sessao_id` da §4.1, repassado |
+
+A tool call continua **sem argumento nenhum** — não há o que o modelo possa
+preencher errado. `sessao_id` não é exceção: ele não vem do modelo, vem do que
+a §4.1 já devolveu ao front.
+
+**`sessao_id` entrou em 25/08/2026, e é o que faz a segunda pergunta valer a
+pena.** "E o que vocês têm mais?" chamava a ferramenta de novo, recebia a mesma
+lista e o atendente falava as mesmas duas categorias. A lista está certa — o
+que faltava era alguém saber o que já tinha sido entregue, e a única coisa que
+atravessa duas chamadas é a sessão, que guarda um cursor no banco.
+
+Mandar `null` ou omitir **não é erro**: a rota responde igual, sempre com as
+maiores. Um campo obrigatório aqui viraria 422 no meio de uma conversa falada,
+que é o pior lugar possível para uma falha de contrato.
 
 **Resposta 200**
 
 ```json
 {
-  "resumo": "Categorias desta loja:
+  "resumo": "FRASE: Tem Carnes e Bebidas, e mais uns tipos.
+DADOS (nao leia em voz alta; so para saber o que ha nesta loja):
+Categorias desta loja:
 Carnes (8)
 Bebidas (3)"
 }
@@ -545,6 +575,12 @@ Bebidas (3)"
 |---|---|---|
 | `resumo` | string | o texto que volta **para o modelo**. Nunca mostre na tela |
 
+**Os mesmos dois blocos rotulados da §4.4**, e de propósito: são duas
+ferramentas e um formato só. `FRASE` já vem pronta para ser dita, com duas
+categorias — quais duas depende do cursor da sessão. `DADOS` leva a lista
+inteira, que é o que o modelo lê antes de dizer que a loja não tem alguma
+coisa.
+
 **Não há `produtos`, e isso é decisão.** Categoria não é produto: não tem preço,
 não tem imagem, e um cartão de "Carnes" não é uma coisa em que o cliente possa
 tocar para adicionar. O fluxo desenhado é **categoria primeiro (falada), produto
@@ -552,8 +588,9 @@ depois (na tela, pela busca que vem em seguida)** — então esta rota não mexe
 cartões, e o front não deve limpar a tela ao chamá-la.
 
 O número entre parênteses é a contagem de produtos vendáveis da categoria. Ele
-existe para o **modelo** escolher as duas maiores em vez de recitar doze nomes;
-o prompt manda não lê-lo em voz alta. No máximo **12** categorias.
+vive só no bloco de `DADOS`, que não se lê em voz alta — a escolha de quais
+duas falar deixou de ser do modelo e virou a `FRASE`. No máximo **12**
+categorias.
 
 Loja sem nenhuma categoria com produto disponível devolve exatamente
 `"Nenhuma categoria com produto disponivel nesta loja."` — a negativa é da
@@ -778,10 +815,10 @@ como atendido de forma síncrona, antes de qualquer `await`.
 `try`:
 
 ```js
-{ "consulta": "sobremesa", "preco_maximo": 50, "ordenar": "mais_barato_da_loja" }
+{ "consulta": "sobremesa mais barata", "preco_maximo": 50 }
 ```
 
-`preco_maximo` e `ordenar` podem não vir. **`name` não é mais sempre
+`preco_maximo` pode não vir. **`name` não é mais sempre
 `buscar_no_cardapio`**: desde 25/08/2026 há duas ferramentas, e o despacho é
 pelo `name` (§4.5).
 
@@ -799,6 +836,12 @@ que soa certa.
 É o pior formato de defeito deste projeto: a feature aparece funcionando no log
 de quem a testa. Se você logar a tool call, **logue o corpo que você enviou**, e
 não o que o modelo pediu.
+
+**O `ordenar` não existe mais** (§4.4) — o campo saiu no mesmo dia, e com ele o
+argumento que tinha de ser repassado. A lição fica inteira, e o corolário dela
+também: a linha `[tool] ...` de um log que imprime os argumentos do modelo é o
+que o **modelo** pediu, e nunca o que o backend recebeu. Vendo `ordenar` numa
+sessão nova, o que está velho é o backend daquela sessão, não o front.
 
 ### 7.3 Como devolver o resultado
 

@@ -113,3 +113,90 @@ def test_a_ordenacao_devolvida_existe_na_tabela_que_o_servico_executa():
                      "o mais barato do cardapio", "qual a entrada mais cara"):
         _, ordenacao = _reescrever_consulta(consulta)
         assert ordenacao in ORDENACOES, consulta
+
+
+# --------------------------------------------------------------------------
+# A PERGUNTA DE PRECO: e sobre o produto, e nao sobre o preco
+#
+# "Quanto custa a picanha?" ia inteira para o embedding — "quanto custa
+# picanha" — e o que volta de uma pergunta nao e o que volta do nome do
+# produto. O sintoma era o pior possivel: nenhum erro, nenhum log, e o
+# atendente falando de outro prato com o preco certo dele.
+#
+# Estas palavras nao pedem ordenacao. Quem le "mais caro" e o bloco de cima; o
+# preco em si ja volta em toda linha do resultado, entao perguntar por ele nao
+# muda a busca nem a ordem.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("consulta", "esperada"),
+    [
+        ("quanto custa a sobremesa", "sobremesa"),
+        ("qual o preco da bebida", "bebida"),
+        ("quanto ta a entrada", "entrada"),
+        ("quanto sai o combo", "combo"),
+    ],
+)
+def test_a_pergunta_de_preco_busca_o_produto_e_nao_a_pergunta(consulta, esperada):
+    assert _reescrever_consulta(consulta) == (esperada, None)
+
+
+def test_perguntar_o_preco_nao_e_pedir_o_mais_barato():
+    """O caso de 25/08/2026: "quanto custa a picanha?" voltou com ordenacao por
+    preco crescente, e o cliente ouviu falar da mais barata em vez da que ele
+    perguntou. Superlativo e o que esta na frase, nunca o assunto dela."""
+    _, ordenacao = _reescrever_consulta("quanto custa a sobremesa")
+
+    assert ordenacao is None
+
+
+def test_o_superlativo_sobrevive_a_pergunta_de_preco():
+    """As duas coisas na mesma frase continuam valendo as duas: o ruido de
+    preco sai, o superlativo vira ordenacao, e o assunto fica."""
+    assert _reescrever_consulta("quanto custa a bebida mais barata") == (
+        "bebida",
+        "mais_barato_da_busca",
+    )
+
+
+def test_palavra_de_preco_que_aparece_em_nome_de_comida_fica():
+    """"vale" ficou de fora da lista de proposito. Arrancar palavra de NOME de
+    produto e pior que deixar uma palavra a mais na consulta: a busca perde o
+    termo do cliente, que e a unica coisa que ela tem."""
+    buscada, _ = _reescrever_consulta("quanto custa o vale verde")
+
+    assert buscada == "vale verde"
+
+
+# --------------------------------------------------------------------------
+# A INVARIANTE QUE FAZ O CONSERTO NAO PRECISAR DE GUARDA
+#
+# "A picanha mais cara" nao pode virar "o mais caro da loja inteira" — foi
+# assim que o atendente respondeu Combo Feijoada a quem perguntou de picanha,
+# em 25/08/2026, quando a ordenacao ainda era um enum que o MODELO preenchia.
+#
+# Hoje isso nao acontece porque nao PODE acontecer: `_da_loja` so sai quando
+# nao sobra palavra nenhuma. Nao ha correcao a fazer em tempo de execucao, e
+# por isso nao ha guarda nem log de correcao no caminho — codigo que trata um
+# estado impossivel e ruina que parece protecao (armadilha 13). O lugar de
+# uma invariante que o desenho garante e aqui.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "consulta",
+    [
+        "a picanha mais cara",
+        "qual a bebida mais barata",
+        "a sobremesa de maior preco",
+        "quanto custa a entrada mais cara",
+        "manda a massa mais em conta",
+    ],
+)
+def test_consulta_com_assunto_nunca_ordena_a_loja_inteira(consulta):
+    buscada, ordenacao = _reescrever_consulta(consulta)
+
+    assert buscada, "sobrou assunto, entao a busca por significado tem o que morder"
+    assert ordenacao is not None
+    assert ordenacao.endswith("_da_busca"), ordenacao

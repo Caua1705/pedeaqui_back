@@ -1328,17 +1328,15 @@ async function executarBusca(callId, nome, argumentosJson, ctx) {
         branch_id: ctx.branchId,
         consulta: argumentos.consulta || "",
         preco_maximo: argumentos.preco_maximo ?? null,
-        // O `ordenar` FALTAVA AQUI, e a falta era invisível (25/08/2026). O
-        // backend ganhou a ordenação por preço, o modelo passou a preencher o
-        // campo, e o log desta página imprimia `{"ordenar":"mais_barato_da_loja"}`
-        // — porque ele imprime os argumentos DO MODELO, antes deste corpo. Mas
-        // o campo morria nesta linha: a busca rodava sem ordem nenhuma e a
-        // resposta parecia certa.
+        // O `ordenar` SAIU DAQUI no mesmo dia em que entrou (25/08/2026),
+        // porque saiu do backend: quem lê "mais caro" e decide a ordenação é
+        // `_reescrever_consulta`, sobre as palavras da consulta. Mandá-lo
+        // daqui era mandar um campo que o Pydantic descarta.
         //
-        // É o pior formato de defeito que este projeto conhece: a feature
-        // aparece funcionando no log de quem a testa, e o número que volta é o
-        // da busca por similaridade.
-        ordenar: argumentos.ordenar ?? null,
+        // E o log acima continua imprimindo o que o MODELO mandou, que é o
+        // ponto dele. Se aparecer `{"ordenar":...}` numa sessão nova, não é
+        // esta linha: é uma sessão aberta contra um backend antigo, que ainda
+        // declara o enum para o modelo preencher.
       }),
     });
     if (resp.ok) { resultado = await resp.json(); }
@@ -1380,7 +1378,14 @@ async function executarCategorias(callId, nome, ctx) {
     const resp = await fetch(base() + "/voice/categories", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ restaurant_id: ctx.restaurantId, branch_id: ctx.branchId }),
+      // `sessao_id` vai junto para a segunda pergunta ("e o que mais tem?")
+      // não receber a mesma lista: quem guarda o que já foi entregue é a
+      // sessão, no banco. Sem ele a rota responde igual — sempre as maiores.
+      body: JSON.stringify({
+        restaurant_id: ctx.restaurantId,
+        branch_id: ctx.branchId,
+        sessao_id: sessaoId,
+      }),
     });
     if (resp.ok) { resultado = await resp.json(); }
     else { log("!! /voice/categories respondeu " + resp.status, "erro"); }

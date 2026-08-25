@@ -360,8 +360,22 @@ def test_o_cardapio_inteiro_se_responde_com_listar_categorias():
     assert "listar_categorias" in _INSTRUCOES
     assert "Voce NAO sabe que tipos de comida esta loja tem" in _CORRIDO
 
-    # A contagem e para ELE escolher, e nao para ser dita.
-    assert "nao leia o numero em voz alta" in _CORRIDO
+
+def test_a_escolha_de_quais_categorias_falar_saiu_do_prompt():
+    """"Fale no maximo DUAS, as maiores, e nao leia o numero em voz alta" era o
+    mesmo desenho do teto de produtos: mandar o modelo ignorar dez das doze
+    linhas que a ferramenta acabou de entregar. Hoje a frase chega com duas
+    (`frase_das_categorias`) e a contagem vive so no bloco de DADOS, que a
+    regra geral ja manda nao ler.
+
+    E a metade que o prompt sozinho nunca teve: qual PAR falar na segunda
+    pergunta. Isso e o cursor da sessao (revisao 20260825_0042), e regra de
+    texto nao tem memoria de um turno para o outro."""
+    assert "as maiores" not in _CORRIDO
+    assert "nao leia o numero em voz alta" not in _CORRIDO
+
+    assert "ela sabe o que ja te mandou e devolve outras" in _CORRIDO
+    assert "Nao repita as que voce ja falou" in _CORRIDO
 
 
 def test_o_que_a_comida_E_nao_se_inventa():

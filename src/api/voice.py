@@ -4,6 +4,7 @@
     POST /voice/session/{id}/connected     o navegador reporta o call_id
     POST /voice/session/{id}/ended         o navegador reporta o fim
     POST /voice/search                     a ferramenta que o modelo chama
+    POST /voice/categories                 a segunda ferramenta, sem busca
 
 Fica ao lado de `src/api/chat.py` de proposito: sao os dois agentes da mesma
 casa, um por texto e outro por voz, e a simetria da rota e a primeira coisa
@@ -32,7 +33,7 @@ from src.api.rate_limit import VOICE_SESSION_RATE_LIMIT, limiter
 from src.core.config import settings
 from src.models.customer_model import Customer
 from src.ai.voice.realtime_client import VOZES_DO_REALTIME
-from src.ai.voice.search_service import VoiceSearchService
+from src.ai.voice.search_service import TETO_FALADO, VoiceSearchService
 from src.ai.voice.session_service import UsoReportado, VoiceSessionService
 from src.ai.voice.voice_prompt import branch_context_for, saudacao_para
 from src.services.chat_service import ChatService
@@ -108,17 +109,29 @@ class BuscaRequest(BaseModel):
 
 
 class CategoriasRequest(BaseModel):
-    """Restaurante e loja, e mais nada.
+    """Restaurante, loja, e o id da sessao para o cursor.
 
     Sem parametro do modelo de proposito: nao ha o que ele possa preencher
     errado. A lista de categorias de uma filial e a mesma para qualquer forma
     de perguntar, e um campo aqui — um filtro, um termo — seria mais uma chance
     de ele acertar a pergunta e errar o argumento, que e o modo de falha que o
     enum de `ordenar` foi desenhado para nao ter.
+
+    `sessao_id` NAO e excecao a isso, e vale dizer por que: ele nao vem do
+    modelo. E o id que esta rota ja devolveu ao navegador em `/voice/session`,
+    repassado por ele — o modelo nunca o ve e nao tem como preenche-lo errado.
+    Ele existe para a segunda chamada da mesma conversa nao devolver a mesma
+    lista (revisao 20260825_0042).
+
+    OPCIONAL, e a ausencia nao e erro: front que nao mande cai no
+    comportamento de antes — sempre as maiores categorias. Um campo
+    obrigatorio aqui transformaria uma ferramenta em 422 no meio de uma
+    conversa falada, que e o pior lugar para uma falha de contrato.
     """
 
     restaurant_id: uuid.UUID
     branch_id: uuid.UUID
+    sessao_id: uuid.UUID | None = None
 
 
 @router.post("/session")
@@ -304,7 +317,19 @@ def listar_categorias(payload: CategoriasRequest, db: Session = Depends(get_db))
     cartao de "Carnes" nao e uma coisa que o cliente possa tocar para adicionar.
     O fluxo desenhado e categoria primeiro (falada), produto depois (na tela,
     pela busca que vem em seguida).
+
+    O RESUMO GANHOU A FRASE PRONTA em 25/08/2026, no mesmo formato de dois
+    blocos da busca, e junto com ela o cursor da sessao. O caso: perguntado
+    "voces tem mais o que?" depois de ja ter ouvido duas categorias, o
+    atendente recebeu a MESMA lista e falou as MESMAS duas. A lista estava
+    certa — o que faltava era alguem saber o que ja tinha sido entregue, e a
+    unica coisa que atravessa as duas chamadas e a sessao.
     """
     service = VoiceSearchService(db)
     categorias = service.listar_categorias(payload.restaurant_id, payload.branch_id)
-    return {"resumo": service.resumo_das_categorias(categorias)}
+    comeco = VoiceSessionService(db).avancar_cursor_de_categorias(
+        payload.sessao_id,
+        len(categorias),
+        TETO_FALADO,
+    )
+    return {"resumo": service.resultado_das_categorias(categorias, comeco)}

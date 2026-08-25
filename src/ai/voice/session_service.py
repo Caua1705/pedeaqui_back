@@ -222,6 +222,53 @@ class VoiceSessionService:
         )
         return True
 
+    def avancar_cursor_de_categorias(
+        self,
+        sessao_id: uuid.UUID | None,
+        quantas_ha: int,
+        passo: int,
+    ) -> int:
+        """De qual categoria esta chamada comeca, e ja deixa a proxima marcada.
+
+        E o que faz "e o que voces tem mais?" nao devolver a mesma lista de
+        novo. Ver a revisao 20260825_0042 para por que o cursor mora na sessao
+        e nao na memoria do processo nem num argumento do modelo.
+
+        DA A VOLTA quando chega ao fim, em vez de parar na ultima: o cliente
+        que perguntou tres vezes numa loja de quatro categorias ouve a primeira
+        de novo, e isso e melhor que uma frase vazia. Nao ha "ja falei de
+        todas" a dizer — o modelo tem a lista inteira na linha de DADOS.
+
+        SEM SESSAO, comeca do zero e nao grava nada. Nao e erro: e a bancada
+        antiga, o teste que chama a rota solta, e a sessao que ja encerrou.
+        Nesse caminho a ferramenta volta a ser o que era — sempre as maiores.
+        """
+        if sessao_id is None or quantas_ha <= 0:
+            return 0
+
+        sessao = self.repository.get(sessao_id)
+        if sessao is None:
+            return 0
+
+        # `% quantas_ha` no que foi LIDO, e nao so no que vai ser gravado: a
+        # loja pode ter perdido categoria desde a chamada anterior (produto
+        # esgotado esvazia uma), e um cursor maior que a lista devolveria fatia
+        # vazia para sempre.
+        comeco = sessao.categories_offset % quantas_ha
+        sessao.categories_offset = (comeco + passo) % quantas_ha
+        self.db.commit()
+
+        # `comeco` na linha porque ele e a unica diferenca entre duas chamadas
+        # iguais: sem ele, "o atendente repetiu as mesmas categorias" e "o
+        # cursor nao andou" sao a mesma linha de log. Com ele, sao duas.
+        logger.info(
+            "[Voz] categorias do turno | sessao_id=%s | comeco=%d | de=%d",
+            sessao_id,
+            comeco,
+            quantas_ha,
+        )
+        return comeco
+
     def encerrar(
         self,
         sessao_id: uuid.UUID,

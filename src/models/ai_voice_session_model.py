@@ -42,6 +42,17 @@ class AIVoiceSession(Base):
     #
     # `cached_tokens` e SUBCONJUNTO da entrada, nao uma quinta parcela — o
     # total sao os quatro primeiros, e somar o cache junto o conta duas vezes.
+    # Quantas categorias a ferramenta `listar_categorias` JA ENTREGOU nesta
+    # sessao. Ver a revisao 20260825_0042. E o que faz "e o que mais tem?"
+    # devolver o que ainda nao foi dito em vez da mesma lista de novo.
+    #
+    # ENTREGUE nao e FALADO, e a distincao e a de sempre: o audio vai do
+    # navegador direto para a OpenAI, entao o backend nunca sabe o que o
+    # assistente disse — so o que ele mandou para ele dizer.
+    categories_offset: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+
     input_audio_tokens: Mapped[int | None] = mapped_column(Integer)
     input_text_tokens: Mapped[int | None] = mapped_column(Integer)
     output_audio_tokens: Mapped[int | None] = mapped_column(Integer)

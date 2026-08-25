@@ -89,10 +89,10 @@ log que o parser le. Resultado: `SEM MODELO | total=0.0 ms` nos nove turnos, um
 JSON de zeros gravado no disco, e a palavra "gravado" impressa na tela — a
 falha mais cara que um medidor pode ter, porque ela parece sucesso.
 
-Quem mede hoje e a bancada (`bancada.html`), que bate no `/chat` real por HTTP
-e por isso passa pelo Uvicorn. Consertar isto nao e prioridade. O que continua
-valendo daqui e a REGUA abaixo: ela e a lista versionada de perguntas, e a
-bancada roda essa mesma lista, nessa mesma ordem.
+Quem mede hoje e a bancada (`tools/bancada/bancada.html`), que bate no `/chat`
+real por HTTP e por isso passa pelo Uvicorn. Consertar isto nao e prioridade.
+O que continua valendo daqui e a REGUA abaixo: ela e a lista versionada de
+perguntas, e a bancada roda essa mesma lista, nessa mesma ordem.
 """
 
 import argparse

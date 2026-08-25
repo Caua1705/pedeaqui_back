@@ -572,7 +572,9 @@ devolva a ele um `function_call_output` com um texto curto de falha (ex.:
 
 Existiu até 24/08/2026 e servia uma bancada de teste interna. O HTML dela foi
 apagado do repositório, a rota passou a responder 500, e as duas coisas foram
-removidas juntas em vez de consertadas: a bancada viva é externa ao backend.
+removidas juntas em vez de consertadas: **a API não serve bancada nenhuma.** A
+que existe hoje é `tools/bancada/` — versionada desde 25/08/2026, mas servida
+por um `http.server` local, não por uma rota.
 
 **São quatro rotas em `/voice`, não cinco.** Nada mudou nas outras.
 

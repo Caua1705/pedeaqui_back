@@ -24,6 +24,14 @@ env/
 # pywin32 do requirements dele nem instala no Linux do container.
 print-agent/
 
+# Bancada do assistente. E uma pagina HTML que roda no NAVEGADOR de quem
+# desenvolve, servida por um `python -m http.server` na propria maquina
+# (`bancada.bat`, na raiz). A API nao a serve — `GET /voice/test` foi removida
+# em 24/08/2026 justamente por isso. Dentro da imagem seria peso morto, e pior:
+# um HTML de teste com campo de token viajando para producao.
+tools/bancada/
+bancada.bat
+
 # Testes e caches de ferramentas
 tests/
 pytest.ini

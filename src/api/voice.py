@@ -12,9 +12,10 @@ que quem chega procura.
 NAO HA MAIS BANCADA SERVIDA DAQUI. `GET /voice/test` existiu e foi removida em
 24/08/2026: o HTML dela morava no repositorio, foi apagado por engano em
 `bd1f164`, e a rota passou a responder 500 lendo um arquivo que nao existia.
-A bancada viva e externa (`bancada-assistente/bancada.html`, servida em
-`localhost:5500`), e as portas 5500, 5501 e 5173 ja estao na lista de origens
-do `main.py` — nao ha nada a servir daqui.
+A bancada viva esta em `tools/bancada/bancada.html` — no repositorio desde
+25/08/2026, mas servida por um `http.server` na maquina de quem desenvolve
+(`bancada.bat`, na raiz), nunca por esta API. As portas 5500, 5501 e 5173 ja
+estao na lista de origens do `main.py` — nao ha nada a servir daqui.
 """
 
 import logging

@@ -1,0 +1,1633 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bancada do assistente — texto e voz</title>
+<style>
+  :root {
+    --fundo: #12141a; --caixa: #1b1e26; --linha: #2b303c;
+    --texto: #e6e8ee; --fraco: #98a0b3; --acento: #6ee7a8;
+    --alerta: #ffb454; --erro: #ff7b72;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 18px; background: var(--fundo); color: var(--texto);
+    font-family: system-ui, -apple-system, sans-serif; font-size: 14px;
+  }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
+       color: var(--fraco); margin: 0 0 10px; }
+  .subtitulo { color: var(--fraco); margin: 0 0 16px; }
+  .painel { background: var(--caixa); border: 1px solid var(--linha);
+            border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+  .colunas { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 900px) { .colunas { grid-template-columns: 1fr; } }
+  label { display: block; margin-bottom: 8px; color: var(--fraco); font-size: 12px; }
+  input[type=text], input[type=password], input[type=number], select, textarea {
+    width: 100%; margin-top: 3px; padding: 7px 8px; background: #0d0f14;
+    color: var(--texto); border: 1px solid var(--linha); border-radius: 5px;
+    font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+  }
+  textarea { resize: vertical; min-height: 62px; font-family: inherit; font-size: 14px; }
+  button {
+    padding: 8px 14px; background: #2a2f3c; color: var(--texto);
+    border: 1px solid var(--linha); border-radius: 5px; cursor: pointer; font-size: 13px;
+  }
+  button:hover:not(:disabled) { background: #343a4a; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.principal { background: var(--acento); color: #0b1b12; border-color: var(--acento);
+                     font-weight: 600; }
+  .linha-botoes { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .par { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .id { font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--acento);
+        word-break: break-all; }
+  .aviso { border-left: 3px solid var(--alerta); padding: 8px 10px; background: #241f14;
+           color: #f0dcc0; border-radius: 4px; margin-bottom: 12px; font-size: 13px; }
+  .estado { font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+            padding: 7px 9px; background: #0d0f14; border-radius: 5px; margin: 10px 0; }
+  .turno { border: 1px solid var(--linha); border-radius: 6px; padding: 10px;
+           margin-bottom: 10px; background: #0f1218; }
+  .turno .quem { font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+                 color: var(--fraco); margin-bottom: 3px; }
+  .turno .dito { margin-bottom: 8px; white-space: pre-wrap; }
+  .metricas { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px;
+              border-top: 1px solid var(--linha); padding-top: 7px; }
+  .metrica b { display: block; font-size: 16px; font-family: ui-monospace, Consolas, monospace; }
+  .metrica.destaque b { color: var(--acento); }
+  .metrica span { color: var(--fraco); font-size: 11px; }
+  .ferramenta { background: #16202a; border-left: 3px solid #58a6ff; padding: 7px 9px;
+                border-radius: 4px; margin: 6px 0; font-family: ui-monospace, Consolas, monospace;
+                font-size: 11px; white-space: pre-wrap; }
+  .cartoes { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+  .cartao { border: 1px solid var(--linha); border-radius: 5px; padding: 7px; width: 140px;
+            font-size: 11px; }
+  .cartao img { width: 100%; height: 62px; object-fit: cover; border-radius: 3px; background: #222; }
+  .cartao .preco { color: var(--acento); font-family: ui-monospace, monospace; }
+  #log { height: 240px; overflow-y: auto; background: #08090c; color: #7ee787;
+         font-family: ui-monospace, Consolas, monospace; font-size: 11px; padding: 9px;
+         border-radius: 5px; white-space: pre-wrap; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 5px 7px; border-bottom: 1px solid var(--linha); }
+  th { color: var(--fraco); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  td.num { font-family: ui-monospace, Consolas, monospace; text-align: right; }
+  .erro { color: var(--erro); }
+  .nota { color: var(--fraco); font-size: 11px; margin-top: 6px; line-height: 1.45; }
+  .caixinha { display: flex; align-items: center; gap: 6px; margin-bottom: 5px;
+              color: var(--fraco); font-size: 12px; }
+  .caixinha input { width: auto; margin: 0; }
+</style>
+</head>
+<body>
+
+<h1>Bancada do assistente — texto e voz</h1>
+<p class="subtitulo">
+  Descartável. Não faz parte do app do cliente e não altera nada no backend:
+  só chama as rotas que já existem em produção.
+</p>
+
+<div class="aviso" id="avisoCusto">
+  <b>A voz custa por minuto.</b> O relógio começa quando a conexão de áudio abre e
+  não para sozinho — só o encerramento para. Cada sessão vai até
+  <span id="avisoTeto">5&nbsp;min</span> e custa da ordem de <b>US$&nbsp;0,09 a US$&nbsp;0,13</b>
+  no teto. O texto custa cerca de <b>US$&nbsp;0,001 por mensagem</b>. Você tem
+  <b>5 sessões de voz por dia</b> por conta de cliente — é essa cota, e não o dinheiro,
+  que costuma acabar primeiro.
+</div>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- LIGAÇÃO: quem é a loja, qual filial, quem está logado               -->
+<!-- ------------------------------------------------------------------ -->
+<div class="painel">
+  <h2>1. Ligação</h2>
+  <div class="par">
+    <label>Base da API
+      <input type="text" id="baseApi" value="https://api.pederapidex.com">
+    </label>
+    <label>Slug do restaurante
+      <input type="text" id="slug" value="junior-da-picanha">
+    </label>
+  </div>
+  <div class="linha-botoes" style="margin-bottom:10px">
+    <button id="btnResolver">Resolver loja e filiais</button>
+    <span id="estadoLoja" class="nota"></span>
+  </div>
+  <div class="par">
+    <label>restaurant_id
+      <input type="text" id="restaurantId" placeholder="preenchido ao resolver">
+    </label>
+    <label>branch_id — a Matriz vem marcada sozinha (<code>is_main</code>)
+      <select id="filial"><option value="">resolva a loja primeiro</option></select>
+    </label>
+  </div>
+
+  <div class="par" style="margin-top:6px">
+    <label>Login do cliente (e-mail ou telefone)
+      <input type="text" id="login" autocomplete="username">
+    </label>
+    <label>Senha
+      <input type="password" id="senha" autocomplete="current-password">
+    </label>
+  </div>
+  <div class="linha-botoes">
+    <button id="btnEntrar">Entrar</button>
+    <span id="estadoLogin" class="nota"></span>
+  </div>
+  <label style="margin-top:10px">access_token — o login preenche; dá para colar um à mão
+    <input type="text" id="token" placeholder="Bearer do cliente; só a emissão da voz exige">
+  </label>
+  <p class="nota">
+    O <code>branch_id</code> é obrigatório nas duas rotas do assistente desde a revisão
+    <code>20260820_0026</code>, e não cai para filial padrão: o cardápio é por loja, e um
+    default faria o assistente oferecer com preço um produto que a Matriz não vende.
+    O <code>/chat</code> não exige login; o <code>/voice/session</code> exige.
+  </p>
+</div>
+
+<div class="colunas">
+  <!-- ---------------------------------------------------------------- -->
+  <!-- TEXTO                                                            -->
+  <!-- ---------------------------------------------------------------- -->
+  <div class="painel">
+    <h2>2. Texto — POST /chat</h2>
+    <label>session_id — o histórico do assistente é por sessão (últimas 20 mensagens)
+      <input type="text" id="sessionId">
+    </label>
+    <textarea id="mensagem" placeholder="o que você digitaria no app: &quot;tem sobremesa de chocolate?&quot;"></textarea>
+    <div class="linha-botoes" style="margin-top:8px">
+      <button class="principal" id="btnEnviar">Enviar</button>
+      <button id="btnNovaSessao">Nova sessão</button>
+      <span id="estadoTexto" class="nota"></span>
+    </div>
+    <div id="conversaTexto" style="margin-top:12px"></div>
+  </div>
+
+  <!-- ---------------------------------------------------------------- -->
+  <!-- VOZ                                                              -->
+  <!-- ---------------------------------------------------------------- -->
+  <div class="painel">
+    <h2>3. Voz — credencial efêmera + WebRTC</h2>
+    <div class="linha-botoes">
+      <button class="principal" id="btnFalar">Falar</button>
+      <button id="btnParar" disabled>Parar</button>
+      <label style="margin:0 0 0 auto; display:flex; gap:6px; align-items:center">
+        voz
+        <select id="voz">
+          <option value="">padrão do .env (marin)</option>
+          <!-- As três em prova. `marin` é a escolhida e já é o padrão do
+               `.env`; as outras duas ficam aqui para comparar de ouvido sem
+               ter de caçá-las no meio das dez. Nenhuma voz foi removida. -->
+          <optgroup label="as que estou testando">
+            <option value="marin">marin</option>
+            <option value="cedar">cedar</option>
+            <option value="ballad">ballad</option>
+          </optgroup>
+          <optgroup label="outras">
+            <option value="alloy">alloy</option>
+            <option value="ash">ash</option>
+            <option value="coral">coral</option>
+            <option value="echo">echo</option>
+            <option value="sage">sage</option>
+            <option value="shimmer">shimmer</option>
+            <option value="verse">verse</option>
+          </optgroup>
+        </select>
+      </label>
+    </div>
+    <div class="estado" id="estadoVoz">parado</div>
+    <p class="nota">
+      O seletor só vale com <code>VOICE_ALLOW_VOICE_OVERRIDE=true</code> no backend. Desligado,
+      a escolha é ignorada em silêncio e a sessão roda com o <code>VOICE_NAME</code> do
+      <code>.env</code> — o log diz qual valeu de verdade. Nem toda voz existe em todo modelo:
+      se a OpenAI recusar, o <code>/voice/session</code> devolve <b>502</b> e o corpo do 400 dela
+      fica no log do servidor.
+    </p>
+
+    <div class="caixinha">
+      <input type="checkbox" id="optTranscrever" checked>
+      <label for="optTranscrever" style="margin:0">
+        transcrever o meu áudio (para ver o que eu falei) — <b>é serviço à parte e cobrado por minuto</b>
+      </label>
+    </div>
+    <div class="caixinha">
+      <input type="checkbox" id="optAbaEscondida" checked>
+      <label for="optAbaEscondida" style="margin:0">encerrar quando a aba sair de vista (protege a fatura)</label>
+    </div>
+    <div class="caixinha">
+      <input type="checkbox" id="optBlur">
+      <label for="optBlur" style="margin:0">
+        encerrar quando a janela perder o foco — o app faz isso; na bancada, abrir o DevTools mata a sessão
+      </label>
+    </div>
+
+    <div id="conversaVoz" style="margin-top:12px"></div>
+    <audio id="audio" autoplay></audio>
+  </div>
+</div>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- MEDIÇÕES                                                           -->
+<!-- ------------------------------------------------------------------ -->
+<div class="painel">
+  <h2>4. Medições</h2>
+  <div class="par" style="margin-bottom:10px">
+    <label>gpt-5-mini — US$ por 1M de entrada
+      <input type="number" id="precoTextoEntrada" value="0.25" step="0.01">
+    </label>
+    <label>gpt-5-mini — US$ por 1M de saída
+      <input type="number" id="precoTextoSaida" value="2.00" step="0.01">
+    </label>
+  </div>
+  <div class="par" style="margin-bottom:10px">
+    <label>voz — US$ por 1M de áudio de entrada
+      <input type="number" id="precoAudioEntrada" value="10" step="0.1">
+    </label>
+    <label>voz — US$ por 1M de áudio de saída
+      <input type="number" id="precoAudioSaida" value="20" step="0.1">
+    </label>
+  </div>
+  <div class="par" style="margin-bottom:10px">
+    <label>voz — US$ por 1M de ÁUDIO de entrada em cache
+      <input type="number" id="precoCacheAudio" value="0.30" step="0.01">
+    </label>
+    <label>voz — US$ por 1M de TEXTO de entrada em cache
+      <input type="number" id="precoCacheTexto" value="0.06" step="0.01">
+    </label>
+  </div>
+  <!-- O lado TEXTO nao e detalhe: numa sessao de 75 s medida em 15/08/2026
+       foram 22.349 tokens de texto de entrada contra 4.038 de audio. Ele
+       ficou em `value="0"` ate 24/08/2026, e enquanto esteve assim TODO
+       `custo_usd` desta bancada estava subestimado. Entrada e saida tem
+       tarifas diferentes (4x), entao sao dois campos e nao um. -->
+  <div class="par" style="margin-bottom:10px">
+    <label>voz — US$ por 1M de TEXTO de entrada
+      <input type="number" id="precoTextoVozEntrada" value="0.60" step="0.01">
+    </label>
+    <label>voz — US$ por 1M de TEXTO de saída
+      <input type="number" id="precoTextoVozSaida" value="2.40" step="0.01">
+    </label>
+  </div>
+
+  <table id="tabela">
+    <thead><tr>
+      <th>#</th><th>canal</th><th>o que entrou</th>
+      <th class="num">1ª palavra</th><th class="num">fim</th>
+      <th class="num">tokens</th><th class="num">US$</th>
+    </tr></thead>
+    <tbody id="corpoTabela"></tbody>
+  </table>
+  <div class="linha-botoes" style="margin-top:10px">
+    <button id="btnCopiar">Copiar tudo como JSON</button>
+    <button id="btnLimpar">Limpar medições</button>
+    <span id="resumoTotal" class="nota"></span>
+  </div>
+  <p class="nota">
+    <b>A coluna que importa é a primeira palavra</b> — é o silêncio que a pessoa sente.
+    Na voz ela é medida de verdade: do fim da sua fala até o primeiro som que sai do
+    alto-falante, lido do próprio áudio (não da transcrição, que chega depois).
+    No texto ela é igual à coluna "fim", e isso não é bug: <b>o <code>/chat</code> não faz
+    streaming</b> — devolve o JSON inteiro de uma vez, então não existe primeira palavra
+    antes da última. Enquanto for assim, esse número só melhora deixando a resposta
+    inteira mais rápida.
+  </p>
+  <p class="nota">
+    <b>Tokens:</b> na voz são reais — vêm do <code>usage</code> de cada
+    <code>response.done</code>, os mesmos seis contadores que a bancada reporta no
+    <code>/ended</code>. No texto são <b>estimativa</b>: o <code>/chat</code> não devolve
+    <code>usage</code> nenhum, então a saída sai de caracteres÷4 e a entrada é o campo
+    editável abaixo. Trate a coluna US$ do texto como ordem de grandeza, não como fatura.
+  </p>
+  <label style="max-width:340px">tokens de entrada por turno de texto (estimativa fixa)
+    <input type="number" id="entradaEstimada" value="1300" step="50">
+  </label>
+</div>
+
+<div class="painel">
+  <h2>5. Log cru</h2>
+  <div id="log"></div>
+</div>
+
+<script>
+"use strict";
+
+/* ==========================================================================
+   A bancada mede DUAS coisas e nada mais: quanto tempo até a resposta
+   começar, e quanto ela custou. Todo o resto da tela existe para dar
+   contexto a esses dois números.
+
+   Ela não altera o backend. Chama exatamente as rotas que o app do cliente
+   chama, com o mesmo contrato — inclusive o `branch_id` obrigatório e o
+   fluxo de credencial efêmera do WebRTC.
+   ========================================================================== */
+
+const $ = (id) => document.getElementById(id);
+const logEl = $("log");
+const t0Pagina = performance.now();
+
+function log(texto, classe) {
+  const marca = ((performance.now() - t0Pagina) / 1000).toFixed(2).padStart(7, " ");
+  const linha = document.createElement("div");
+  if (classe) { linha.className = classe; }
+  linha.textContent = marca + "s  " + texto;
+  logEl.appendChild(linha);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+const base = () => $("baseApi").value.trim().replace(/\/+$/, "");
+const ms = (v) => (v == null ? "—" : Math.round(v) + " ms");
+
+/* --------------------------------------------------------------------------
+   AS MEDIÇÕES
+   -------------------------------------------------------------------------- */
+const turnos = [];
+
+function registrarTurno(turno) {
+  turnos.push(turno);
+  desenharTabela();
+}
+
+function precos() {
+  return {
+    textoEntrada: parseFloat($("precoTextoEntrada").value) || 0,
+    textoSaida: parseFloat($("precoTextoSaida").value) || 0,
+    audioEntrada: parseFloat($("precoAudioEntrada").value) || 0,
+    audioSaida: parseFloat($("precoAudioSaida").value) || 0,
+    cacheAudio: parseFloat($("precoCacheAudio").value) || 0,
+    cacheTexto: parseFloat($("precoCacheTexto").value) || 0,
+    textoVozEntrada: parseFloat($("precoTextoVozEntrada").value) || 0,
+    textoVozSaida: parseFloat($("precoTextoVozSaida").value) || 0,
+  };
+}
+
+function custoDoTurno(turno) {
+  const p = precos();
+  const t = turno.tokens || {};
+  if (turno.canal === "texto") {
+    return ((t.entrada || 0) * p.textoEntrada + (t.saida || 0) * p.textoSaida) / 1e6;
+  }
+  // `cached_tokens` e SUBCONJUNTO da entrada, nao uma quinta parcela: e a
+  // fatia que saiu mais barata. Ele desconta da entrada e e cobrado a parte,
+  // em vez de somar duas vezes.
+  //
+  // O QUE ESTAVA ERRADO ATE 24/08/2026, e por que o numero mentia:
+  // a formula fazia `input_audio_tokens - cached_tokens`. Mas o cache e quase
+  // todo TEXTO — o prefixo (instrucoes + schema da ferramenta + historico) e
+  // que passa dos 1024 tokens e vira cache, e numa sessao medida havia 22.349
+  // tokens de texto contra 4.038 de audio. Subtrair um numero de texto da
+  // parcela de audio zerava o audio de entrada dos turnos COM cache e jogava
+  // a conta inteira no turno SEM. O turno 14 da bateria de 24/08 aparecia
+  // custando o dobro dos outros em parte por isso, e nao so pela perda real
+  // de cache.
+  //
+  // A API quebra o cache por tipo em `usage.input_token_details.
+  // cached_tokens_details` (`audio_tokens` / `text_tokens`), entao a conta e
+  // exata: cada parcela desconta da SUA propria entrada e paga a SUA tarifa
+  // de cache. Ver `fecharTurnoDeVoz` para o que fazer quando ela nao vem.
+  const audioNovo = Math.max(0, (t.input_audio_tokens || 0) - (t.cached_audio_tokens || 0));
+  const textoNovo = Math.max(0, (t.input_text_tokens || 0) - (t.cached_text_tokens || 0));
+  return (
+    audioNovo * p.audioEntrada +
+    (t.cached_audio_tokens || 0) * p.cacheAudio +
+    textoNovo * p.textoVozEntrada +
+    (t.cached_text_tokens || 0) * p.cacheTexto +
+    (t.output_audio_tokens || 0) * p.audioSaida +
+    (t.output_text_tokens || 0) * p.textoVozSaida
+  ) / 1e6;
+}
+
+function cacheSalvoNoTurno(turno) {
+  // O QUE O OVERRIDE TERIA CUSTADO A MAIS neste turno (24/08/2026).
+  //
+  // A saudação e o aviso de inatividade saíam em `response.create` com
+  // `instructions` — que substitui as instruções da sessão e, por serem elas o
+  // token zero do prompt, invalida o prefixo inteiro em cache. O turno voltava
+  // com `cached=0`.
+  //
+  // Como o conserto (`mandarFalar`) tira o override, o cache agora ENGATA
+  // nesses turnos — e o que ele economizou é exatamente a diferença entre a
+  // tarifa cheia e a de cache, sobre o que veio cacheado. Sem esta linha, "o
+  // conserto valeu?" só se responderia rodando a versão velha de novo.
+  //
+  // É uma conta do CONTRAFACTUAL, e o rótulo do log diz isso: o turno real
+  // custou `custoDoTurno`; este número é o que ele NÃO custou.
+  const p = precos();
+  const t = turno.tokens || {};
+  return (
+    (t.cached_audio_tokens || 0) * (p.audioEntrada - p.cacheAudio) +
+    (t.cached_text_tokens || 0) * (p.textoVozEntrada - p.cacheTexto)
+  ) / 1e6;
+}
+
+function totalDeTokens(turno) {
+  const t = turno.tokens || {};
+  if (turno.canal === "texto") { return (t.entrada || 0) + (t.saida || 0); }
+  return (t.input_audio_tokens || 0) + (t.input_text_tokens || 0) +
+         (t.output_audio_tokens || 0) + (t.output_text_tokens || 0);
+}
+
+function desenharTabela() {
+  const corpo = $("corpoTabela");
+  corpo.innerHTML = "";
+  let soma = 0;
+  let somaPrimeira = 0;
+  let contaPrimeira = 0;
+
+  turnos.forEach((turno, i) => {
+    const custo = custoDoTurno(turno);
+    soma += custo;
+    if (turno.tPrimeira != null) { somaPrimeira += turno.tPrimeira; contaPrimeira++; }
+
+    const tr = document.createElement("tr");
+    const entrada = (turno.entrada || "—").slice(0, 60);
+    tr.innerHTML =
+      "<td class='num'>" + (i + 1) + "</td>" +
+      "<td>" + turno.canal + "</td>" +
+      "<td></td>" +
+      "<td class='num'>" + ms(turno.tPrimeira) + "</td>" +
+      "<td class='num'>" + ms(turno.tFim) + "</td>" +
+      "<td class='num'>" + totalDeTokens(turno) + (turno.canal === "texto" ? "*" : "") + "</td>" +
+      "<td class='num'>" + custo.toFixed(5) + "</td>";
+    tr.children[2].textContent = entrada;
+    corpo.appendChild(tr);
+  });
+
+  const media = contaPrimeira ? Math.round(somaPrimeira / contaPrimeira) : null;
+  $("resumoTotal").textContent =
+    turnos.length + " turno(s) · média até a primeira palavra: " +
+    (media == null ? "—" : media + " ms") + " · gasto acumulado: US$ " + soma.toFixed(4) +
+    "   (* = estimado)";
+}
+
+/* --------------------------------------------------------------------------
+   RESOLVER A LOJA
+   Nada de UUID chumbado no HTML: os dois ids saem da própria API, do slug.
+   Assim a bancada não mente quando a base muda, e dá para conferir de olho
+   qual filial está sendo testada.
+   -------------------------------------------------------------------------- */
+async function resolverLoja() {
+  const slug = $("slug").value.trim();
+  $("estadoLoja").textContent = "resolvendo...";
+  try {
+    const respRest = await fetch(base() + "/restaurants/" + encodeURIComponent(slug));
+    if (!respRest.ok) { throw new Error("GET /restaurants/" + slug + " respondeu " + respRest.status); }
+    const restaurante = await respRest.json();
+    $("restaurantId").value = restaurante.id;
+    log("[loja] " + restaurante.name + " = " + restaurante.id);
+
+    // Corpo vazio de propósito: sem endereço, a rota não consulta rota paga do
+    // Google e devolve só a lista com aberta/fechada, que é tudo o que a
+    // bancada precisa.
+    const respFiliais = await fetch(
+      base() + "/restaurants/" + encodeURIComponent(slug) + "/branches/availability",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }
+    );
+    if (!respFiliais.ok) { throw new Error("availability respondeu " + respFiliais.status); }
+    const dados = await respFiliais.json();
+
+    const select = $("filial");
+    select.innerHTML = "";
+    for (const filial of dados.branches) {
+      const opt = document.createElement("option");
+      opt.value = filial.id;
+      opt.textContent = filial.name + (filial.is_main ? "  (Matriz)" : "") +
+                        (filial.is_open_now ? "" : "  [fechada agora]");
+      if (filial.is_main) { opt.selected = true; }
+      select.appendChild(opt);
+      log("[filial] " + filial.name + " = " + filial.id + (filial.is_main ? "  <- Matriz" : ""));
+    }
+    $("estadoLoja").textContent =
+      restaurante.name + " · " + dados.branches.length + " filial(is) · Matriz marcada";
+  } catch (erro) {
+    $("estadoLoja").innerHTML = "<span class='erro'>" + erro.message + "</span>";
+    log("!! " + erro.message, "erro");
+  }
+}
+
+async function entrar() {
+  $("estadoLogin").textContent = "entrando...";
+  try {
+    const resp = await fetch(base() + "/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ login: $("login").value.trim(), password: $("senha").value }),
+    });
+    const dados = await resp.json();
+    if (!resp.ok) { throw new Error(JSON.stringify(dados.detail || dados)); }
+    if (!dados.access_token) {
+      throw new Error(dados.message || "login sem access_token (e-mail não verificado?)");
+    }
+    $("token").value = dados.access_token;
+    $("estadoLogin").textContent = "ok: " + (dados.customer ? dados.customer.name : "logado");
+    log("[login] token obtido");
+  } catch (erro) {
+    $("estadoLogin").innerHTML = "<span class='erro'>" + erro.message + "</span>";
+    log("!! login: " + erro.message, "erro");
+  }
+}
+
+function contexto() {
+  const restaurantId = $("restaurantId").value.trim();
+  const branchId = $("filial").value;
+  if (!restaurantId || !branchId) {
+    throw new Error("resolva a loja primeiro — o branch_id é obrigatório nas duas rotas");
+  }
+  return { restaurantId, branchId };
+}
+
+/* --------------------------------------------------------------------------
+   CANAL 1 — TEXTO
+   -------------------------------------------------------------------------- */
+function novaSessao() {
+  $("sessionId").value = "bancada-" + Math.random().toString(36).slice(2, 10);
+  $("conversaTexto").innerHTML = "";
+  log("[texto] sessão nova: " + $("sessionId").value);
+}
+
+function estimarTokens(texto) {
+  // ~4 caracteres por token. Português com acento fica um pouco abaixo disso,
+  // então o número tende a subestimar — é estimativa, e está rotulada como tal.
+  return Math.ceil((texto || "").length / 4);
+}
+
+async function enviarTexto() {
+  let ctx;
+  try { ctx = contexto(); }
+  catch (erro) { $("estadoTexto").innerHTML = "<span class='erro'>" + erro.message + "</span>"; return; }
+
+  const mensagem = $("mensagem").value.trim();
+  if (!mensagem) { return; }
+
+  $("btnEnviar").disabled = true;
+  $("estadoTexto").textContent = "aguardando...";
+
+  const inicio = performance.now();
+  let tCabecalho = null;
+  try {
+    const resp = await fetch(base() + "/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        restaurant_id: ctx.restaurantId,
+        branch_id: ctx.branchId,
+        session_id: $("sessionId").value.trim(),
+        message: mensagem,
+      }),
+    });
+    // O instante em que os CABEÇALHOS chegaram. Numa rota que faz streaming
+    // este seria o "primeira palavra"; aqui ele encosta no fim porque o
+    // FastAPI só responde com o JSON pronto. A diferença entre os dois é a
+    // medida de quanto haveria a ganhar com streaming.
+    tCabecalho = performance.now() - inicio;
+
+    const dados = await resp.json();
+    const tFim = performance.now() - inicio;
+
+    if (!resp.ok) {
+      const detalhe = typeof dados.detail === "string" ? dados.detail : JSON.stringify(dados.detail);
+      throw new Error(resp.status + " — " + detalhe);
+    }
+
+    desenharTurnoDeTexto(mensagem, dados, tCabecalho, tFim);
+    registrarTurno({
+      canal: "texto",
+      entrada: mensagem,
+      saida: dados.message,
+      tPrimeira: tFim,          // sem streaming, a primeira palavra é a última
+      tCabecalho: tCabecalho,
+      tFim: tFim,
+      tokens: {
+        entrada: parseInt($("entradaEstimada").value, 10) || 0,
+        saida: estimarTokens(dados.message),
+        estimado: true,
+      },
+      ferramentas: [],
+      produtos: (dados.products || []).map((p) => p.name),
+      response_type: dados.response_type,
+      quando: new Date().toISOString(),
+    });
+
+    $("mensagem").value = "";
+    $("estadoTexto").textContent = "";
+  } catch (erro) {
+    $("estadoTexto").innerHTML = "<span class='erro'>" + erro.message + "</span>";
+    log("!! /chat: " + erro.message, "erro");
+  } finally {
+    $("btnEnviar").disabled = false;
+  }
+}
+
+function desenharTurnoDeTexto(mensagem, dados, tCabecalho, tFim) {
+  const div = document.createElement("div");
+  div.className = "turno";
+
+  const eu = document.createElement("div");
+  eu.innerHTML = "<div class='quem'>eu digitei</div>";
+  const ditoEu = document.createElement("div");
+  ditoEu.className = "dito";
+  ditoEu.textContent = mensagem;
+  eu.appendChild(ditoEu);
+  div.appendChild(eu);
+
+  const ele = document.createElement("div");
+  ele.innerHTML = "<div class='quem'>assistente · " + dados.response_type + "</div>";
+  const ditoEle = document.createElement("div");
+  ditoEle.className = "dito";
+  ditoEle.textContent = dados.message;
+  ele.appendChild(ditoEle);
+  div.appendChild(ele);
+
+  // O /chat não expõe chamada de ferramenta: a busca no cardápio acontece
+  // dentro do servidor e o cliente nunca a vê. O que dá para observar é o
+  // resultado dela — os produtos que voltaram. Está rotulado assim de
+  // propósito, para não parecer que a bancada leu uma tool call que não existe.
+  if (dados.products && dados.products.length) {
+    const nota = document.createElement("div");
+    nota.className = "ferramenta";
+    nota.textContent = "busca no cardápio: feita DENTRO do servidor (não é tool call visível).\n" +
+                       "voltaram " + dados.products.length + " produto(s):";
+    div.appendChild(nota);
+    div.appendChild(desenharCartoes(dados.products));
+  }
+
+  div.appendChild(desenharMetricas([
+    { titulo: "1ª palavra", valor: ms(tFim), destaque: true },
+    { titulo: "cabeçalhos", valor: ms(tCabecalho) },
+    { titulo: "fim", valor: ms(tFim) },
+    { titulo: "saída (estimada)", valor: estimarTokens(dados.message) + " tok" },
+  ]));
+
+  $("conversaTexto").prepend(div);
+}
+
+function desenharMetricas(itens) {
+  const bloco = document.createElement("div");
+  bloco.className = "metricas";
+  for (const item of itens) {
+    const m = document.createElement("div");
+    m.className = "metrica" + (item.destaque ? " destaque" : "");
+    m.innerHTML = "<b></b><span></span>";
+    m.querySelector("b").textContent = item.valor;
+    m.querySelector("span").textContent = item.titulo;
+    bloco.appendChild(m);
+  }
+  return bloco;
+}
+
+function desenharCartoes(produtos) {
+  const caixa = document.createElement("div");
+  caixa.className = "cartoes";
+  for (const produto of produtos) {
+    const cartao = document.createElement("div");
+    cartao.className = "cartao";
+    if (produto.image_url) {
+      const img = document.createElement("img");
+      img.src = produto.image_url;
+      cartao.appendChild(img);
+    }
+    const nome = document.createElement("div");
+    nome.textContent = produto.name;
+    cartao.appendChild(nome);
+    const preco = document.createElement("div");
+    preco.className = "preco";
+    // O número da TELA vem do banco, nunca do que o modelo falou.
+    preco.textContent = "R$ " + Number(produto.price).toFixed(2).replace(".", ",");
+    cartao.appendChild(preco);
+    caixa.appendChild(cartao);
+  }
+  return caixa;
+}
+
+/* --------------------------------------------------------------------------
+   CANAL 2 — VOZ
+
+   O mesmo fluxo do app: credencial efêmera no nosso backend, WebRTC direto
+   com a OpenAI, tool call devolvida pelo data channel, e os três
+   encerramentos. O áudio nunca passa pelo nosso backend.
+   -------------------------------------------------------------------------- */
+let pc = null, canal = null, microfone = null;
+let sessaoId = null, sessaoEmCurso = false;
+let limites = { duracao_maxima_s: 300, inatividade_s: 45, aviso_antes_s: 10 };
+let timerDoTeto = null, timerDoAviso = null, timerDaInatividade = null;
+let inicioDaSessao = 0;
+
+// A Realtime aceita UMA resposta em curso por vez; pedir outra devolve
+// `conversation_already_has_active_response`. Isto já quebrou em teste real.
+let respostaAtiva = false, pedidoEmVoo = false, respostaNaFila = false;
+const buscasIniciadas = new Set();
+const resultadosEnviados = new Set();
+
+// Os seis contadores do contrato. Só vão para o /ended se algum
+// `response.done` tiver trazido `usage`: zero significa "reportou zero", e
+// inventar zero estraga o relatório de custo.
+let uso = null;
+let turnoDeVoz = null;
+let saudacao = null;
+
+// O nó onde as buscas de um turno são desenhadas. Fica num WeakMap, e não no
+// próprio objeto do turno, porque `copiarJson` serializa `turnos` inteiro —
+// um elemento do DOM ali dentro faz o JSON.stringify morrer em referência
+// circular.
+const caixasDeFerramenta = new WeakMap();
+let ultimaFalaDoCliente = null;
+// O rótulo do PRÓXIMO turno, quando quem pediu a fala fomos nós e não o
+// cliente. Ele existe para a medição do cache: sem saber qual turno é o aviso
+// de inatividade, não há como dizer se tirar o override valeu.
+let rotuloDoProximoTurno = null;
+// As formas faladas que a última busca autorizou. Sai do terceiro campo do
+// resumo, que o backend já calcula — a página NÃO converte número nenhum, que
+// é exatamente o defeito que o backend acabou de tirar do modelo.
+let precosFaladosDoTurno = [];
+// TODOS os nomes de produto que a sessão já viu, de qualquer busca. É o
+// vocabulário do contador do teto de dois.
+//
+// A SESSÃO INTEIRA, e não só a busca deste turno — e essa é a decisão que faz
+// o contador enxergar o caso que o motivou. Em 25/08/2026 o atendente falou
+// três produtos numa frase, e o terceiro tinha vindo de um turno anterior: um
+// contador que só conhecesse a busca do turno teria logado "2 de 2" e passado
+// batido justamente na violação que existia para pegar.
+//
+// O teto é da FRASE, não da conversa: o que se conta é quantos nomes aparecem
+// numa resposta: de onde eles vieram não importa.
+const nomesConhecidos = new Set();
+let referenciaDaLatencia = null;   // fim da minha fala: é daqui que a espera conta
+let esperandoPrimeiroSom = false;
+let analisador = null, contextoDeAudio = null;
+
+function estadoVoz(texto) {
+  $("estadoVoz").textContent = texto;
+  log("[estado] " + texto);
+}
+
+async function comecarVoz() {
+  let ctx;
+  try { ctx = contexto(); }
+  catch (erro) { estadoVoz(erro.message); return; }
+
+  const token = $("token").value.trim();
+  if (!token) { estadoVoz("a emissão da credencial exige login de cliente"); return; }
+
+  $("btnFalar").disabled = true;
+  zerarConversa();
+  uso = null;
+  const marcos = {};
+  const t = performance.now();
+
+  // 1. A credencial efêmera. Não custa nada: o relógio só começa no passo 3.
+  estadoVoz("pedindo credencial ao backend...");
+  const resp = await fetch(base() + "/voice/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+    // `voz` é campo de BANCADA: vazio (produção) o backend usa o `VOICE_NAME`
+    // do `.env`. Ele só é aceito com `VOICE_ALLOW_VOICE_OVERRIDE` ligada, e um
+    // nome fora da lista fechada morre em 422 antes de custar uma emissão.
+    body: JSON.stringify({
+      restaurant_id: ctx.restaurantId,
+      branch_id: ctx.branchId,
+      voz: $("voz").value || undefined,
+    }),
+  });
+  if (!resp.ok) {
+    const texto = await resp.text();
+    // 404 = VOICE_ENABLED desligado (a rota nem existe). 403 = a loja não tem
+    // voz. 401 = token. 429 = cota (5/dia por cliente) ou rate limit (3/min).
+    estadoVoz("a emissão falhou: " + resp.status + " — " + texto);
+    log("!! /voice/session " + resp.status + ": " + texto, "erro");
+    $("btnFalar").disabled = false;
+    return;
+  }
+  const sessao = await resp.json();
+  marcos.credencial = performance.now() - t;
+  sessaoId = sessao.sessao_id;
+  limites = sessao.limites;
+  // Vem pronta do backend, com o primeiro nome do cliente já dentro. A página
+  // não monta essa frase: quem sabe o nome é quem autenticou o token.
+  saudacao = sessao.saudacao || null;
+  $("avisoTeto").textContent = Math.round(limites.duracao_maxima_s / 60) + " min";
+  log("[sessao] " + sessaoId + " · credencial expira_at=" + sessao.credencial.expires_at);
+  log("[limites] teto=" + limites.duracao_maxima_s + "s · inatividade=" +
+      limites.inatividade_s + "s · aviso=" + limites.aviso_antes_s + "s antes");
+  // A voz QUE VALEU, e não a que foi pedida. Com o seletor desligado no
+  // backend as duas divergem, e sem esta linha a conclusão seria "o seletor
+  // não funciona" quando o que houve foi a chave estar desligada.
+  const vozPedida = $("voz").value;
+  log("[voz] valendo=" + (sessao.voz || "?") +
+      (vozPedida && vozPedida !== sessao.voz
+        ? " · pedi " + vozPedida + " e NÃO valeu (VOICE_ALLOW_VOICE_OVERRIDE desligada?)"
+        : ""));
+
+  // 2. O microfone.
+  estadoVoz("pedindo o microfone...");
+  microfone = await navigator.mediaDevices.getUserMedia({ audio: true });
+  marcos.microfone = performance.now() - t;
+
+  pc = new RTCPeerConnection();
+  pc.ontrack = (evento) => {
+    $("audio").srcObject = evento.streams[0];
+    ligarAnalisador(evento.streams[0]);
+  };
+  pc.addTrack(microfone.getTracks()[0]);
+
+  canal = pc.createDataChannel("oai-events");
+  canal.onopen = () => {
+    marcos.canal = performance.now() - t;
+    estadoVoz("conectado — pode falar");
+    if ($("optTranscrever").checked) { pedirTranscricaoDaMinhaFala(); }
+    if (saudacao) { cumprimentar(); }
+    log("[marcos] credencial " + ms(marcos.credencial) + " · microfone " +
+        ms(marcos.microfone) + " · SDP " + ms(marcos.sdp) + " · canal aberto " + ms(marcos.canal));
+  };
+  canal.onmessage = (evento) => tratarEvento(JSON.parse(evento.data), ctx);
+
+  const oferta = await pc.createOffer();
+  await pc.setLocalDescription(oferta);
+
+  // 3. A OpenAI, direto do navegador. É AQUI que o relógio da fatura começa.
+  estadoVoz("conectando na OpenAI...");
+  const respSdp = await fetch("https://api.openai.com/v1/realtime/calls", {
+    method: "POST",
+    body: oferta.sdp,
+    headers: { "Authorization": "Bearer " + sessao.credencial.value, "Content-Type": "application/sdp" },
+  });
+  if (!respSdp.ok) {
+    estadoVoz("a OpenAI recusou a conexão: " + respSdp.status);
+    log(await respSdp.text(), "erro");
+    $("btnFalar").disabled = false;
+    return;
+  }
+  marcos.sdp = performance.now() - t;
+
+  // 4. O call_id, do cabeçalho Location. Sem ele o servidor não consegue
+  // desligar esta sessão remotamente — e o teto do navegador vira a única
+  // proteção. Pode faltar: é cabeçalho de outra origem.
+  const local = respSdp.headers.get("Location");
+  if (local) {
+    reportarConexao(local.split("/").filter(Boolean).pop());
+  } else {
+    log("!! sem cabeçalho Location: o servidor NÃO vai conseguir desligar esta sessão", "erro");
+  }
+
+  await pc.setRemoteDescription({ type: "answer", sdp: await respSdp.text() });
+
+  sessaoEmCurso = true;
+  inicioDaSessao = Date.now();
+  armarTeto();
+  rearmarInatividade();
+  $("btnParar").disabled = false;
+}
+
+function cumprimentar() {
+  // O texto exato vem do backend. O que a página faz é mandar a ordem daquele
+  // turno como ITEM DE CONVERSA, e não como override de `instructions` — ver
+  // `mandarFalar`.
+  log("[saudacao] " + saudacao);
+  mandarFalar(
+    "Cumprimente o cliente falando exatamente isto, e nada mais: " + saudacao,
+    "saudacao"
+  );
+}
+
+function mandarFalar(ordem, rotulo) {
+  // A NOSSA FALA, sem trocar o prefixo da sessão (24/08/2026).
+  //
+  // Antes, a saudação e o aviso de inatividade eram `response.create` com
+  // `instructions` — o que SUBSTITUI as instruções da sessão naquela resposta.
+  // E `instructions` é o começo do prompt: trocá-lo troca o token zero, e o
+  // cache de prefixo da OpenAI só vale a partir do primeiro token diferente.
+  //
+  // O log de 24/08/2026 mostrou isso sem margem para dúvida:
+  //
+  //     turno 1 (saudação):  input_text_tokens=165    cached=0
+  //     turno 2:             input_text_tokens=1834   cached=0
+  //     turno 3 em diante:   cached entre 1792 e 2368
+  //
+  // Na SAUDAÇÃO isso custa quase nada — o prefixo cheio ia ser cobrado uma
+  // vez de qualquer jeito, no turno 1 em vez do 2. **O caro é o aviso de
+  // inatividade**, que acontece no fim da sessão: ali o override joga fora o
+  // cache de uma conversa inteira (texto E áudio já ditos) para dizer uma
+  // frase de seis palavras.
+  //
+  // Como item de conversa, o prefixo fica intacto: a ordem entra DEPOIS das
+  // instruções, o cache engata, e o turno seguinte não paga reconstrução.
+  //
+  // `role: "system"` porque isto é ordem nossa, não fala do cliente — um item
+  // de `user` faria o modelo responder a um cliente que não disse nada. Se a
+  // API recusar o papel, o `error` aparece no log desta página e a resposta
+  // ainda sai (sob o prompt de voz inteiro, que é a degradação aceitável).
+  //
+  // E continua fora do `VOICE_INSTRUCTIONS`: frase pronta no prefixo é molde
+  // para o resto da conversa (armadilha 44 do backend). Item de conversa é um
+  // turno passado, não uma regra permanente.
+  rotuloDoProximoTurno = rotulo || null;
+  enviar({
+    type: "conversation.item.create",
+    item: {
+      type: "message",
+      role: "system",
+      content: [{ type: "input_text", text: ordem }],
+    },
+  });
+  pedirResposta();
+}
+
+function pedirTranscricaoDaMinhaFala() {
+  // O servidor configura a sessão sem transcrição da entrada — ele não precisa
+  // dela, e ela é cobrada à parte. A bancada precisa: sem isto não há como
+  // mostrar "o que eu falei". Se a API recusar, o log denuncia e o resto
+  // continua funcionando.
+  log("[transcricao] pedindo transcrição do meu áudio (serviço à parte, cobrado por minuto)");
+  enviar({
+    type: "session.update",
+    session: { type: "realtime", audio: { input: { transcription: { model: "whisper-1" } } } },
+  });
+}
+
+function ligarAnalisador(stream) {
+  // O NÚMERO QUE MAIS IMPORTA sai daqui. A transcrição chega depois do som, e
+  // o evento de áudio em bytes não existe no WebRTC (o áudio vem pela mídia,
+  // não pelo data channel). Então medimos o próprio alto-falante: a primeira
+  // amostra acima do piso de ruído é a primeira palavra que a pessoa ouve.
+  try {
+    contextoDeAudio = new (window.AudioContext || window.webkitAudioContext)();
+    const fonte = contextoDeAudio.createMediaStreamSource(stream);
+    analisador = contextoDeAudio.createAnalyser();
+    analisador.fftSize = 512;
+    fonte.connect(analisador);   // sem connect ao destino: quem toca é o <audio>
+    const amostras = new Uint8Array(analisador.fftSize);
+
+    const olhar = () => {
+      if (!analisador) { return; }
+      analisador.getByteTimeDomainData(amostras);
+      let soma = 0;
+      for (let i = 0; i < amostras.length; i++) {
+        const desvio = (amostras[i] - 128) / 128;
+        soma += desvio * desvio;
+      }
+      const rms = Math.sqrt(soma / amostras.length);
+      if (esperandoPrimeiroSom && rms > 0.02) {
+        esperandoPrimeiroSom = false;
+        marcarPrimeiroSom();
+      }
+      requestAnimationFrame(olhar);
+    };
+    requestAnimationFrame(olhar);
+  } catch (erro) {
+    log("!! não consegui medir o áudio de saída: " + erro.message, "erro");
+  }
+}
+
+function marcarPrimeiroSom() {
+  if (!turnoDeVoz || turnoDeVoz.tPrimeira != null) { return; }
+  turnoDeVoz.tPrimeira = performance.now() - turnoDeVoz.referencia;
+  log("[latencia] primeiro som em " + ms(turnoDeVoz.tPrimeira) + " depois do fim da fala");
+  estadoVoz("respondendo — primeira palavra em " + ms(turnoDeVoz.tPrimeira));
+}
+
+function abrirTurnoDeVoz() {
+  if (turnoDeVoz) { return; }
+  turnoDeVoz = {
+    canal: "voz",
+    entrada: ultimaFalaDoCliente || "(fala ainda sem transcrição)",
+    saida: "",
+    // Se o modelo falar sem eu ter falado (saudação), a referência é o próprio
+    // começo da resposta — e o número deixa de ser "espera percebida".
+    referencia: referenciaDaLatencia || performance.now(),
+    referenciaCrua: referenciaDaLatencia,
+    tPrimeira: null,
+    tPrimeiraTranscricao: null,
+    tFim: null,
+    tokens: {},
+    ferramentas: [],
+    produtos: [],
+    quando: new Date().toISOString(),
+    // Vazio quando o turno é do cliente. Preenchido quando a fala foi pedida
+    // por nós — ver `mandarFalar`, e o relatório de cache em `fecharTurnoDeVoz`.
+    rotulo: rotuloDoProximoTurno,
+  };
+  rotuloDoProximoTurno = null;
+  ultimaFalaDoCliente = null;
+  referenciaDaLatencia = null;
+  esperandoPrimeiroSom = true;
+}
+
+function fecharTurnoDeVoz(evento) {
+  if (!turnoDeVoz) { return; }
+  turnoDeVoz.tFim = performance.now() - turnoDeVoz.referencia;
+
+  const u = (evento.response && evento.response.usage) || {};
+  const entrada = u.input_token_details || {};
+  const saida = u.output_token_details || {};
+  turnoDeVoz.tokens = {
+    input_audio_tokens: entrada.audio_tokens || 0,
+    input_text_tokens: entrada.text_tokens || 0,
+    output_audio_tokens: saida.audio_tokens || 0,
+    output_text_tokens: saida.text_tokens || 0,
+    cached_tokens: entrada.cached_tokens || 0,
+  };
+  // O cache QUEBRADO POR TIPO. Sem isto `custoDoTurno` nao tem como saber de
+  // qual parcela descontar, e a versao anterior descontava tudo do audio —
+  // ver o comentario la. Os dois campos ficam SO no registro do turno: o
+  // `acumularUso` percorre as chaves de `uso`, entao eles nao vazam para o
+  // corpo do `/ended`, que continua com os seis contadores do contrato.
+  Object.assign(turnoDeVoz.tokens, repartirCache(entrada));
+  acumularUso(turnoDeVoz.tokens);
+
+  if (turnoDeVoz.rotulo) {
+    const t = turnoDeVoz.tokens;
+    log("[cache/" + turnoDeVoz.rotulo + "] cacheado=" + (t.cached_tokens || 0) +
+        " (texto " + (t.cached_text_tokens || 0) +
+        " · áudio " + (t.cached_audio_tokens || 0) + ")" +
+        " · turno custou US$ " + custoDoTurno(turnoDeVoz).toFixed(5) +
+        " · o override teria somado US$ " + cacheSalvoNoTurno(turnoDeVoz).toFixed(5));
+  }
+
+  desenharTurnoDeVoz(turnoDeVoz);
+  registrarTurno(turnoDeVoz);
+  turnoDeVoz = null;
+  esperandoPrimeiroSom = false;
+}
+
+function repartirCache(entrada) {
+  // `cached_tokens_details` e o caminho certo, e a API manda: `audio_tokens` e
+  // `text_tokens`, os dois subconjuntos da entrada do mesmo tipo.
+  const detalhe = entrada.cached_tokens_details;
+  if (detalhe && (detalhe.audio_tokens != null || detalhe.text_tokens != null)) {
+    return {
+      cached_audio_tokens: detalhe.audio_tokens || 0,
+      cached_text_tokens: detalhe.text_tokens || 0,
+    };
+  }
+
+  // QUEDA, para versao de API que mande so o total. O cache vai para o TEXTO
+  // primeiro, e o motivo e medido, nao suposto: o que passa dos 1024 tokens e
+  // vira cache e o prefixo (instrucoes + schema da ferramenta + historico), e
+  // numa sessao de 75 s deram 22.349 tokens de texto contra 4.038 de audio.
+  // Estimativa, e esta rotulada como tal no JSON exportado — quem for ler o
+  // numero precisa saber que aquele turno nao veio detalhado.
+  const total = entrada.cached_tokens || 0;
+  const noTexto = Math.min(total, entrada.text_tokens || 0);
+  return {
+    cached_audio_tokens: Math.max(0, total - noTexto),
+    cached_text_tokens: noTexto,
+    cache_estimado: true,
+  };
+}
+
+function acumularUso(t) {
+  if (!uso) {
+    uso = { input_audio_tokens: 0, input_text_tokens: 0, output_audio_tokens: 0,
+            output_text_tokens: 0, cached_tokens: 0 };
+  }
+  for (const chave of Object.keys(uso)) { uso[chave] += t[chave] || 0; }
+}
+
+function desenharFerramenta(ferramenta) {
+  const pedaco = document.createDocumentFragment();
+
+  const bloco = document.createElement("div");
+  bloco.className = "ferramenta";
+  bloco.textContent =
+    "tool " + ferramenta.nome + "  (" + ms(ferramenta.duracao) + ")\n" +
+    "argumentos: " + JSON.stringify(ferramenta.argumentos) + "\n" +
+    "devolvido ao modelo: " + ferramenta.resumo;
+  pedaco.appendChild(bloco);
+
+  if (ferramenta.produtos && ferramenta.produtos.length) {
+    pedaco.appendChild(desenharCartoes(ferramenta.produtos));
+  }
+  return pedaco;
+}
+
+function desenharTurnoDeVoz(turno) {
+  const div = document.createElement("div");
+  div.className = "turno";
+
+  const eu = document.createElement("div");
+  eu.innerHTML = "<div class='quem'>eu falei</div>";
+  const ditoEu = document.createElement("div");
+  ditoEu.className = "dito";
+  ditoEu.textContent = turno.entrada;
+  eu.appendChild(ditoEu);
+  div.appendChild(eu);
+
+  const ele = document.createElement("div");
+  ele.innerHTML = "<div class='quem'>assistente falou</div>";
+  const ditoEle = document.createElement("div");
+  ditoEle.className = "dito";
+  ditoEle.textContent = turno.saida || "(sem transcrição)";
+  ele.appendChild(ditoEle);
+  div.appendChild(ele);
+
+  // A busca deste turno pode ainda estar EM VOO: o `response.done` da tool
+  // call chega antes de o fetch voltar. Registro sem `resumo` é isso, e quem
+  // o desenha é `executarBusca`, na caixa que fica guardada logo abaixo.
+  const caixaDeFerramentas = document.createElement("div");
+  for (const ferramenta of turno.ferramentas) {
+    if (ferramenta.resumo == null) { continue; }
+    caixaDeFerramentas.appendChild(desenharFerramenta(ferramenta));
+  }
+  div.appendChild(caixaDeFerramentas);
+  caixasDeFerramenta.set(turno, caixaDeFerramentas);
+
+  const t = turno.tokens;
+  div.appendChild(desenharMetricas([
+    { titulo: turno.referenciaCrua ? "1ª palavra (do fim da minha fala)" : "1ª palavra (sem fala minha)",
+      valor: ms(turno.tPrimeira), destaque: true },
+    { titulo: "1ª transcrição", valor: ms(turno.tPrimeiraTranscricao) },
+    { titulo: "fim da fala dele", valor: ms(turno.tFim) },
+    { titulo: "áudio in/out", valor: (t.input_audio_tokens || 0) + " / " + (t.output_audio_tokens || 0) },
+    { titulo: "US$ deste turno", valor: custoDoTurno(turno).toFixed(5) },
+  ]));
+
+  $("conversaVoz").prepend(div);
+}
+
+function zerarConversa() {
+  respostaAtiva = false; pedidoEmVoo = false; respostaNaFila = false;
+  buscasIniciadas.clear(); resultadosEnviados.clear(); nomesConhecidos.clear();
+  precosFaladosDoTurno = [];
+  turnoDeVoz = null; ultimaFalaDoCliente = null; referenciaDaLatencia = null;
+  esperandoPrimeiroSom = false; saudacao = null;
+}
+
+function enviar(objeto) {
+  if (!canal || canal.readyState !== "open") {
+    log("[canal] fechado, descartei: " + objeto.type);
+    return;
+  }
+  canal.send(JSON.stringify(objeto));
+}
+
+function pedirResposta() {
+  // SEM PARÂMETRO desde 24/08/2026. Ela recebia um `extra` que só existia
+  // para carregar `response.instructions` — o override que trocava o prefixo
+  // da sessão e derrubava o cache (ver `mandarFalar`). Sem nenhum chamador
+  // que o use, o parâmetro é só o convite para o defeito voltar.
+  if (respostaAtiva || pedidoEmVoo) {
+    respostaNaFila = true;
+    log("[fila] já há resposta ativa; peço quando ela fechar");
+    return;
+  }
+  pedidoEmVoo = true;
+  enviar({ type: "response.create" });
+}
+
+function tratarEvento(evento, ctx) {
+  if (evento.type !== "response.output_audio_transcript.delta") {
+    log("<- " + evento.type);
+  }
+
+  if (evento.type === "error") {
+    const erro = evento.error || {};
+    log("!! " + JSON.stringify(erro), "erro");
+    pedidoEmVoo = false;
+    if (erro.code === "conversation_already_has_active_response") {
+      respostaAtiva = true;
+      respostaNaFila = true;
+      estadoVoz("colisão de resposta — peço de novo quando a atual fechar");
+    }
+    return;
+  }
+
+  // O QUE A OPENAI DIZ QUE ESTÁ VALENDO na entrada de áudio. O servidor
+  // configura `noise_reduction` e o `server_vad` na emissão da credencial, e
+  // esta página manda um `session.update` para ligar a transcrição — e não
+  // está escrito na documentação se um update parcial de `audio.input`
+  // preserva o resto do objeto ou o substitui. Estas linhas respondem isso na
+  // próxima sessão (uma antes do update, outra depois), em vez de deixar a
+  // dúvida virar "o ruído voltou e ninguém sabe por quê".
+  if (evento.type === "session.created" || evento.type === "session.updated") {
+    const entrada = (evento.session && evento.session.audio && evento.session.audio.input) || {};
+    log("[audio.input] " + JSON.stringify({
+      noise_reduction: entrada.noise_reduction,
+      turn_detection: entrada.turn_detection,
+    }));
+    return;
+  }
+
+  // O fim da MINHA fala. É a única referência honesta para a espera: contar
+  // do começo da fala mediria o tamanho da frase, não a lentidão do sistema.
+  if (evento.type === "input_audio_buffer.speech_stopped") {
+    referenciaDaLatencia = performance.now();
+    return;
+  }
+  if (evento.type === "input_audio_buffer.speech_started") {
+    log("[inatividade] falei; contador zerado");
+    rearmarInatividade();
+    return;
+  }
+
+  if (evento.type === "response.created") {
+    respostaAtiva = true;
+    pedidoEmVoo = false;
+    abrirTurnoDeVoz();
+    return;
+  }
+  if (evento.type === "response.done") {
+    respostaAtiva = false;
+    fecharTurnoDeVoz(evento);
+    if (respostaNaFila) {
+      respostaNaFila = false;
+      pedirResposta();
+    }
+    return;
+  }
+
+  // A transcrição do que ele falou chega DEPOIS do som — por isso ela é a
+  // medida secundária, e não a principal.
+  if (evento.type === "response.output_audio_transcript.delta") {
+    if (turnoDeVoz && turnoDeVoz.tPrimeiraTranscricao == null) {
+      turnoDeVoz.tPrimeiraTranscricao = performance.now() - turnoDeVoz.referencia;
+    }
+    return;
+  }
+  if (evento.type === "response.output_audio_transcript.done") {
+    if (turnoDeVoz) { turnoDeVoz.saida = evento.transcript; }
+    log("[assistente] " + evento.transcript);
+    // A VERSÃO MAGRA da detecção de preço errado (25/08/2026): loga as formas
+    // faladas VÁLIDAS daquele turno logo abaixo do que ele falou, para os dois
+    // ficarem lado a lado no log e o olho comparar.
+    //
+    // Não é detector. Detector de verdade — casar sequência de número por
+    // extenso no transcript contra este conjunto — é heurística com falso
+    // positivo ("serve duas pessoas" tem número dentro), e esta página não é
+    // versionada. Fica para outra rodada; isto aqui é uma linha.
+    if (precosFaladosDoTurno.length) {
+      log("[precos válidos] " + precosFaladosDoTurno.join(" · "));
+    }
+    contarProdutosNaFala(evento.transcript);
+    return;
+  }
+  if (evento.type === "conversation.item.input_audio_transcription.completed") {
+    log("[eu] " + evento.transcript);
+    // Costuma chegar depois de a resposta já ter começado: se o turno está
+    // aberto e ainda sem texto meu, é dele.
+    if (turnoDeVoz && turnoDeVoz.entrada.startsWith("(fala")) {
+      turnoDeVoz.entrada = evento.transcript;
+    } else {
+      ultimaFalaDoCliente = evento.transcript;
+    }
+    return;
+  }
+
+  // A tool call chega por DOIS eventos com o mesmo call_id, a menos de 1 ms
+  // de distância. Os dois são tratados (a API já renomeou esses eventos
+  // antes) e a dedupe é pelo call_id, marcada de forma síncrona.
+  if (evento.type === "response.function_call_arguments.done") {
+    despacharFerramenta(evento.call_id, evento.name, evento.arguments, ctx);
+    return;
+  }
+  if (evento.type === "response.output_item.done" && evento.item && evento.item.type === "function_call") {
+    despacharFerramenta(evento.item.call_id, evento.item.name, evento.item.arguments, ctx);
+  }
+}
+
+// O despacho por NOME. Ele existe desde que a sessão passou a declarar duas
+// ferramentas (25/08/2026): sem ele, uma chamada de `listar_categorias` cairia
+// na guarda do `executarBusca` e voltaria em silêncio — e o modelo ficaria
+// esperando um resultado que nunca chega, com o cliente ouvindo o silêncio.
+function despacharFerramenta(callId, nome, argumentosJson, ctx) {
+  if (!callId) { return; }
+  if (nome === "buscar_no_cardapio") { executarBusca(callId, nome, argumentosJson, ctx); return; }
+  if (nome === "listar_categorias") { executarCategorias(callId, nome, ctx); return; }
+  log("!! ferramenta desconhecida: " + nome, "erro");
+}
+
+async function executarBusca(callId, nome, argumentosJson, ctx) {
+  if (buscasIniciadas.has(callId)) { return; }
+  buscasIniciadas.add(callId);   // síncrono, antes de qualquer await
+
+  let argumentos = {};
+  try { argumentos = JSON.parse(argumentosJson); }
+  catch (erro) { log("!! argumentos ilegíveis: " + argumentosJson, "erro"); }
+
+  log("[tool] buscar_no_cardapio " + JSON.stringify(argumentos));
+  const inicio = performance.now();
+
+  // O TURNO É CAPTURADO AQUI, antes de qualquer await, e o registro entra
+  // nele vazio. O `response.done` da tool call chega ENQUANTO o fetch está em
+  // voo, e `fecharTurnoDeVoz` zera `turnoDeVoz`: ler a global depois do await
+  // era ler `null`, e o registro inteiro — com os cartões dentro — caía no
+  // chão. Era isto que fazia `produtos: []` em todos os turnos exportados.
+  const turno = turnoDeVoz;
+  const registro = {
+    nome: nome,
+    argumentos: argumentos,
+    duracao: null,
+    resumo: null,
+    produtos: [],
+  };
+  if (turno) { turno.ferramentas.push(registro); }
+
+  let resultado = { produtos: [], resumo: "A busca falhou." };
+  try {
+    const resp = await fetch(base() + "/voice/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        restaurant_id: ctx.restaurantId,
+        branch_id: ctx.branchId,
+        consulta: argumentos.consulta || "",
+        preco_maximo: argumentos.preco_maximo ?? null,
+        // O `ordenar` FALTAVA AQUI, e a falta era invisível (25/08/2026). O
+        // backend ganhou a ordenação por preço, o modelo passou a preencher o
+        // campo, e o log desta página imprimia `{"ordenar":"mais_barato_da_loja"}`
+        // — porque ele imprime os argumentos DO MODELO, antes deste corpo. Mas
+        // o campo morria nesta linha: a busca rodava sem ordem nenhuma e a
+        // resposta parecia certa.
+        //
+        // É o pior formato de defeito que este projeto conhece: a feature
+        // aparece funcionando no log de quem a testa, e o número que volta é o
+        // da busca por similaridade.
+        ordenar: argumentos.ordenar ?? null,
+      }),
+    });
+    if (resp.ok) { resultado = await resp.json(); }
+    else { log("!! /voice/search respondeu " + resp.status, "erro"); }
+  } catch (erro) {
+    log("!! /voice/search: " + erro.message, "erro");
+  }
+
+  registro.duracao = performance.now() - inicio;
+  registro.resumo = resultado.resumo;
+  registro.produtos = resultado.produtos;
+
+  // Se o turno já foi desenhado, `desenharTurnoDeVoz` pulou este registro —
+  // ele ainda estava sem resumo — e quem o desenha é esta linha.
+  const caixa = turno && caixasDeFerramenta.get(turno);
+  if (caixa) { caixa.appendChild(desenharFerramenta(registro)); }
+  precosFaladosDoTurno = formasFaladas(resultado.resumo);
+  for (const produto of resultado.produtos || []) {
+    if (produto && produto.name) { nomesConhecidos.add(produto.name); }
+  }
+  log("[tool] " + ms(registro.duracao) + " · " + resultado.resumo);
+
+  // Nunca deixar o modelo esperando calado: mesmo a falha volta como texto.
+  enviarResultado(callId, resultado.resumo);
+}
+
+async function executarCategorias(callId, nome, ctx) {
+  if (buscasIniciadas.has(callId)) { return; }
+  buscasIniciadas.add(callId);
+
+  log("[tool] listar_categorias");
+  const inicio = performance.now();
+  const turno = turnoDeVoz;   // antes de qualquer await, igual à busca
+  const registro = { nome: nome, argumentos: {}, duracao: null, resumo: null, produtos: [] };
+  if (turno) { turno.ferramentas.push(registro); }
+
+  let resultado = { resumo: "A listagem falhou." };
+  try {
+    const resp = await fetch(base() + "/voice/categories", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ restaurant_id: ctx.restaurantId, branch_id: ctx.branchId }),
+    });
+    if (resp.ok) { resultado = await resp.json(); }
+    else { log("!! /voice/categories respondeu " + resp.status, "erro"); }
+  } catch (erro) {
+    log("!! /voice/categories: " + erro.message, "erro");
+  }
+
+  registro.duracao = performance.now() - inicio;
+  registro.resumo = resultado.resumo;
+
+  const caixa = turno && caixasDeFerramenta.get(turno);
+  if (caixa) { caixa.appendChild(desenharFerramenta(registro)); }
+
+  // NÃO mexe em `precosFaladosDoTurno` nem em `nomesConhecidos`: categoria não
+  // é produto, não traz preço e não vai para a tela. O vocabulário do contador
+  // do teto continua sendo só o que a BUSCA devolveu — categoria citada numa
+  // frase não é produto falado.
+  log("[tool] " + ms(registro.duracao) + " · " + resultado.resumo);
+  enviarResultado(callId, resultado.resumo);
+}
+
+const TETO_DE_PRODUTOS_FALADOS = 2;
+
+function achatar(texto) {
+  // Minúscula e sem acento. O cadastro é texto livre do lojista e a transcrição
+  // vem da OpenAI: "Picanha Suina" no banco e "picanha suína" no áudio são o
+  // mesmo produto, e sem isto seriam duas strings que nunca se encontram.
+  return Array.from(String(texto || "").toLowerCase())
+    .map((caractere) => caractere.normalize("NFD")[0])
+    .join("");
+}
+
+function contarProdutosNaFala(transcript) {
+  // Quantos produtos ele citou nesta resposta. Diferente da detecção de preço
+  // que eu recusei escrever, esta checagem é EXATA: os nomes são strings que o
+  // backend nos deu, não padrões que a gente tenta adivinhar no meio do texto.
+  //
+  // Ela não corrige nada e não deve. É medição: três rodadas de regra de prompt
+  // não seguraram o teto, e a próxima decisão — endurecer, cortar o resumo, ou
+  // conviver — precisa de um número em vez de impressão.
+  //
+  // O QUE SE CONTA É MENÇÃO, E NÃO NOME QUE CASA (25/08/2026). A primeira versão
+  // filtrava `nomesConhecidos` por `includes` e contava o que sobrava. Ela logou
+  // "falou 3 de 2" numa frase com DOIS produtos: o cardápio tem "Picanha suína"
+  // (R$ 24,66) e "Picanha Suína" (R$ 92,10) — dois produtos diferentes que só
+  // divergem na maiúscula — e a comparação era em minúscula, então UMA menção
+  // casou com os dois.
+  //
+  // Falso positivo aqui é pior que medição faltando: o número existe para
+  // decidir se a regra do prompt pegou, e um contador que acusa violação onde
+  // não houve manda endurecer um prompt que estava obedecendo.
+  //
+  // Caixa é só o caso que apareceu. A mesma falha tem forma maior e certa de
+  // voltar: "Picanha" e "Picanha Completa" no mesmo cardápio fazem uma menção
+  // valer dois. Por isso o conserto não é comparar caixa — é contar TRECHO
+  // OCUPADO da frase. Cada menção pertence ao nome mais longo que a explica, e
+  // o que couber inteiro dentro de um trecho já reivindicado não conta de novo.
+  const dito = achatar(transcript);
+  if (!dito) { return; }
+
+  // Do mais longo para o mais curto: quem reivindica o trecho é o nome mais
+  // específico. Na ordem inversa "Picanha" tomaria o trecho e "Picanha
+  // Completa" ficaria de fora — mesma contagem, nome errado no log.
+  const candidatos = [...nomesConhecidos]
+    .map((nome) => ({ nome, chave: achatar(nome) }))
+    .filter(({ chave }) => chave)
+    .sort((a, b) => b.chave.length - a.chave.length);
+
+  const ocupados = [];   // os trechos [inicio, fim) já reivindicados
+  const citados = [];
+  for (const { nome, chave } of candidatos) {
+    for (let de = dito.indexOf(chave); de !== -1; de = dito.indexOf(chave, de + 1)) {
+      const ate = de + chave.length;
+      if (ocupados.some(([inicio, fim]) => de >= inicio && ate <= fim)) { continue; }
+      // Uma reivindicação por nome, e o `break` é ela: o teto é de produtos
+      // falados, e citar o mesmo produto duas vezes na frase é um produto.
+      ocupados.push([de, ate]);
+      citados.push({ nome, de });
+      break;
+    }
+  }
+  if (!citados.length) { return; }
+
+  // O log sai na ordem em que ele FALOU, e não na ordem do laço, que é por
+  // comprimento do nome. Quem lê a linha está conferindo contra uma frase.
+  citados.sort((a, b) => a.de - b.de);
+
+  const acima = citados.length > TETO_DE_PRODUTOS_FALADOS;
+  log(
+    "[teto] falou " + citados.length + " de " + TETO_DE_PRODUTOS_FALADOS +
+      (acima ? " — ACIMA: " : " · ") + citados.map(({ nome }) => nome).join(", "),
+    acima ? "erro" : undefined
+  );
+}
+
+function formasFaladas(resumo) {
+  // O terceiro campo de cada linha: `nome | R$ x,yz | como se fala | descrição`.
+  // Linha com "-" ali é produto sem preço, e não entra.
+  return String(resumo || "")
+    .split("\n")
+    .slice(1)
+    .map((linha) => (linha.split(" | ")[2] || "").trim())
+    .filter((falado) => falado && falado !== "-");
+}
+
+function enviarResultado(callId, resumo) {
+  if (resultadosEnviados.has(callId)) { return; }
+  resultadosEnviados.add(callId);
+  enviar({
+    type: "conversation.item.create",
+    item: { type: "function_call_output", call_id: callId, output: resumo },
+  });
+  pedirResposta();
+}
+
+/* --- os três encerramentos ------------------------------------------------ */
+
+function armarTeto() {
+  clearTimeout(timerDoTeto);
+  timerDoTeto = setTimeout(
+    () => encerrar("teto de " + limites.duracao_maxima_s + "s atingido"),
+    limites.duracao_maxima_s * 1000
+  );
+}
+
+function rearmarInatividade() {
+  clearTimeout(timerDoAviso);
+  clearTimeout(timerDaInatividade);
+  if (!sessaoEmCurso) { return; }
+  const avisoEm = Math.max(0, limites.inatividade_s - limites.aviso_antes_s) * 1000;
+  timerDoAviso = setTimeout(() => {
+    log("[inatividade] avisando que vou encerrar");
+    // Item de conversa, e não override de `instructions`: este aviso sai no
+    // FIM da sessão, quando o prefixo em cache já vale uma conversa inteira.
+    // Ver `mandarFalar` para o que o override custava aqui.
+    mandarFalar(
+      "Diga exatamente isto, em uma frase e nada mais: vou encerrar por inatividade.",
+      "aviso-de-inatividade"
+    );
+  }, avisoEm);
+  timerDaInatividade = setTimeout(
+    () => encerrar("silencio por " + limites.inatividade_s + "s"),
+    limites.inatividade_s * 1000
+  );
+}
+
+function reportarConexao(callId) {
+  if (!sessaoId || !callId) { return; }
+  log("[sessao] reportando call_id=" + callId);
+  fetch(base() + "/voice/session/" + sessaoId + "/connected", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ call_id: callId }),
+  }).then((r) => r.json())
+    .then((d) => { if (!d.registrado) { log("!! /connected devolveu registrado=false", "erro"); } })
+    .catch((erro) => log("!! /connected: " + erro.message, "erro"));
+}
+
+function reportarEncerramento(motivo, duracaoSegundos) {
+  if (!sessaoId) { return; }
+  // Os seis contadores só existem no navegador — o backend não vê a conversa.
+  // Sessão sem `usage` nenhum vai só com o motivo: zero significa "reportou
+  // zero", e inventar zero mente no relatório de custo.
+  const corpo = Object.assign({ motivo: motivo, duration_seconds: duracaoSegundos }, uso || {});
+  fetch(base() + "/voice/session/" + sessaoId + "/ended", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(corpo),
+    keepalive: true,   // sobrevive à aba fechada no mesmo instante
+  }).catch(() => {});
+  log("[sessao] /ended: " + JSON.stringify(corpo));
+}
+
+function encerrar(motivo) {
+  if (!sessaoEmCurso) { return; }
+  sessaoEmCurso = false;
+  clearTimeout(timerDoTeto); clearTimeout(timerDoAviso); clearTimeout(timerDaInatividade);
+  const duracao = Math.round((Date.now() - inicioDaSessao) / 1000);
+  estadoVoz("sessão encerrada — " + motivo + " (" + duracao + "s)");
+
+  if (canal) { try { canal.close(); } catch (e) {} canal = null; }
+  if (pc) { pc.close(); pc = null; }
+  // Sem parar as faixas o indicador de gravação fica aceso e o microfone
+  // continua captando depois de a sessão ter acabado.
+  if (microfone) { microfone.getTracks().forEach((f) => f.stop()); microfone = null; }
+  if (contextoDeAudio) { try { contextoDeAudio.close(); } catch (e) {} contextoDeAudio = null; }
+  analisador = null;
+
+  zerarConversa();
+  $("btnFalar").disabled = false;
+  $("btnParar").disabled = true;
+
+  reportarEncerramento(motivo, duracao);   // por último, sem await
+  sessaoId = null;
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && $("optAbaEscondida").checked) { encerrar("a aba saiu de vista"); }
+});
+window.addEventListener("blur", () => {
+  if ($("optBlur").checked) { encerrar("a janela perdeu o foco"); }
+});
+
+/* --------------------------------------------------------------------------
+   EXPORTAR
+   -------------------------------------------------------------------------- */
+function copiarJson() {
+  const pacote = {
+    quando: new Date().toISOString(),
+    base: base(),
+    restaurant_id: $("restaurantId").value,
+    branch_id: $("filial").value,
+    precos: precos(),
+    turnos: turnos.map((t) => Object.assign({}, t, { custo_usd: custoDoTurno(t) })),
+  };
+  navigator.clipboard.writeText(JSON.stringify(pacote, null, 2))
+    .then(() => { $("resumoTotal").textContent = "copiado."; setTimeout(desenharTabela, 1500); })
+    .catch(() => log("!! não consegui copiar", "erro"));
+}
+
+$("btnResolver").addEventListener("click", resolverLoja);
+$("btnEntrar").addEventListener("click", entrar);
+$("btnEnviar").addEventListener("click", enviarTexto);
+$("btnNovaSessao").addEventListener("click", novaSessao);
+$("btnFalar").addEventListener("click", () => {
+  comecarVoz().catch((erro) => {
+    estadoVoz("erro: " + erro.message);
+    log(String(erro), "erro");
+    $("btnFalar").disabled = false;
+  });
+});
+$("btnParar").addEventListener("click", () => encerrar("o cliente clicou em Parar"));
+$("btnCopiar").addEventListener("click", copiarJson);
+$("btnLimpar").addEventListener("click", () => { turnos.length = 0; desenharTabela(); });
+$("mensagem").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { enviarTexto(); }
+});
+["precoTextoEntrada","precoTextoSaida","precoAudioEntrada","precoAudioSaida",
+ "precoCacheAudio","precoCacheTexto","precoTextoVozEntrada","precoTextoVozSaida",
+ "entradaEstimada"].forEach((id) => $(id).addEventListener("input", desenharTabela));
+
+novaSessao();
+desenharTabela();
+log("bancada pronta. resolva a loja, entre com um cliente, e comece pelo texto.");
+if (!window.isSecureContext) {
+  log("!! esta página não está em contexto seguro: o microfone vai ser recusado", "erro");
+}
+</script>
+</body>
+</html>

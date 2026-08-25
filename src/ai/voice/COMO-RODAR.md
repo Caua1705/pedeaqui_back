@@ -5,6 +5,17 @@ plataforma inteira; outra no banco, restaurante por restaurante. Isso é
 proposital: a chave global sozinha acenderia a voz para toda a base no mesmo
 instante, e cada sessão custa dinheiro.
 
+## O atalho: `bancada.bat`
+
+Os passos 3 e 5 — subir a API e servir a página — cabem num duplo clique no
+`bancada.bat` da raiz. Ele abre duas janelas (a API e o `http.server`) e o
+navegador já na bancada. É `cmd` puro, sem PowerShell, então não depende de
+`ExecutionPolicy`.
+
+O que ele **não** faz são as duas chaves (passos 1 e 2) nem escolher o
+restaurante (passo 4): configuração e dados continuam na mão. O resto deste
+arquivo é o passo a passo, e o que explica o que o atalho está fazendo por você.
+
 ## 1. A chave mestra, no `.env`
 
 ```
@@ -58,22 +69,32 @@ verdade é o índice que está vazio.
 
 ## 5. Abra a bancada
 
-**A bancada é externa ao repositório**, e é de propósito: ela é descartável,
-mexe em três rotas que já existem e não tem por que versionar junto do
-backend. Ela mora em `bancada-assistente/bancada.html`, ao lado deste projeto,
-e se serve sozinha:
+A bancada mora em **`tools/bancada/`**, versionada junto do backend desde
+25/08/2026. Antes disso ela vivia numa pasta solta ao lado do projeto, e o
+motivo de ter vindo para cá é o que aconteceu enquanto estava fora: ninguém
+lembra de atualizar o que não aparece no `git status`. A página conhece o
+formato de `POST /voice/search` e os seis contadores do `/ended` — quando uma
+dessas coisas muda, a bancada tem que mudar no mesmo commit, e agora dá.
+
+Ela continua se servindo sozinha:
 
 ```bash
-cd ../bancada-assistente
+cd tools/bancada
 python -m http.server 5500
 ```
 
 E abra <http://localhost:5500/bancada.html>. As portas 5500, 5501 e 5173 já
 estão liberadas no CORS do `main.py` — não é preciso mexer em nada aqui.
 
+**Estar no repositório não é estar na imagem.** O `.dockerignore` deixa
+`tools/bancada/` e o `bancada.bat` de fora do `COPY . .`, pelo mesmo motivo do
+`print-agent/`: é código que roda na máquina de quem desenvolve, e um HTML de
+teste com campo de token não tem o que fazer viajando para produção.
+
 `GET /voice/test` **não existe mais** (removida em 24/08/2026). Ela servia uma
 cópia interna que foi apagada em `bd1f164` e ficou respondendo 500. Se você
-veio de um link antigo, é a bancada externa que você quer.
+veio de um link antigo, é `tools/bancada/bancada.html` que você quer — e note
+que **a API não serve a bancada nem hoje**: quem serve é o `http.server` acima.
 
 Cole o `restaurant_id`, a filial e o **token do cliente** (a emissão exige
 login; `POST /auth/login` devolve o `access_token`), clique em **Falar**, dê
@@ -106,7 +127,7 @@ junto das cotas.
 Emitir a credencial (`POST /voice/session`) não custa nada — o relógio começa
 quando o navegador abre a sessão de áudio. **Aba esquecida não fatura mais
 para sempre:** a sessão encerra sozinha no teto de duração, na inatividade e
-quando a aba sai de vista. Ver a bancada externa e `session_service.py`.
+quando a aba sai de vista. Ver `tools/bancada/` e `session_service.py`.
 
 ### Quanto foi de verdade, por restaurante
 

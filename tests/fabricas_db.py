@@ -172,6 +172,7 @@ def criar_produto(
     sort_order: int = 0,
     code: str | None = None,
     catalog_key: str | None = None,
+    serves_people: int | None = None,
 ) -> Product:
     """Um produto. A FILIAL sai da categoria, como em `create_product`.
 
@@ -191,6 +192,7 @@ def criar_produto(
         is_active=is_active,
         is_available=is_available,
         sort_order=sort_order,
+        serves_people=serves_people,
         code=code,
     )
     db.add(produto)

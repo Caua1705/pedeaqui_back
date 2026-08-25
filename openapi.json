@@ -10048,6 +10048,17 @@
             "title": "Restaurant Id",
             "type": "string"
           },
+          "serves_people": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Serves People"
+          },
           "slug": {
             "anyOf": [
               {

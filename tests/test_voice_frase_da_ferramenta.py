@@ -23,18 +23,27 @@ aparece mais no prompt: nomes inventados testam a montagem igual, e nome real
 vira exemplo que alguem copia para o prompt depois.
 """
 
-from decimal import Decimal
-from types import SimpleNamespace
+import uuid
 
 from src.ai.voice.search_service import VoiceSearchService
+from src.schemas.product_schema import ProductResponse
 
 
-def _produto(nome: str, preco: str | None = "10.00") -> SimpleNamespace:
-    return SimpleNamespace(
+def _produto(nome: str, preco: str = "10.00") -> ProductResponse:
+    """O schema real, e nao um `SimpleNamespace`: campo que o
+    `ProductResponse` nao tem tem que virar erro aqui, e nao em producao.
+    O relato inteiro esta em `test_voice_resumo_da_busca._produto`.
+
+    `preco` nao aceita `None` porque `ProductResponse.price` e `float`
+    obrigatorio — produto sem preco chega deste lado como zero.
+    """
+    return ProductResponse(
+        id=uuid.uuid4(),
+        restaurant_id=uuid.uuid4(),
+        branch_id=uuid.uuid4(),
+        category_id=uuid.uuid4(),
         name=nome,
-        price=None if preco is None else Decimal(preco),
-        description=None,
-        serves_people=None,
+        price=float(preco),
     )
 
 
@@ -78,8 +87,10 @@ def test_mais_de_dois_para_em_dois_e_avisa_que_ha_mais():
 def test_produto_sem_preco_nao_ganha_numero_inventado():
     """`preco_por_extenso` devolve None para preco ausente, zerado ou fora da
     faixa. Dizer "por zero reais" seria oferecer de graca o que ninguem
-    precificou."""
-    assert VoiceSearchService.frase_para_o_modelo([_produto("Prato Um", None)]) == "Tem Prato Um."
+    precificou.
+
+    O caso que chega aqui e o ZERO, e nao o nulo: a coluna e NOT NULL."""
+    assert VoiceSearchService.frase_para_o_modelo([_produto("Prato Um", "0.00")]) == "Tem Prato Um."
 
 
 def test_busca_vazia_nao_tem_frase_pronta():

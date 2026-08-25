@@ -20,6 +20,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+from src.models.product_model import Product
+from src.models.product_option_model import ProductOption, ProductOptionGroup
 from src.services.menu_service import MenuService
 
 
@@ -174,8 +176,26 @@ def make_restaurant():
     return SimpleNamespace(id=RESTAURANT_ID, name="Pizzaria do Ze", slug="pizzaria-do-ze")
 
 
+# OS TRES FIXTURES ABAIXO USAM O MODEL DE VERDADE, e nao `SimpleNamespace`.
+#
+# Eles alimentam `product_response`, que le COLUNA POR COLUNA. Com um dublê
+# solto, coluna nova que entre no model e no `product_response` — e que nao
+# esteja escrita aqui — vira `AttributeError`; e coluna que exista aqui com o
+# nome errado nunca e denunciada. Foi exatamente o que aconteceu com
+# `serves_people` (revisao 20260825_0039) na ponta da voz.
+#
+# Uma instancia TRANSIENTE do model resolve os dois lados de graca: coluna nao
+# passada vale `None` (nao estoura), e kwarg que nao seja coluna levanta
+# `TypeError` na hora. Nao ha sessao, nao ha banco, e estes testes continuam
+# fora do marcador `db`.
+#
+# O que NAO se ganha, e vale saber: `default=` de coluna so e aplicado no
+# INSERT, entao aqui ele nao vale — o que estes fixtures escreverem e o que a
+# funcao le. Por isso os campos continuam explicitos.
+
+
 def make_option(name, sort_order=0, is_active=True, additional_price="2.50"):
-    return SimpleNamespace(
+    return ProductOption(
         id=uuid.uuid4(),
         name=name,
         description=None,
@@ -199,7 +219,7 @@ def make_group(name, options=None, sort_order=0, is_active=True):
     """
     if options is None:
         options = [make_option("padrao")]
-    return SimpleNamespace(
+    group = ProductOptionGroup(
         id=uuid.uuid4(),
         name=name,
         description=None,
@@ -208,12 +228,13 @@ def make_group(name, options=None, sort_order=0, is_active=True):
         is_required=False,
         sort_order=sort_order,
         is_active=is_active,
-        options=list(options),
     )
+    group.options = list(options)
+    return group
 
 
 def make_product(name="X-Burger", slug="x-burger", price="24.90", image_path=None, option_groups=()):
-    return SimpleNamespace(
+    product = Product(
         id=uuid.uuid4(),
         restaurant_id=RESTAURANT_ID,
         branch_id=BRANCH_ID,
@@ -227,8 +248,9 @@ def make_product(name="X-Burger", slug="x-burger", price="24.90", image_path=Non
         is_active=True,
         is_available=True,
         sort_order=0,
-        option_groups=list(option_groups),
     )
+    product.option_groups = list(option_groups)
+    return product
 
 
 def make_service(
@@ -385,6 +407,26 @@ class TestProductResponseValues:
         response = MenuService.product_response(make_product(image_path="produtos/x.jpg"))
         assert response.image_url is not None
         assert response.image_url.endswith("produtos/x.jpg")
+
+    def test_o_serve_n_pessoas_atravessa_para_a_resposta_publica(self):
+        """A coluna existe desde a revisao 20260825_0039 e ficou meses so no
+        `AdminProductResponse`: o lojista preenchia pelo painel e ninguem do
+        lado do cliente lia.
+
+        Quem le e o atendente de VOZ, que monta a linha do produto a partir
+        desta resposta (a hidratacao da voz e do `/chat` passa por aqui). Sem
+        esta linha, `_serve_quantas_pessoas` levantava `AttributeError` em
+        toda busca falada — sem que nenhum teste rapido notasse."""
+        product = make_product()
+        product.serves_people = 2
+
+        assert MenuService.product_response(product).serves_people == 2
+
+    def test_o_serve_nulo_atravessa_como_nulo_e_nao_como_um(self):
+        """NULO e "o lojista nao disse". Carimbar 1 aqui seria o backend
+        inventando o fato que a coluna existe para parar de inventar — e
+        enquanto o cadastro estiver vazio, e o caso de TODO produto."""
+        assert MenuService.product_response(make_product()).serves_people is None
 
 
 # ---------------------------------------------------------------------------

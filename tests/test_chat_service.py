@@ -26,6 +26,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.models.branch_model import Branch
+from src.models.product_model import Product
 from src.services import chat_service as chat_module
 from src.services.chat_service import (
     _MAX_SESSION_MESSAGES,
@@ -80,7 +81,16 @@ class FakeProductRepository:
 
 
 def make_product(name="X-Burger", product_id=None):
-    return SimpleNamespace(
+    """O modelo de verdade, pelo mesmo motivo de `make_branch` logo abaixo.
+
+    A hidratacao entrega isto a `MenuService.product_response`, que le coluna
+    por coluna — entao um dublê solto tem de ser lembrado a cada coluna nova,
+    e o esquecimento sai como `AttributeError` num teste que fala de outra
+    coisa. Foi o que aconteceu com `serves_people` (revisao 20260825_0039):
+    ela entrou no model e no `product_response` da voz, e a ponta que
+    quebrou foi a busca falada, em producao.
+    """
+    product = Product(
         id=product_id or uuid.uuid4(),
         restaurant_id=uuid.uuid4(),
         branch_id=BRANCH_ID,
@@ -94,8 +104,9 @@ def make_product(name="X-Burger", product_id=None):
         is_active=True,
         is_available=True,
         sort_order=0,
-        option_groups=[],
     )
+    product.option_groups = []
+    return product
 
 
 def make_restaurant(name="Restaurante de Teste", assistant_notes=None):

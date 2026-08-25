@@ -41,6 +41,18 @@ class ProductResponse(BaseResponse):
     name: str
     slug: str | None = None
     description: str | None = None
+    # Mesmo campo do `AdminProductResponse`, e ele precisa existir NAS DUAS
+    # pontas: o lojista preenche pelo painel, e quem le e o atendente de voz,
+    # que monta a linha do produto a partir DESTE schema (a hidratacao do
+    # `/chat` e da voz passa por `MenuService.product_response`). Enquanto ele
+    # so existia do lado do admin, `_serve_quantas_pessoas` levantava
+    # AttributeError em toda busca de voz.
+    #
+    # NULO e "o lojista nao disse", e nao "serve para ninguem" — revisao
+    # 20260825_0039. Campo novo com default nao quebra cliente antigo do
+    # contrato (armadilha 7), e este schema nao e gravado em
+    # `idempotency_keys.response_body`.
+    serves_people: int | None = None
     price: float
     image_path: str | None = None
     image_url: str | None = None

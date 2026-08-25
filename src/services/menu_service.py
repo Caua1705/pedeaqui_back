@@ -299,6 +299,7 @@ class MenuService:
             name=product.name,
             slug=product.slug,
             description=product.description,
+            serves_people=product.serves_people,
             price=money_to_float(product.price),
             image_path=product.image_path,
             image_url=build_storage_url(product.image_path),

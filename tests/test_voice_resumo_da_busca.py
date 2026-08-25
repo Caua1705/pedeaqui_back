@@ -17,23 +17,54 @@ qualquer regra escrita contra ele teria sido regra exigindo o que o contrato
 nao entregava.
 """
 
-from decimal import Decimal
-from types import SimpleNamespace
+import uuid
 
 from src.ai.voice.search_service import VoiceSearchService, _LIMITE_DA_DESCRICAO
+from src.schemas.product_schema import ProductResponse
 
 
 def _produto(
     nome: str,
-    preco: str | None,
+    preco: str,
     descricao: str | None = None,
     serve: int | None = None,
-) -> SimpleNamespace:
-    return SimpleNamespace(
+) -> ProductResponse:
+    """O SCHEMA DE VERDADE, e nao um `SimpleNamespace` com os campos que a
+    funcao sob teste calha de ler.
+
+    **O dublê solto ja custou um defeito inteiro, e foi este arquivo que
+    deixou de pega-lo.** Em 25/08/2026 `serves_people` entrou no
+    `AdminProductResponse` (o do painel) e em `_serve_quantas_pessoas`, mas
+    nao no `ProductResponse` — que e o que `MenuService.product_response`
+    devolve, e portanto o que a hidratacao entrega a ferramenta de voz. Os
+    testes daqui passaram, porque o `SimpleNamespace` tinha o atributo, e
+    TODA busca de voz levantava `AttributeError` no caminho real. Quem
+    denunciou foi o teste de fumaca com banco, um dia depois.
+
+    A licao e a mesma do correlato da armadilha 42, do lado do schema: um
+    dublê que aceita qualquer atributo nao testa o contrato, testa o dublê.
+    Construir o schema real custa quatro UUIDs e faz campo que nao existe
+    virar erro na hora.
+
+    `preco` continua chegando como string, para o valor ficar legivel na
+    chamada — mas o schema o guarda como `float`, que e o que
+    `money_to_float` grava no caminho real. Um `Decimal` aqui esconderia
+    essa conversao.
+
+    **E `preco` deixou de aceitar `None`**: `products.price` e
+    `numeric(10,2) NOT NULL` e `ProductResponse.price` e `float` obrigatorio,
+    entao produto sem preco nao existe deste lado. O caso reachable e ZERO, e
+    e ele que os testes usam.
+    """
+    return ProductResponse(
+        id=uuid.uuid4(),
+        restaurant_id=uuid.uuid4(),
+        branch_id=uuid.uuid4(),
+        category_id=uuid.uuid4(),
         name=nome,
-        price=None if preco is None else Decimal(preco),
         description=descricao,
         serves_people=serve,
+        price=float(preco),
     )
 
 
@@ -63,8 +94,11 @@ def test_o_preco_em_digitos_NAO_vai_mais_para_o_modelo():
 
 def test_produto_sem_preco_nao_recebe_numero_nem_fala():
     """"-" no campo do preco, e o prompt manda nao falar preco desse produto.
-    Um zero aqui viraria "de graca" em audio."""
-    linha = VoiceSearchService.resumo_para_o_modelo([_produto("Brinde", None)]).splitlines()[1]
+    Um zero aqui viraria "de graca" em audio.
+
+    ZERO e nao `None`: a coluna e NOT NULL e o schema exige o campo, entao
+    "o lojista nao precificou" chega deste lado como `0.00`."""
+    linha = VoiceSearchService.resumo_para_o_modelo([_produto("Brinde", "0.00")]).splitlines()[1]
 
     assert linha == "Brinde | - | - | -"
 

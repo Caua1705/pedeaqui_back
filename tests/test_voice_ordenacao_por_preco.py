@@ -15,18 +15,35 @@ COMPARTILHADO: a voz passou a pedir busca larga, e a chave do cache de busca
 nao distinguia tamanho de conjunto.
 """
 
-from types import SimpleNamespace
+import uuid
 
 import pytest
+from pydantic import ValidationError
 
 from src.ai.services.chat_cache import ChatCache
 from src.ai.services.retrieval_service import TOP_K_PADRAO
 from src.ai.voice.realtime_client import SEARCH_TOOL
 from src.ai.voice.search_service import ORDENACOES, _ordenados_por_preco
+from src.schemas.product_schema import ProductResponse
 
 
-def _produto(nome: str, preco: float | None) -> SimpleNamespace:
-    return SimpleNamespace(name=nome, price=preco)
+def _produto(nome: str, preco: float) -> ProductResponse:
+    """O schema real, e nao um `SimpleNamespace` de dois campos.
+
+    Este era o dublê mais estreito dos tres — so `name` e `price` — e por isso
+    o mais enganoso: `_ordenados_por_preco` de fato so le esses dois hoje, mas
+    o que entra e sai da funcao e um `ProductResponse` inteiro, e foi um campo
+    lido DEPOIS dela (`serves_people`, no resumo) que quebrou em producao.
+    O relato esta em `test_voice_resumo_da_busca._produto`.
+    """
+    return ProductResponse(
+        id=uuid.uuid4(),
+        restaurant_id=uuid.uuid4(),
+        branch_id=uuid.uuid4(),
+        category_id=uuid.uuid4(),
+        name=nome,
+        price=preco,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -52,7 +69,7 @@ def test_decrescente_poe_o_mais_caro_na_frente():
     assert [p.name for p in ordenados] == ["caro", "medio", "barato"]
 
 
-@pytest.mark.parametrize("sem_valor", [None, 0, 0.0])
+@pytest.mark.parametrize("sem_valor", [0, 0.0])
 def test_produto_sem_preco_sai_da_lista_ordenada(sem_valor):
     """Preco ausente nao e preco zero. No topo de "o mais barato" ele seria o
     atendente oferecendo de graca o que ninguem precificou — e a voz e o
@@ -65,15 +82,29 @@ def test_produto_sem_preco_sai_da_lista_ordenada(sem_valor):
     assert [p.name for p in ordenados] == ["com preco"]
 
 
+def test_o_preco_nulo_nao_chega_a_esta_funcao():
+    """O `None` SAIU da lista acima em 25/08/2026, e a razao merece a linha.
+
+    `_ordenados_por_preco` testa `price is not None`, e enquanto o dublê era
+    `SimpleNamespace` dava para exercitar esse ramo. Com o schema real nao da:
+    `products.price` e `numeric(10,2) NOT NULL` e `ProductResponse.price` e
+    `float` obrigatorio — os dois caminhos que alimentam a funcao passam por
+    `MenuService.product_response`, entao nulo nao existe deste lado.
+
+    A guarda no codigo fica, e continua barata. O que este teste registra e
+    que ela e cinto de seguranca e nao caso vivo: quem for reproduzir "produto
+    sem preco" tem que usar ZERO, senao esbarra no schema como aqui."""
+    with pytest.raises(ValidationError):
+        _produto("sem preco", None)
+
+
 def test_produto_sem_preco_so_some_no_caminho_ordenado():
     """A remocao e local: fora de uma consulta ordenada ele continua
     aparecendo. Quem nao tem preco nao pode ser ordenado, mas pode ser
     mostrado."""
     from src.ai.voice.search_service import VoiceSearchService
 
-    resumo = VoiceSearchService.resumo_para_o_modelo(
-        [SimpleNamespace(name="Brinde", price=None, description=None, serves_people=None)]
-    )
+    resumo = VoiceSearchService.resumo_para_o_modelo([_produto("Brinde", 0.0)])
 
     assert "Brinde" in resumo
 

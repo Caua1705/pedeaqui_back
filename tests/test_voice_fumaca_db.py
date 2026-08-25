@@ -65,8 +65,17 @@ def test_a_voz_emite_credencial_e_a_ferramenta_devolve_produto(db, monkeypatch):
     # busca da voz e por LOJA desde a revisao 20260820_0026.
     filial = criar_filial(db, restaurante)
     categoria = criar_categoria(db, restaurante, nome="Carnes", filial=filial)
+    # `serves_people` preenchido de proposito: e o campo que atravessa o
+    # caminho INTEIRO (coluna -> `ProductResponse` -> resumo da ferramenta) e o
+    # unico teste que consegue provar que ele atravessa e este. Ver o bloco do
+    # passo 2.
     produto = criar_produto(
-        db, restaurante, categoria, nome="Picanha na Chapa", preco=Decimal("23.90")
+        db,
+        restaurante,
+        categoria,
+        nome="Picanha na Chapa",
+        preco=Decimal("23.90"),
+        serves_people=2,
     )
     _indexar(db, produto, "Carnes")
 
@@ -107,10 +116,28 @@ def test_a_voz_emite_credencial_e_a_ferramenta_devolve_produto(db, monkeypatch):
 
     corpo = busca.json()
     assert [p["name"] for p in corpo["produtos"]] == ["Picanha na Chapa"]
-    # O preço do cartão vem do banco, e o resumo que vai ao modelo usa o mesmo
-    # formato do chat de texto — vírgula, não ponto.
+    # O preço do cartão vem do banco.
     assert corpo["produtos"][0]["price"] == 23.90
-    assert corpo["resumo"] == "Produtos encontrados: Picanha na Chapa - R$ 23,90"
+
+    # O RESUMO, no formato de hoje. A asserção anterior ainda cobrava
+    # `"Produtos encontrados: Picanha na Chapa - R$ 23,90"`, o formato de antes
+    # de a ferramenta passar a entregar a frase pronta — e ninguém percebeu
+    # porque o teste morria ANTES desta linha, num `AttributeError` de
+    # `serves_people`. Consertada a exceção, apareceu a asserção velha
+    # embaixo dela. Vale como lembrete: teste vermelho esconde o próximo.
+    frase, *resto = corpo["resumo"].splitlines()
+    assert frase == "FRASE: Tem Picanha na Chapa por vinte e tres e noventa."
+
+    # O preço vai ao modelo SÓ na forma falada. Dígitos no resumo foram a
+    # tentação que produziu "quarenta e quatro e quarenta" para um R$ 34,40.
+    assert "23,90" not in corpo["resumo"]
+    assert "R$" not in corpo["resumo"]
+
+    # E o `serve N` chega ao modelo pelo caminho de verdade: coluna do banco,
+    # hidratação em `ProductResponse`, linha do resumo. Enquanto o campo
+    # existia só no `AdminProductResponse`, este passo levantava
+    # `AttributeError` — o lojista preenchia no painel e o atendente não lia.
+    assert resto[-1].endswith("| serve 2 pessoas")
 
     # 3. A OUTRA loja do mesmo restaurante nao conhece esta picanha.
     #
@@ -132,7 +159,16 @@ def test_a_voz_emite_credencial_e_a_ferramenta_devolve_produto(db, monkeypatch):
     # E a negativa que volta ao modelo diz NESTA LOJA. A picanha existe no
     # restaurante — so nao aqui. O modelo repete o que le, e "nao temos"
     # dito sobre a rede inteira e uma frase que ninguem conserta depois.
-    assert busca_na_outra.json()["resumo"] == "Nenhum produto encontrado nesta loja."
+    #
+    # A terceira asserção deste teste que estava congelada no formato antigo,
+    # pelo mesmo motivo das outras duas: a exceção do passo 2 nunca deixou
+    # nenhuma delas rodar.
+    resumo_vazio = busca_na_outra.json()["resumo"]
+    assert "Nenhum produto encontrado nesta loja." in resumo_vazio
+
+    # FRASE vazia é o sinal de "não achei": o que dizer numa negativa depende
+    # do que o cliente pediu, e essa pergunta só o modelo tem.
+    assert resumo_vazio.startswith("FRASE:\n")
 
 
 def _indexar(db, produto, category_name: str) -> None:

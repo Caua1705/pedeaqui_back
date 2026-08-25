@@ -39,9 +39,20 @@ from sqlalchemy.orm import Session
 
 from src.services.chat_service import ChatService
 from src.utils.money import format_money_br
+from src.utils.money_por_extenso import preco_por_extenso
 
 
 logger = logging.getLogger("uvicorn.error")
+
+# O corte da descricao. Generoso o bastante para caber "Baiao e batata frita.
+# Serve 2 pessoas." e curto o bastante para o paragrafo do lojista nao virar
+# custo em toda busca.
+_LIMITE_DA_DESCRICAO = 120
+
+# O que ocupa o campo quando nao ha o que por. Um traco, e nao campo vazio: com
+# quatro campos posicionais, "a | b |  | d" e mais facil de ler errado do que
+# "a | b | - | d".
+_VAZIO = "-"
 
 
 class VoiceSearchService:
@@ -144,6 +155,14 @@ class VoiceSearchService:
     def resumo_para_o_modelo(produtos: list) -> str:
         """O texto que volta para a Realtime como resultado da ferramenta.
 
+        Quatro campos por produto, um produto por linha:
+
+            nome | preco em digitos | preco como se fala | descricao
+
+        O que cada campo significa esta escrito no PROMPT, e nao aqui: o
+        prompt e cacheado a partir do turno 2, e este texto e cobrado inteiro
+        em toda busca. Explicacao de formato e coisa que se diz uma vez.
+
         A NEGATIVA E POR LOJA, e nao por restaurante (revisao
         20260820_0026). "Nenhum produto encontrado" foi escrito quando o
         cardapio era do restaurante e a frase era verdadeira; hoje a busca ja
@@ -152,23 +171,77 @@ class VoiceSearchService:
         junto — dizer "nesta loja" nos dois e o que impede o mais frouxo dos
         dois de ser o que ele repete em audio.
 
-        So nome e preco, e no maximo cinco. O modelo NAO precisa de id, imagem
-        nem grupo de opcao — isso ja esta na tela do cliente, vindo do JSON
-        completo da rota. Mandar o objeto inteiro para o modelo seria pagar
-        token de audio para ele nao usar nada disso.
+        Continua sem id, sem imagem e sem grupo de opcao, e no maximo cinco:
+        isso esta na tela do cliente, vindo do JSON completo da rota.
 
-        O preco sai de `format_money_br`, o MESMO do chat de texto. Antes era
-        um `:.2f` local, que produzia "R$ 23.90" com ponto enquanto o texto
-        dizia "R$ 23,90" com virgula — e o prompt de voz manda dizer o preco
-        "exatamente como a ferramenta devolveu" (`prompt_de_voz.py`). O modelo
-        estava sendo instruido a copiar um numero em formato que nao e o do
-        resto do sistema.
+        O preco em digitos sai de `format_money_br`, o MESMO do chat de texto.
+        Antes era um `:.2f` local, que produzia "R$ 23.90" com ponto enquanto
+        o texto dizia "R$ 23,90" com virgula.
+
+        O PRECO FALADO ENTROU EM 25/08/2026, e o porque esta inteiro no
+        cabecalho de `src/utils/money_por_extenso.py`: `R$ 34,40` saiu como
+        "quarenta e quatro e quarenta" numa sessao real. O modelo TRADUZIA o
+        numero de cabeca; agora ele copia. `None` — preco zerado, ausente ou
+        fora da faixa — vira "-", e o prompt manda nao falar preco desse
+        produto.
+
+        A DESCRICAO ENTROU NA MESMA RODADA, e por um defeito que parecia ser
+        outra coisa. Perguntado "e essa serve para quantas pessoas?", o
+        atendente respondeu que a picanha "nao vem com a quantidade servida
+        especifica" e que "normalmente e servida por peso". Lido de fora,
+        parecia a NAO INVENTE ao contrario: negar o que se tem.
+
+        **Ele nao tinha.** Este resumo mandava nome e preco, e mais nada — a
+        descricao com "Serve 2 pessoas" existia so no `produtos`, que vai para
+        a TELA. O modelo nao estava negando um dado que recebeu; estava sem
+        resposta e preencheu o buraco com conhecimento geral.
+
+        Por isso a descricao passou a vir. Regra de prompt sozinha nao
+        resolveria: mandar "nao invente" a quem nao tem a informacao so troca
+        a invencao por "esta na tela" — e quem esta com o telefone no ouvido
+        nao esta olhando a tela, que e o mesmo argumento que faz o preco ser
+        falado.
+
+        Ela vem CORTADA em `_LIMITE_DA_DESCRICAO` caracteres, no espaco. O
+        campo e texto livre do lojista: ha descricao de uma linha e ha
+        paragrafo inteiro, e cinco paragrafos por busca sao dezenas de tokens
+        cobrados em toda chamada para o modelo ler uma vez.
         """
         if not produtos:
             return "Nenhum produto encontrado nesta loja."
 
-        linhas = [f"{produto.name} - {format_money_br(produto.price)}" for produto in produtos[:5]]
-        return "Produtos encontrados: " + "; ".join(linhas)
+        linhas = [_linha_do_produto(produto) for produto in produtos[:5]]
+        return "Produtos encontrados nesta loja:\n" + "\n".join(linhas)
+
+
+def _linha_do_produto(produto) -> str:
+    """`nome | preco | preco falado | descricao`, com "-" no que faltar."""
+    falado = preco_por_extenso(produto.price)
+    return " | ".join(
+        (
+            produto.name,
+            format_money_br(produto.price) if falado else _VAZIO,
+            falado or _VAZIO,
+            _descricao_curta(produto.description),
+        )
+    )
+
+
+def _descricao_curta(descricao: str | None) -> str:
+    """A descricao do lojista, cortada no espaco, ou "-" quando nao houver.
+
+    Corta no ESPACO e nao no caractere: "Serve 2 pes" e pior que uma frase a
+    menos, porque o modelo le o pedaco como se fosse a informacao inteira.
+    """
+    if not descricao or not descricao.strip():
+        return _VAZIO
+
+    limpa = " ".join(descricao.split())
+    if len(limpa) <= _LIMITE_DA_DESCRICAO:
+        return limpa
+
+    cortada = limpa[:_LIMITE_DA_DESCRICAO].rsplit(" ", 1)[0]
+    return f"{cortada}..." if cortada else limpa[:_LIMITE_DA_DESCRICAO]
 
 
 def _digest(consulta: str) -> str:

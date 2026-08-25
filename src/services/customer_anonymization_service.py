@@ -37,10 +37,13 @@ from src.models.customer_model import Customer
 from src.models.order_model import Order
 from src.repositories.cashback_repository import CashbackRepository
 from src.repositories.customer_repository import CustomerRepository
+from src.repositories.customer_saved_card_repository import CustomerSavedCardRepository
 from src.repositories.order_review_repository import OrderReviewRepository
 from src.repositories.delivery_estimate_repository import DeliveryEstimateRepository
 from src.repositories.order_repository import OrderRepository
+from src.integrations.payment_gateway import PaymentGatewayError, delete_saved_card
 from src.services.order_state_machine import TERMINAL_ORDER_STATUSES
+from src.services.payment_credential_service import PaymentCredentialService
 from src.utils.security import hash_password, utcnow, verify_password
 
 
@@ -85,6 +88,8 @@ class CustomerAnonymizationService:
         self.delivery_estimate_repository = DeliveryEstimateRepository(db)
         self.cashback_repository = CashbackRepository(db)
         self.order_review_repository = OrderReviewRepository(db)
+        self.saved_card_repository = CustomerSavedCardRepository(db)
+        self.payment_credential_service = PaymentCredentialService(db)
 
     def anonymize(self, customer: Customer, password: str) -> None:
         """Apaga a pessoa e mantem a venda. Uma transacao, um commit.
@@ -102,9 +107,17 @@ class CustomerAnonymizationService:
         # saldo de um fantasma.
         cashback_perdido = self.cashback_repository.get_available_balance(customer.id)
 
+        # FORA da transacao, e ANTES dela, porque e I/O de rede: uma chamada
+        # ao Mercado Pago dentro do `try` seguraria a conexao do banco
+        # durante segundos e, pior, um gateway fora do ar impediria alguem
+        # de exercer o direito de apagar a propria conta. Falha aqui e
+        # registrada e engolida — ver _forget_cards_at_gateway.
+        cartoes_orfaos = self._forget_cards_at_gateway(customer)
+
         try:
             self._anonymize_orders(customer)
             self._clear_review_comments(customer)
+            self._delete_saved_cards(customer)
             self._delete_addresses(customer)
             self._delete_delivery_estimates(customer)
             self._delete_verification_codes(customer)
@@ -122,6 +135,7 @@ class CustomerAnonymizationService:
         # resolve mais para pessoa nenhuma.
         logger.info("[LGPD] conta anonimizada customer_id=%s", customer.id)
         self._log_forfeited_cashback(customer.id, cashback_perdido)
+        self._log_orphan_cards(customer.id, cartoes_orfaos)
 
     @staticmethod
     def _log_forfeited_cashback(customer_id: uuid.UUID, balance: Decimal) -> None:
@@ -248,6 +262,82 @@ class CustomerAnonymizationService:
         (`order_review_service.review_retention_cutoff`).
         """
         self.order_review_repository.clear_comments_of_customer(customer.id)
+
+    def _forget_cards_at_gateway(self, customer: Customer) -> int:
+        """Apaga os cartoes salvos na conta do Mercado Pago de cada lojista.
+
+        MELHOR ESFORCO, de proposito. O direito de apagar a conta nao pode
+        ficar refem de o gateway estar de pe: uma instabilidade deles
+        transformaria a exclusao num 502 que a pessoa nao tem como resolver,
+        e a LGPD nao admite esse tipo de dependencia. Por isso a falha e
+        contada e logada, nunca propagada.
+
+        O que sobra quando falha e um cartao pendurado na conta do lojista
+        sem referencia nossa. Nao ha PAN nem CVV la — o Mercado Pago guarda
+        o cartao, nao nos — mas e um resto que alguem precisa saber que
+        existe, e por isso ele sai no log com o customer_id.
+
+        ANTES da transacao e nao depois do commit: depois do commit as linhas
+        ja teriam sido apagadas e nao haveria mais como saber quais ids
+        remover.
+        """
+        falhas = 0
+        for card in self.saved_card_repository.list_all_cards_of_customer(customer.id):
+            if not self._delete_one_card_at_gateway(card):
+                falhas += 1
+        return falhas
+
+    def _delete_one_card_at_gateway(self, card) -> bool:
+        profile = card.profile
+        credential = self.payment_credential_service.get_active_credential(
+            profile.restaurant_id
+        )
+        if credential is None:
+            # Restaurante sem credencial no ambiente ativo: nao ha conta a
+            # que pedir a remocao. Conta como resto, nao como sucesso.
+            return False
+        try:
+            delete_saved_card(
+                access_token=credential.access_token,
+                provider_customer_id=profile.provider_customer_id,
+                provider_card_id=card.provider_card_id,
+            )
+            return True
+        except PaymentGatewayError as exc:
+            logger.warning(
+                "[LGPD] falha ao remover cartao no gateway customer_id=%s: %s",
+                profile.customer_id,
+                exc,
+            )
+            return False
+
+    @staticmethod
+    def _log_orphan_cards(customer_id: uuid.UUID, falhas: int) -> None:
+        """Linha propria e SO quando sobrou cartao, pelo mesmo motivo do
+        `_log_forfeited_cashback`: o que se quer de um grep e o caso que
+        precisa de acao, nao todo evento do tipo."""
+        if falhas <= 0:
+            return
+        logger.warning(
+            "[LGPD] conta anonimizada com cartao remanescente no gateway "
+            "customer_id=%s cartoes=%s",
+            customer_id,
+            falhas,
+        )
+
+    def _delete_saved_cards(self, customer: Customer) -> None:
+        """Apaga cartoes E perfis daqui dentro da transacao unica.
+
+        O perfil vai junto: ele guarda o id do "customer" que o Mercado Pago
+        criou a partir do e-mail da pessoa, e deixar a linha seria manter um
+        ponteiro para um cadastro dela num sistema de terceiro, que e
+        exatamente o que a anonimizacao existe para nao fazer.
+        """
+        for card in self.saved_card_repository.list_all_cards_of_customer(customer.id):
+            self.saved_card_repository.delete_card(card)
+        for profile in self.saved_card_repository.list_profiles_of_customer(customer.id):
+            self.saved_card_repository.delete_profile(profile)
+        self.db.flush()
 
     def _delete_addresses(self, customer: Customer) -> None:
         self.customer_repository.delete_addresses_of(customer.id)

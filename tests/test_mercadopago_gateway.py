@@ -65,10 +65,14 @@ HTTPX_CLIENT_PATH = "src.integrations.payment_gateway.httpx.Client"
 
 
 class FakeResponse:
-    def __init__(self, status_code, json_body=None, json_error=False):
+    def __init__(self, status_code, json_body=None, json_error=False, content=b"{}"):
         self.status_code = status_code
         self._json_body = json_body
         self._json_error = json_error
+        # `_call_mercadopago` le `.content` antes de `.json()`: corpo vazio e
+        # resposta valida para o DELETE de cartao. O default nao-vazio faz
+        # todo dublê existente continuar caindo no caminho do `.json()`.
+        self.content = content
 
     def json(self):
         if self._json_error:

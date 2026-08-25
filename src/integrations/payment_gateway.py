@@ -57,6 +57,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
+from urllib.parse import quote
 
 import httpx
 
@@ -204,6 +205,10 @@ class CardPaymentInput:
     # nenhum daqui.
     payer_document_type: str | None = None
     payer_document_number: str | None = None
+    # Preenchido SO na cobranca com cartao salvo: e o "customer" do Mercado
+    # Pago dono do cartao. Sem ele o gateway recusa um token que nasceu de
+    # um `card_id`, porque o cartao pertence ao customer e nao ao avulso.
+    provider_customer_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -229,6 +234,24 @@ class PaymentIntent:
     # cliente que "cc_rejected_bad_filled_security_code").
     raw_status: str | None = None
     raw_status_detail: str | None = None
+
+
+@dataclass(frozen=True)
+class SavedCardData:
+    """O que o gateway devolve ao pendurar um cartao num customer.
+
+    E deliberadamente magro: id opaco, bandeira, quatro digitos e validade.
+    A resposta do Mercado Pago traz mais campos (primeiros seis digitos,
+    nome do portador, dados do emissor); **nada disso e lido aqui**, para
+    nao existir caminho pelo qual um dado a mais chegue ao banco por
+    descuido de quem escrever o INSERT depois.
+    """
+
+    provider_card_id: str
+    brand: str
+    last_four_digits: str
+    expiration_month: int | None = None
+    expiration_year: int | None = None
 
 
 @dataclass(frozen=True)
@@ -401,6 +424,14 @@ def _mercadopago_body(
             "type": card.payer_document_type,
             "number": card.payer_document_number,
         }
+    # Cartao SALVO: o pagador deixa de ser um e-mail avulso e passa a ser o
+    # customer dono do cartao. O `token` continua obrigatorio e continua
+    # vindo do navegador — a diferenca e que ele nasceu de um `card_id` mais
+    # o CVV, em vez do numero digitado. Sem estes dois campos o Mercado Pago
+    # recusa esse token: para ele o cartao pertence ao customer.
+    if card.provider_customer_id:
+        body["payer"]["type"] = "customer"
+        body["payer"]["id"] = card.provider_customer_id
     return body
 
 
@@ -433,6 +464,124 @@ def _mercadopago_intent(payload: dict) -> PaymentIntent:
         qr_code=transaction_data.get("qr_code"),
         raw_status=raw_status,
         raw_status_detail=payload.get("status_detail"),
+    )
+
+
+def find_or_create_gateway_customer(*, access_token: str, email: str) -> str:
+    """O id do "customer" do Mercado Pago para este e-mail, criando se preciso.
+
+    BUSCA ANTES DE CRIAR, e a ordem nao e otimizacao: o Mercado Pago recusa
+    um segundo customer com o mesmo e-mail na mesma conta. Criar primeiro e
+    tratar o erro funcionaria, mas obrigaria a distinguir "ja existe" de
+    "e-mail invalido" pelo texto da mensagem deles — que muda sem aviso.
+
+    A busca depois do POST cobre a CORRIDA: duas abas salvando um cartao ao
+    mesmo tempo, a primeira cria e a segunda leva o 400. Aqui a segunda
+    busca de novo e acha o que a primeira criou, em vez de estourar um erro
+    que o cliente nao tem como resolver.
+    """
+    existing = _search_gateway_customer(access_token=access_token, email=email)
+    if existing is not None:
+        return existing
+
+    try:
+        payload = _call_mercadopago(
+            method="POST",
+            path="/v1/customers",
+            access_token=access_token,
+            json_body={"email": email},
+        )
+    except PaymentGatewayError:
+        recovered = _search_gateway_customer(access_token=access_token, email=email)
+        if recovered is None:
+            raise
+        return recovered
+
+    customer_id = payload.get("id")
+    if not customer_id:
+        raise PaymentGatewayUnavailableError(
+            "Mercado Pago criou o customer sem devolver id"
+        )
+    return str(customer_id)
+
+
+def _search_gateway_customer(*, access_token: str, email: str) -> str | None:
+    """None quando a conta do restaurante ainda nao conhece este e-mail."""
+    payload = _call_mercadopago(
+        method="GET",
+        path=f"/v1/customers/search?email={quote(email)}",
+        access_token=access_token,
+    )
+    results = payload.get("results") or []
+    if not results:
+        return None
+    found = results[0].get("id")
+    return str(found) if found else None
+
+
+def save_card(*, access_token: str, provider_customer_id: str, token: str) -> SavedCardData:
+    """Pendura no customer o cartao que o navegador tokenizou.
+
+    `token` e de uso unico e vida curta, e e o UNICO jeito de o cartao
+    chegar aqui: o numero foi digitado no formulario do SDK deles, no
+    navegador, e nunca passou por este processo.
+
+    **Isto nao cobra nada e nao valida saldo.** O cartao so e testado de
+    verdade na primeira cobranca — decisao tomada em 25/08/2026, e o motivo
+    esta em docs/cartao-salvo.md.
+    """
+    payload = _call_mercadopago(
+        method="POST",
+        path=f"/v1/customers/{provider_customer_id}/cards",
+        access_token=access_token,
+        json_body={"token": token},
+    )
+    return _saved_card_data(payload)
+
+
+def delete_saved_card(
+    *, access_token: str, provider_customer_id: str, provider_card_id: str
+) -> None:
+    """Apaga o cartao na conta do restaurante no Mercado Pago.
+
+    404 e tratado como SUCESSO: o cartao ja nao esta la, que e exatamente o
+    estado que se queria. Levantar erro faria uma remocao repetida — dois
+    cliques, um retry de rede — travar para sempre uma linha que o cliente
+    quer ver sumir.
+    """
+    try:
+        _call_mercadopago(
+            method="DELETE",
+            path=f"/v1/customers/{provider_customer_id}/cards/{provider_card_id}",
+            access_token=access_token,
+        )
+    except PaymentNotFoundError:
+        logger.info(
+            "[Pagamento][mercadopago] cartao ja nao existia no gateway card_id=%s",
+            provider_card_id,
+        )
+
+
+def _saved_card_data(payload: dict) -> SavedCardData:
+    """Le SO os cinco campos que a tabela guarda, e recusa o resto.
+
+    A resposta deles traz `first_six_digits`, nome do portador e dados do
+    emissor. Nenhum e lido: o que nao e extraido aqui nao tem como ser
+    gravado por engano depois.
+    """
+    provider_card_id = payload.get("id")
+    last_four = payload.get("last_four_digits")
+    brand = (payload.get("payment_method") or {}).get("id")
+    if not provider_card_id or not last_four or not brand:
+        raise PaymentGatewayUnavailableError(
+            "Mercado Pago salvou o cartao sem id, bandeira ou ultimos digitos"
+        )
+    return SavedCardData(
+        provider_card_id=str(provider_card_id),
+        brand=str(brand),
+        last_four_digits=str(last_four),
+        expiration_month=payload.get("expiration_month"),
+        expiration_year=payload.get("expiration_year"),
     )
 
 
@@ -726,7 +875,7 @@ def _call_mercadopago(
     json_body: dict | None = None,
     extra_headers: dict[str, str] | None = None,
 ) -> dict:
-    """POST/GET autenticado na API do Mercado Pago.
+    """POST/GET/DELETE autenticado na API do Mercado Pago.
 
     Nunca loga o access_token nem o corpo de uma resposta de SUCESSO: o
     primeiro e credencial da conta do restaurante, o segundo traz o dado de
@@ -792,6 +941,13 @@ def _call_mercadopago(
         # A mensagem da excecao leva o CODIGO, nunca o texto deles: ele chega
         # ao cliente e pode ecoar o e-mail do pagador que mandamos.
         raise _mercadopago_error_for_status(status_code, method, path, error)
+
+    # Corpo vazio e resposta VALIDA para o DELETE de cartao (eles ora
+    # devolvem o recurso apagado, ora um 204 pelado). Tratar isso como erro
+    # faria uma remocao bem-sucedida virar 502 na cara do cliente, e a
+    # linha continuaria no nosso banco.
+    if not response.content:
+        return {}
 
     try:
         return response.json()

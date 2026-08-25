@@ -5123,14 +5123,34 @@
             "title": "Payer Document Type"
           },
           "payment_method_id": {
-            "description": "Bandeira que o SDK resolveu ('visa', 'master', 'elo'). NAO e o `payment_method` do pedido ('credit_card') — sao vocabularios diferentes, e o gateway quer o dele.",
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Bandeira que o SDK resolveu ('visa', 'master', 'elo'). NAO e o `payment_method` do pedido ('credit_card') — sao vocabularios diferentes, e o gateway quer o dele. Opcional QUANDO ha `saved_card_id`: nesse caso vale a bandeira gravada no cadastro do cartao, que e mais confiavel que a que o cliente mandaria.",
             "examples": [
               "master"
             ],
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Payment Method Id",
-            "type": "string"
+            "title": "Payment Method Id"
+          },
+          "saved_card_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Id do cartao SALVO (o `id` de /customers/me/cards), quando a cobranca usa um cartao que a pessoa ja cadastrou. **O `token` continua obrigatorio**: para cobrar um cartao salvo o SDK gera um token novo a partir do `card_id` mais o CVV, no navegador. Cartao salvo poupa redigitar o NUMERO, nao o codigo de seguranca.",
+            "title": "Saved Card Id"
           },
           "token": {
             "description": "Token de uso unico gerado pelo SDK no navegador.",
@@ -5141,8 +5161,7 @@
           }
         },
         "required": [
-          "token",
-          "payment_method_id"
+          "token"
         ],
         "title": "CardPaymentPayload",
         "type": "object"
@@ -9048,7 +9067,8 @@
           "payment_unavailable",
           "payment_rejected",
           "login_required",
-          "card_token_required"
+          "card_token_required",
+          "saved_card_not_found"
         ],
         "title": "PaymentErrorCode",
         "type": "string"
@@ -11105,6 +11125,83 @@
           "average_ticket_comparison"
         ],
         "title": "SalesSummaryResponse",
+        "type": "object"
+      },
+      "SaveCardRequest": {
+        "description": "O que o navegador manda para salvar um cartao.\n\n`restaurant_slug` no corpo, e nao inferido: o cartao salvo vive dentro\nda conta do Mercado Pago DAQUELE restaurante (ver\n`customer_saved_cards`), entao nao existe \"salvar o cartao\" sem dizer\nonde. Um default silencioso salvaria na loja errada e o cartao nao\napareceria na tela do checkout.",
+        "properties": {
+          "restaurant_slug": {
+            "description": "Restaurante em cuja conta do gateway o cartao sera salvo.",
+            "title": "Restaurant Slug",
+            "type": "string"
+          },
+          "token": {
+            "description": "Token de uso unico gerado pelo SDK do Mercado Pago NO NAVEGADOR. O numero do cartao nao passa por esta API.",
+            "minLength": 1,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "restaurant_slug",
+          "token"
+        ],
+        "title": "SaveCardRequest",
+        "type": "object"
+      },
+      "SavedCardResponse": {
+        "description": "O cartao como a tela precisa dele: para reconhecer, nao para cobrar.\n\n`id` e o nosso UUID, e e ele que volta em `card.saved_card_id` na hora\nde pagar. O id do cartao no Mercado Pago **nao sai daqui** — ele so tem\nsentido dentro da conta do restaurante, e publica-lo nao ajudaria o\nfront em nada.",
+        "properties": {
+          "brand": {
+            "description": "Bandeira, no vocabulario do gateway: \"visa\", \"master\", \"elo\".",
+            "title": "Brand",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expiration_month": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expiration Month"
+          },
+          "expiration_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expiration Year"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_four_digits": {
+            "description": "Os quatro ultimos digitos, para a tela.",
+            "title": "Last Four Digits",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "brand",
+          "last_four_digits",
+          "created_at"
+        ],
+        "title": "SavedCardResponse",
         "type": "object"
       },
       "StartPaymentRequest": {
@@ -17306,6 +17403,181 @@
           }
         ],
         "summary": "Set Default Address",
+        "tags": [
+          "customers"
+        ]
+      }
+    },
+    "/customers/me/cards": {
+      "get": {
+        "description": "Os cartoes que esta pessoa salvou NESTE restaurante.\n\n## Lista vazia nao quer dizer \"nunca salvou\"\n\nEla tambem e a resposta para quem salvou cartao em outra loja da\nplataforma, e para quem salvou antes de o ambiente do gateway virar de\nteste para producao. Nos tres casos a tela e a mesma: oferecer o cadastro\nde um cartao novo.\n\n## O que NAO sai daqui\n\nO id do cartao no Mercado Pago. O `id` da resposta e o nosso UUID, e e\nele que volta em `card.saved_card_id` na hora de pagar.",
+        "operationId": "list_saved_cards_customers_me_cards_get",
+        "parameters": [
+          {
+            "description": "Restaurante cujos cartoes salvos se quer listar. Obrigatorio: o cartao vive na conta do gateway DAQUELE lojista e nao e visivel nem cobravel pela conta de outro.",
+            "in": "query",
+            "name": "restaurant_slug",
+            "required": true,
+            "schema": {
+              "description": "Restaurante cujos cartoes salvos se quer listar. Obrigatorio: o cartao vive na conta do gateway DAQUELE lojista e nao e visivel nem cobravel pela conta de outro.",
+              "title": "Restaurant Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SavedCardResponse"
+                  },
+                  "title": "Response List Saved Cards Customers Me Cards Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Nao autenticado"
+          },
+          "404": {
+            "description": "Restaurante nao encontrado"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Saved Cards",
+        "tags": [
+          "customers"
+        ]
+      },
+      "post": {
+        "description": "Salva um cartao tokenizado na conta do restaurante.\n\n## O numero do cartao nao passa por aqui\n\nO corpo leva o `token` que o SDK do Mercado Pago gerou NO NAVEGADOR.\nNao ha campo de PAN, de CVV nem de validade — e nao deve haver.\n\n## Isto nao cobra nada, e o cartao nao e validado agora\n\nNao ha cobranca de R$ 1,00 seguida de estorno. O cartao e testado na\nprimeira cobranca de verdade, e um cartao sem limite entra na lista e so\nfalha no checkout. **Decisao tomada**, com o motivo em\n`docs/cartao-salvo.md`.\n\n## 201 repetido para o mesmo cartao devolve a MESMA linha\n\nSalvar duas vezes o mesmo cartao nao cria duas linhas: o gateway devolve\no mesmo id e o cadastro existente e reaproveitado.",
+        "operationId": "save_card_customers_me_cards_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveCardRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedCardResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Nao autenticado"
+          },
+          "409": {
+            "description": "Conta sem e-mail"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "description": "Gateway recusou ou nao respondeu"
+          },
+          "503": {
+            "description": "Restaurante sem cartao habilitado no ambiente ativo"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Save Card",
+        "tags": [
+          "customers"
+        ]
+      }
+    },
+    "/customers/me/cards/{card_id}": {
+      "delete": {
+        "description": "Remove o cartao NOS DOIS LADOS: no Mercado Pago e no nosso banco.\n\nO gateway responde primeiro. Se ele estiver fora do ar a remocao falha\ninteira (502) e o cartao continua na lista — o cliente tenta de novo. A\nordem inversa deixaria o cartao pendurado na conta do lojista **sem\nreferencia nenhuma nossa**, e ninguem mais conseguiria remove-lo.\n\n## Pedido em analise que usava este cartao continua em analise\n\nA cobranca ja existe no gateway e nao depende do cadastro do cartao: ela\nfoi criada com um token, nao com o `card_id`. Remover o cartao nao\ncancela, nao estorna e nao muda o resultado do antifraude — o `in_review`\nsegue e o webhook decide o pedido do mesmo jeito.",
+        "operationId": "delete_saved_card_customers_me_cards__card_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "card_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Card Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Nao autenticado"
+          },
+          "404": {
+            "description": "Cartao nao encontrado nesta conta"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "description": "Gateway nao respondeu"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Saved Card",
         "tags": [
           "customers"
         ]

@@ -1,6 +1,7 @@
+import uuid
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class PaymentErrorCode(str, Enum):
@@ -28,6 +29,10 @@ class PaymentErrorCode(str, Enum):
     # Cartao pedido sem o token gerado no navegador. Erro de integracao do
     # front, nao do cliente.
     CARD_TOKEN_REQUIRED = "card_token_required"
+    # `saved_card_id` que nao e desta pessoa, nao e deste restaurante, ou foi
+    # removido entre a tela de checkout e o clique em pagar. O front tem que
+    # recarregar a lista de cartoes — insistir com o mesmo id nao muda nada.
+    SAVED_CARD_NOT_FOUND = "saved_card_not_found"
 
 
 class CardPaymentPayload(BaseModel):
@@ -45,11 +50,25 @@ class CardPaymentPayload(BaseModel):
         min_length=1,
         max_length=256,
     )
-    payment_method_id: str = Field(
+    saved_card_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "Id do cartao SALVO (o `id` de /customers/me/cards), quando a "
+            "cobranca usa um cartao que a pessoa ja cadastrou. **O `token` "
+            "continua obrigatorio**: para cobrar um cartao salvo o SDK gera "
+            "um token novo a partir do `card_id` mais o CVV, no navegador. "
+            "Cartao salvo poupa redigitar o NUMERO, nao o codigo de "
+            "seguranca."
+        ),
+    )
+    payment_method_id: str | None = Field(
+        default=None,
         description=(
             "Bandeira que o SDK resolveu ('visa', 'master', 'elo'). NAO e o "
             "`payment_method` do pedido ('credit_card') — sao vocabularios "
-            "diferentes, e o gateway quer o dele."
+            "diferentes, e o gateway quer o dele. Opcional QUANDO ha "
+            "`saved_card_id`: nesse caso vale a bandeira gravada no cadastro "
+            "do cartao, que e mais confiavel que a que o cliente mandaria."
         ),
         min_length=1,
         max_length=64,
@@ -74,6 +93,22 @@ class CardPaymentPayload(BaseModel):
         ),
         max_length=32,
     )
+
+    @model_validator(mode="after")
+    def _bandeira_ou_cartao_salvo(self) -> "CardPaymentPayload":
+        """Sem bandeira e sem cartao salvo nao ha como montar o corpo.
+
+        A checagem vive aqui, e nao no service, porque a resposta certa e
+        422 do proprio contrato: e um corpo malformado, nao uma regra de
+        negocio. Deixar passar renderia um 400 do gateway, la na frente,
+        dizendo `payment_method_id` ausente — o mesmo defeito uma camada
+        depois e com o nome deles.
+        """
+        if self.payment_method_id or self.saved_card_id:
+            return self
+        raise ValueError(
+            "Informe payment_method_id (bandeira) ou saved_card_id (cartao salvo)."
+        )
 
 
 class PaymentConfigResponse(BaseModel):

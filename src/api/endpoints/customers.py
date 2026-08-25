@@ -25,10 +25,12 @@ from src.schemas.customer_schema import (
     UpdateCustomerAddressRequest,
 )
 from src.schemas.order_schema import OrderDetailResponse
+from src.schemas.saved_card_schema import SaveCardRequest, SavedCardResponse
 from src.services.customer_anonymization_service import CustomerAnonymizationService
 from src.services.customer_service import CustomerService
 from src.services.cashback_service import CashbackService
 from src.services.order_service import OrderService
+from src.services.saved_card_service import SavedCardService
 
 
 router = APIRouter(prefix="/customers", tags=["customers"])
@@ -283,3 +285,111 @@ def set_default_address(
     db: Session = Depends(get_db),
 ) -> CustomerAddressResponse:
     return CustomerService(db).set_default_address(current_customer, address_id)
+
+
+@router.get(
+    "/me/cards",
+    response_model=list[SavedCardResponse],
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"description": "Nao autenticado"},
+        status.HTTP_404_NOT_FOUND: {"description": "Restaurante nao encontrado"},
+    },
+)
+def list_saved_cards(
+    restaurant_slug: str = Query(
+        description=(
+            "Restaurante cujos cartoes salvos se quer listar. Obrigatorio: o "
+            "cartao vive na conta do gateway DAQUELE lojista e nao e visivel "
+            "nem cobravel pela conta de outro."
+        ),
+    ),
+    current_customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+) -> list[SavedCardResponse]:
+    """Os cartoes que esta pessoa salvou NESTE restaurante.
+
+    ## Lista vazia nao quer dizer "nunca salvou"
+
+    Ela tambem e a resposta para quem salvou cartao em outra loja da
+    plataforma, e para quem salvou antes de o ambiente do gateway virar de
+    teste para producao. Nos tres casos a tela e a mesma: oferecer o cadastro
+    de um cartao novo.
+
+    ## O que NAO sai daqui
+
+    O id do cartao no Mercado Pago. O `id` da resposta e o nosso UUID, e e
+    ele que volta em `card.saved_card_id` na hora de pagar.
+    """
+    return SavedCardService(db).list_cards(current_customer, restaurant_slug)
+
+
+@router.post(
+    "/me/cards",
+    response_model=SavedCardResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"description": "Nao autenticado"},
+        status.HTTP_409_CONFLICT: {"description": "Conta sem e-mail"},
+        status.HTTP_502_BAD_GATEWAY: {"description": "Gateway recusou ou nao respondeu"},
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "description": "Restaurante sem cartao habilitado no ambiente ativo"
+        },
+    },
+)
+def save_card(
+    payload: SaveCardRequest,
+    current_customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+) -> SavedCardResponse:
+    """Salva um cartao tokenizado na conta do restaurante.
+
+    ## O numero do cartao nao passa por aqui
+
+    O corpo leva o `token` que o SDK do Mercado Pago gerou NO NAVEGADOR.
+    Nao ha campo de PAN, de CVV nem de validade — e nao deve haver.
+
+    ## Isto nao cobra nada, e o cartao nao e validado agora
+
+    Nao ha cobranca de R$ 1,00 seguida de estorno. O cartao e testado na
+    primeira cobranca de verdade, e um cartao sem limite entra na lista e so
+    falha no checkout. **Decisao tomada**, com o motivo em
+    `docs/cartao-salvo.md`.
+
+    ## 201 repetido para o mesmo cartao devolve a MESMA linha
+
+    Salvar duas vezes o mesmo cartao nao cria duas linhas: o gateway devolve
+    o mesmo id e o cadastro existente e reaproveitado.
+    """
+    return SavedCardService(db).save_card(current_customer, payload)
+
+
+@router.delete(
+    "/me/cards/{card_id}",
+    response_model=MessageResponse,
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"description": "Nao autenticado"},
+        status.HTTP_404_NOT_FOUND: {"description": "Cartao nao encontrado nesta conta"},
+        status.HTTP_502_BAD_GATEWAY: {"description": "Gateway nao respondeu"},
+    },
+)
+def delete_saved_card(
+    card_id: UUID,
+    current_customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    """Remove o cartao NOS DOIS LADOS: no Mercado Pago e no nosso banco.
+
+    O gateway responde primeiro. Se ele estiver fora do ar a remocao falha
+    inteira (502) e o cartao continua na lista — o cliente tenta de novo. A
+    ordem inversa deixaria o cartao pendurado na conta do lojista **sem
+    referencia nenhuma nossa**, e ninguem mais conseguiria remove-lo.
+
+    ## Pedido em analise que usava este cartao continua em analise
+
+    A cobranca ja existe no gateway e nao depende do cadastro do cartao: ela
+    foi criada com um token, nao com o `card_id`. Remover o cartao nao
+    cancela, nao estorna e nao muda o resultado do antifraude — o `in_review`
+    segue e o webhook decide o pedido do mesmo jeito.
+    """
+    SavedCardService(db).delete_card(current_customer, card_id)
+    return MessageResponse(message="Cartão removido.")

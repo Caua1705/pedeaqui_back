@@ -45,6 +45,7 @@ from src.integrations.payment_gateway import (
 from src.models.customer_model import Customer
 from src.models.order_status_history_model import OrderStatusHistory
 from src.repositories.customer_repository import CustomerRepository
+from src.repositories.customer_saved_card_repository import CustomerSavedCardRepository
 from src.repositories.order_repository import OrderRepository
 from src.schemas.payment_schema import (
     PaymentConfigResponse,
@@ -104,6 +105,10 @@ _LOGIN_REQUIRED_MESSAGE = (
 _CARD_TOKEN_REQUIRED_MESSAGE = (
     "Não foi possível ler os dados do cartão. Preencha novamente."
 )
+_SAVED_CARD_NOT_FOUND_MESSAGE = (
+    "Este cartão não está mais salvo na sua conta. "
+    "Escolha outro cartão ou cadastre novamente."
+)
 
 
 class PaymentService:
@@ -114,6 +119,7 @@ class PaymentService:
         self.idempotency_service = IdempotencyService(db)
         self.payment_credential_service = PaymentCredentialService(db)
         self.customer_repository = CustomerRepository(db)
+        self.saved_card_repository = CustomerSavedCardRepository(db)
 
     def get_payment_config(self, restaurant_slug: str) -> PaymentConfigResponse:
         """O que o navegador precisa para tokenizar um cartao deste restaurante.
@@ -212,7 +218,9 @@ class PaymentService:
         # segundo caso, create_payment e quem recusa com 503.
         # Cartao e resolvido ANTES do commit e antes do gateway: recusar aqui
         # custa uma resposta, recusar depois custa uma cobranca criada.
-        card = self._resolve_card_input(payment_method, payload, current_customer)
+        card = self._resolve_card_input(
+            payment_method, payload, current_customer, restaurant_id
+        )
 
         access_token = None
         payer_email = None
@@ -308,6 +316,7 @@ class PaymentService:
         payment_method: str | None,
         payload: StartPaymentRequest | None,
         current_customer: Customer | None,
+        restaurant_id: uuid.UUID,
     ) -> CardPaymentInput | None:
         """Monta o que so o cartao precisa, ou recusa o pedido de cobranca.
 
@@ -338,13 +347,64 @@ class PaymentService:
             )
 
         card = payload.card
+        if card.saved_card_id is None:
+            return CardPaymentInput(
+                token=card.token,
+                payment_method_id=card.payment_method_id,
+                issuer_id=card.issuer_id,
+                payer_document_type=card.payer_document_type,
+                payer_document_number=card.payer_document_number,
+            )
+
+        saved = self._resolve_saved_card(card.saved_card_id, current_customer, restaurant_id)
         return CardPaymentInput(
             token=card.token,
-            payment_method_id=card.payment_method_id,
+            # A bandeira sai do que foi GRAVADO no cadastro, e nao do corpo:
+            # o cliente nao tem por que escolher a bandeira de um cartao que
+            # ja esta salvo, e o valor do banco nao pode divergir do cartao.
+            payment_method_id=saved.brand,
             issuer_id=card.issuer_id,
             payer_document_type=card.payer_document_type,
             payer_document_number=card.payer_document_number,
+            provider_customer_id=saved.profile.provider_customer_id,
         )
+
+    def _resolve_saved_card(
+        self,
+        saved_card_id: uuid.UUID,
+        current_customer: Customer,
+        restaurant_id: uuid.UUID,
+    ):
+        """O cartao salvo desta pessoa NESTE restaurante, ou 404.
+
+        As duas checagens sao a autorizacao inteira, e nenhuma e dispensavel:
+
+        - **dono** — o repositorio ja casa o cartao com o `customer_id` do
+          token, entao um UUID de cartao alheio nao resolve;
+        - **restaurante** — um `card_id` so existe dentro da conta do
+          Mercado Pago que o emitiu. Cobrar na loja B um cartao salvo na
+          loja A daria 404 do gateway no meio do checkout, com a cobranca ja
+          em andamento; recusar aqui custa uma resposta.
+
+        Divergencia responde **404, e nao 403** — 403 confirmaria que aquele
+        cartao existe em outra conta ou em outra loja.
+        """
+        saved = self.saved_card_repository.get_card_of_customer(
+            current_customer.id, saved_card_id
+        )
+        if saved is None or saved.profile.restaurant_id != restaurant_id:
+            raise self._payment_error(
+                status_code=status.HTTP_404_NOT_FOUND,
+                code=PaymentErrorCode.SAVED_CARD_NOT_FOUND,
+                message=_SAVED_CARD_NOT_FOUND_MESSAGE,
+                retryable=False,
+                cause=ValueError("cartao salvo inexistente para este cliente/restaurante"),
+            )
+        # O ambiente do perfil nao e conferido aqui de proposito: virar
+        # MERCADOPAGO_ENVIRONMENT muda a conta do gateway, e o perfil do
+        # ambiente antigo simplesmente deixa de ser encontrado pelo
+        # SavedCardService — a lista do cliente vem vazia e ele recadastra.
+        return saved
 
     def _resolve_payer_email(self, order, current_customer: Customer | None = None) -> str:
         """E-mail exigido pelo Mercado Pago para criar a cobranca.

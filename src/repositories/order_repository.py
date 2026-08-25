@@ -4,6 +4,7 @@ from datetime import datetime
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from src.core.constants import PAYMENT_STATUSES_WITH_LIVE_CHARGE
 from src.models.order_item_model import OrderItem
 from src.models.order_item_option_model import OrderItemOption
 from src.models.order_model import Order
@@ -563,6 +564,43 @@ class OrderRepository:
             Order.provider_payment_id == provider_payment_id,
         )
         return self.db.scalar(stmt)
+
+    def list_orders_awaiting_refund(
+        self,
+        since: datetime,
+        limit: int = 200,
+    ) -> list[Order]:
+        """Pedidos que acabaram sem virar venda e ainda tem cobranca viva.
+
+        **Nao existe coluna de "estorno pendente", e nao precisa existir**:
+        pedido terminal sem venda com `payment_status` ainda em pending,
+        in_review ou paid JA e a descricao completa do que falta fazer. Uma
+        coluna de fila seria um segundo lugar para a mesma verdade, e o
+        primeiro a sair de sincronia num rollback.
+
+        Assim que o estorno (ou o cancelamento da cobranca) e aplicado, o
+        pedido sai do conjunto sozinho — `refunded` e `failed` nao estao na
+        lista.
+
+        Sem filtro por restaurante de proposito: quem chama e a varredura de
+        manutencao, que nao e um tenant. `since` limita a varredura porque a
+        tabela cresce para sempre e o que esta parado ha meses ja passou do
+        prazo de estorno do gateway — e ai o conserto e humano, nao uma
+        retentativa a mais.
+        """
+        stmt = (
+            select(Order)
+            .where(
+                Order.status.in_(NON_BILLABLE_ORDER_STATUSES),
+                Order.payment_flow == "online",
+                Order.payment_status.in_(PAYMENT_STATUSES_WITH_LIVE_CHARGE),
+                Order.provider_payment_id.isnot(None),
+                Order.created_at >= since,
+            )
+            .order_by(Order.created_at)
+            .limit(limit)
+        )
+        return list(self.db.scalars(stmt).all())
 
     def attach_payment_intent(
         self,

@@ -38,6 +38,7 @@ from src.integrations.payment_gateway import (
 )
 from src.schemas.payment_schema import CardPaymentPayload, StartPaymentRequest
 from src.services.idempotency_service import IdempotencyService
+from src.services.payment_refund_service import PaymentRefundService
 from src.services.order_state_machine import PAYMENT_STATUSES_THAT_RELEASE_ORDER
 from src.services.payment_service import PaymentService
 
@@ -943,11 +944,13 @@ class WebhookTests(unittest.TestCase):
 
         self.assertEqual(self.order.status, "pending")
 
-    def test_payment_confirmed_on_a_rejected_order_is_logged(self):
-        # A corrida real: o lojista recusa enquanto o pagamento esta em voo.
-        # O pedido termina `rejected` + `paid`, e o extrato exclui `rejected`
-        # da comissao — entao esta linha de log e o unico rastro de que
-        # existe dinheiro de cliente parado.
+    def test_payment_confirmed_on_a_rejected_order_is_refunded(self):
+        # A corrida real: o lojista recusa enquanto o pagamento esta em voo,
+        # e o pedido termina `rejected` + `paid`. Ate 25/08/2026 isto era so
+        # um warning — o dinheiro do cliente ficava na conta do restaurante,
+        # e o extrato nao denunciava, porque `rejected` ja esta fora da
+        # comissao. Hoje dispara o MESMO estorno do cancelamento pelo painel,
+        # da outra ponta da mesma corrida.
         order = make_order(
             payment_provider="sandbox",
             provider_payment_id="sandbox-1",
@@ -955,17 +958,15 @@ class WebhookTests(unittest.TestCase):
         )
         service = build_service(order)
 
-        with self.assertLogs("uvicorn.error", level="WARNING") as captured:
+        with patch.object(PaymentRefundService, "refund_terminal_order") as refund:
             self._handle(service, webhook_body("sandbox-1", "paid"))
 
-        logged = "\n".join(captured.output)
-        self.assertIn("pagamento confirmado em pedido ja rejected", logged)
-        self.assertIn(str(order.id), logged)
+        refund.assert_called_once_with(order.id, order.restaurant_id)
         # O pagamento e gravado assim mesmo: recusar a escrita esconderia o
-        # dinheiro que de fato entrou.
+        # dinheiro que de fato entrou — e e justamente ele que sera devolvido.
         self.assertEqual(order.payment_status, "paid")
 
-    def test_payment_confirmed_on_a_cancelled_order_is_logged(self):
+    def test_payment_confirmed_on_a_cancelled_order_is_refunded(self):
         order = make_order(
             payment_provider="sandbox",
             provider_payment_id="sandbox-1",
@@ -973,19 +974,25 @@ class WebhookTests(unittest.TestCase):
         )
         service = build_service(order)
 
-        with self.assertLogs("uvicorn.error", level="WARNING") as captured:
+        with patch.object(PaymentRefundService, "refund_terminal_order") as refund:
             self._handle(service, webhook_body("sandbox-1", "paid"))
 
-        self.assertIn("pagamento confirmado em pedido ja cancelled", "\n".join(captured.output))
+        refund.assert_called_once_with(order.id, order.restaurant_id)
 
-    def test_payment_confirmed_on_a_live_order_is_not_logged_as_a_problem(self):
-        # O caminho normal nao pode gerar o aviso: um warning que sai em todo
-        # pedido pago deixa de ser lido no dia em que importar.
+    def test_payment_confirmed_on_a_live_order_is_never_refunded(self):
+        # A propriedade mais perigosa desta frente inteira: pagar um pedido
+        # NORMAL nao pode devolver o dinheiro. `pending` nao e estado
+        # terminal, e a checagem que separa os dois casos e uma linha so.
         service = build_service(self.order)
 
-        with self.assertLogs("uvicorn.error", level="INFO") as captured:
-            self._handle(service, webhook_body("sandbox-1", "paid"))
+        with patch.object(PaymentRefundService, "refund_terminal_order") as refund:
+            with self.assertLogs("uvicorn.error", level="INFO") as captured:
+                self._handle(service, webhook_body("sandbox-1", "paid"))
 
+        refund.assert_not_called()
+        # E o caminho normal continua sem gerar o aviso de dinheiro parado:
+        # um warning que sai em todo pedido pago deixa de ser lido no dia em
+        # que importar.
         self.assertNotIn("sem estorno automatico", "\n".join(captured.output))
 
     def test_refund_on_a_terminal_order_is_not_the_same_alarm(self):

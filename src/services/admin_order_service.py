@@ -16,18 +16,16 @@ from src.schemas.admin_order_schema import (
     AdminOrderListResponse,
     AdminOrderStatusCount,
     AdminOrderStatusCountsResponse,
+    CancelOrderErrorCode,
+    CancelOrderErrorDetail,
     CancelOrderRequest,
     UpdateOrderStatusRequest,
 )
 from src.schemas.order_schema import OrderDetailResponse
 from src.services.idempotency_service import IdempotencyService
 from src.services.order_service import OrderService
-from src.services.order_state_machine import (
-    ensure_order_transition_allowed,
-    ensure_payment_allows_order_status,
-)
-from src.services.cashback_service import CashbackService
-from src.services.coupon_service import CouponService
+from src.services.order_state_machine import cancellation_needs_confirmation
+from src.services.order_status_change_service import OrderStatusChangeService
 from src.utils.money import money_to_float
 
 
@@ -39,10 +37,6 @@ CANCEL_ROUTE = "PATCH /admin/orders/{order_id}/cancel"
 # O unico destino da rota de cancelamento. Constante para nao aparecer como
 # string solta ao lado das outras regras de status.
 CANCELLED_STATUS = "cancelled"
-
-# O estado em que o cashback do pedido e creditado. Constante pelo mesmo
-# motivo do de cima, e porque agora ele decide dinheiro.
-COMPLETED_STATUS = "completed"
 
 PANEL_TIMEZONE = ZoneInfo(PLATFORM_TIMEZONE)
 
@@ -61,9 +55,11 @@ class AdminOrderService:
     def __init__(self, db: Session):
         self.db = db
         self.order_repository = OrderRepository(db)
-        self.coupon_service = CouponService(db)
-        self.cashback_service = CashbackService(db)
-        self.idempotency_service = IdempotencyService(db)
+        # A ESCRITA de status nao mora mais aqui: ela e compartilhada com o
+        # cancelamento pelo cliente, e uma copia por porta seria a chance de
+        # o cupom voltar num caminho e nao no outro. Ver
+        # OrderStatusChangeService.
+        self.status_change_service = OrderStatusChangeService(db)
 
     def list_orders(
         self,
@@ -169,6 +165,7 @@ class AdminOrderService:
             admin_user=admin_user,
             idempotency_key=idempotency_key,
             route=UPDATE_STATUS_ROUTE,
+            confirm_prepared_order=payload.confirm_prepared_order,
         )
 
     def cancel_order(
@@ -200,6 +197,7 @@ class AdminOrderService:
             admin_user=admin_user,
             idempotency_key=idempotency_key,
             route=CANCEL_ROUTE,
+            confirm_prepared_order=payload.confirm_prepared_order,
         )
 
     def _apply_status_change(
@@ -211,83 +209,76 @@ class AdminOrderService:
         admin_user: AdminUser,
         idempotency_key: str | None,
         route: str,
+        confirm_prepared_order: bool = False,
     ) -> OrderDetailResponse:
-        """Grava a mudanca de status: validacao, escrita e historico.
+        """Carrega o pedido do escopo, confere o que e regra DESTA porta e
+        delega a escrita.
 
-        `route` entra no escopo da idempotencia para que a mesma
-        `Idempotency-Key` reenviada em rotas diferentes nao seja tratada
-        como repeticao de uma so.
+        A escrita em si mora em `OrderStatusChangeService`, compartilhada com
+        o cancelamento pelo cliente. O que sobra aqui e o que so vale para o
+        painel: o escopo do lojista e a confirmacao de pedido em preparo.
         """
-        restaurant_id = scope.restaurant_id
         order = self._get_order_in_scope(order_id, scope)
+        self._ensure_cancellation_confirmed(order, new_status, confirm_prepared_order)
 
-        # Sem isto, cada reenvio do painel (clique duplo, retry) empilhava uma
-        # linha nova em order_status_history para o mesmo status, sujando o
-        # historico que o cliente ve.
-        replayed = self.idempotency_service.begin(
-            scope=IdempotencyService.build_scope(
-                restaurant_id=restaurant_id,
-                route=route,
-                requester=f"admin:{admin_user.id}",
-            ),
-            key=idempotency_key,
-            request_fingerprint=IdempotencyService.fingerprint({
-                "order_id": str(order_id),
-                "status": new_status,
-                "note": note,
-            }),
+        return self.status_change_service.apply(
+            order=order,
+            restaurant_id=scope.restaurant_id,
+            new_status=new_status,
+            note=note,
+            # Quem mudou sai do token, nunca do corpo: o campo era texto
+            # livre enviado pelo cliente, entao o historico do pedido dizia
+            # o que o painel quisesse ("sistema", "cliente").
+            changed_by=self._admin_signature(admin_user),
+            requester=f"admin:{admin_user.id}",
+            route=route,
+            idempotency_key=idempotency_key,
         )
-        if replayed is not None:
-            return IdempotencyService.parse_stored_response(OrderDetailResponse, replayed)
 
-        # A validacao da transicao vem DEPOIS do replay de proposito. Um
-        # reenvio da mesma chave chega com o pedido ja no status de destino;
-        # validando antes, o retry legitimo morreria com "o pedido ja esta em
-        # accepted" em vez de devolver a resposta gravada.
-        ensure_order_transition_allowed(order.status, new_status, order.order_type)
-        ensure_payment_allows_order_status(new_status, order.payment_status)
-        self._log_cancellation_of_paid_order(order, new_status)
+    @staticmethod
+    def _ensure_cancellation_confirmed(
+        order,
+        new_status: str,
+        confirm_prepared_order: bool,
+    ) -> None:
+        """Exige o segundo clique para cancelar comida que ja foi feita.
 
-        try:
-            self.order_repository.update_status(order, new_status)
-            if new_status in {"cancelled", "rejected"}:
-                self.coupon_service.reverse_for_order(order.id)
-                # O cashback resgatado volta para o saldo pelo mesmo motivo
-                # do cupom: sem isto o cliente cancela e PERDE o dinheiro.
-                self.cashback_service.refund_redemption(order)
-            if new_status == COMPLETED_STATUS:
-                # O credito acontece AQUI, e nao no pago nem no aceite:
-                # `completed` e o unico estado terminal em que houve venda, e
-                # e o que faz o estorno de credito ser excecao em vez de
-                # rotina. Ver `docs/cashback.md`, secao 1.
-                self.cashback_service.credit_for_order(order)
-            self.order_repository.create_status_history(
-                OrderStatusHistory(
-                    order_id=order.id,
-                    status=new_status,
-                    # Quem mudou sai do token, nunca do corpo: o campo era
-                    # texto livre enviado pelo cliente, entao o historico
-                    # dizia o que o painel quisesse ("sistema", "cliente").
-                    changed_by=self._admin_signature(admin_user),
-                    note=note,
-                )
-            )
-            if self.idempotency_service.has_reservation:
-                # Recarrega antes do commit para gravar a mesma resposta que
-                # o chamador vai receber.
-                self.idempotency_service.complete(
-                    response_body=OrderService.to_order_detail_response(
-                        self.order_repository.get_order_detail(order_id, restaurant_id)
-                    ).model_dump(mode="json"),
-                    order_id=order_id,
-                )
-            self.db.commit()
-            order = self.order_repository.get_order_detail(order_id, restaurant_id)
-        except Exception:
-            self.db.rollback()
-            raise
+        **428 e nao 409, e a escolha e o contrato.** Os 409 desta rota sao
+        conflitos de estado de verdade ("pedido ja entregue nao muda mais") e
+        saem com `detail` de texto; este aqui nao e erro nenhum — e o backend
+        pedindo uma precondicao que o painel consegue satisfazer na hora, com
+        um corpo TIPADO que diz qual dialogo abrir. Sobrepor os dois no mesmo
+        codigo obrigaria o painel a distinguir pelo texto da mensagem, e
+        publicar um `model` de 409 que so vale para metade dos 409 da rota
+        seria pior ainda (armadilha 16).
 
-        return OrderService.to_order_detail_response(order)
+        A checagem roda ANTES do replay de idempotencia, e isso e inofensivo:
+        um retry legitimo chega com o pedido ja em `cancelled`, que nao esta
+        em PREPARED_ORDER_STATUSES — a confirmacao nao e exigida de novo e a
+        resposta gravada volta normalmente.
+
+        Vale para as DUAS rotas do painel. `PATCH /status` aceita
+        `status='cancelled'`, e a confirmacao so na rota de cancelamento
+        deixaria de pe exatamente a porta que ela existe para fechar.
+        """
+        if confirm_prepared_order:
+            return
+        if not cancellation_needs_confirmation(order.status, new_status):
+            return
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            # mode="json" para o `code` sair como a string do enum: o dict vai
+            # direto para o corpo da resposta.
+            detail=CancelOrderErrorDetail(
+                code=CancelOrderErrorCode.CONFIRMATION_REQUIRED,
+                message=(
+                    "Este pedido já está em produção. Cancelar agora não "
+                    "devolve o custo da comida para o restaurante. Confirme "
+                    "para continuar."
+                ),
+                order_status=order.status,
+            ).model_dump(mode="json"),
+        )
 
     def _get_order_in_scope(self, order_id: UUID, scope: AdminScope):
         """Carrega o pedido conferindo restaurante E filial.
@@ -396,19 +387,3 @@ class AdminOrderService:
         lojista), e um UUID nao diz nada sem outra consulta.
         """
         return f"admin:{admin_user.email}"
-
-    @staticmethod
-    def _log_cancellation_of_paid_order(order, new_status: str) -> None:
-        """Avisa quando um pedido JA PAGO e cancelado.
-
-        Cancelar nao estorna: o estorno so acontece quando o gateway avisa
-        (PaymentService.handle_webhook) ou quando alguem o faz no painel do
-        proprio gateway. Enquanto o Mercado Pago nao estiver plugado, este
-        log e o unico rastro de que existe dinheiro do cliente parado.
-        """
-        if new_status in {"cancelled", "rejected"} and order.payment_status == "paid":
-            logger.warning(
-                "[Pagamento] pedido pago foi %s sem estorno automatico order_id=%s",
-                new_status,
-                order.id,
-            )

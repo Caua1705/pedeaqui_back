@@ -19,6 +19,7 @@ from src.api.dependencies.admin_scope import (
 from src.api.dependencies.database import get_db
 from src.models.admin_user_model import AdminUser
 from src.schemas.admin_order_schema import (
+    CancelOrderErrorResponse,
     AdminOrderListResponse,
     AdminOrderStatusCountsResponse,
     AdminOrderStreamEvent,
@@ -255,9 +256,31 @@ def get_order_print_jobs(
     return AdminPrintingService(db).build_print_jobs(order_id, scope)
 
 
+# 428 e nao 409, e a escolha e o contrato. Os 409 destas rotas sao conflitos
+# de estado de verdade ("pedido ja entregue nao muda mais") e saem com
+# `detail` de texto; o 428 nao e erro nenhum — e o backend pedindo uma
+# precondicao que o painel satisfaz na hora, com um corpo TIPADO que diz qual
+# dialogo abrir. Sobrepor os dois no mesmo codigo obrigaria o painel a
+# distinguir pelo texto da mensagem, e publicar um `model` de 409 que so vale
+# para metade dos 409 da rota seria pior ainda (armadilha 16).
+#
+# Declarado nas DUAS rotas porque o PATCH de status aceita
+# `status="cancelled"`: so na rota de cancelamento, ficaria de pe exatamente a
+# porta que a confirmacao existe para fechar.
+_CONFIRMATION_REQUIRED_RESPONSE = {
+    428: {
+        "model": CancelOrderErrorResponse,
+        "description": (
+            "Cancelamento de pedido ja em producao sem `confirm_prepared_order`. "
+            "Nao e erro: o painel abre o dialogo de confirmacao e reenvia."
+        ),
+    }
+}
+
 @router.patch(
     "/orders/{order_id}/status",
     response_model=OrderDetailResponse,
+    responses=_CONFIRMATION_REQUIRED_RESPONSE,
     # PESSOAS: aceitar e recusar pedido E o trabalho do balcao. O agente de
     # impressao fica de fora — ele reage a mudanca de status, nao a provoca, e
     # uma credencial de maquina que aceita pedido aceitaria tambem o pedido
@@ -290,6 +313,7 @@ def update_order_status(
 @router.patch(
     "/orders/{order_id}/cancel",
     response_model=OrderDetailResponse,
+    responses=_CONFIRMATION_REQUIRED_RESPONSE,
     # GERENCIA, e o atendente perde esta: cancelar pedido PAGO nao estorna
     # nada (armadilha 25) e o log e o unico rastro de dinheiro de cliente
     # parado. Quem esta no balcao e precisa nao atender um pedido tem

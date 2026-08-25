@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
+from src.schemas.admin_order_schema import UpdateOrderStatusRequest
 from src.api.dependencies.admin_scope import AdminScope, build_admin_scope
 from src.services.admin_order_service import AdminOrderService
 from src.services.order_service import OrderService
@@ -168,15 +169,21 @@ class WriteIsolationTests(unittest.TestCase):
         self.repository = TenantScopedOrderRepository({self.order_of_b.id: self.order_of_b})
 
         self.service = AdminOrderService(self.db)
+        # Leitura na camada de cima, escrita no OrderStatusChangeService que
+        # ela delega. O MESMO dublê nos dois: o que este teste protege e o
+        # filtro por restaurante, que precisa valer nas duas pontas.
         self.service.order_repository = self.repository
-        self.service.coupon_service = SimpleNamespace(reverse_for_order=lambda order_id: None)
+        self.service.status_change_service.order_repository = self.repository
+        self.service.status_change_service.coupon_service = SimpleNamespace(
+            reverse_for_order=lambda order_id: None
+        )
 
     def test_admin_cannot_change_status_of_another_restaurants_order(self):
         with self.assertRaises(HTTPException) as raised:
             self.service.update_order_status(
                 self.order_of_b.id,
                 owner_scope(self.restaurant_a),
-                SimpleNamespace(status="accepted", note=None),
+                UpdateOrderStatusRequest(status="accepted", note=None),
                 admin_user=ADMIN_USER,
             )
 
@@ -191,7 +198,7 @@ class WriteIsolationTests(unittest.TestCase):
             self.service.update_order_status(
                 self.order_of_b.id,
                 owner_scope(self.restaurant_b),
-                SimpleNamespace(status="accepted", note=None),
+                UpdateOrderStatusRequest(status="accepted", note=None),
                 admin_user=ADMIN_USER,
             )
 
@@ -247,7 +254,7 @@ class BranchIsolationTests(unittest.TestCase):
             self.service.update_order_status(
                 self.order_b.id,
                 branch_scope(self.restaurant_id, self.branch_a),
-                SimpleNamespace(status="accepted", note=None),
+                UpdateOrderStatusRequest(status="accepted", note=None),
                 admin_user=ADMIN_USER,
             )
 

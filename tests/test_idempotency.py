@@ -20,6 +20,8 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
+from src.models.order_model import Order
+from src.schemas.admin_order_schema import UpdateOrderStatusRequest
 from src.api.dependencies.admin_scope import AdminScope
 from src.core.config import settings
 from src.models.idempotency_key_model import (
@@ -489,13 +491,24 @@ class StatusHistoryRepository:
 class UpdateStatusIdempotencyTests(unittest.TestCase):
     def _service(self, db, order, repository=None):
         service = AdminOrderService(db)
-        service.order_repository = StatusHistoryRepository(order)
-        service.coupon_service = SimpleNamespace(reverse_for_order=lambda order_id: None)
-        service.idempotency_service.repository = repository or FakeIdempotencyRepository()
+        historico = StatusHistoryRepository(order)
+        # A escrita de status mora no OrderStatusChangeService que o
+        # AdminOrderService delega — e a idempotencia com ela, porque quem
+        # reserva a chave e quem grava. A leitura continua na camada de cima.
+        service.order_repository = historico
+        service.status_change_service.order_repository = historico
+        service.status_change_service.coupon_service = SimpleNamespace(
+            reverse_for_order=lambda order_id: None
+        )
+        service.status_change_service.idempotency_service.repository = (
+            repository or FakeIdempotencyRepository()
+        )
         return service
 
     def _order(self, restaurant_id):
-        return SimpleNamespace(
+        # Model de verdade, transiente (sem sessao, sem banco). O motivo esta
+        # no docstring do `make_order` de test_admin_order_cancel.py.
+        return Order(
             id=uuid.uuid4(),
             restaurant_id=restaurant_id,
             status="pending",
@@ -510,7 +523,7 @@ class UpdateStatusIdempotencyTests(unittest.TestCase):
         admin_id = uuid.uuid4()
         order = self._order(restaurant_id)
         shared_repository = FakeIdempotencyRepository()
-        request = SimpleNamespace(status="accepted", note=None)
+        request = UpdateOrderStatusRequest(status="accepted", note=None)
 
         detail = {"id": str(order.id), "status": "accepted"}
         with patch.object(
@@ -551,12 +564,12 @@ class UpdateStatusIdempotencyTests(unittest.TestCase):
         ):
             service_a = self._service(db, order, shared_repository)
             service_a.update_order_status(
-                order.id, _owner_scope(restaurant_id), SimpleNamespace(status="accepted", note=None),
+                order.id, _owner_scope(restaurant_id), UpdateOrderStatusRequest(status="accepted", note=None),
                 admin_user=_admin(uuid.uuid4()), idempotency_key="mesma-chave",
             )
             service_b = self._service(db, order, shared_repository)
             service_b.update_order_status(
-                order.id, _owner_scope(restaurant_id), SimpleNamespace(status="preparing", note=None),
+                order.id, _owner_scope(restaurant_id), UpdateOrderStatusRequest(status="preparing", note=None),
                 admin_user=_admin(uuid.uuid4()), idempotency_key="mesma-chave",
             )
 
@@ -573,13 +586,13 @@ class UpdateStatusIdempotencyTests(unittest.TestCase):
             service = self._service(db, order)
             result = service.update_order_status(
                 order.id, _owner_scope(restaurant_id),
-                SimpleNamespace(status="accepted", note=None),
+                UpdateOrderStatusRequest(status="accepted", note=None),
                 admin_user=_admin(uuid.uuid4()),
             )
 
         self.assertEqual(result, "detail")
         self.assertEqual(len(service.order_repository.history), 1)
-        self.assertEqual(service.idempotency_service.repository.reserve_calls, [])
+        self.assertEqual(service.status_change_service.idempotency_service.repository.reserve_calls, [])
 
 
 if __name__ == "__main__":

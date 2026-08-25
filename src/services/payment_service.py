@@ -54,6 +54,7 @@ from src.schemas.payment_schema import (
     StartPaymentRequest,
     StartPaymentResponse,
 )
+from src.services.commission import zero_commission_for_refund
 from src.services.idempotency_service import IdempotencyService
 from src.services.order_state_machine import (
     PAYMENT_HISTORY_PREFIX,
@@ -62,6 +63,7 @@ from src.services.order_state_machine import (
     payment_history_status,
 )
 from src.services.payment_credential_service import ActivePaymentCredential, PaymentCredentialService
+from src.services.payment_refund_service import PaymentRefundService
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import to_decimal
 from src.utils.security import utcnow
@@ -579,9 +581,11 @@ class PaymentService:
             )
             return {"status": "ignored", "reason": "invalid_transition"}
 
-        # Lido ANTES do commit: depois dele o objeto do SQLAlchemy esta
+        # Lidos ANTES do commit: depois dele o objeto do SQLAlchemy esta
         # expirado e cada atributo relido dispara um SELECT novo.
         order_status = order.status
+        order_id = order.id
+        restaurant_id = order.restaurant_id
 
         try:
             self.order_repository.update_payment_status(
@@ -593,6 +597,12 @@ class PaymentService:
             # mas nao diz quanto — e o relatorio que um dia somar dinheiro
             # devolvido precisa do numero, nao do rotulo.
             order.refunded_amount = event.refunded_amount
+            if event.payment_status == "refunded":
+                # MESMA funcao que o estorno automatico usa, e e o ponto:
+                # estorno feito no painel do Mercado Pago tem que zerar a
+                # comissao igual ao que sai daqui. Duas copias da regra
+                # fariam o extrato depender de por onde o lojista devolveu.
+                zero_commission_for_refund(order)
             self.order_repository.create_status_history(
                 OrderStatusHistory(
                     order_id=order.id,
@@ -621,7 +631,9 @@ class PaymentService:
             event.payment_status,
             provider,
         )
-        self._log_payment_on_terminal_order(order.id, order_status, event.payment_status)
+        self._refund_payment_on_terminal_order(
+            order_id, restaurant_id, order_status, event.payment_status
+        )
         # O pedido NAO e aceito automaticamente aqui: pagar nao obriga o
         # lojista a aceitar. O que o pagamento faz e liberar o botao —
         # ensure_payment_allows_order_status passa a deixar.
@@ -677,39 +689,51 @@ class PaymentService:
             "payment_status": order.payment_status,
         }
 
-    @staticmethod
-    def _log_payment_on_terminal_order(
+    def _refund_payment_on_terminal_order(
+        self,
         order_id: uuid.UUID,
+        restaurant_id: uuid.UUID,
         order_status: str,
         payment_status: str,
     ) -> None:
-        """Avisa quando o dinheiro entra num pedido que ja acabou.
+        """Devolve o dinheiro que entrou num pedido que ja acabou.
 
         A corrida: o lojista recusa (ou cancela) enquanto o pagamento ainda
         esta em voo, e o webhook chega depois. `handle_webhook` valida so a
         transicao de PAGAMENTO, e `pending -> paid` e valida qualquer que
-        seja o status operacional — o pedido termina `rejected` + `paid`.
-        Dinheiro do cliente entrou, o pedido nao vai ser produzido, e ninguem
-        estorna.
+        seja o status operacional — o pedido termina `rejected` + `paid`. A
+        escrita acontece de proposito: recusa-la esconderia o dinheiro que de
+        fato entrou.
 
-        `AdminOrderService._log_cancellation_of_paid_order` NAO cobre este
-        caso: ela dispara quando o pedido JA estava pago no momento da
-        recusa, e aqui a ordem e a inversa. O extrato tambem nao denuncia —
-        `cancelled` e `rejected` sao excluidos da comissao, corretamente.
+        Ate 25/08/2026 isto era so um `logger.warning`, porque nao havia
+        estorno automatico nenhum. O dinheiro do cliente ficava na conta do
+        restaurante ate alguem notar — e o extrato nao denunciava, porque
+        `cancelled` e `rejected` ja estao fora da comissao.
 
-        Por isso esta linha e o unico rastro, como a daquela. Vale o mesmo
-        grep no radar.
+        E o MESMO service do cancelamento pelo painel, chamado da outra
+        ponta da corrida: as duas ordens de eventos terminam no mesmo lugar
+        e devolvem o mesmo dinheiro. Ver PaymentRefundService.
+
+        Roda DEPOIS do commit de proposito. A resposta ao webhook nao pode
+        depender do estorno dar certo: o gateway reenvia em backoff por
+        horas quem nao responde 2xx, e reenviar nao conserta um estorno que
+        falhou — quem conserta e a varredura.
         """
         if payment_status != "paid":
             return
         if order_status not in TERMINAL_ORDER_STATUSES:
             return
-        logger.warning(
-            "[Pagamento] pagamento confirmado em pedido ja %s sem estorno "
-            "automatico order_id=%s",
-            order_status,
-            order_id,
-        )
+        try:
+            PaymentRefundService(self.db).refund_terminal_order(order_id, restaurant_id)
+        except Exception:
+            # A cobranca ja esta gravada como paga; o 2xx para o gateway vale
+            # mais que este estorno, que a varredura retenta.
+            logger.exception(
+                "[Pagamento] falha inesperada ao estornar pagamento em pedido ja %s "
+                "order_id=%s",
+                order_status,
+                order_id,
+            )
 
     def _verify_signature(
         self,

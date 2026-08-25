@@ -1,9 +1,9 @@
-# O commit de que as imagens sao construidas, repetido nos TRES servicos que
-# constroem (`pedeaqui-api`, `limpeza`, `reindex`).
+# O commit de que as imagens sao construidas, repetido nos QUATRO servicos que
+# constroem (`pedeaqui-api`, `limpeza`, `estorno`, `reindex`).
 #
-# Repetido, e nao so na API, por um motivo mecanico: os tres tem `build: .`, e
+# Repetido, e nao so na API, por um motivo mecanico: os quatro tem `build: .`, e
 # `build args` diferentes produzem IMAGENS diferentes. Carimbar so a API faria
-# o compose construir a mesma arvore duas vezes, e o worker de reindex — que
+# o compose construir a mesma arvore varias vezes, e o worker de reindex — que
 # tambem fala com a OpenAI e tambem aparece em investigacao de log — ficaria
 # sem a versao.
 #
@@ -104,6 +104,49 @@ services:
         done
     # Não passa pelo Traefik e não publica porta: ele só fala com o Postgres,
     # pela DATABASE_URL do .env.
+    networks:
+      - n8n_default
+
+  # Rede de segurança do estorno automático. Quem estorna de verdade é o
+  # `PaymentRefundService`, na hora do cancelamento; isto aqui só volta no que
+  # ficou para trás porque o Mercado Pago não respondeu naquele minuto.
+  #
+  # CONTAINER PRÓPRIO, e não mais uma linha no `limpeza`, por causa da
+  # CADÊNCIA. Aquele laço dorme 24h, e o que ele faz é apagar linha vencida —
+  # um dia de atraso não custa nada. Aqui o atraso é dinheiro de cliente parado
+  # na conta do restaurante. Juntar os dois obrigaria a escolher uma cadência
+  # errada para um deles.
+  estorno:
+    build:
+      context: .
+      args:
+        GIT_SHA: "${GIT_SHA:-}"
+    container_name: pedeaqui-estorno
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      - pedeaqui-api
+    # ENTRYPOINT VAZIO pelo mesmo motivo do `limpeza`: o
+    # `docker-entrypoint.sh` roda `alembic upgrade head`, e só a API migra.
+    entrypoint: []
+    # 15 min no caminho feliz (que é uma varredura que não acha nada e não
+    # gasta chamada nenhuma ao gateway) e 5 min depois de uma falha. O script
+    # sai com 0 mesmo deixando pedido pendente — de propósito, senão um pedido
+    # irrecuperável faria o laço girar em cima dele para sempre. Ver o
+    # docstring dele.
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          if python scripts/estorna_pedidos_cancelados.py; then
+            sleep 900
+          else
+            echo "[estorno] falhou; nova tentativa em 5 min"
+            sleep 300
+          fi
+        done
     networks:
       - n8n_default
 

@@ -21,9 +21,11 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from src.api.dependencies.admin_scope import AdminScope
+from src.models.order_model import Order
 from src.schemas.admin_order_schema import CancelOrderRequest
 from src.services.admin_order_service import AdminOrderService
 from src.services.order_service import OrderService
+from src.services.payment_refund_service import PaymentRefundService
 
 
 ADMIN = SimpleNamespace(id=uuid.uuid4(), email="lojista@exemplo.com")
@@ -59,16 +61,36 @@ class FakeOrderRepository:
 
 def build_service(order):
     service = AdminOrderService(FakeDb())
-    service.order_repository = FakeOrderRepository(order)
+    repository = FakeOrderRepository(order)
     service.reversed_coupons = []
-    service.coupon_service = SimpleNamespace(
+    # A LEITURA (escopo, detalhe do pedido) continua sendo do
+    # AdminOrderService; a ESCRITA passou a ser do OrderStatusChangeService,
+    # que ele delega — e que e o mesmo writer do cancelamento pelo cliente. O
+    # MESMO dublê vai nos dois: sao duas camadas do mesmo caminho, nao dois
+    # repositorios.
+    service.order_repository = repository
+    service.status_change_service.order_repository = repository
+    service.status_change_service.coupon_service = SimpleNamespace(
         reverse_for_order=service.reversed_coupons.append
     )
     return service
 
 
 def make_order(restaurant_id, *, status="preparing", payment_status="on_delivery"):
-    return SimpleNamespace(
+    """Pedido TRANSIENTE — o model de verdade, sem sessao e sem banco.
+
+    `SimpleNamespace` aqui era um teste verde descrevendo um objeto que a
+    aplicacao nunca produz: ele responde qualquer atributo que o teste
+    escreva e nenhum que o teste esqueca. Foi assim que o estorno automatico
+    (que le `order.payment_flow`) passou a estourar `AttributeError` em
+    todos estes testes de uma vez, sem nada de errado no codigo.
+
+    Com o model, coluna nova que ninguem passa vale `None` em vez de
+    estourar, e nome errado levanta `TypeError` na hora. `payment_flow` fica
+    nulo de proposito: e o pedido pago na entrega, que e o caminho de quase
+    todos estes casos.
+    """
+    return Order(
         id=uuid.uuid4(),
         restaurant_id=restaurant_id,
         status=status,
@@ -126,7 +148,7 @@ class CancellationTests(unittest.TestCase):
             service.cancel_order(
                 order.id,
                 owner_scope(self.restaurant_id),
-                CancelOrderRequest(reason="acabou a costela"),
+                CancelOrderRequest(reason="acabou a costela", confirm_prepared_order=True),
                 admin_user=ADMIN,
             )
 
@@ -145,7 +167,7 @@ class CancellationTests(unittest.TestCase):
             service.cancel_order(
                 order.id,
                 owner_scope(self.restaurant_id),
-                CancelOrderRequest(reason="cliente desistiu"),
+                CancelOrderRequest(reason="cliente desistiu", confirm_prepared_order=True),
                 admin_user=ADMIN,
             )
 
@@ -218,3 +240,93 @@ class CancellationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EstornoAutomaticoTests(unittest.TestCase):
+    """Cancelar um pedido pago passou a devolver o dinheiro.
+
+    Ate 25/08/2026 cancelar so gravava um warning com o texto `sem estorno
+    automatico`, e o dinheiro do cliente ficava na conta do restaurante ate
+    alguem devolver a mao no painel do Mercado Pago. O que se prova aqui e a
+    LIGACAO — a decisao de qual operacao mandar ao gateway vive em
+    `tests/test_estorno_automatico.py`.
+    """
+
+    def setUp(self):
+        self.restaurant_id = uuid.uuid4()
+
+    def _cancelar(self, order):
+        service = build_service(order)
+        with patch.object(
+            PaymentRefundService, "refund_terminal_order"
+        ) as estorno:
+            with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
+                service.cancel_order(
+                    order.id,
+                    owner_scope(self.restaurant_id),
+                    CancelOrderRequest(reason="cliente desistiu", confirm_prepared_order=True),
+                    admin_user=ADMIN,
+                )
+        return estorno
+
+    def test_cancelar_pedido_pago_online_dispara_o_estorno(self):
+        order = make_order(self.restaurant_id, payment_status="paid")
+        order.payment_flow = "online"
+
+        estorno = self._cancelar(order)
+
+        estorno.assert_called_once_with(order.id, self.restaurant_id)
+
+    def test_cancelar_pedido_pago_na_entrega_nao_dispara_nada(self):
+        # A checagem mais barata possivel, e a que evita abrir uma transacao
+        # de leitura no caminho de quase todo cancelamento: nao ha cobranca.
+        order = make_order(self.restaurant_id)
+
+        estorno = self._cancelar(order)
+
+        estorno.assert_not_called()
+
+    def test_o_estorno_roda_DEPOIS_do_commit_do_cancelamento(self):
+        # A ordem e a regra que protege o lojista: o cancelamento nao pode
+        # depender de o Mercado Pago responder. Com o estorno dentro da
+        # transacao, um timeout deles desfaria o cancelamento inteiro.
+        order = make_order(self.restaurant_id, payment_status="paid")
+        order.payment_flow = "online"
+        service = build_service(order)
+        momentos = []
+
+        def anotar(*_args, **_kwargs):
+            momentos.append(list(service.db.events))
+
+        with patch.object(PaymentRefundService, "refund_terminal_order", side_effect=anotar):
+            with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
+                service.cancel_order(
+                    order.id,
+                    owner_scope(self.restaurant_id),
+                    CancelOrderRequest(reason="cliente desistiu", confirm_prepared_order=True),
+                    admin_user=ADMIN,
+                )
+
+        self.assertEqual(momentos, [["commit"]])
+
+    def test_falha_inesperada_do_estorno_nao_derruba_o_cancelamento(self):
+        # O cancelamento JA esta gravado. Um 500 aqui diria ao lojista que
+        # ele nao aconteceu — o que e falso, e o faria tentar de novo.
+        order = make_order(self.restaurant_id, payment_status="paid")
+        order.payment_flow = "online"
+        service = build_service(order)
+
+        with patch.object(
+            PaymentRefundService, "refund_terminal_order", side_effect=RuntimeError("boom")
+        ):
+            with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
+                with self.assertLogs("uvicorn.error", level="ERROR"):
+                    resultado = service.cancel_order(
+                        order.id,
+                        owner_scope(self.restaurant_id),
+                        CancelOrderRequest(reason="cliente desistiu", confirm_prepared_order=True),
+                        admin_user=ADMIN,
+                    )
+
+        self.assertEqual(resultado, "detail")
+        self.assertEqual(order.status, "cancelled")

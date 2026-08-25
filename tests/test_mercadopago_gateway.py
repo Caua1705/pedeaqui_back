@@ -52,9 +52,12 @@ from src.integrations.payment_gateway import (
     PaymentNotFoundError,
     PaymentProviderNotConfiguredError,
     PaymentWebhookPayloadError,
+    cancel_payment,
     create_payment,
     extract_provider_payment_id,
+    fetch_payment,
     parse_webhook_event,
+    refund_payment,
     verify_webhook_signature,
 )
 
@@ -837,3 +840,151 @@ class VerifyMercadopagoSignatureTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FetchCancelRefundTests(unittest.TestCase):
+    """As tres funcoes que o estorno automatico usa.
+
+    O que elas provam e o FORMATO do que sai na rede — que e a metade que
+    nenhum teste de service pega, porque la elas estao dubladas. A decisao de
+    QUAL delas chamar e de `PaymentRefundService`, e vive em
+    `tests/test_estorno_automatico.py`.
+    """
+
+    def test_fetch_payment_reads_the_status_and_the_refunded_amount(self):
+        fake_client = FakeHttpxClient(
+            response=FakeResponse(
+                200,
+                {
+                    "id": 123456789,
+                    "status": "approved",
+                    # Estorno PARCIAL feito no painel deles: o pagamento
+                    # continua `approved`, e este campo e o unico sinal.
+                    "transaction_amount_refunded": 20.5,
+                },
+            )
+        )
+
+        with patch(HTTPX_CLIENT_PATH, return_value=fake_client):
+            snapshot = fetch_payment(
+                provider="mercadopago",
+                access_token=ACCESS_TOKEN,
+                provider_payment_id="123456789",
+            )
+
+        pedido = fake_client.requests[0]
+        self.assertEqual(pedido["method"], "GET")
+        self.assertEqual(pedido["url"], "https://api.mercadopago.com/v1/payments/123456789")
+        self.assertEqual(pedido["headers"]["Authorization"], f"Bearer {ACCESS_TOKEN}")
+        self.assertEqual(snapshot.payment_status, "paid")
+        self.assertEqual(snapshot.raw_status, "approved")
+        self.assertEqual(snapshot.refunded_amount, Decimal("20.5"))
+
+    def test_fetch_payment_translates_a_payment_already_refunded(self):
+        # `refunded` NAO esta na traducao do webhook (la ele e "o que mudou").
+        # Faltando aqui, uma cobranca ja devolvida viraria "status sem
+        # traducao" e o estorno automatico trataria como falha o caso em que
+        # nao ha mais nada a fazer.
+        fake_client = FakeHttpxClient(
+            response=FakeResponse(200, {"id": 1, "status": "refunded"})
+        )
+
+        with patch(HTTPX_CLIENT_PATH, return_value=fake_client):
+            snapshot = fetch_payment(
+                provider="mercadopago", access_token=ACCESS_TOKEN, provider_payment_id="1"
+            )
+
+        self.assertEqual(snapshot.payment_status, "refunded")
+
+    def test_fetch_payment_on_the_sandbox_says_it_does_not_know(self):
+        # None e "este provider nao sabe dizer", nao "nao existe": o sandbox
+        # nao guarda estado, e a copia local JA e a verdade dele.
+        snapshot = fetch_payment(
+            provider="sandbox", access_token=None, provider_payment_id="sandbox-1"
+        )
+
+        self.assertIsNone(snapshot)
+
+    def test_cancel_payment_sends_a_put_with_the_cancelled_status(self):
+        fake_client = FakeHttpxClient(
+            response=FakeResponse(200, {"id": 1, "status": "cancelled"})
+        )
+
+        with patch(HTTPX_CLIENT_PATH, return_value=fake_client):
+            cancel_payment(
+                provider="mercadopago", access_token=ACCESS_TOKEN, provider_payment_id="1"
+            )
+
+        pedido = fake_client.requests[0]
+        self.assertEqual(pedido["method"], "PUT")
+        self.assertEqual(pedido["url"], "https://api.mercadopago.com/v1/payments/1")
+        self.assertEqual(pedido["json"], {"status": "cancelled"})
+
+    def test_cancel_payment_on_an_approved_charge_raises(self):
+        # O Mercado Pago so cancela cobranca que ainda nao capturou dinheiro.
+        # Falhar alto aqui e o que faz `PaymentRefundService` consultar o
+        # estado ANTES de escolher a operacao, em vez de tentar as duas.
+        fake_client = FakeHttpxClient(
+            response=FakeResponse(400, {"error": "bad_request", "message": "not cancellable"})
+        )
+
+        with patch(HTTPX_CLIENT_PATH, return_value=fake_client):
+            with self.assertRaises(PaymentGatewayError):
+                cancel_payment(
+                    provider="mercadopago", access_token=ACCESS_TOKEN, provider_payment_id="1"
+                )
+
+    def test_refund_payment_posts_an_empty_body_and_a_stable_idempotency_key(self):
+        # Corpo vazio = estorno TOTAL do que restar. Mandar o valor calculado
+        # daqui abriria a chance de divergir do que eles capturaram.
+        #
+        # E a chave e estavel PARA SEMPRE, ao contrario da chave da criacao
+        # de cobranca: repetir um estorno nunca e uma operacao nova, e um
+        # timeout na ida seguido de retry nao pode virar dois estornos.
+        fake_client = FakeHttpxClient(
+            response=FakeResponse(201, {"id": 555, "amount": 93.0, "status": "approved"})
+        )
+
+        with patch(HTTPX_CLIENT_PATH, return_value=fake_client):
+            result = refund_payment(
+                provider="mercadopago", access_token=ACCESS_TOKEN, provider_payment_id="123"
+            )
+
+        pedido = fake_client.requests[0]
+        self.assertEqual(pedido["method"], "POST")
+        self.assertEqual(pedido["url"], "https://api.mercadopago.com/v1/payments/123/refunds")
+        self.assertEqual(pedido["json"], {})
+        self.assertEqual(pedido["headers"]["X-Idempotency-Key"], "refund:123")
+        self.assertTrue(result.settled)
+        self.assertEqual(result.amount, Decimal("93.0"))
+        self.assertEqual(result.provider_refund_id, "555")
+
+    def test_refund_payment_in_process_is_not_settled(self):
+        # O estorno deles tem status proprio, e so `approved` significa que o
+        # dinheiro saiu. Ler `in_process` como sucesso marcaria o pedido como
+        # `refunded` com o dinheiro ainda na conta do restaurante.
+        fake_client = FakeHttpxClient(
+            response=FakeResponse(201, {"id": 555, "amount": 93.0, "status": "in_process"})
+        )
+
+        with patch(HTTPX_CLIENT_PATH, return_value=fake_client):
+            with self.assertLogs("uvicorn.error", level="WARNING"):
+                result = refund_payment(
+                    provider="mercadopago", access_token=ACCESS_TOKEN, provider_payment_id="123"
+                )
+
+        self.assertFalse(result.settled)
+        self.assertEqual(result.raw_status, "in_process")
+
+    def test_the_three_refuse_a_restaurant_without_credential(self):
+        # Nao existe token de fallback: cobrar (ou devolver) em nome de uma
+        # conta que nao e a do restaurante do pedido nao pode acontecer por
+        # descuido.
+        for chamada in (fetch_payment, cancel_payment, refund_payment):
+            with self.subTest(chamada=chamada.__name__):
+                with self.assertRaises(PaymentProviderNotConfiguredError):
+                    chamada(
+                        provider="mercadopago",
+                        access_token=None,
+                        provider_payment_id="1",
+                    )

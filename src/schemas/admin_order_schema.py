@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import Enum
 from typing import Literal
 from uuid import UUID
 
@@ -80,6 +81,15 @@ class UpdateOrderStatusRequest(BaseModel):
 
     status: str
     note: str | None = None
+    confirm_prepared_order: bool = Field(
+        default=False,
+        description=(
+            "Mesma confirmacao de `CancelOrderRequest`, e ela precisa existir "
+            "aqui tambem: esta rota aceita `status='cancelled'` e seria a "
+            "porta pela qual o painel pularia o dialogo. So tem efeito nesse "
+            "status."
+        ),
+    )
 
 
 class CancelOrderRequest(BaseModel):
@@ -97,6 +107,14 @@ class CancelOrderRequest(BaseModel):
     """
 
     reason: str = Field(max_length=MAX_CANCELLATION_REASON_LENGTH)
+    confirm_prepared_order: bool = Field(
+        default=False,
+        description=(
+            "Confirmacao explicita de que o lojista sabe que a comida ja foi "
+            "feita. Obrigatoria a partir de `preparing`; sem ela a rota "
+            "responde 428 com `confirmation_required`. Antes disso e ignorada."
+        ),
+    )
 
     @field_validator("reason")
     @classmethod
@@ -110,6 +128,44 @@ class CancelOrderRequest(BaseModel):
                 f"{MIN_CANCELLATION_REASON_LENGTH} caracteres"
             )
         return reason
+
+
+class CancelOrderErrorCode(str, Enum):
+    """Os desfechos do cancelamento que o painel trata de forma propria.
+
+    Enum e nao `str` solto para a LISTA sair no /openapi.json (armadilha 16):
+    o painel precisa dela para escrever a tela, e nao so o status HTTP.
+    """
+
+    # A comida ja foi feita e o lojista ainda nao confirmou que sabe disso.
+    # Nao e erro: e o backend pedindo o segundo clique.
+    CONFIRMATION_REQUIRED = "confirmation_required"
+
+
+class CancelOrderErrorDetail(BaseModel):
+    """O `detail` de um cancelamento que precisa de confirmacao."""
+
+    code: CancelOrderErrorCode
+    message: str = Field(
+        description="Pronta para ser mostrada no dialogo de confirmacao do painel.",
+    )
+    order_status: str = Field(
+        description=(
+            "O status em que o pedido estava. E o que permite ao painel dizer "
+            "'ja saiu para entrega' em vez de 'ja esta em preparo'."
+        ),
+    )
+
+
+class CancelOrderErrorResponse(BaseModel):
+    """O CORPO INTEIRO, com o envelope `detail` do FastAPI.
+
+    Existe pelo mesmo motivo de `PaymentErrorResponse`: `HTTPException`
+    entrega `{"detail": {...}}`, e anunciar o detail na raiz faria o painel
+    escrever o parser contra um formato que a rota nunca devolve.
+    """
+
+    detail: CancelOrderErrorDetail
 
 
 class AdminStreamTicketResponse(BaseModel):

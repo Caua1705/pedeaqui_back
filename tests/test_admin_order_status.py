@@ -13,7 +13,9 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
+from src.schemas.admin_order_schema import UpdateOrderStatusRequest
 from src.api.dependencies.admin_scope import AdminScope
+from src.models.order_model import Order
 from src.services.admin_order_service import AdminOrderService
 from src.services.order_service import OrderService
 
@@ -51,13 +53,24 @@ class FakeOrderRepository:
 
 def build_service(order):
     service = AdminOrderService(FakeDb())
-    service.order_repository = FakeOrderRepository(order)
-    service.coupon_service = SimpleNamespace(reverse_for_order=lambda order_id: None)
+    repository = FakeOrderRepository(order)
+    # A LEITURA (escopo, detalhe do pedido) continua sendo do
+    # AdminOrderService; a ESCRITA passou a ser do OrderStatusChangeService,
+    # que ele delega — e que e o mesmo writer do cancelamento pelo cliente. O
+    # MESMO dublê vai nos dois: sao duas camadas do mesmo caminho, nao dois
+    # repositorios.
+    service.order_repository = repository
+    service.status_change_service.order_repository = repository
+    service.status_change_service.coupon_service = SimpleNamespace(
+        reverse_for_order=lambda order_id: None
+    )
     return service
 
 
 def make_order(restaurant_id, *, status="pending", payment_status="on_delivery", order_type="delivery"):
-    return SimpleNamespace(
+    # Model de verdade, transiente (sem sessao, sem banco). O motivo esta no
+    # docstring do `make_order` de test_admin_order_cancel.py.
+    return Order(
         id=uuid.uuid4(),
         restaurant_id=restaurant_id,
         status=status,
@@ -77,7 +90,11 @@ def owner_scope(restaurant_id):
 
 
 def request(status, note=None):
-    return SimpleNamespace(status=status, note=note)
+    # Schema de verdade, nao SimpleNamespace: um objeto de atributos
+    # livres responde qualquer campo que o teste escreva e nenhum que ele
+    # esqueca, e foi exatamente `confirm_prepared_order` que quebrou
+    # todos estes testes de uma vez quando o campo nasceu (CLAUDE.md).
+    return UpdateOrderStatusRequest(status=status, note=note)
 
 
 class TransitionTests(unittest.TestCase):

@@ -163,9 +163,13 @@ ticket de 30s obtido em `POST /admin/orders/stream-ticket`.
 Aqui rodam as duas guardas, nesta ordem: `ensure_order_transition_allowed` (o
 grafo) e `ensure_payment_allows_order_status` (o dinheiro). Ver a seção 5.
 
-`PATCH /admin/orders/{id}/cancel` **não** é uma segunda escrita de status: delega
-para o mesmo `_apply_status_change` com `new_status="cancelled"`. Duas escritas
-independentes seriam a chance de a máquina de estados valer numa e não na outra.
+`PATCH /admin/orders/{id}/cancel` **não** é uma segunda escrita de status, e
+desde 25/08/2026 nem a terceira porta é: as três — o PATCH de status, o cancelamento
+pelo painel e o **cancelamento pelo cliente** — desembocam em
+`OrderStatusChangeService.apply`, que é o único lugar do sistema que grava
+`orders.status`. Escritas independentes seriam a chance de a máquina de estados
+valer numa e não na outra; com dinheiro em cima (cupom, cashback e estorno saem
+todos dali), seriam quatro bugs por um copiar e colar. Ver a seção 5.1.
 
 ### Etapa 5 — o agente de impressão escuta
 
@@ -260,6 +264,42 @@ on_delivery  (terminal — paga na entrega, nasce e morre assim)
 pending ──→ paid ──→ refunded (terminal)
    └──→ failed ──→ pending    (cartão negado / pix expirado: pode tentar de novo)
 ```
+
+### 5.1 Quem pode cancelar, e até quando
+
+A máquina de estados diz o que é **possível**; esta regra diz quem tem
+**autoridade**, e o eixo é um só: *antes do preparo cancelar é barato, depois
+alguém come o prejuízo.*
+
+| Quem | Até onde | O que o backend exige |
+|---|---|---|
+| **cliente** (`POST /restaurants/{slug}/orders/track/{token}/cancel`) | `pending`, `accepted` | nada além do `tracking_token`; motivo é opcional |
+| **lojista** (`PATCH .../cancel` e `PATCH .../status`) | qualquer estado não-terminal | motivo obrigatório; **e confirmação explícita a partir de `preparing`** |
+
+**`preparing` entra na faixa que exige confirmação**, e a escolha é
+deliberada: "a comida já foi feita" começa quando ela começa a ser feita, não
+quando fica pronta. Em `accepted` o lojista só aceitou, e o pedido pode nem ter
+chegado à praça.
+
+**A confirmação responde 428, não 409**, e o código é contrato. Os 409 dessas
+rotas são conflitos de estado de verdade ("pedido já entregue não muda mais") e
+saem com `detail` de texto; o 428 não é erro nenhum — é o backend pedindo uma
+precondição que o painel satisfaz na hora, com um corpo **tipado**
+(`CancelOrderErrorResponse`, código `confirmation_required`) que diz qual
+diálogo abrir e em que status o pedido está. Sobrepor os dois no mesmo código
+obrigaria o painel a distinguir pelo texto da mensagem.
+
+**A confirmação vale nas DUAS rotas do painel.** `PATCH /status` aceita
+`status="cancelled"` e seria exatamente a porta pela qual o painel pularia o
+diálogo — `confirm_prepared_order` existe nos dois corpos de requisição, opcional
+com default `false` para não quebrar painel já instalado no minuto do deploy.
+
+**Recusar (`rejected`) nunca pede confirmação:** o grafo só o alcança a partir
+de `pending`, onde nada foi preparado.
+
+O cancelamento do cliente passa pela mesma escrita do painel, então o cupom
+volta, o cashback volta e **o pagamento é estornado** — um pix pago e cancelado
+em seguida volta sem ninguém ligar para o restaurante.
 
 ### A regra que amarra as duas
 

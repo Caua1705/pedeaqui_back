@@ -222,3 +222,39 @@ class OrderDetailResponse(BaseResponse):
     updated_at: datetime | None = None
     items: list[OrderItemResponse]
     status_history: list[StatusHistoryResponse]
+
+
+# Teto do motivo escrito pelo cliente. Metade do teto do painel: aqui e um
+# comentario espontaneo ("mudei de ideia"), la e o registro que o suporte le
+# quando o cliente liga perguntando por que o pedido dele sumiu.
+MAX_CUSTOMER_CANCELLATION_REASON_LENGTH = 150
+
+
+class CustomerCancelOrderRequest(BaseModel):
+    """Corpo do cancelamento pelo cliente. Tudo opcional, inclusive ele.
+
+    **O motivo e OPCIONAL aqui e obrigatorio no painel**, e a assimetria e
+    proposital: exigir justificativa de quem desiste de um pedido que nem
+    comecou vira um campo que todo mundo preenche com "a", e o historico
+    ganha ruido em vez de informacao. Quem cancelou ja fica em
+    `order_status_history.changed_by`, que e a pergunta que o suporte faz.
+
+    Nao ha campo de status, e nao havera: esta rota so cancela, e so ate
+    `accepted`. Ver CustomerOrderCancelService.
+    """
+
+    reason: str | None = Field(
+        default=None,
+        max_length=MAX_CUSTOMER_CANCELLATION_REASON_LENGTH,
+        description="Opcional. Entra no historico do pedido, precedido de 'Cancelado pelo cliente'.",
+    )
+
+    @field_validator("reason")
+    @classmethod
+    def strip_reason(cls, value: str | None) -> str | None:
+        # Espaco em branco vira None: gravar "   " no historico e pior que
+        # nao gravar nada, porque parece um motivo que se perdeu.
+        if value is None:
+            return None
+        reason = value.strip()
+        return reason or None

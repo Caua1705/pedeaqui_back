@@ -650,7 +650,11 @@ por contrato. Publicá-lo no OpenAPI do painel do lojista o transformaria em cam
 de tela, e editá-lo seria **o lojista escolhendo quanto nos paga**.
 
 Quem precisa dele é o relatório de comissão, que só mostra o valor **já
-congelado** em cada pedido.
+congelado** em cada pedido — congelado desde a criação e reescrito por uma
+coisa só: **estorno TOTAL zera `commission_base_amount` e `commission_amount`**
+(decisão de 25/08/2026). `commission_percent` sobrevive de propósito: ele não é
+dinheiro, é a taxa contratada, e zerá-lo faria o pedido estornado parecer um
+contrato de 0%.
 
 Se você for "completar" o `AdminRestaurantSettingsResponse` com os campos que
 faltam da tabela, esse fica de fora.
@@ -793,41 +797,105 @@ E em banco que já tem o schema, a baseline é `alembic stamp 20260726_0001`, nu
 
 ---
 
-## 25. Dinheiro de cliente parado tem DOIS logs, e a ordem dos eventos decide qual
+## 25. Estornar e cancelar cobrança são operações DIFERENTES, e quem escolhe é o gateway
 
-O estorno só acontece quando o gateway avisa (webhook `refunded`) ou quando alguém
-o faz no painel do próprio gateway. Nada aqui estorna sozinho.
+**Esta armadilha mudou de assunto em 25/08/2026, e o histórico importa.** Ela
+dizia "dinheiro de cliente parado tem DOIS logs, e nada aqui estorna sozinho":
+cancelar um pedido pago gravava um warning e o dinheiro do cliente ficava na
+conta do restaurante até alguém devolver a mão no painel do Mercado Pago. As
+duas ordens de eventos tinham log e nenhuma tinha conserto.
 
-**A ordem em que as duas coisas acontecem produz logs diferentes, em arquivos
-diferentes, e cada um cobre só a metade dele.**
+Hoje `PaymentRefundService.refund_terminal_order` é chamado das duas pontas —
+`AdminOrderService._apply_status_change` e
+`PaymentService._refund_payment_on_terminal_order` —, e o que sobra de
+armadilha é **como** devolver.
 
-**Pagou primeiro, o lojista cancelou depois** — `AdminOrderService._log_cancellation_of_paid_order`:
+**"Estornar" é uma palavra só para duas chamadas que não se substituem:**
 
-```
-[Pagamento] pedido pago foi cancelled sem estorno automatico order_id=...
-```
+| Estado no gateway | Chamada | O que é |
+|---|---|---|
+| `pending`, `in_process` | `PUT /v1/payments/{id}` → `cancelled` | ninguém pagou; a cobrança morre |
+| `approved` | `POST /v1/payments/{id}/refunds` | dinheiro voltando de verdade |
 
-**O lojista recusou primeiro, o pagamento entrou depois** — `PaymentService._log_payment_on_terminal_order`:
+Nenhuma funciona no estado da outra: chamar a errada é 4xx com o dinheiro
+ficando onde estava.
 
-```
-[Pagamento] pagamento confirmado em pedido ja rejected sem estorno automatico order_id=...
-```
+**E o estado que decide NÃO é `orders.payment_status`.** Aquilo é o último
+webhook que chegou, e a defasagem é maior justamente onde o dinheiro está: o
+antifraude pode segurar um cartão por **até 48h úteis**, e nenhum lojista espera
+48h para recusar um pedido de almoço — a análise pode terminar entre a decisão
+do lojista e a chamada. Por isso o service **consulta o gateway antes de agir**
+(`fetch_payment`). Decidir pela cópia local manda `cancel` numa cobrança já
+aprovada.
 
-A segunda metade ficou **sem rastro nenhum até 23/08/2026**, e é a corrida mais
-provável das duas: `handle_webhook` valida só a transição de **pagamento**, e
-`pending → paid` é válida qualquer que seja o `orders.status`. O pedido termina
-`rejected` + `paid` sem que nada recuse a escrita — corretamente, porque recusar
-esconderia o dinheiro que de fato entrou.
+Quando essa corrida acontece, o histórico grava **dois** eventos —
+`payment:paid` e depois `payment:refunded`. O intermediário não é burocracia:
+`in_review → refunded` não existe no grafo e não deve existir, porque o dinheiro
+ENTROU antes de voltar.
 
-**E o faturamento não denuncia:** `billable_order_conditions` exclui `cancelled` e
-`rejected` da comissão, o que está certo e é justamente o que faz o pedido sumir
-do extrato levando junto a única pista de que havia dinheiro nele.
+**Três coisas que continuam valendo, e uma que quase se perdeu:**
 
-O grep que vale no radar cobre os dois: `sem estorno automatico`.
+- `handle_webhook` valida só a transição de **pagamento**, e `pending → paid` é
+  válida qualquer que seja o `orders.status`. A escrita acontece de propósito —
+  recusá-la esconderia o dinheiro que de fato entrou.
+- **o faturamento não denuncia:** `billable_order_conditions` exclui `cancelled`
+  e `rejected`, o que está certo e é o que faz o pedido sumir do extrato levando
+  junto a única pista de que havia dinheiro nele.
+- **o grep do radar não mudou: `sem estorno automatico`.** Mantido palavra por
+  palavra para quem tiver alerta em cima dele. O que mudou é que agora a linha só
+  sai quando a tentativa automática FALHOU — mais rara, e por isso mais séria.
+- **`completed` também é terminal, e é o único terminal em que HOUVE venda.** Um
+  `status in TERMINAL_ORDER_STATUSES` como guarda do estorno devolveria o
+  dinheiro de todo pedido entregue, todo dia, sozinho. O conjunto certo é
+  `NON_BILLABLE_ORDER_STATUSES`, e ele mora num lugar só justamente para a
+  varredura procurar exatamente o que o service trata.
 
-Isso fica mais frequente com **cartão**: o antifraude do Mercado Pago pode segurar
-um pagamento em análise por até 48h úteis, e nenhum lojista espera 48h para
-recusar um pedido de almoço.
+**E a taxa do gateway NÃO volta.** O Mercado Pago devolve ao cliente o valor da
+compra e fica com a tarifa da transação original: R$ 0,89 no pix e R$ 3,58 no
+cartão, num pedido de R$ 90. Cancelar pedido pago custa dinheiro ao lojista
+**mesmo com o estorno funcionando perfeitamente** — e ele precisa saber disso
+antes do primeiro cancelamento, não pela fatura. A frase pronta para essa
+conversa está em `docs/pagamentos-e-comissao.md`, seção 7.1; não improvise uma
+no lugar, porque os três pedaços dela existem para fechar três buracos
+diferentes.
+
+Desenho inteiro em `docs/pagamentos-e-comissao.md`, seção 6.
+
+---
+
+## 25.1 Há UMA escrita de status de pedido, e agora três portas chegam nela
+
+`OrderStatusChangeService.apply` é o único lugar do sistema que grava
+`orders.status`. Chegam nele:
+
+- `PATCH /admin/orders/{id}/status` — o lojista movendo o pedido;
+- `PATCH /admin/orders/{id}/cancel` — o lojista cancelando, com motivo;
+- `POST /restaurants/{slug}/orders/track/{token}/cancel` — o **cliente**
+  desistindo antes do preparo (rota de 25/08/2026).
+
+A regra já estava escrita quando havia só as duas primeiras: *"cancelar não é
+uma segunda escrita de status"*. A terceira é o teste dela — um cancelamento
+pelo cliente com código próprio seria um caminho em que **o cupom não volta, o
+cashback fica retido, o histórico não registra quem cancelou e o pagamento não
+é estornado**. Quatro bugs de dinheiro por um copiar e colar.
+
+**O que esse service NÃO faz é autorizar**, e isso é desenho, não omissão. Ele
+recebe o pedido já carregado e já autorizado, porque as três portas autorizam
+de formas incomparáveis: escopo de lojista pelo token no painel,
+`tracking_token` no app do cliente. Um `if` aqui dentro decidindo de quem é o
+pedido é exatamente onde esse tipo de coisa vaza.
+
+**Quem pode cancelar em que estado também fica de fora**, pelo mesmo motivo: é
+regra da PORTA. `ensure_customer_can_cancel` roda no service do cliente (só
+`pending` e `accepted`); a confirmação de pedido em preparo roda no do painel
+(a partir de `preparing`, 428 com `confirmation_required`).
+
+**A armadilha concreta, para quem for mexer nos testes:** os dublês de
+repositório precisam ser ligados nas DUAS camadas —
+`service.order_repository` (a leitura, que continua no `AdminOrderService`) e
+`service.status_change_service.order_repository` (a escrita). Ligar só a
+primeira faz o teste rodar contra o repositório de verdade e estourar num
+`FakeDb` sem `add`, longe de onde o dublê foi montado.
 
 ---
 
@@ -1393,9 +1461,16 @@ already_applied` engolia isso **sem nem logar**.
 
 O sinal é `transaction_amount_refunded`, e ele mora em `orders.refunded_amount`.
 **A comissão não é reduzida por ele, de propósito** — a plataforma cobra sobre a
-venda que aconteceu. E mapear estorno parcial para `refunded` seria pior nas
-duas direções: tiraria o pedido inteiro do extrato, e a plataforma deixaria de
-cobrar sobre a parte que o cliente pagou.
+venda que aconteceu, e devolução por erro do lojista é custo dele. E mapear
+estorno parcial para `refunded` seria pior nas duas direções: tiraria o pedido
+inteiro do extrato, e a plataforma deixaria de cobrar sobre a parte que o
+cliente pagou.
+
+**Não confunda com o estorno TOTAL, que desde 25/08/2026 ZERA a comissão.** A
+fronteira é exatamente esta: no total o cliente recebeu tudo de volta e não
+houve venda; no parcial houve venda, e o lojista devolveu parte por decisão
+dele. A plataforma **também não faz estorno parcial** — só total; o que chega
+de parcial vem do painel do Mercado Pago.
 
 **E o sandbox recusa cartão.** Ele ignorava `payment_method` inteiro —
 `_create_sandbox_payment` só recebia o `order_id` — então devolvia intent válido

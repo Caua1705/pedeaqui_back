@@ -74,6 +74,11 @@ PUBLIC_ORDER_LOOKUP_RATE_LIMIT = "30/minute"
 # token, porque esta ESCREVE. E a consulta e legitimamente repetida (o cliente
 # reabre a tela para ver se saiu para entrega); avaliar e uma vez por pedido.
 REVIEW_ORDER_RATE_LIMIT = "10/minute;60/hour"
+# Cancelamento pelo cliente. Mesmo teto da avaliacao e pelo mesmo motivo: ele
+# ESCREVE e e uma vez por pedido. Nao precisa ser mais folgado que isso —
+# tentar de novo nao existe aqui, porque o segundo clique chega com o pedido
+# ja em `cancelled` e a maquina de estados responde 409.
+CANCEL_ORDER_RATE_LIMIT = "10/minute;60/hour"
 CREATE_ORDER_RATE_LIMIT = "10/minute;60/hour"
 # Criar cobranca chama o gateway, que cobra por requisicao e tem limite
 # proprio. Um pouco mais folgado que criar pedido porque o cliente pode

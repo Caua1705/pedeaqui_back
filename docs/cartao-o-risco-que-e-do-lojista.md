@@ -76,8 +76,14 @@ na seção 8 do `docs/pagamentos-e-comissao.md`.
 1. **Comprovante de entrega é a defesa.** É o que o lojista manda para contestar
    de volta no painel do Mercado Pago. Sem ele, a contestação é perdida por
    omissão.
-2. **O nosso lado tem o rastro**, e ele não é automático: nada aqui estorna
-   sozinho. O grep que acha dinheiro de cliente parado é `sem estorno automatico`.
+2. **Chargeback continua sendo do lojista, e o estorno automático não o
+   alcança.** Desde 25/08/2026 cancelar um pedido pago devolve o dinheiro
+   sozinho — mas isso é o lojista (ou a plataforma) decidindo devolver. Um
+   *chargeback* é o portador contestando na operadora, sem passar por nós, e
+   chega como `charged_back` no webhook: o dinheiro já saiu quando ficamos
+   sabendo, e não há o que estornar. O grep que acha dinheiro de cliente parado
+   continua sendo `sem estorno automatico`, e hoje ele só sai quando um estorno
+   automático **falhou**.
 3. **É o gatilho do item acima.** Um chargeback real muda a conta do 3DS, e a
    conversa com o lojista deixa de ser sobre risco hipotético.
 
@@ -86,5 +92,10 @@ na seção 8 do `docs/pagamentos-e-comissao.md`.
 ## Onde mais isso aparece
 
 - `docs/pagamentos-e-comissao.md` §8 — o que ficou de fora e por quê.
+- `docs/pagamentos-e-comissao.md` §7.1 — **a taxa que o Mercado Pago não
+  devolve no estorno**, com a frase pronta. É a outra conversa que pertence a
+  este mesmo momento do cadastro: as duas falam de dinheiro que sai do lojista
+  sem ele ter errado, e ouvir as duas juntas é melhor que descobrir uma pela
+  fatura.
 - `docs/onboarding-de-restaurante.md` — o momento de dizer a frase é o cadastro
   da credencial de cartão, não o primeiro pedido.

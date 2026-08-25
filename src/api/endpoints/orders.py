@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from src.api.dependencies.customer_auth import get_optional_current_customer
 from src.api.dependencies.database import get_db
 from src.api.rate_limit import (
+    CANCEL_ORDER_RATE_LIMIT,
     CREATE_ORDER_RATE_LIMIT,
     PUBLIC_ORDER_LOOKUP_RATE_LIMIT,
     REVIEW_ORDER_RATE_LIMIT,
@@ -14,7 +15,13 @@ from src.schemas.order_review_schema import (
     CreateOrderReviewRequest,
     OrderReviewResponse,
 )
-from src.schemas.order_schema import CreateOrderRequest, CreateOrderResponse, OrderDetailResponse
+from src.schemas.order_schema import (
+    CreateOrderRequest,
+    CreateOrderResponse,
+    CustomerCancelOrderRequest,
+    OrderDetailResponse,
+)
+from src.services.customer_order_cancel_service import CustomerOrderCancelService
 from src.services.idempotency_service import normalize_idempotency_key
 from src.services.order_review_service import OrderReviewService
 from src.services.order_service import OrderService
@@ -112,3 +119,57 @@ def review_order(
     - `comment`: opcional, ate 500 caracteres.
     """
     return OrderReviewService(db).submit(restaurant_slug, tracking_token, payload)
+
+
+@router.post(
+    "/{restaurant_slug}/orders/track/{tracking_token}/cancel",
+    response_model=OrderDetailResponse,
+    responses={
+        404: {"description": "Pedido nao encontrado, ou token invalido"},
+        409: {
+            "description": (
+                "O pedido ja saiu da janela em que o cliente cancela sozinho "
+                "(a partir de `preparing`), ou ja e um estado final"
+            )
+        },
+    },
+)
+@limiter.limit(CANCEL_ORDER_RATE_LIMIT)
+def cancel_order_by_customer(
+    request: Request,
+    restaurant_slug: str,
+    tracking_token: str,
+    payload: CustomerCancelOrderRequest | None = None,
+    db: Session = Depends(get_db),
+) -> OrderDetailResponse:
+    """O cliente desistindo do proprio pedido, antes do preparo.
+
+    **Ate onde ela vai: `pending` e `accepted`.** Antes do preparo ninguem
+    gastou nada e desistir e barato para os dois lados. A partir de
+    `preparing` o insumo ja saiu do estoque, e quem decide quem come o
+    prejuizo passa a ser o lojista — a rota responde **409** e o app manda o
+    cliente falar com o restaurante.
+
+    **Sem login, de proposito.** Pedido de convidado e caso normal, e exigir
+    conta aqui deixaria justamente o convidado sem saida. Quem autoriza e o
+    `tracking_token` desta URL — o mesmo do acompanhamento e da avaliacao,
+    com 256 bits e sem rota de reemissao.
+
+    **O corpo e opcional, e o motivo dentro dele tambem.** Exigir
+    justificativa de quem desiste de um pedido que nem comecou produz um
+    campo preenchido com "a"; quem cancelou ja fica gravado no historico.
+
+    ## O que ela faz junto, e que o app nao precisa pedir
+
+    E a MESMA escrita do cancelamento pelo painel
+    (`OrderStatusChangeService`), entao o cupom volta a ficar disponivel, o
+    cashback resgatado volta para o saldo e **o pagamento online e
+    estornado** — um pix pago e cancelado em seguida volta sem ninguem ligar
+    para o restaurante. O estorno acontece depois do commit e nao pode
+    derrubar esta resposta: se o gateway estiver fora do ar, o cancelamento
+    vale e uma varredura devolve o dinheiro depois.
+
+    **Sem `Idempotency-Key`**, e ela nao faz falta: o segundo clique chega
+    com o pedido ja em `cancelled` e leva 409 da maquina de estados.
+    """
+    return CustomerOrderCancelService(db).cancel(restaurant_slug, tracking_token, payload)

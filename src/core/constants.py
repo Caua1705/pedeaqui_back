@@ -104,6 +104,20 @@ PAYMENT_METHODS = (
 #              (ver PaymentService._apply_refunded_amount).
 PAYMENT_STATUSES = ("on_delivery", "pending", "in_review", "paid", "failed", "refunded")
 
+# Estados em que ainda existe cobranca VIVA do lado do gateway — dinheiro
+# retido, ou uma cobranca que o cliente ainda consegue pagar.
+#
+# Sao exatamente os estados em que um pedido cancelado tem o que ser feito
+# no Mercado Pago, e por isso a lista serve a dois lugares que precisam
+# concordar: `PaymentRefundService`, que decide, e
+# `OrderRepository.list_orders_awaiting_refund`, que acha o que ficou para
+# tras. Duas copias virariam uma varredura que procura um conjunto e um
+# service que trata outro.
+#
+# `on_delivery` fica de fora porque nunca houve cobranca; `failed` porque a
+# cobranca ja morreu; `refunded` porque o dinheiro ja voltou.
+PAYMENT_STATUSES_WITH_LIVE_CHARGE = ("pending", "in_review", "paid")
+
 # O que o cliente aponta quando a nota e baixa. ESPELHA o CHECK
 # `ck_order_reviews_problem_tag` e muda JUNTO com ele — e o mesmo par de
 # listas da armadilha 15 (PAYMENT_METHODS x o CHECK de

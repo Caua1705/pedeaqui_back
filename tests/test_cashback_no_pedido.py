@@ -17,6 +17,7 @@ from fastapi import HTTPException
 
 from src.schemas.order_schema import CreateOrderRequest
 from src.services.admin_order_service import AdminOrderService
+from src.models.order_model import Order
 from src.services.order_service import OrderService
 
 
@@ -275,22 +276,31 @@ class CreditoNaMudancaDeStatusTests(unittest.TestCase):
 
     def build(self, order):
         service = AdminOrderService(FakeDb())
-        service.order_repository = SimpleNamespace(
+        repository = SimpleNamespace(
             get_order_detail=lambda order_id, restaurant_id: order,
             update_status=lambda current, novo: setattr(current, "status", novo),
             create_status_history=lambda history: None,
         )
-        service.coupon_service = SimpleNamespace(reverse_for_order=lambda order_id: None)
         service.creditados = []
         service.devolvidos = []
-        service.cashback_service = SimpleNamespace(
+        # A leitura é do AdminOrderService e a escrita é do
+        # OrderStatusChangeService que ele delega; o cashback mora no writer,
+        # que é o mesmo caminho do cancelamento pelo cliente.
+        service.order_repository = repository
+        service.status_change_service.order_repository = repository
+        service.status_change_service.coupon_service = SimpleNamespace(
+            reverse_for_order=lambda order_id: None
+        )
+        service.status_change_service.cashback_service = SimpleNamespace(
             credit_for_order=lambda pedido: service.creditados.append(pedido.id),
             refund_redemption=lambda pedido: service.devolvidos.append(pedido.id),
         )
         return service
 
     def pedido(self, status="out_for_delivery"):
-        return SimpleNamespace(
+        # Model de verdade, transiente. O motivo esta no docstring do
+        # `make_order` de test_admin_order_cancel.py.
+        return Order(
             id=uuid.uuid4(),
             restaurant_id=uuid.uuid4(),
             branch_id=uuid.uuid4(),
@@ -323,6 +333,10 @@ class CreditoNaMudancaDeStatusTests(unittest.TestCase):
             admin_user=SimpleNamespace(id=uuid.uuid4(), email="lojista@exemplo.com"),
             idempotency_key=None,
             route="teste",
+            # Cancelar pedido em preparo exige confirmação explícita desde
+            # 25/08/2026 (a comida já foi feita). Aqui ela é ruído: o assunto
+            # do teste é o cashback, e sem isto ele morreria com 428 no setup.
+            confirm_prepared_order=True,
         )
 
     def test_concluir_credita(self):

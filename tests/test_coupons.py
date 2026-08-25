@@ -10,7 +10,9 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
+from src.schemas.admin_order_schema import UpdateOrderStatusRequest
 from src.api.dependencies.admin_scope import AdminScope
+from src.models.order_model import Order
 from src.schemas.coupon_schema import CouponCampaignFields, CouponPreviewRequest
 from src.schemas.order_schema import CreateOrderRequest
 from src.services.admin_order_service import AdminOrderService
@@ -578,7 +580,9 @@ class OrderCouponIntegrationTests(unittest.TestCase):
     def test_cancelled_order_reverses_redemption_in_same_transaction(self):
         db = FakeDb()
         restaurant_id = uuid.uuid4()
-        order = SimpleNamespace(
+        # Model de verdade, transiente. O motivo esta no docstring do
+        # `make_order` de test_admin_order_cancel.py.
+        order = Order(
             id=uuid.uuid4(),
             status="pending",
             order_type="delivery",
@@ -603,15 +607,21 @@ class OrderCouponIntegrationTests(unittest.TestCase):
 
         reversed_orders = []
         service = AdminOrderService(db)
-        service.order_repository = Repo()
-        service.coupon_service = SimpleNamespace(reverse_for_order=lambda order_id: reversed_orders.append(order_id))
+        repository = Repo()
+        # Leitura no AdminOrderService, escrita no OrderStatusChangeService
+        # que ele delega — o mesmo writer do cancelamento pelo cliente.
+        service.order_repository = repository
+        service.status_change_service.order_repository = repository
+        service.status_change_service.coupon_service = SimpleNamespace(
+            reverse_for_order=lambda order_id: reversed_orders.append(order_id)
+        )
 
         from unittest.mock import patch
         with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
             result = service.update_order_status(
                 order.id,
                 AdminScope(admin_user=None, restaurant_id=restaurant_id, branch_id=None),
-                SimpleNamespace(status="cancelled", note=None),
+                UpdateOrderStatusRequest(status="cancelled", note=None),
                 admin_user=SimpleNamespace(id=uuid.uuid4(), email="lojista@exemplo.com"),
             )
 

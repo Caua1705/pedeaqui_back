@@ -50,6 +50,25 @@ TERMINAL_ORDER_STATUSES = tuple(
 # precisa ter cruzado.
 KITCHEN_ORDER_STATUSES = ("accepted", "preparing", "ready", "out_for_delivery", "completed")
 
+# Estados em que a comida JA CUSTOU DINHEIRO ao restaurante. Cancelar aqui
+# nao e desfazer nada: o insumo saiu do estoque e alguem vai comer o
+# prejuizo. Por isso o cancelamento nestes estados exige confirmacao
+# explicita de quem clica — ver `cancellation_needs_confirmation`.
+#
+# `preparing` ENTRA, e a escolha e deliberada: "a comida ja foi feita" comeca
+# quando ela comeca a ser feita, nao quando fica pronta. Em `accepted` o
+# lojista so aceitou, e o pedido pode nao ter chegado a praca.
+PREPARED_ORDER_STATUSES = ("preparing", "ready", "out_for_delivery")
+
+# Ate onde o CLIENTE cancela sozinho. A regra e a mesma do outro lado da
+# moeda: antes do preparo ninguem gastou nada, e desistir e barato para os
+# dois. Depois disso o cancelamento passa a ser uma conversa — o cliente liga
+# e o lojista decide, com a confirmacao que PREPARED_ORDER_STATUSES exige.
+#
+# `pending` cobre o pedido esperando o aceite E o pix ainda nao pago; nos dois
+# o cliente desiste sem custo para ninguem.
+CUSTOMER_CANCELLABLE_STATUSES = ("pending", "accepted")
+
 # Estados de pagamento que autorizam o pedido a entrar na cozinha.
 # `on_delivery` entra porque o dinheiro so existe no fim mesmo.
 #
@@ -146,6 +165,60 @@ def ensure_payment_allows_order_status(new_status: str, payment_status: str) -> 
             f"(payment_status='{payment_status}'). O pedido nao pode ser aceito."
         ),
     )
+
+
+def cancellation_needs_confirmation(current_status: str, new_status: str) -> bool:
+    """Este cancelamento precisa de um segundo clique de quem o pediu?
+
+    Predicado e nao `ensure_*`, ao contrario dos vizinhos deste arquivo, e o
+    motivo e o formato da resposta: os outros recusam com 409 e uma frase, e
+    este recusa com um corpo TIPADO que o painel le para decidir abrir o
+    dialogo de confirmacao (ver AdminOrderService._ensure_cancellation_confirmed).
+    Deixar a forma HTTP fora daqui e o que mantem este arquivo sem importar
+    schema nenhum.
+
+    So `cancelled` passa por aqui. `rejected` nao: o grafo so o alcanca a
+    partir de `pending`, onde nada foi preparado ainda.
+    """
+    if new_status != "cancelled":
+        return False
+    return current_status in PREPARED_ORDER_STATUSES
+
+
+def ensure_customer_can_cancel(current_status: str) -> None:
+    """O cliente so cancela sozinho antes de a comida comecar a ser feita.
+
+    Depois disso o pedido ja custou dinheiro ao restaurante, e quem decide
+    quem come o prejuizo e o lojista — que tem a rota do painel, com motivo
+    obrigatorio e confirmacao explicita. Deixar o cliente cancelar um pedido
+    em preparo daria a ele o poder de gerar prejuizo com um toque, sem
+    ninguem do outro lado saber por que.
+
+    A recusa cita o status para o app conseguir escrever a frase certa: "seu
+    pedido ja esta sendo preparado, fale com o restaurante" e uma coisa,
+    "este pedido ja foi entregue" e outra.
+    """
+    if current_status in CUSTOMER_CANCELLABLE_STATUSES:
+        return
+    raise HTTPException(
+        status_code=http_status.HTTP_409_CONFLICT,
+        detail=(
+            f"Pedido em '{current_status}' nao pode mais ser cancelado por voce. "
+            "Fale com o restaurante."
+        ),
+    )
+
+
+def payment_transition_is_allowed(current_status: str, new_status: str) -> bool:
+    """A mesma regra de `ensure_payment_transition_allowed`, como pergunta.
+
+    Existe porque o estorno automatico (`PaymentRefundService`) precisa
+    DECIDIR sobre a transicao, e nao recusar uma requisicao: ele roda depois
+    de o cancelamento ja estar gravado, onde levantar HTTPException nao
+    chega a lugar nenhum util. As duas leem o mesmo grafo; o que muda e o
+    que acontece quando a resposta e nao.
+    """
+    return new_status in PAYMENT_STATUS_TRANSITIONS.get(current_status, ())
 
 
 def ensure_payment_transition_allowed(current_status: str, new_status: str) -> None:

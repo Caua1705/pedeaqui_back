@@ -5,6 +5,7 @@ import uuid
 from pydantic import ValidationError
 
 from main import app
+from src.schemas.admin_order_schema import CancelOrderErrorCode
 from src.schemas.admin_printing_schema import PrintAgentCommandType
 from src.schemas.customer_schema import ImportCustomerAddressesRequest
 from src.schemas.delivery_schema import DeliveryEstimateRequest
@@ -577,3 +578,98 @@ class CardapioPorFilialContractTests(unittest.TestCase):
         """E ela que explica por que duas lojas aparecem numa linha so."""
         self.assertIn("catalog_key", self.components["ProductSalesItem"]["properties"])
 
+
+
+class CancelConfirmationContractTests(unittest.TestCase):
+    """A confirmacao de cancelamento tem que estar PUBLICADA, nao so implementada.
+
+    O painel escreve a tela a partir do /openapi.json. Um 428 que existe no
+    codigo e nao no documento e um dialogo que ninguem sabe que precisa
+    desenhar — e o lojista leva um erro sem saida no meio do movimento.
+    """
+
+    CANCEL_ROUTE = "/admin/orders/{order_id}/cancel"
+    STATUS_ROUTE = "/admin/orders/{order_id}/status"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.schema = app.openapi()
+
+    def test_the_428_is_declared_on_BOTH_admin_doors(self):
+        # `PATCH /status` aceita status="cancelled" e seria a porta pela qual
+        # o painel pularia o dialogo. Declarar so na rota de cancelamento
+        # publicaria meia regra.
+        for route in (self.CANCEL_ROUTE, self.STATUS_ROUTE):
+            with self.subTest(route=route):
+                responses = self.schema["paths"][route]["patch"]["responses"]
+                self.assertIn("428", responses)
+
+    def test_the_declared_body_carries_the_detail_envelope(self):
+        ref = self.schema["paths"][self.CANCEL_ROUTE]["patch"]["responses"]["428"][
+            "content"
+        ]["application/json"]["schema"]["$ref"]
+        self.assertEqual(ref, "#/components/schemas/CancelOrderErrorResponse")
+
+        envelope = self.schema["components"]["schemas"]["CancelOrderErrorResponse"]
+        self.assertEqual(
+            envelope["properties"]["detail"]["$ref"],
+            "#/components/schemas/CancelOrderErrorDetail",
+        )
+
+    def test_the_detail_publishes_every_field_the_panel_reads(self):
+        detail = self.schema["components"]["schemas"]["CancelOrderErrorDetail"]
+
+        for field in ("code", "message", "order_status"):
+            self.assertIn(field, detail["properties"])
+        self.assertEqual(
+            sorted(detail["required"]), ["code", "message", "order_status"]
+        )
+
+    def test_the_possible_codes_are_published_as_an_enum(self):
+        published = self.schema["components"]["schemas"]["CancelOrderErrorCode"]["enum"]
+        self.assertEqual(published, [code.value for code in CancelOrderErrorCode])
+
+    def test_the_confirmation_field_is_published_on_both_request_bodies(self):
+        # Sem o campo no documento, o painel nao tem como reenviar
+        # confirmando: ele veria o 428 e nao saberia o que mudar.
+        for schema_name in ("CancelOrderRequest", "UpdateOrderStatusRequest"):
+            with self.subTest(schema=schema_name):
+                corpo = self.schema["components"]["schemas"][schema_name]
+                self.assertIn("confirm_prepared_order", corpo["properties"])
+                # Opcional com default false: campo obrigatorio quebraria todo
+                # painel ja instalado no minuto do deploy.
+                self.assertNotIn("confirm_prepared_order", corpo.get("required", []))
+
+
+class CustomerCancelContractTests(unittest.TestCase):
+    """A rota de cancelamento pelo cliente, do jeito que o app a le."""
+
+    ROUTE = "/restaurants/{restaurant_slug}/orders/track/{tracking_token}/cancel"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.schema = app.openapi()
+
+    def test_the_route_exists_and_is_a_post(self):
+        self.assertIn(self.ROUTE, self.schema["paths"])
+        self.assertIn("post", self.schema["paths"][self.ROUTE])
+
+    def test_it_answers_the_order_detail(self):
+        # Mesma resposta do acompanhamento: o app ja sabe desenha-la, e o
+        # cliente ve o pedido cancelado sem uma segunda requisicao.
+        ref = self.schema["paths"][self.ROUTE]["post"]["responses"]["200"]["content"][
+            "application/json"
+        ]["schema"]["$ref"]
+        self.assertEqual(ref, "#/components/schemas/OrderDetailResponse")
+
+    def test_the_409_is_declared(self):
+        # E o caso que o app precisa tratar com texto proprio: "seu pedido ja
+        # esta sendo preparado, fale com o restaurante".
+        self.assertIn("409", self.schema["paths"][self.ROUTE]["post"]["responses"])
+
+    def test_the_body_is_optional_and_so_is_the_reason(self):
+        corpo = self.schema["paths"][self.ROUTE]["post"].get("requestBody")
+        if corpo is not None:
+            self.assertFalse(corpo.get("required", False))
+        pedido = self.schema["components"]["schemas"]["CustomerCancelOrderRequest"]
+        self.assertNotIn("required", pedido)

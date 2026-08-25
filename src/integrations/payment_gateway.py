@@ -1,13 +1,33 @@
 """Integracao com o gateway de pagamento.
 
 ===========================================================================
-TRES FUNCOES fazem a ponte com o Mercado Pago; nada fora deste arquivo
+SEIS FUNCOES fazem a ponte com o Mercado Pago; nada fora deste arquivo
 precisa mudar quando o gateway ou a versao da API mudar:
 
   1. create_payment           — cria a cobranca e devolve o id do gateway
-  2. verify_webhook_signature — confere que a notificacao veio do gateway
-  3. parse_webhook_event      — traduz o corpo do gateway para o daqui
+  2. fetch_payment            — le o estado ATUAL de uma cobranca
+  3. cancel_payment           — mata cobranca que ainda nao capturou dinheiro
+  4. refund_payment           — devolve dinheiro que ja foi capturado
+  5. verify_webhook_signature — confere que a notificacao veio do gateway
+  6. parse_webhook_event      — traduz o corpo do gateway para o daqui
 ===========================================================================
+
+**As funcoes 3 e 4 nao sao a mesma coisa com nomes diferentes**, e escolher
+a errada e um erro do gateway na cara do cliente:
+
+  - `cancel_payment` (`PUT /v1/payments/{id}` com `status=cancelled`) so
+    vale para cobranca que AINDA NAO capturou dinheiro — `pending` (o QR do
+    pix gerado e nao pago) e `in_process` (o cartao em analise). Nao ha
+    dinheiro voltando: a cobranca deixa de existir.
+  - `refund_payment` (`POST /v1/payments/{id}/refunds`) so vale para
+    cobranca APROVADA. Ai ha dinheiro de verdade voltando.
+
+Nenhuma das duas funciona no estado da outra, e QUAL delas cabe depende do
+estado que o pagamento tem no gateway AGORA — que nao e necessariamente o
+que `orders.payment_status` guarda, porque o webhook pode ainda estar em
+voo. E por isso que a funcao 2 existe: quem vai encerrar uma cobranca
+pergunta antes, em vez de decidir pela copia local. Ver
+`PaymentRefundService`.
 
 Por que uma camada propria e nao chamar o SDK do Mercado Pago direto dos
 services: o resto do sistema fala "paid", "failed", "refunded"
@@ -126,19 +146,29 @@ _MERCADOPAGO_STATUS_TRANSLATION = {
     "charged_back": "refunded",
 }
 
-# O mesmo dicionario nao serve para a RESPOSTA da criacao da cobranca, e a
+# O mesmo dicionario nao serve para ler o ESTADO de um pagamento, e a
 # diferenca esta no `pending`:
 #
 #   no WEBHOOK  `pending` nao produz mudanca — o pedido ja esta pending, e
 #               traduzi-lo faria uma transicao de X para X.
-#   na CRIACAO  `pending` e o desfecho normal do pix, e precisa virar o
-#               estado inicial do pagamento.
-_MERCADOPAGO_CREATION_STATUS_TRANSLATION = {
+#   no ESTADO   `pending` e um estado legitimo (o pix esperando ser pago), e
+#               precisa ter nome.
+#
+# Duas funcoes leem o estado e por isso usam este: `_mercadopago_intent` (a
+# resposta da criacao) e `fetch_payment` (a consulta ao pagamento). As duas
+# perguntam "em que pe esta esta cobranca", nao "o que mudou".
+_MERCADOPAGO_PAYMENT_STATUS_TRANSLATION = {
     "pending": "pending",
     "in_process": "in_review",
     "approved": "paid",
     "rejected": "failed",
     "cancelled": "failed",
+    # Os dois so aparecem para quem CONSULTA um pagamento antigo — cobranca
+    # recem-criada nunca nasce assim. Sem eles, `fetch_payment` devolveria
+    # "status sem traducao" para um pagamento ja estornado, e o estorno
+    # automatico trataria como falha o caso em que nao ha mais nada a fazer.
+    "refunded": "refunded",
+    "charged_back": "refunded",
 }
 
 
@@ -234,6 +264,41 @@ class PaymentIntent:
     # cliente que "cc_rejected_bad_filled_security_code").
     raw_status: str | None = None
     raw_status_detail: str | None = None
+
+
+@dataclass(frozen=True)
+class GatewayPayment:
+    """Em que pe uma cobranca esta NO GATEWAY, agora.
+
+    Existe para quem vai encerrar uma cobranca nao decidir pela copia local:
+    `orders.payment_status` e o ultimo webhook que chegou, e o webhook pode
+    estar em voo. Cancelar uma cobranca que acabou de ser aprovada, ou
+    estornar uma que nunca foi paga, sao os dois erros que essa defasagem
+    produz — e os dois voltam como 4xx do gateway.
+    """
+
+    # Ja em PAYMENT_STATUSES. None quando o status deles nao tem traducao
+    # aqui (um estado novo que eles inventem): quem chama nao age no escuro.
+    payment_status: str | None
+    raw_status: str | None
+    # Quanto ja voltou para o cliente, no total. Diferente de zero num
+    # pagamento que ainda esta `paid` significa estorno PARCIAL — feito no
+    # painel deles, ou por esta plataforma.
+    refunded_amount: Decimal = Decimal("0")
+
+
+@dataclass(frozen=True)
+class RefundResult:
+    """O que o gateway devolveu ao mandar o dinheiro de volta."""
+
+    provider_refund_id: str | None
+    amount: Decimal
+    # True so quando o gateway diz que o dinheiro JA saiu da conta do
+    # restaurante. O estorno deles tem status proprio, e `in_process` existe:
+    # tratar isso como concluido marcaria o pedido como `refunded` antes de
+    # o dinheiro ter se movido. Quando for False, quem confirma e o webhook.
+    settled: bool
+    raw_status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -444,7 +509,7 @@ def _mercadopago_intent(payload: dict) -> PaymentIntent:
     """
     transaction_data = (payload.get("point_of_interaction") or {}).get("transaction_data") or {}
     raw_status = payload.get("status")
-    payment_status = _MERCADOPAGO_CREATION_STATUS_TRANSLATION.get(raw_status)
+    payment_status = _MERCADOPAGO_PAYMENT_STATUS_TRANSLATION.get(raw_status)
 
     if payment_status is None:
         # Status que eles inventaram depois desta linha ser escrita. `pending`
@@ -464,6 +529,174 @@ def _mercadopago_intent(payload: dict) -> PaymentIntent:
         qr_code=transaction_data.get("qr_code"),
         raw_status=raw_status,
         raw_status_detail=payload.get("status_detail"),
+    )
+
+
+def fetch_payment(
+    *,
+    provider: str,
+    access_token: str | None,
+    provider_payment_id: str,
+) -> GatewayPayment | None:
+    """Le o estado atual da cobranca no gateway.
+
+    `None` significa **"este provider nao sabe dizer"**, e nao "nao existe".
+    O sandbox nao guarda estado nenhum: a unica coisa que muda o pagamento
+    dele e um webhook que nos mesmos disparamos, entao a copia local JA e a
+    verdade e nao ha o que consultar. Quem chama trata o None caindo para
+    `orders.payment_status` — ver PaymentRefundService.
+
+    Pagamento que o gateway nao encontra levanta PaymentNotFoundError, que e
+    coisa diferente e nao pode virar `None`: id gravado aqui que nao existe
+    la e divergencia de dado, e precisa aparecer.
+    """
+    if provider == SANDBOX_PROVIDER:
+        return None
+
+    if provider != MERCADOPAGO_PROVIDER:
+        raise PaymentProviderUnknownError(f"Provider de pagamento desconhecido: {provider}")
+
+    if not access_token:
+        raise PaymentProviderNotConfiguredError(
+            "Restaurante sem credencial do Mercado Pago cadastrada para o "
+            "ambiente atual: impossivel consultar o pagamento"
+        )
+
+    payload = _call_mercadopago(
+        method="GET",
+        path=f"/v1/payments/{provider_payment_id}",
+        access_token=access_token,
+    )
+    raw_status = payload.get("status")
+    return GatewayPayment(
+        payment_status=_MERCADOPAGO_PAYMENT_STATUS_TRANSLATION.get(raw_status),
+        raw_status=raw_status,
+        refunded_amount=_refunded_amount(payload),
+    )
+
+
+def cancel_payment(
+    *,
+    provider: str,
+    access_token: str | None,
+    provider_payment_id: str,
+) -> None:
+    """Mata uma cobranca que ainda NAO capturou dinheiro.
+
+    E o caminho do pix com o QR gerado e nao pago, e do cartao ainda em
+    analise do antifraude. **Nao ha dinheiro voltando** — a cobranca deixa
+    de existir, e o cliente nao consegue mais paga-la. Para cobranca ja
+    aprovada quem serve e `refund_payment`, e o Mercado Pago recusa esta
+    chamada com 4xx nesse caso (ver o docstring do modulo).
+
+    Cancelar o pix aberto de um pedido cancelado nao e higiene: sem isso o
+    cliente paga, do lado dele, um pedido que ninguem vai produzir — e o
+    webhook chega num pedido ja terminal, que e a corrida tratada em
+    `PaymentService._refund_payment_on_terminal_order`.
+
+    Sucesso e a ausencia de excecao. Nao ha o que devolver: o unico desfecho
+    possivel de um cancelamento aceito e a cobranca cancelada.
+    """
+    if provider == SANDBOX_PROVIDER:
+        # Nao ha cobranca de verdade para matar. Retornar (em vez de
+        # levantar) e o que mantem o fluxo inteiro demonstravel no sandbox,
+        # que e a razao de ele existir.
+        return
+
+    if provider != MERCADOPAGO_PROVIDER:
+        raise PaymentProviderUnknownError(f"Provider de pagamento desconhecido: {provider}")
+
+    if not access_token:
+        raise PaymentProviderNotConfiguredError(
+            "Restaurante sem credencial do Mercado Pago cadastrada para o "
+            "ambiente atual: impossivel cancelar a cobranca"
+        )
+
+    _call_mercadopago(
+        method="PUT",
+        path=f"/v1/payments/{provider_payment_id}",
+        access_token=access_token,
+        json_body={"status": "cancelled"},
+    )
+
+
+def refund_payment(
+    *,
+    provider: str,
+    access_token: str | None,
+    provider_payment_id: str,
+) -> RefundResult:
+    """Devolve INTEGRALMENTE o dinheiro de uma cobranca aprovada.
+
+    Corpo vazio de proposito: no Mercado Pago um `POST .../refunds` sem
+    `amount` estorna o que restar do pagamento. Mandar o valor calculado
+    daqui abriria a chance de divergir do que eles capturaram de fato — o
+    total do pedido nao e necessariamente o valor da cobranca depois de um
+    estorno parcial feito no painel deles.
+
+    **Estorno parcial nao tem funcao aqui**, e a ausencia e deliberada:
+    quem cancela um pedido devolve o pedido inteiro. Devolucao de parte do
+    valor continua sendo operacao do painel do Mercado Pago, e chega aqui
+    pelo webhook (`PaymentService._apply_partial_refund`).
+
+    A chave de idempotencia sai do id do PAGAMENTO e e estavel para sempre:
+    ao contrario da criacao de cobranca (ver _mercadopago_idempotency_key),
+    aqui repetir a chamada NUNCA e uma operacao nova. Um timeout na ida
+    seguido de um retry nao pode virar dois estornos.
+    """
+    if provider == SANDBOX_PROVIDER:
+        # Mesmo motivo do cancel: sem isto o sandbox nao consegue demonstrar
+        # o cancelamento de pedido pago, que e justamente o fluxo novo.
+        return RefundResult(
+            provider_refund_id=f"sandbox-refund-{provider_payment_id}",
+            amount=Decimal("0"),
+            settled=True,
+            raw_status="approved",
+        )
+
+    if provider != MERCADOPAGO_PROVIDER:
+        raise PaymentProviderUnknownError(f"Provider de pagamento desconhecido: {provider}")
+
+    if not access_token:
+        raise PaymentProviderNotConfiguredError(
+            "Restaurante sem credencial do Mercado Pago cadastrada para o "
+            "ambiente atual: impossivel estornar o pagamento"
+        )
+
+    payload = _call_mercadopago(
+        method="POST",
+        path=f"/v1/payments/{provider_payment_id}/refunds",
+        access_token=access_token,
+        json_body={},
+        extra_headers={"X-Idempotency-Key": f"refund:{provider_payment_id}"},
+    )
+    return _mercadopago_refund_result(payload)
+
+
+def _mercadopago_refund_result(payload: dict) -> RefundResult:
+    """Le a resposta do estorno — inclusive quando ela nao e um desfecho.
+
+    O estorno deles tem status proprio (`approved`, `in_process`,
+    `rejected`), e so `approved` significa que o dinheiro saiu. Um
+    `in_process` lido como sucesso marcaria o pedido `refunded` com o
+    dinheiro ainda na conta do restaurante; o webhook e quem fecha esse
+    caso.
+
+    Status ausente conta como NAO concluido, pela mesma regra que
+    `_mercadopago_intent` usa para status sem traducao: a queda segura e a
+    que nao declara dinheiro devolvido sem prova.
+    """
+    raw_status = payload.get("status")
+    if raw_status is not None and raw_status != "approved":
+        logger.warning(
+            "[Pagamento][mercadopago] estorno aceito mas nao concluido status=%s",
+            raw_status,
+        )
+    return RefundResult(
+        provider_refund_id=str(payload["id"]) if payload.get("id") else None,
+        amount=_decimal_or_zero(payload.get("amount"), "amount"),
+        settled=raw_status == "approved",
+        raw_status=raw_status,
     )
 
 
@@ -855,15 +1088,26 @@ def _refunded_amount(payload: dict) -> Decimal:
     simplesmente nao traze-lo, e um estorno que a gente nao consegue ler nao
     pode derrubar a confirmacao de um pagamento que a gente consegue.
     """
-    raw = payload.get("transaction_amount_refunded")
+    return _decimal_or_zero(
+        payload.get("transaction_amount_refunded"), "transaction_amount_refunded"
+    )
+
+
+def _decimal_or_zero(raw, field_name: str) -> Decimal:
+    """Numero de dinheiro vindo do gateway, ou zero.
+
+    Compartilhada pelos dois campos de valor que lemos deles
+    (`transaction_amount_refunded` na consulta e `amount` no estorno) porque
+    a regra e a mesma: campo ausente ou ilegivel vale zero e rende um aviso,
+    nunca uma excecao. Um valor que a gente nao consegue ler nao pode
+    derrubar a operacao que a gente conseguiu fazer.
+    """
     if raw is None:
         return Decimal("0")
     try:
         return Decimal(str(raw))
     except (ArithmeticError, TypeError, ValueError):
-        logger.warning(
-            "[Pagamento][mercadopago] transaction_amount_refunded ilegivel: %r", raw
-        )
+        logger.warning("[Pagamento][mercadopago] %s ilegivel: %r", field_name, raw)
         return Decimal("0")
 
 
@@ -875,7 +1119,7 @@ def _call_mercadopago(
     json_body: dict | None = None,
     extra_headers: dict[str, str] | None = None,
 ) -> dict:
-    """POST/GET/DELETE autenticado na API do Mercado Pago.
+    """POST/GET/PUT/DELETE autenticado na API do Mercado Pago.
 
     Nunca loga o access_token nem o corpo de uma resposta de SUCESSO: o
     primeiro e credencial da conta do restaurante, o segundo traz o dado de

@@ -87,6 +87,25 @@ toma um `pg_advisory_xact_lock` antes de ler `alembic_version`, e a segunda
 espera (sem timeout, dizendo no log que está esperando). O porquê de cada
 escolha está em [`src/db/advisory_lock.py`](src/db/advisory_lock.py).
 
+## Antes de mexer em produção
+
+```bash
+docker exec pedeaqui-api python scripts/estado_da_producao.py
+```
+
+Uma tela, sem argumentos, e as quatro perguntas que precedem toda investigação:
+**que código está no ar** (o `git_sha` da imagem, e se `ALEMBIC_TARGET` ficou
+preso no `.env`), **em que revisão está o banco** (contra o `head` desta mesma
+imagem — e distingue "atrás" de "à frente", que pedem coisas opostas), **se o
+Redis responde** (e se despejou chave, que derruba rate limit em silêncio) e
+**se as credenciais do Mercado Pago estão cadastradas** — conferidas
+*decifrando*, o único jeito de saber que a `PAYMENT_CREDENTIALS_ENCRYPTION_KEY`
+deste `.env` é a que cifrou o que está no banco.
+
+Só leitura, e sai com 1 quando há erro. Para conferir **um restaurante** antes
+do primeiro pedido dele, é outro script:
+`python scripts/check_restaurant.py <slug>`.
+
 ## Variáveis de ambiente obrigatórias
 
 Sem estas, o boot falha com `ValidationError` do pydantic-settings:

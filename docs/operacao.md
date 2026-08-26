@@ -241,7 +241,34 @@ Faça backup antes. É Supabase/Postgres; DDL ruim custa caro.
 
 ---
 
-## 3. Ver logs
+## 3. Diagnóstico e logs
+
+### A tela do estado da produção
+
+Antes de qualquer coisa, e sem argumento nenhum:
+
+```bash
+docker exec pedeaqui-api python scripts/estado_da_producao.py
+```
+
+Ele responde, numa tela, as quatro perguntas que precedem toda investigação:
+
+| Conferência | O que ela pega |
+|---|---|
+| **Imagem no ar** | o `git_sha` da imagem, e `ALEMBIC_TARGET` esquecido no `.env` — o estado temporário que vira permanente e faz toda revisão nova deixar de ser aplicada com o deploy passando verde |
+| **Revisão do banco** | `alembic_version` contra o `head` **desta mesma imagem**, e distingue **atrás** (migração não rodou) de **à frente** (rollback de imagem sem `downgrade` — pede conserto urgente, ver `cardapio-por-filial.md`) |
+| **Redis** | responde? e `evicted_keys`, cujo valor esperado é **zero, para sempre**: chave despejada pode ser contador de rate limit, e o limite deixa de valer sem nenhum erro |
+| **Mercado Pago** | por restaurante que oferece pagamento online, se há credencial e segredo de webhook — conferidos **decifrando**, que é o único jeito de saber que a `PAYMENT_CREDENTIALS_ENCRYPTION_KEY` deste `.env` é a que cifrou o que está no banco |
+
+**Só leitura**, e sai com 1 quando há ERRO — dá para usar como porta num script
+de deploy. Rodado no host em vez de no container, o `git_sha` que ele lê é o do
+`.env` do host, não o da imagem; por isso a linha de uso começa com
+`docker exec`.
+
+Ele **não** substitui `check_restaurant.py`, e os dois não se fundem: aquele
+recebe um slug e responde "este restaurante está pronto para o primeiro
+pedido?"; este não recebe nada e responde "a plataforma está de pé e coerente?".
+
 
 Todo log da aplicação vai para o logger `uvicorn.error`.
 

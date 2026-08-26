@@ -1802,5 +1802,27 @@ São dois casos diferentes e agora estão escritos como tais — **não pegou a
 palavra**, pergunte; **pegou mas não conhece**, busque. Duas regras que se
 contradizem no mesmo prompt não são duas regras: são uma licença.
 
+**O conserto criou uma dependência nova, e ela não está no prompt nem no
+`search_service.py`: a negativa agora vale porque a BUSCA É EXATA.** "Não
+temos" tem uma origem só — uma busca que voltou vazia naquele turno —, e essa
+frase só é verdadeira enquanto vazio significar "não existe". Numa varredura
+sequencial significa, porque ela olha o cardápio inteiro.
+
+Quem for mexer na busca vetorial precisa saber disso antes de mexer, porque a
+mudança que quebra isso não parece ter relação nenhuma com a voz: **um índice
+ANN** (`ivfflat`, `hnsw`) é aproximado por definição — visita parte do grafo,
+não a tabela toda — e faz a busca devolver vazio para produto que existe. Numa
+medição de 400 consultas, uma devolveu zero onde a busca exata devolveu cinco.
+
+Do lado de fora isso chega ao cliente **como esta armadilha, de novo**: a
+churrascaria dizendo que não tem picanha, sem erro, sem log, sem tela onde
+conferir. E dessa vez o prompt estaria certo e o código estaria certo — o que
+teria mudado é o significado de "vazio".
+
+A decisão de não criar o índice, a medição e o gatilho estão em
+`docs/busca-vetorial-e-indice-ann.md`, com a regra que importa aqui: bater o
+gatilho de ~3.000 produtos **não é autorização**, porque ele só cobre o
+argumento de latência. Esta armadilha é a outra metade da conta.
+
 Ver [[44]] — exemplo solto na SAÍDA vira molde — e [[45]], sobre ler o log
 certo antes de mexer no código de corte.

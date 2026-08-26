@@ -1,6 +1,6 @@
 # Modelo de dados
 
-35 tabelas mapeadas pelo ORM. Este documento cobre o que cada uma guarda, como
+40 tabelas mapeadas pelo ORM. Este documento cobre o que cada uma guarda, como
 se ligam e por que o isolamento entre restaurantes funciona do jeito que
 funciona.
 
@@ -12,51 +12,143 @@ congelado, **não rode nada de lá**.
 
 ## 1. O desenho geral
 
+Seis diagramas e não um, e a razão é prática: 40 tabelas num `erDiagram` só
+renderizam como um novelo em que nada se acha. O corte é por **assunto**, que é
+como as perguntas chegam — "onde mora a taxa de entrega?", "o que o pedido
+congela?" —, e cada tabela aparece no diagrama do dono dela.
+
+Notação: `||` é obrigatório, `o|` é opcional (a FK aceita nulo), `o{` é muitos.
+Então `branches |o--o{ admin_users` lê-se "um usuário do painel pode pender de
+uma filial, e pode não pender de nenhuma".
+
+**O que o Mermaid não consegue desenhar, e é justamente o que segura o
+cardápio:** as quatro FKs COMPOSTAS de `products` e `categories`
+(`(branch_id, category_id)`, `(branch_id, printing_sector_id)`,
+`(restaurant_id, branch_id)`). Elas estão escritas por extenso na seção do
+cardápio, mais abaixo — o diagrama mostra as pontas, e não o par.
+
+### A raiz e a loja
+
+```mermaid
+erDiagram
+    restaurants ||--o| restaurant_settings : "padrão que a filial herda"
+    restaurants ||--o{ branches : "as lojas"
+    restaurants ||--o{ admin_users : "quem entra no painel"
+    restaurants ||--o{ restaurant_banners : "vitrine"
+    restaurants ||--o{ restaurant_payment_credentials : "uma por ambiente"
+    branches ||--o{ branch_business_hours : "a semana, weekday 0 = segunda"
+    branches ||--o{ branch_delivery_time_bands : "faixa de km"
+    branches ||--o{ branch_payment_methods : "formas aceitas"
+    branches ||--o{ printing_sectors : "impressora é objeto físico"
+    branches |o--o{ admin_users : "escopo de filial, quando há"
 ```
-                          restaurants  ◄──────── raiz de tudo
-                               │
-     ┌──────────────┬──────────┼───────────┬───────────────┬──────────────┐
-     │              │          │           │               │              │
-restaurant_      branches                          restaurant_      admin_users
- settings           │                              coupons
-  (1 : 1)           │                                 │
-        ┌───────────┼──────┬─────────────┐     coupon_redemptions
-        │           │      │             │            │
-branch_       branch_   printing_    categories       │
-business_     payment_   sectors ◄──┐     │           │
- hours        methods               └── products      │
-                            (products.printing_       │
-                             sector_id, NULLABLE)     │
-                               │                          │
-                            orders ◄─────────────────────-┘
-                               │
-              ┌────────────────┼───────────────────┐
-              │                │                   │
-        order_items    order_status_history   idempotency_keys.order_id
-              │
-       order_item_options
 
+`restaurant_settings` é 1:1 **opcional**, e os seis campos comerciais dela são
+só o padrão: `NULL` na filial significa "herda" (§35 da skill). O estado do dia
+— `is_open`, `accepts_delivery`, `accepts_pickup` — é `NOT NULL` na filial e
+não herda nada.
 
-   customers  ◄──── GLOBAL, fora da árvore do restaurante
-       │
-       ├── customer_addresses
-       ├── email_verification_codes / password_reset_codes
-       ├── cashback_transactions
-       ├── coupon_redemptions
-       └── orders (customer_id, NULLABLE — pedido de convidado)
+### O cardápio, que é da filial
 
-
-   delivery_estimates    estimativa já calculada, reaproveitada na criação do
-                         pedido por token (TTL curto). Aponta para restaurante,
-                         filial e, quando há login, cliente.
-
-   restaurant_payment_credentials   credencial do Mercado Pago, uma linha por
-                                    (restaurant_id, environment)
-
-   coupon_templates                 GLOBAL (catálogo de arte/tipo)
-   restaurant_banners               por restaurante
-   ai_product_embeddings / ai_feedback   por restaurante
+```mermaid
+erDiagram
+    branches ||--o{ categories : "cardápio por loja"
+    branches ||--o{ products : "sem herança"
+    categories ||--o{ products : "a seção do cardápio"
+    printing_sectors |o--o{ products : "nulo = não imprime via de produção"
+    products ||--o{ product_option_groups : "escolha o acompanhamento"
+    product_option_groups ||--o{ product_options : "adicional"
+    products ||--o{ ai_product_embeddings : "o índice do Rapi"
 ```
+
+**`restaurant_id` continua nas duas tabelas e NÃO é o filtro.** Consultar
+cardápio por restaurante devolve as lojas todas misturadas, com 200 e sem log.
+
+### O pedido
+
+```mermaid
+erDiagram
+    restaurants ||--o{ orders : "de quem é a venda"
+    branches ||--o{ orders : "onde foi feito"
+    customers |o--o{ orders : "nulo = pedido de convidado"
+    customer_addresses |o--o{ orders : "entrega"
+    restaurant_coupons |o--o{ orders : "desconto aplicado"
+    orders ||--o{ order_items : "as linhas, em snapshot"
+    products |o--o{ order_items : "só o id; o resto é snapshot"
+    order_items ||--o{ order_item_options : "adicionais escolhidos"
+    product_options |o--o{ order_item_options : "só o id"
+    product_option_groups |o--o{ order_item_options : "de que grupo veio"
+    orders ||--o{ order_status_history : "um evento por mudança"
+    orders ||--o| order_reviews : "nota e comentário"
+    orders |o--o{ idempotency_keys : "24h, guarda a resposta inteira"
+```
+
+As setas para `products` e `product_options` existem para o histórico continuar
+navegável — **o valor exibido nunca sai delas.** Nome, preço unitário e preço do
+adicional estão congelados em `order_items` e `order_item_options`, e
+`unit_price_snapshot` **já vem com os adicionais somados** (§2 da skill).
+
+### O cliente, que é global
+
+```mermaid
+erDiagram
+    customers ||--o{ customer_addresses : "endereços salvos"
+    customers ||--o{ email_verification_codes : "cadastro"
+    customers ||--o{ password_reset_codes : "recuperação"
+    customers ||--o{ customer_payment_profiles : "um por restaurante"
+    customer_payment_profiles ||--o{ customer_saved_cards : "token do gateway"
+    customers ||--o{ cashback_transactions : "saldo por restaurante"
+    customers ||--o{ coupon_redemptions : "quem já usou"
+    customers |o--o{ ai_voice_sessions : "cota por cliente"
+    customers |o--o{ delivery_estimates : "quando há login"
+```
+
+`customers` não pende de `restaurants`, e é o único ramo assim: a conta é da
+plataforma. O que é por restaurante é o **saldo** (`cashback_transactions`) e o
+**perfil de pagamento** — e a credencial salva é do lojista, então o cartão de
+uma loja não vale na outra.
+
+### O dinheiro: cupom, cashback e gateway
+
+```mermaid
+erDiagram
+    coupon_templates ||--o{ restaurant_coupons : "a arte, catálogo global"
+    restaurants ||--o{ restaurant_coupons : "o cupom da casa"
+    restaurant_coupons ||--o{ coupon_redemptions : "teto de uso"
+    orders ||--o{ coupon_redemptions : "o resgate, com o pedido junto"
+    restaurants ||--o{ cashback_rules : "enabled nasce FALSO"
+    branches |o--o{ cashback_rules : "regra por loja, quando há"
+    cashback_rules ||--o{ cashback_rule_weekdays : "em que dias vale"
+    restaurants |o--o{ cashback_transactions : "o razão"
+    orders |o--o{ cashback_transactions : "crédito, resgate, devolução"
+    restaurants ||--o{ restaurant_payment_credentials : "test e production"
+```
+
+`coupon_templates` é o único catálogo **global** do schema — ele guarda a arte e
+o tipo, e o cupom que desconta é o `restaurant_coupons`. Os dois precisam
+concordar no tipo e no valor.
+
+### Impressão, IA e o resto
+
+```mermaid
+erDiagram
+    branches ||--o{ print_agents : "o balcão"
+    branches ||--o{ print_agent_printers : "as impressoras vistas"
+    branches ||--o{ print_agent_commands : "fila de comando"
+    printing_sectors |o--o{ print_agent_commands : "para qual impressora"
+    admin_users |o--o{ print_agent_commands : "quem mandou"
+    restaurants ||--o{ ai_feedback : "texto do cliente, expurgo por retenção"
+    restaurants ||--o{ ai_voice_sessions : "cota e uso"
+    restaurants ||--o{ admin_error_reports : "relato do lojista"
+    branches |o--o{ admin_error_reports : "de que loja"
+    admin_users |o--o{ admin_error_reports : "quem relatou"
+    restaurants ||--o{ delivery_estimates : "estimativa guardada"
+    branches ||--o{ delivery_estimates : "token de 15 min"
+```
+
+`ai_feedback` e o `comment` de `order_reviews` **não têm `customer_id`**, e nas
+duas a retenção não é faxina de disco: é o mecanismo de exclusão (§38 da
+skill). Esticar o prazo "porque disco é barato" troca uma coisa pela outra.
 
 ---
 

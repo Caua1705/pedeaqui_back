@@ -14,6 +14,13 @@ from src.models.coupon_model import CouponTemplate, RestaurantCoupon
 from src.models.coupon_redemption_model import CouponRedemption
 from src.models.customer_model import Customer, CustomerAddress, EmailVerificationCode, PasswordResetCode
 from src.models.customer_saved_card_model import CustomerPaymentProfile, CustomerSavedCard
+# `delivery_estimates` faltava aqui, e o efeito nao era um import quebrado:
+# `alembic/env.py` monta o `target_metadata` a partir de `import src.models`,
+# entao a tabela simplesmente NAO EXISTIA para o autogenerate — que propoe
+# `DROP TABLE` em tudo que nao acha no ORM (armadilha 24). Ela sobrevivia
+# porque o app a importa por outro caminho (o repositorio), e porque a regra
+# manda ler o arquivo gerado antes de aplicar. Modelo novo entra NESTA lista.
+from src.models.delivery_estimate_model import DeliveryEstimate
 from src.models.idempotency_key_model import IdempotencyKey
 from src.models.order_item_model import OrderItem
 from src.models.order_item_option_model import OrderItemOption
@@ -49,6 +56,7 @@ __all__ = [
     "CustomerAddress",
     "CustomerPaymentProfile",
     "CustomerSavedCard",
+    "DeliveryEstimate",
     "EmailVerificationCode",
     "IdempotencyKey",
     "PasswordResetCode",

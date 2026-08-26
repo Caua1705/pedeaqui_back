@@ -148,7 +148,10 @@ limites de corpo, TTLs).
 | Arquivo | Assunto |
 |---|---|
 | [docs/arquitetura.md](docs/arquitetura.md) | **o mapa** — pastas, caminho de um pedido, onde mora o dinheiro, máquina de estados |
-| [docs/modelo-de-dados.md](docs/modelo-de-dados.md) | tabelas e isolamento entre restaurantes |
+| [docs/modelo-de-dados.md](docs/modelo-de-dados.md) | **o diagrama ER** (Mermaid, seis por assunto), as 40 tabelas e o isolamento entre restaurantes |
+| [docs/cardapio-por-filial.md](docs/cardapio-por-filial.md) | por que o cardápio pende de filial e nada nele herda |
+| [docs/cashback.md](docs/cashback.md) | crédito, resgate, validade e por que ligar a chave mexe em faturamento |
+| [docs/testes.md](docs/testes.md) | as duas suítes, e por que o schema de teste não sai do `create_all` |
 | [docs/pagamentos-e-comissao.md](docs/pagamentos-e-comissao.md) | cobrança, Mercado Pago, comissão |
 | [docs/entrega-e-horarios.md](docs/entrega-e-horarios.md) | estimativa, taxa por km, horário de funcionamento |
 | [docs/autenticacao-e-escopo.md](docs/autenticacao-e-escopo.md) | tokens e escopo por restaurante/filial |

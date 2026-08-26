@@ -80,6 +80,18 @@ def collect_runtime_warnings(argv: list[str], env: Mapping[str, str]) -> list[st
     comando e responde "este jeito de subir combina com o que o codigo
     assume?". Juntar os dois obrigaria a passar argv e env para uma funcao
     que hoje so precisa de settings.
+
+    O QUE ESTA FUNCAO NAO CONSEGUE VER, e que nao e conserto de redacao: argv
+    e do PROCESSO, entao ela enxerga os workers deste container e mais nada.
+    Duas replicas atras do Traefik, cada uma com `--workers 1`, sao dois
+    processos servindo o mesmo `/chat` — e este guard fica calado, porque do
+    lado de ca esta tudo certo mesmo.
+
+    Quem cobre esse pedaco e o lock da migracao (`src/db/advisory_lock.py`):
+    a replica que precisa ESPERAR para migrar acabou de provar que existe
+    outra, e e ela quem grita. O guard daqui continua sendo o dos workers, e
+    os dois avisam sobre o mesmo perigo por dois caminhos que nao se
+    substituem.
     """
     warnings: list[str] = []
 

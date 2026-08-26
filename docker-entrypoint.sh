@@ -8,6 +8,17 @@ set -e
 # do compose tenta de novo. Um banco fora do ar vira loop de restart visivel
 # no `docker ps`, o que e melhor que uma API de pe respondendo errado.
 
+# DUAS REPLICAS NAO MIGRAM JUNTAS, e a trava NAO esta aqui: esta em
+# `alembic/env.py`, que toma um `pg_advisory_xact_lock` antes de ler
+# `alembic_version`. Mora la, e nao neste script, porque assim ela vale para
+# TODO caminho que migra — o `alembic upgrade` rodado a mao numa janela de
+# manutencao, o `stamp` do banco novo e a fixture da suite `db` inclusive —, e
+# nao so para o container.
+#
+# A replica que chegar em segundo lugar ESPERA, sem timeout, e diz no log que
+# esta esperando. Ver `src/db/advisory_lock.py` para por que esperar e o
+# comportamento certo e o que o `set -e` acima ja cobrava antes.
+
 # ALVO PADRAO E `head`, e mudar isso e para UMA situacao so: a migracao em
 # duas etapas, onde a segunda e irreversivel e precisa de uma janela de
 # conferencia antes.

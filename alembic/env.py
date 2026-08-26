@@ -16,6 +16,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from src.core.config import settings
+from src.db.advisory_lock import travar_para_migrar
 from src.db.base import Base
 
 # Importado pelo efeito colateral de registrar todos os modelos no Base
@@ -34,6 +35,9 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
+    # SEM o lock, e isso nao e esquecimento: `--sql` nao abre conexao com
+    # banco nenhum, so imprime o DDL na tela. Nao ha o que serializar, e nao
+    # ha conexao onde tomar o lock.
     context.configure(
         url=settings.DATABASE_URL,
         target_metadata=target_metadata,
@@ -61,6 +65,20 @@ def run_migrations_online() -> None:
         )
 
         with context.begin_transaction():
+            # DENTRO da transacao que o `begin_transaction` acabou de abrir,
+            # e ANTES de `run_migrations`. As duas coisas importam:
+            #
+            # - dentro, porque o lock e de transacao (`pg_advisory_xact_lock`)
+            #   e e ela que o segura ate o fim do upgrade — inclusive quando a
+            #   `DATABASE_URL` passa por um pooler em modo transacao, onde um
+            #   lock de sessao nao valeria nada;
+            # - antes, porque a leitura de `alembic_version` precisa acontecer
+            #   ja travada. Duas replicas lendo a MESMA revisao atual e o
+            #   comeco do problema, nao o fim.
+            #
+            # Isto vale para `upgrade`, `downgrade` e `stamp` juntos: os tres
+            # passam por aqui, e os tres escrevem `alembic_version`.
+            travar_para_migrar(connection)
             context.run_migrations()
 
 

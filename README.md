@@ -68,15 +68,24 @@ propósito.
 ## Deploy
 
 ```bash
-docker compose up -d --build
+GIT_SHA=$(git rev-parse --short HEAD) docker compose up -d --build
 docker logs -f pedeaqui-api
 ```
+
+**O `GIT_SHA=` na frente não é enfeite.** Sem ele a imagem nasce sem carimbo, o
+boot escreve `git_sha=nao-carimbado` e não há como saber que código está no ar —
+o que já custou uma bateria de medição em produção para ser respondido.
 
 O Traefik roteia pela rede externa `n8n_default`; o compose não expõe porta.
 
 ⚠️ **O container roda `alembic upgrade head` antes do Uvicorn.** Migração ruim
 vira loop de restart, e `CREATE INDEX` em tabela grande trava escrita com a API
 fora do ar. Detalhes em [`docs/operacao.md`](docs/operacao.md).
+
+Duas réplicas subindo juntas **não** migram ao mesmo tempo: `alembic/env.py`
+toma um `pg_advisory_xact_lock` antes de ler `alembic_version`, e a segunda
+espera (sem timeout, dizendo no log que está esperando). O porquê de cada
+escolha está em [`src/db/advisory_lock.py`](src/db/advisory_lock.py).
 
 ## Variáveis de ambiente obrigatórias
 

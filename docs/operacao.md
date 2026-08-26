@@ -135,6 +135,31 @@ Duas consequências que você precisa ter na cabeça:
    mão com `CREATE INDEX CONCURRENTLY` (que não roda dentro de transação) e depois
    `alembic stamp <revisão>`.
 
+3. **Duas réplicas não migram ao mesmo tempo.** Se elas subirem juntas atrás do
+   Traefik — que é o que `docker compose up -d` faz —, a segunda **espera** a
+   primeira terminar. A trava é um `pg_advisory_xact_lock` tomado em
+   `alembic/env.py` antes da leitura de `alembic_version`, e ela vale para todo
+   caminho que migra: o entrypoint, o `alembic upgrade` rodado à mão numa janela
+   de manutenção e o `stamp` de um banco novo.
+
+   No log da réplica que esperou:
+
+   ```
+   [alembic] outra replica esta migrando este banco. Esperando a vez (sem timeout: esperar e o certo).
+   [alembic] a outra replica terminou; migrando agora.
+   [alembic] ATENCAO: havia OUTRA REPLICA subindo agora, ...
+   ```
+
+   Aquele `ATENCAO` é de propósito, e não é sobre a migração: ele avisa que
+   **mais de um processo vai servir a API**, e o histórico do `/chat` vive em
+   memória do processo (armadilha 20). É a única forma de o sistema saber disso
+   — o guard de `--workers` lê `sys.argv` e por isso só enxerga o container
+   dele. Se você **quer** duas réplicas, o aviso é o preço, e o Rapi passa a
+   esquecer a conversa quando o turno cai na outra.
+
+   Não há timeout: quem espera é um container que ainda não serve ninguém.
+   O porquê de cada escolha está em `src/db/advisory_lock.py`.
+
 O entrypoint fica como `ENTRYPOINT`, e não embutido no `CMD`, para que
 sobrescrever o comando (`docker compose run api bash`) continue migrando primeiro.
 

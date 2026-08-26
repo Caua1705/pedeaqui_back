@@ -2,8 +2,12 @@
 
 **Decisão: não criar índice `ivfflat` nem `hnsw` em
 `ai_product_embeddings.embedding`.** Medido em 17/08/2026, contra o schema
-real, no tamanho de cardápio real. Este documento existe para a pergunta não
-voltar do zero — e para dizer **quando** ela deve voltar.
+real, no tamanho de cardápio real, e **reafirmado em 26/08/2026 por um motivo
+diferente e mais forte** — ver "A recusa de 26/08/2026" mais abaixo. Este
+documento existe para a pergunta não voltar do zero.
+
+Em uma linha: o ganho é 4 ms de 52, e o preço é o assistente voltar a poder
+dizer "não temos" sobre um produto que existe.
 
 Reproduzir:
 
@@ -106,6 +110,11 @@ para menos de 1. Duas leituras importam:
 ativos indexados, ou o p95 da busca subindo sem o cardápio ter mudado. Até
 lá, exatidão de graça vale mais que 4 ms.
 
+**E revisitar não é autorizar.** O gatilho acima diz apenas que o argumento de
+LATÊNCIA virou de lado; o `mínimo 0` da última coluna continua valendo no dia
+seguinte, e ele é o que de fato recusa. A conta inteira está em "A recusa de
+26/08/2026".
+
 ```sql
 -- o número que decide, restaurante a restaurante
 SELECT r.slug, count(*) AS produtos_indexados
@@ -114,6 +123,76 @@ SELECT r.slug, count(*) AS produtos_indexados
  GROUP BY r.slug
  ORDER BY 2 DESC;
 ```
+
+---
+
+## A recusa de 26/08/2026, e por que ela não é sobre latência
+
+A pergunta voltou — tipo de índice, custo de construir, efeito na precisão — e
+foi **recusada**. O registro fica aqui para ela não voltar do zero uma terceira
+vez, e porque o motivo que decidiu **não é o mesmo** que este documento vinha
+dando.
+
+O argumento antigo é de desempenho: das 52 ms de uma consulta o banco usa 4, e
+um índice infinitamente rápido economizaria 4 ms de 52. Ele continua verdadeiro
+e continua fraco — **é um argumento que vence hoje e perde no dia em que um
+cardápio crescer.**
+
+O que decidiu é a última coluna da tabela de 5.000 produtos, e é sobre
+correção:
+
+> Uma consulta em 400 com `hnsw` devolveu **zero produtos** onde a busca exata
+> devolveu cinco.
+
+ANN é aproximado por definição: ele visita parte do grafo, não a tabela inteira.
+Devolver menos é o comportamento correto dele, não um defeito de configuração —
+`ef_search` desloca a fronteira, não a apaga.
+
+**E "devolver zero" tem um significado específico neste sistema.** Desde
+25/08/2026 a negativa do atendente de voz não é mais escrita pelo modelo: a
+busca vazia devolve a frase pronta (`_NEGATIVA`, em
+`src/ai/voice/search_service.py`), e "não temos" passou a ter uma origem só —
+uma busca que voltou vazia **naquele turno**. Foi o conserto da armadilha 46,
+onde uma churrascaria disse não ter picanha.
+
+Um índice ANN reabre essa porta por dentro. A busca vazia deixaria de
+significar "não tem" e passaria a significar "não tem, **ou** o grafo não
+passou por lá" — e as duas chegam ao cliente como a mesma frase, sem erro, sem
+log, sem tela onde conferir. Trocaríamos 4 ms por uma negativa que volta a não
+ter dono, três semanas depois de ela ter ganhado um.
+
+Isso vale a pena escrever porque é o tipo de custo que não aparece em nenhum
+`EXPLAIN`: quem medir de novo vai reencontrar os 4 ms e não vai reencontrar
+isto.
+
+### O que fica registrado, para o dia em que a conta mudar
+
+**O gatilho não mudou, e sozinho ele não basta mais.** Continua sendo um único
+restaurante passando de ~3.000 produtos ativos indexados — o Júnior, que é o
+maior cardápio em produção, tem 136. Mas o gatilho só diz que o **argumento de
+latência** virou; a pergunta da recall continua aberta e precisa de resposta
+própria antes de qualquer índice ser criado. Bater os 3.000 não é autorização.
+
+Se aquele dia chegar, o que já está medido:
+
+- **Tipo**: `hnsw` com `vector_cosine_ops` (`m=16`, `ef_construction=64`).
+  Não `ivfflat`: ele depende de `lists` calibrado ao tamanho da tabela, e
+  `lists` defasado degrada em silêncio conforme o cardápio cresce — ninguém
+  recalibra um índice que ninguém está olhando. O operador **tem** que ser
+  `vector_cosine_ops`, porque a consulta ordena por `<=>`; com outro operador o
+  planejador simplesmente não escolhe o índice, e ele fica ocupando disco e
+  sendo mantido em toda escrita sem ser lido uma vez.
+- **Custo de construir**: **não medido.** O `bench` já cronometra e imprime
+  `(construcao: X.XX s)` por cenário, mas o número nunca foi transportado para
+  cá, e estimá-lo seria inventar. `python scripts/bench_busca_vetorial.py
+  --produtos 5000` responde.
+- **Custo de manter, esse sim conhecido**: o índice é mantido em **toda
+  escrita**, e o container `reindex` reescreve todo vetor que ficou atrás do
+  produto a cada minuto.
+- **Como criar, se um dia for criado**: `CREATE INDEX` sem `CONCURRENTLY` trava
+  escrita na tabela, e rodaria dentro do `alembic upgrade` do entrypoint — com
+  a API fora do ar (armadilha 5). Ou fora do movimento, ou `CREATE INDEX
+  CONCURRENTLY` à mão seguido de `alembic stamp`.
 
 ---
 

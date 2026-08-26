@@ -151,6 +151,7 @@ limites de corpo, TTLs).
 | [docs/modelo-de-dados.md](docs/modelo-de-dados.md) | **o diagrama ER** (Mermaid, seis por assunto), as 40 tabelas e o isolamento entre restaurantes |
 | [docs/cardapio-por-filial.md](docs/cardapio-por-filial.md) | por que o cardápio pende de filial e nada nele herda |
 | [docs/cashback.md](docs/cashback.md) | crédito, resgate, validade e por que ligar a chave mexe em faturamento |
+| [docs/busca-vetorial-e-indice-ann.md](docs/busca-vetorial-e-indice-ann.md) | **por que NÃO existe índice ANN** no pgvector — a medição, e o gatilho que sozinho não autoriza criá-lo |
 | [docs/testes.md](docs/testes.md) | as duas suítes, e por que o schema de teste não sai do `create_all` |
 | [docs/pagamentos-e-comissao.md](docs/pagamentos-e-comissao.md) | cobrança, Mercado Pago, comissão |
 | [docs/entrega-e-horarios.md](docs/entrega-e-horarios.md) | estimativa, taxa por km, horário de funcionamento |

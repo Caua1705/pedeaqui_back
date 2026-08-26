@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 from src.api.dependencies.admin_scope import AdminScope
 from src.core.constants import ORDER_STATUSES, PLATFORM_TIMEZONE
 from src.models.admin_user_model import AdminUser
-from src.models.order_status_history_model import OrderStatusHistory
 from src.repositories.order_repository import OrderRepository
 from src.schemas.admin_order_schema import (
     AdminOrderListItem,
@@ -22,7 +21,6 @@ from src.schemas.admin_order_schema import (
     UpdateOrderStatusRequest,
 )
 from src.schemas.order_schema import OrderDetailResponse
-from src.services.idempotency_service import IdempotencyService
 from src.services.order_service import OrderService
 from src.services.order_state_machine import cancellation_needs_confirmation
 from src.services.order_status_change_service import OrderStatusChangeService

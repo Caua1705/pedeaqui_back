@@ -40,7 +40,29 @@ O compose **não expõe porta**: o Traefik roteia pela rede externa `n8n_default
 pelas labels em `docker-compose.yml`. O container roda como usuário sem
 privilégios (uid 10001) e com `/app` somente-leitura.
 
-São **dois** serviços: `pedeaqui-api` e `redis`.
+São **cinco** serviços, e os três do meio são os fáceis de esquecer: ninguém
+fala com eles, nenhum expõe porta, e nenhum aparece no `curl` acima.
+
+| Serviço | O que roda | Cadência |
+|---|---|---|
+| `pedeaqui-api` | a API, atrás do Traefik | — |
+| `redis` | rate limit e cache de estimativa de entrega | — |
+| `limpeza` | `cleanup_idempotency_keys.py` e `expire_cashback.py` | 24h |
+| `estorno` | `estorna_pedidos_cancelados.py` | 15 min |
+| `reindex` | `reindex_worker.py`, o índice do Rapi | 1 min |
+
+As cadências são diferentes de propósito e não devem ser juntadas: na `limpeza`
+o atraso apaga uma linha vencida um dia depois, e no `estorno` o atraso é
+dinheiro de cliente parado na conta do restaurante.
+
+Os três rodam com **`entrypoint: []`**, e isso não é detalhe: o
+`docker-entrypoint.sh` roda `alembic upgrade head`, e só a API migra (§2). Sem
+o entrypoint vazio seriam quatro containers disputando a mesma migração a cada
+deploy.
+
+Quando um deles morre, nada na API muda de aparência — o sintoma é indireto
+(saldo que não vence, dinheiro que não volta, Rapi respondendo com o cardápio de
+ontem). Os greps de cada um estão em §3.
 
 ### Redis
 

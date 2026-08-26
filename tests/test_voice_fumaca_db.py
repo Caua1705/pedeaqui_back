@@ -166,9 +166,11 @@ def test_a_voz_emite_credencial_e_a_ferramenta_devolve_produto(db, monkeypatch):
     resumo_vazio = busca_na_outra.json()["resumo"]
     assert "Nenhum produto encontrado nesta loja." in resumo_vazio
 
-    # FRASE vazia é o sinal de "não achei": o que dizer numa negativa depende
-    # do que o cliente pediu, e essa pergunta só o modelo tem.
-    assert resumo_vazio.startswith("FRASE:\n")
+    # E a FRASE já é a negativa pronta, desde 25/08/2026: enquanto ela fosse
+    # texto que o modelo escrevia, ele conseguia negar um produto SEM ter
+    # buscado — foi o que aconteceu com "vocês têm picanha?" numa
+    # churrascaria. Agora a negativa só existe como resultado de uma busca.
+    assert resumo_vazio.startswith("FRASE: Aqui a gente nao tem isso")
 
 
 def _indexar(db, produto, category_name: str) -> None:

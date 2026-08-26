@@ -446,14 +446,39 @@ Pudim - ..."
 | `resumo` | string | o texto que volta **para o modelo**. Nunca mostre na tela |
 
 `produtos` pode vir **vazio** (`[]`) — é resposta legítima quando nada casa.
-Nesse caso `resumo` é exatamente `"Nenhum produto encontrado nesta loja."`
-— a negativa é da **filial** que você mandou em `branch_id`, e não do
-restaurante: o produto pode existir na outra loja.
-
-Quando há produtos, `resumo` é uma linha de cabeçalho seguida de **um produto
-por linha**, com quatro campos separados por `|`:
+Nesse caso o `resumo` traz a **negativa já escrita**, e é a mesma forma de
+sempre: `FRASE:` com o que dizer, e `DADOS:` com o que a loja tem.
 
 ```
+FRASE: Aqui a gente nao tem isso, mas tem Carnes e Bebidas.
+DADOS (nao leia em voz alta; so para responder pergunta sobre produto ja citado):
+Nenhum produto encontrado nesta loja.
+Categorias desta loja:
+Carnes (14)
+Bebidas (9)
+```
+
+**A negativa passou a ser escrita aqui em 25/08/2026, e antes era do modelo.**
+O caso: numa churrascaria, *"vocês têm picanha?"*. O modelo não entendeu a
+palavra, chamou `listar_categorias` em vez da busca, e respondeu *"não tem no
+cardápio, mas tem Executivos e Bebidas"* — negando um produto que a casa
+vende, sem ter buscado. Enquanto a negativa fosse texto que ele montava, ele
+conseguia montá-la a qualquer momento. Agora ela só existe como resultado de
+uma busca que voltou vazia, e **sem busca no turno o que sobra é "não entendi,
+pode repetir?"**.
+
+A negativa é da **filial** que você mandou em `branch_id`, e não do
+restaurante: o produto pode existir na outra loja. As duas categorias na frase
+são as duas primeiras **na ordem do cardápio** (`sort_order`, e o nome
+desempatando), não as maiores; a lista inteira — até 12, com a contagem de cada
+uma — continua vindo nos `DADOS`.
+
+Quando há produtos, o `resumo` traz a `FRASE` pronta e, nos `DADOS`, **um
+produto por linha** com quatro campos separados por `|`:
+
+```
+FRASE: Tem Baião de dois e Picanha suína.
+DADOS (nao leia em voz alta; so para responder pergunta sobre produto ja citado):
 Produtos encontrados nesta loja:
 Baião de dois | trinta e quatro e quarenta | Baião e batata frita. | serve 2 pessoas
 Picanha suína | vinte e quatro e sessenta e seis | Na brasa, com vinagrete. | -

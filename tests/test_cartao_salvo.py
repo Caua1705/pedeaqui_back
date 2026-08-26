@@ -418,6 +418,91 @@ class CobrancaComCartaoSalvoTests(unittest.TestCase):
         self.assertTrue(body["token"])
 
 
+class OCartaoNaoVaiNoCorpoDoPedidoTests(unittest.TestCase):
+    """Onde o `saved_card_id` entra, e onde ele NAO entra.
+
+    A pergunta chegou do front como "falta a saved_card_id chegar ao pedido", e
+    a resposta e que ela nao vai no corpo do pedido de proposito. Sao duas
+    chamadas: `POST /orders` cria, `POST .../payment` cobra.
+
+    Os dois motivos, e o segundo custa dinheiro:
+
+    - a chamada ao gateway nao pode acontecer com a transacao do pedido aberta
+      — e por isso que `start_payment` e rota separada desde antes de o cartao
+      existir;
+    - campo novo em `CreateOrderRequest` custa 24h de 422, mesmo opcional:
+      `OrderService` assina o corpo com `payload.model_dump()`, entao um campo
+      a mais muda o `request_fingerprint` de TODOS os pedidos e derruba as
+      chaves de idempotencia em voo no minuto do deploy (armadilha 37).
+
+    Estes testes existem para a decisao nao ser "consertada" por engano por
+    quem ler o relato do front antes de ler o desenho.
+    """
+
+    def _corpo_minimo(self) -> dict:
+        return {
+            "branch_id": str(uuid.uuid4()),
+            "order_type": "delivery",
+            "payment_method": "credit_card",
+            "items": [{"product_id": str(uuid.uuid4()), "quantity": 1}],
+        }
+
+    def test_o_pedido_nao_tem_campo_de_cartao(self):
+        from src.schemas.order_schema import CreateOrderRequest
+
+        campos = set(CreateOrderRequest.model_fields)
+        for proibido in ("saved_card_id", "card", "card_token", "token"):
+            self.assertNotIn(proibido, campos, proibido)
+
+    def test_saved_card_id_no_corpo_do_pedido_e_descartado(self):
+        """`extra="ignore"` engole o campo, e este teste guarda o motivo de o
+        silencio ser aceitavel: o valor nao poderia ser usado ali de qualquer
+        forma, e recusar o corpo quebraria todo front que ja manda campo a mais.
+
+        E, com o campo fora do schema, ele tambem fica fora do `model_dump()` —
+        que e o que impede o fingerprint de idempotencia de mudar.
+        """
+        from src.schemas.order_schema import CreateOrderRequest
+
+        corpo = self._corpo_minimo()
+        corpo["saved_card_id"] = str(uuid.uuid4())
+
+        pedido = CreateOrderRequest(**corpo)
+
+        self.assertFalse(hasattr(pedido, "saved_card_id"))
+        self.assertNotIn("saved_card_id", pedido.model_dump())
+
+    def test_o_fingerprint_do_pedido_nao_muda_com_o_campo_a_mais(self):
+        """A metade que de fato custa dinheiro. Se um dia `saved_card_id`
+        entrar no schema, este teste falha — e a falha e o aviso de que aquele
+        deploy vem com 24h de 422 para as chaves em voo."""
+        from src.schemas.order_schema import CreateOrderRequest
+        from src.services.order_service import OrderService
+
+        # O MESMO corpo nos dois, e nao dois corpos parecidos: com ids
+        # sorteados de novo o teste compararia branch e produto diferentes e
+        # passaria a falhar por um motivo que nao e o dele.
+        corpo = self._corpo_minimo()
+        limpo = CreateOrderRequest(**corpo)
+        com_cartao = CreateOrderRequest(**{**corpo, "saved_card_id": str(uuid.uuid4())})
+
+        self.assertEqual(
+            OrderService._idempotency_fingerprint(limpo),
+            OrderService._idempotency_fingerprint(com_cartao),
+        )
+
+    def test_o_cartao_vai_no_corpo_do_pagamento(self):
+        """O outro lado da mesma decisao: o lugar existe, e e este."""
+        from src.schemas.payment_schema import StartPaymentRequest
+
+        pagamento = StartPaymentRequest(
+            card={"token": "token-novo-do-navegador", "saved_card_id": str(uuid.uuid4())}
+        )
+
+        self.assertIsNotNone(pagamento.card.saved_card_id)
+        self.assertEqual(pagamento.card.token, "token-novo-do-navegador")
+
+
 class ContratoDoPayloadDeCartaoTests(unittest.TestCase):
     def test_bandeira_pode_faltar_quando_ha_cartao_salvo(self):
         from src.schemas.payment_schema import CardPaymentPayload

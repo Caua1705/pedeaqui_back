@@ -4967,9 +4967,61 @@
         "title": "BusinessHoursReplaceRequest",
         "type": "object"
       },
+      "CancelOrderErrorCode": {
+        "description": "Os desfechos do cancelamento que o painel trata de forma propria.\n\nEnum e nao `str` solto para a LISTA sair no /openapi.json (armadilha 16):\no painel precisa dela para escrever a tela, e nao so o status HTTP.",
+        "enum": [
+          "confirmation_required"
+        ],
+        "title": "CancelOrderErrorCode",
+        "type": "string"
+      },
+      "CancelOrderErrorDetail": {
+        "description": "O `detail` de um cancelamento que precisa de confirmacao.",
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/CancelOrderErrorCode"
+          },
+          "message": {
+            "description": "Pronta para ser mostrada no dialogo de confirmacao do painel.",
+            "title": "Message",
+            "type": "string"
+          },
+          "order_status": {
+            "description": "O status em que o pedido estava. E o que permite ao painel dizer 'ja saiu para entrega' em vez de 'ja esta em preparo'.",
+            "title": "Order Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "order_status"
+        ],
+        "title": "CancelOrderErrorDetail",
+        "type": "object"
+      },
+      "CancelOrderErrorResponse": {
+        "description": "O CORPO INTEIRO, com o envelope `detail` do FastAPI.\n\nExiste pelo mesmo motivo de `PaymentErrorResponse`: `HTTPException`\nentrega `{\"detail\": {...}}`, e anunciar o detail na raiz faria o painel\nescrever o parser contra um formato que a rota nunca devolve.",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/CancelOrderErrorDetail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "CancelOrderErrorResponse",
+        "type": "object"
+      },
       "CancelOrderRequest": {
         "description": "Corpo do cancelamento pelo painel.\n\nO motivo e OBRIGATORIO aqui, e o `note` do PATCH de status continua\nopcional: mudar para `preparing` nao precisa de justificativa, cancelar\nprecisa. Cancelamento e a unica transicao que o cliente questiona\ndepois — ele ligou, esperou, e o pedido sumiu — e sem motivo gravado o\nhistorico so consegue dizer que alguem cancelou as 20h14.\n\nNao ha campo de status: a rota so cancela. Fosse `status` do corpo, ela\nseria o PATCH de status com nome diferente e a obrigatoriedade do motivo\nviraria um `if` por status.",
         "properties": {
+          "confirm_prepared_order": {
+            "default": false,
+            "description": "Confirmacao explicita de que o lojista sabe que a comida ja foi feita. Obrigatoria a partir de `preparing`; sem ela a rota responde 428 com `confirmation_required`. Antes disso e ignorada.",
+            "title": "Confirm Prepared Order",
+            "type": "boolean"
+          },
           "reason": {
             "maxLength": 300,
             "title": "Reason",
@@ -7180,6 +7232,26 @@
           "is_default"
         ],
         "title": "CustomerAddressResponse",
+        "type": "object"
+      },
+      "CustomerCancelOrderRequest": {
+        "description": "Corpo do cancelamento pelo cliente. Tudo opcional, inclusive ele.\n\n**O motivo e OPCIONAL aqui e obrigatorio no painel**, e a assimetria e\nproposital: exigir justificativa de quem desiste de um pedido que nem\ncomecou vira um campo que todo mundo preenche com \"a\", e o historico\nganha ruido em vez de informacao. Quem cancelou ja fica em\n`order_status_history.changed_by`, que e a pergunta que o suporte faz.\n\nNao ha campo de status, e nao havera: esta rota so cancela, e so ate\n`accepted`. Ver CustomerOrderCancelService.",
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 150,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Opcional. Entra no historico do pedido, precedido de 'Cancelado pelo cliente'.",
+            "title": "Reason"
+          }
+        },
+        "title": "CustomerCancelOrderRequest",
         "type": "object"
       },
       "CustomerDataExportResponse": {
@@ -11557,6 +11629,12 @@
       "UpdateOrderStatusRequest": {
         "description": "Corpo do PATCH de status.\n\n`changed_by` foi REMOVIDO do contrato: quem mudou passou a sair do token\ndo lojista (AdminOrderService._admin_signature). Era texto livre vindo do\ncliente, entao o historico do pedido registrava qualquer autor que o\npainel quisesse escrever. Clientes antigos que ainda mandam o campo nao\nquebram — o Pydantic ignora chave desconhecida —, ele so nao tem mais\nefeito.",
         "properties": {
+          "confirm_prepared_order": {
+            "default": false,
+            "description": "Mesma confirmacao de `CancelOrderRequest`, e ela precisa existir aqui tambem: esta rota aceita `status='cancelled'` e seria a porta pela qual o painel pularia o dialogo. So tem efeito nesse status.",
+            "title": "Confirm Prepared Order",
+            "type": "boolean"
+          },
           "note": {
             "anyOf": [
               {
@@ -14692,6 +14770,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelOrderErrorResponse"
+                }
+              }
+            },
+            "description": "Cancelamento de pedido ja em producao sem `confirm_prepared_order`. Nao e erro: o painel abre o dialogo de confirmacao e reenvia."
           }
         },
         "security": [
@@ -14817,6 +14905,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelOrderErrorResponse"
+                }
+              }
+            },
+            "description": "Cancelamento de pedido ja em producao sem `confirm_prepared_order`. Nao e erro: o painel abre o dialogo de confirmacao e reenvia."
           }
         },
         "security": [
@@ -18540,6 +18638,81 @@
           }
         },
         "summary": "Track Order",
+        "tags": [
+          "orders"
+        ]
+      }
+    },
+    "/restaurants/{restaurant_slug}/orders/track/{tracking_token}/cancel": {
+      "post": {
+        "description": "O cliente desistindo do proprio pedido, antes do preparo.\n\n**Ate onde ela vai: `pending` e `accepted`.** Antes do preparo ninguem\ngastou nada e desistir e barato para os dois lados. A partir de\n`preparing` o insumo ja saiu do estoque, e quem decide quem come o\nprejuizo passa a ser o lojista — a rota responde **409** e o app manda o\ncliente falar com o restaurante.\n\n**Sem login, de proposito.** Pedido de convidado e caso normal, e exigir\nconta aqui deixaria justamente o convidado sem saida. Quem autoriza e o\n`tracking_token` desta URL — o mesmo do acompanhamento e da avaliacao,\ncom 256 bits e sem rota de reemissao.\n\n**O corpo e opcional, e o motivo dentro dele tambem.** Exigir\njustificativa de quem desiste de um pedido que nem comecou produz um\ncampo preenchido com \"a\"; quem cancelou ja fica gravado no historico.\n\n## O que ela faz junto, e que o app nao precisa pedir\n\nE a MESMA escrita do cancelamento pelo painel\n(`OrderStatusChangeService`), entao o cupom volta a ficar disponivel, o\ncashback resgatado volta para o saldo e **o pagamento online e\nestornado** — um pix pago e cancelado em seguida volta sem ninguem ligar\npara o restaurante. O estorno acontece depois do commit e nao pode\nderrubar esta resposta: se o gateway estiver fora do ar, o cancelamento\nvale e uma varredura devolve o dinheiro depois.\n\n**Sem `Idempotency-Key`**, e ela nao faz falta: o segundo clique chega\ncom o pedido ja em `cancelled` e leva 409 da maquina de estados.",
+        "operationId": "cancel_order_by_customer_restaurants__restaurant_slug__orders_track__tracking_token__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "restaurant_slug",
+            "required": true,
+            "schema": {
+              "title": "Restaurant Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tracking_token",
+            "required": true,
+            "schema": {
+              "title": "Tracking Token",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CustomerCancelOrderRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "Pedido nao encontrado, ou token invalido"
+          },
+          "409": {
+            "description": "O pedido ja saiu da janela em que o cliente cancela sozinho (a partir de `preparing`), ou ja e um estado final"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Order By Customer",
         "tags": [
           "orders"
         ]

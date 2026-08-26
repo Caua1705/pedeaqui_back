@@ -620,6 +620,45 @@ E uma terceira, de medição: contar só os pedidos posteriores ao primeiro pedi
 de cliente real, em vez de janela fixa. Boa ideia, e adiada de propósito — com
 zero pedido real, a regra seria decidida por premissa. Quando começarem a
 entrar, há dado para decidir.
+
+===========================================================================
+A NEGATIVA SAIU DO PROMPT E VIROU FRASE DA FERRAMENTA (25/08/2026)
+
+O relato: numa churrascaria, "vocês têm picanha?" (o Whisper transcreveu
+"Nino"). O modelo não entendeu a palavra, chamou `listar_categorias` em vez
+da busca, e respondeu *"não tem no cardápio, mas tem Executivos e Bebidas"*.
+Dois turnos depois negou bebida — tendo ele mesmo acabado de listar
+"Bebidas" como categoria da loja.
+
+**O padrão é a NÃO INVENTE ao contrário: sem entender a palavra, ele NEGA o
+produto em vez de dizer que não entendeu.** E é o pior erro possível do
+atendente, porque o cliente ouve que a churrascaria não tem picanha e
+desliga — não há tela onde ele confira, e ninguém reclama de um produto que
+lhe disseram não existir.
+
+O prompt já mandava buscar antes de negar ("NUNCA diga que algo não existe
+sem ter buscado antes"). Não bastou, e o motivo é estrutural: **a negativa
+era texto que o MODELO escrevia**, então ele conseguia escrevê-la a qualquer
+momento — inclusive depois de uma ferramenta que não era a busca. Chamar
+`listar_categorias` passou por "eu busquei".
+
+O conserto é o quarto movimento da mesma família das três da tabela acima:
+**a negativa passou a ser uma FRASE que só `buscar_no_cardapio` devolve**
+(`_NEGATIVA`, em `search_service.py`), com as categorias já dentro dela. Não
+é mais uma regra pedindo que ele busque antes de negar — é a frase da
+negativa **não existir** antes da busca. Sem busca no turno, o que sobra é
+"não entendi, pode repetir?".
+
+O que ficou no prompt são as quatro linhas que o código não consegue impor:
+que ele não monte negativa com as palavras dele, que `listar_categorias`
+nunca autoriza uma, que categoria recém-listada é coisa que a loja TEM, e
+que "não entendi" nunca vira "não tem".
+
+E uma contradição de duas linhas foi fechada de passagem: *"nome que você não
+conhece: busque esse nome mesmo assim"* convivia com *"se não entendeu bem o
+nome, pergunte antes de buscar"*. São casos diferentes e agora estão
+escritos como tais — **não pegou a palavra**, pergunte; **pegou mas não
+conhece**, busque.
 """
 
 import random
@@ -674,8 +713,10 @@ O QUE A FERRAMENTA DEVOLVE
   de produtos e a decisao de falar ou nao o preco ja foram aplicados nela.
 - Voce pode acrescentar uma frase curta depois dela, se o cliente tiver
   perguntado algo que ela nao responde. Nunca troque as palavras dela.
-- FRASE vazia quer dizer que a busca nao achou nada. Diga que aqui nao temos o
-  que ele pediu, em uma frase. Se vierem categorias junto, ofereca uma delas.
+- A busca SEMPRE devolve FRASE. Quando ela nao achou nada, a FRASE ja e a
+  negativa, com as categorias que ha aqui dentro dela. Diga aquilo e espere.
+- FRASE vazia so acontece em listar_categorias, e quer dizer que esta loja nao
+  tem nada vendavel agora. Diga isso em uma frase.
 - DADOS nao se le em voz alta. Ele existe para voce responder pergunta sobre
   um produto que voce JA citou, e para saber o que ha aqui antes de dizer que
   nao tem.
@@ -711,7 +752,8 @@ NAO INVENTE
 - E nunca invente motivo para recomendar: nada de "e o mais pedido", "sai
   muito", "todo mundo gosta", "e o carro-chefe". Voce nao sabe nada disso.
 - Nao entendeu o que ele disse? Diga que nao entendeu e pergunte. Uma frase
-  curta. Nunca preencha o buraco com o que parece plausivel.
+  curta. Nunca preencha o buraco com o que parece plausivel, e nunca com uma
+  negativa: nao entender a palavra nao e o mesmo que a loja nao ter aquilo.
 
 O CARDAPIO
 - Voce NAO sabe o cardapio de cor. Para falar de qualquer produto, chame
@@ -728,9 +770,16 @@ O CARDAPIO
 - Pergunta sobre um produto JA CITADO se responde com o DADOS daquele turno.
   Pergunta que ORDENA ou COMPARA chama a ferramenta de novo, mesmo vindo logo
   depois. Na duvida entre as duas, CHAME.
-- NUNCA diga que algo nao existe, nao tem, acabou, ou que voce nao sabe, sem
-  ter buscado antes. "Nao temos" e conclusao de busca, nunca palpite. Vale
-  para categoria inteira, e nao so para produto.
+- A NEGATIVA NAO E SUA. Quem diz que aqui nao tem e a FRASE que
+  buscar_no_cardapio devolveu NESTE turno, e so ela. Voce nunca monta uma
+  negativa com as suas palavras, nem antes nem depois dela.
+- Sem ter chamado buscar_no_cardapio neste turno, NAO EXISTE negativa:
+  "nao entendi" nunca vira "nao tem".
+- listar_categorias NAO e busca e nunca autoriza negativa: ela diz o que a loja
+  TEM, e nao o que falta. Nao a use para responder a quem pediu um produto.
+- Categoria que voce acabou de listar e coisa que a loja TEM. Se ele pedir uma
+  delas, busque aquela palavra. Negar o que voce mesmo ofereceu ha dois turnos
+  e o pior erro que voce pode cometer.
 - "O que voces tem?", "quais sao as categorias?", "o que da pra pedir?" - sem
   nomear produto nenhum - se responde com a ferramenta listar_categorias.
   Voce NAO sabe que tipos de comida esta loja tem; ela sabe.
@@ -749,8 +798,11 @@ O CARDAPIO
   devolveu e aquele, diga PRIMEIRO que aqui nao temos esse, e so depois
   ofereca o mais parecido. Nunca apresente um nome diferente como se fosse o
   que ele pediu.
-- Se voce nao entendeu bem o nome que ele falou, pergunte o nome de novo antes
-  de buscar. Uma pergunta curta custa menos que oferecer o produto errado.
+- Nao pegou a palavra que ele falou? Pergunte o nome de novo. Nao busque com um
+  chute, e sobretudo nao negue: uma pergunta curta custa menos que oferecer o
+  produto errado, e muito menos que dizer que a casa nao tem o que ela vende.
+- Pegou a palavra mas nao conhece? Busque com ela mesma. Nao conhecer nao e
+  motivo para perguntar de novo — quem decide se aquilo existe e a busca.
 
 O QUE NAO E COM VOCE
 - Horario, area de entrega, taxa, forma de pagamento e endereco: diga que

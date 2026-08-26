@@ -1750,3 +1750,57 @@ responde "quantos ele falou?".
 Ver [[43]] para o outro lado da mesma confusão — a transcrição da fala do
 cliente não é o que o modelo ouviu — e [[44]] para o caso em que só o argumento
 da tool call separou "inventou" de "veio errado".
+
+---
+
+## 46. A negativa do assistente precisa de dono — e o dono não pode ser o modelo
+
+25/08/2026, numa churrascaria: *"vocês têm picanha?"*. O modelo não entendeu a
+palavra, chamou `listar_categorias` em vez de `buscar_no_cardapio`, e
+respondeu **"não tem no cardápio, mas tem Executivos e Bebidas"**. Dois turnos
+depois negou bebida — tendo ele mesmo acabado de listar "Bebidas" como
+categoria da loja.
+
+**É a NÃO INVENTE ao contrário, e é pior que inventar.** Quem inventa um
+produto é desmentido no cardápio, na tela, no primeiro toque. Quem ouve que a
+churrascaria não tem picanha desliga, e ninguém reclama de um produto que lhe
+disseram não existir — não há tela onde conferir, não há log de cliente
+perdido, e o lojista descobre pela receita.
+
+**A regra já existia e não bastou**, e é isso que este item registra. O prompt
+dizia, com todas as letras: *"NUNCA diga que algo não existe, não tem, acabou,
+sem ter buscado antes"*. O modelo obedeceu à forma e não ao conteúdo — ele
+chamou **uma** ferramenta, e chamar uma ferramenta passou por "eu busquei".
+
+**Enquanto a negativa for texto que o modelo escreve, ele consegue
+escrevê-la a qualquer momento.** Nenhuma regra fecha isso, porque a regra e a
+frase moram no mesmo lugar: o prompt. O conserto foi tirar a frase de lá —
+`_NEGATIVA`, em `src/ai/voice/search_service.py`, e a busca vazia passou a
+devolver a negativa pronta (com as categorias que a loja tem dentro dela).
+Agora "não temos" tem uma origem só, e ela é uma busca que voltou vazia
+**naquele turno**. Sem busca, a frase não existe, e o que sobra é *"não
+entendi, pode repetir?"*.
+
+É o quarto movimento da mesma família de `frase_para_o_modelo`, e a família
+inteira diz a mesma coisa: **preço parou de errar quando chegou por extenso,
+superlativo parou de errar quando o banco ordenou, o teto parou de errar
+quando a frase veio com dois — e a negativa parou de errar quando deixou de
+ser escrita pelo modelo.** Em nenhum dos quatro o conserto foi mais uma
+regra.
+
+**O que fica para o próximo agente, e vale além da voz:** quando uma regra de
+prompt já existe, está escrita corretamente e mesmo assim é violada, o
+problema não é a redação. Procure a frase que o modelo precisa produzir para
+violá-la, e veja se ela pode nascer em código. Se puder, a regra vira
+verificável; se não puder, aceite que ela é uma recomendação e desenhe o resto
+do sistema sabendo disso.
+
+E uma contradição de duas linhas foi fechada de passagem, porque foi ela que
+deu ao modelo a saída: *"nome que você não conhece: busque esse nome mesmo
+assim"* convivia com *"se não entendeu bem o nome, pergunte antes de buscar"*.
+São dois casos diferentes e agora estão escritos como tais — **não pegou a
+palavra**, pergunte; **pegou mas não conhece**, busque. Duas regras que se
+contradizem no mesmo prompt não são duas regras: são uma licença.
+
+Ver [[44]] — exemplo solto na SAÍDA vira molde — e [[45]], sobre ler o log
+certo antes de mexer no código de corte.

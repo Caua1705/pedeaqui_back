@@ -481,3 +481,64 @@ def test_o_prompt_nao_manda_mais_perguntar_quantidade():
     assert "escolha entre dois produtos, faixa de preco" in _CORRIDO
     assert "escolha entre opcoes, quantidade, ponto da carne" not in _CORRIDO
     assert "Nao pergunte quantidade nem ponto da carne" in _CORRIDO
+
+
+# --------------------------------------------------------------------------
+# A NEGATIVA, e o que dela sobrou no prompt
+#
+# O caso: "voces tem picanha?" numa churrascaria (o Whisper transcreveu
+# "Nino"). O modelo nao entendeu a palavra, chamou `listar_categorias` em vez
+# da busca, e respondeu "nao tem no cardapio, mas tem Executivos e Bebidas".
+# Dois turnos depois negou bebida, tendo ele mesmo listado "Bebidas".
+#
+# O CONSERTO E DE CODIGO: a negativa virou uma FRASE que so
+# `buscar_no_cardapio` devolve (`_NEGATIVA`, em `search_service.py`), e quem a
+# testa com dados e `test_voice_frase_da_ferramenta.py`. Enquanto ela fosse
+# texto que o modelo escrevia, nenhuma regra impedia que ele a escrevesse sem
+# ter buscado — e a regra que mandava buscar antes de negar ja existia.
+#
+# O que sobra aqui sao as quatro linhas que o codigo nao consegue impor.
+# --------------------------------------------------------------------------
+
+
+def test_a_negativa_nao_e_do_modelo():
+    """A frase da negativa chega pronta da busca; montar uma com as palavras
+    dele e o caminho de volta ao defeito."""
+    assert "A NEGATIVA NAO E SUA" in _CORRIDO
+    assert "Voce nunca monta uma negativa com as suas palavras" in _CORRIDO
+
+
+def test_listar_categorias_nao_autoriza_negativa():
+    """Foi por esta porta que o defeito entrou: chamar UMA ferramenta passou
+    por "eu busquei"."""
+    assert "listar_categorias NAO e busca e nunca autoriza negativa" in _CORRIDO
+
+
+def test_nao_entendi_nunca_vira_nao_tem():
+    """A NAO INVENTE ao contrario: sem entender a palavra, negar o produto e
+    pior do que qualquer invencao — o cliente ouve que a churrascaria nao tem
+    picanha e desliga."""
+    assert "Sem ter chamado buscar_no_cardapio neste turno, NAO EXISTE negativa" in _CORRIDO
+    assert '"nao entendi" nunca vira "nao tem"' in _CORRIDO
+
+
+def test_categoria_recem_listada_nao_pode_ser_negada():
+    """O segundo turno do relato: negou bebida dois turnos depois de oferecer
+    "Bebidas"."""
+    assert "Categoria que voce acabou de listar e coisa que a loja TEM" in _CORRIDO
+
+
+def test_nao_pegar_a_palavra_e_nao_conhecer_a_palavra_sao_casos_diferentes():
+    """A contradicao que o caso desenterrou: "nome que voce nao conhece:
+    busque esse nome mesmo assim" convivia com "se nao entendeu bem o nome,
+    pergunte antes de buscar". Sao dois casos, e agora estao escritos como
+    tais."""
+    assert "Nao pegou a palavra que ele falou? Pergunte o nome de novo" in _CORRIDO
+    assert "Pegou a palavra mas nao conhece? Busque com ela mesma" in _CORRIDO
+
+
+def test_a_regra_antiga_da_negativa_nao_ficou_junto_da_nova():
+    """Duas redacoes da mesma regra sao a chance de discordarem depois — e a
+    antiga era a que o modelo conseguia contornar."""
+    assert "NUNCA diga que algo nao existe, nao tem, acabou" not in _CORRIDO
+    assert "Diga que aqui nao temos o que ele pediu" not in _CORRIDO

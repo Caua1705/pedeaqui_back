@@ -176,6 +176,210 @@ casos a tela é a mesma: oferecer o cadastro de um cartão novo.
 
 ---
 
+## Ponta a ponta: o pedido pago com cartão salvo
+
+Esta seção existe porque a pergunta chegou do front assim: *"falta a
+`saved_card_id` chegar ao pedido"*. **Ela não vai no corpo do pedido, e isso é
+desenho, não pendência.** São duas chamadas, e a segunda é a do cartão.
+
+### Por que o cartão não entra em `POST /orders`
+
+Dois motivos, e o segundo custa dinheiro:
+
+- **a chamada ao gateway não pode acontecer com a transação do pedido aberta.**
+  É por isso que `start_payment` é rota separada desde antes de o cartão
+  existir: um gateway lento seguraria uma conexão do pool com o `INSERT` do
+  pedido em aberto, e com o pool cheio a API inteira trava (§ `start_payment`,
+  em `payments.py`);
+- **campo novo em `CreateOrderRequest` custa 24h de 422**, mesmo opcional e
+  mesmo que ninguém o leia. `OrderService` assina o corpo com
+  `payload.model_dump()`, então um campo a mais muda o `request_fingerprint` de
+  **todos** os pedidos — e toda `Idempotency-Key` em voo no minuto do deploy
+  passa a receber `422 Idempotency-Key já utilizada com um corpo diferente`.
+  É a armadilha 37, e ela não perdoa campo opcional.
+
+Um `saved_card_id` no corpo do pedido seria, então, um campo que ninguém lê,
+que ninguém pode ler (a cobrança acontece depois, noutra transação), e que
+cobraria um dia de recusas para entrar. Se ele for mandado assim hoje, o
+`extra="ignore"` do schema o descarta em silêncio — que é exatamente o sintoma
+de "o pagamento não fecha".
+
+### Passo 1 — criar o pedido
+
+```http
+POST /restaurants/junior-da-picanha/orders
+Authorization: Bearer <token do cliente>        # obrigatório para cartão
+Idempotency-Key: 5f1c2a7e-3b6d-4c9a-8e21-0d7b4f8a1c33
+Content-Type: application/json
+```
+
+```json
+{
+  "branch_id": "6d2b8f10-4a3c-4f27-9c5e-1b8a7d3e2f45",
+  "order_type": "delivery",
+  "payment_method": "credit_card",
+  "customer_address_id": "b71e4c02-9d55-4f18-a3c7-6e2f0a9b8d14",
+  "delivery_estimate_token": "TQ4rZ0m6...",
+  "items": [
+    { "product_id": "0a9f3c11-2d47-4b8e-9f60-5c3a1e7d2b98", "quantity": 1 }
+  ],
+  "use_cashback": false
+}
+```
+
+`payment_method: "credit_card"` é o que faz o pedido nascer com
+`payment_flow: "online"`. A filial precisa ter `credit_card` habilitado em
+`branch_payment_methods`, senão a criação responde 400 (armadilha 15).
+
+Resposta — **`tracking_token` só sai aqui, uma vez, e não há rota para
+reemiti-lo**:
+
+```json
+{
+  "id": "9c1d7b64-5e08-4a3f-bb92-7d4e1f0c6a35",
+  "order_number": 5471,
+  "tracking_token": "kJ8vQ2mZ...43 caracteres",
+  "status": "pending",
+  "payment_flow": "online",
+  "payment_status": "pending",
+  "subtotal": 89.9,
+  "delivery_fee": 8.0,
+  "service_fee": 0.0,
+  "coupon_code": null,
+  "coupon_discount_amount": "0.00",
+  "cashback_redeemed_amount": "0.00",
+  "discount_total": "0.00",
+  "total": 97.9,
+  "message": "Pedido criado com sucesso"
+}
+```
+
+> Os quatro primeiros valores são **número** e os três descontos são **string**
+> com duas casas. Não é engano deste exemplo — é a armadilha 34, e o front
+> precisa saber quais campos converter.
+
+### Passo 2 — cobrar, com o cartão salvo
+
+```http
+POST /restaurants/junior-da-picanha/orders/kJ8vQ2mZ.../payment
+Authorization: Bearer <token do cliente>        # cartão exige login
+Content-Type: application/json
+```
+
+```json
+{
+  "card": {
+    "token": "9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+    "saved_card_id": "3e7a1c98-6b25-4d0f-8a13-9c4e5f2b7d60",
+    "payer_document_type": "CPF",
+    "payer_document_number": "12345678909"
+  }
+}
+```
+
+**O front manda os dois: o `card_id` e um token novo, gerado na hora.** É a
+pergunta que mais volta, e a resposta não é uma escolha nossa — é como o
+Mercado Pago funciona:
+
+| Campo | De onde vem | Por que |
+|---|---|---|
+| `saved_card_id` | o `id` de `GET /customers/me/cards` — **o nosso UUID** | diz *qual* cartão, e traz o `customer` dono dele |
+| `token` | `createCardToken({ cardId, securityCode })` no navegador, **agora** | é de uso único e vida curta; sem ele não há cobrança |
+
+`payment_method_id` (a bandeira) **não vai** quando há `saved_card_id`: ela sai
+do que está gravado em `customer_saved_cards.brand`, que é mais confiável que o
+que o cliente mandaria. Enviá-la não é erro — é ignorada.
+
+O que o backend faz com o par, antes de falar com o gateway: confere que o
+cartão é **desta pessoa** e **desta loja** (404 nos dois casos, nunca 403 — ver
+`_resolve_saved_card`), e acrescenta `payer.type: "customer"` e `payer.id` ao
+corpo da cobrança. Sem esses dois o Mercado Pago recusa um token que nasceu de
+um `card_id`, porque para ele o cartão pertence ao customer.
+
+Resposta, com o veredito já dentro — **cartão é síncrono**:
+
+```json
+{
+  "provider": "mercadopago",
+  "provider_payment_id": "1234567890",
+  "payment_status": "paid",
+  "checkout_url": null,
+  "qr_code": null,
+  "status_detail": "accredited"
+}
+```
+
+`checkout_url` e `qr_code` são do pix e vêm nulos no cartão: não há para onde
+mandar o cliente, o desfecho já está em `payment_status` — `paid`, `failed` ou
+`in_review`. Os três estão descritos em *"Os três desfechos da cobrança"*.
+
+Recusado, a resposta é a mesma forma com `payment_status: "failed"` e o
+`status_detail` cru (`cc_rejected_bad_filled_security_code` pede do cliente
+coisa diferente de `cc_rejected_insufficient_amount`). **O pedido continua
+existindo e continua pagável**: a próxima tentativa é uma cobrança nova, com
+chave de idempotência nova, e o front só precisa chamar o passo 2 de novo.
+
+### Passo 3 — conferir o pedido pago
+
+`GET /restaurants/{slug}/orders/track/{tracking_token}` devolve o
+`OrderDetailResponse`, e o que muda depois de uma cobrança aprovada são três
+campos:
+
+```json
+{
+  "payment_method": "credit_card",
+  "payment_flow": "online",
+  "payment_status": "paid",
+  "paid_at": "2026-08-25T18:42:07.913Z",
+  "status": "pending",
+  "status_history": [
+    { "status": "pending", "changed_by": "system", "note": "Pedido criado" },
+    { "status": "payment:paid", "changed_by": "gateway:mercadopago" }
+  ]
+}
+```
+
+`status` continua `pending`: pagamento confirmado libera o pedido para o
+lojista **aceitar**, não o aceita sozinho. É a partir daqui que a comanda
+imprime.
+
+---
+
+## Os sete campos de endereço do formulário: nenhum é exigido
+
+Pergunta de 25/08/2026, e a resposta é curta: **o formulário do app pede CEP,
+endereço, número, complemento, bairro, cidade e estado, e o Mercado Pago não
+exige nenhum deles para tokenizar um cartão.** Foi precaução.
+
+O que `createCardToken` usa é o que o próprio cartão tem: número, nome
+impresso, validade, CVV, e o documento do portador. Endereço não entra na
+tokenização — no `POST /v1/payments` ele existe como campo **opcional** de
+`additional_info`, que alimenta o escore do antifraude e nada mais.
+
+**O backend nunca recebeu nenhum desses sete campos**, e é o que torna a
+resposta verificável em vez de opinativa: não há campo de endereço em
+`SaveCardRequest`, em `CardPaymentPayload`, em `CustomerSavedCard`, nem no
+corpo que `create_payment` monta e envia. Se algum fosse obrigatório, a
+integração inteira já teria parado na primeira chamada — a de salvar o cartão,
+que é a que roda hoje.
+
+O que **fica em aberto até a primeira cobrança real contra a credencial de
+teste** é o desfecho, e não a exigência: pode voltar `in_process` (análise) em
+vez de `approved`. Isso não é o gateway pedindo endereço; é a mesma análise
+antifraude que a seção acima descreve.
+
+**A recomendação é tirar os sete.** São sete campos de atrito num checkout de
+delivery de bairro, num formulário em que cada campo a mais é um cliente a
+menos — e o endereço de entrega o app já tem, noutra tela, para o pedido.
+
+O que se perde ao tirar: alguns pontos no escore do antifraude do Mercado Pago,
+que podem virar um `in_review` a mais em vez de um `paid` direto. Não vira
+recusa; vira análise. Se um dia o volume de `in_review` incomodar, o campo que
+tem efeito de verdade é **`payer_document_number` (o CPF)**, que já está no
+contrato e já é enviado — e o passo seguinte é 3DS, não endereço.
+
+---
+
 ## Salvar não valida o cartão
 
 **Não há cobrança de R$ 1,00 seguida de estorno.** Salvar pendura o cartão no

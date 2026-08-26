@@ -93,11 +93,61 @@ def test_produto_sem_preco_nao_ganha_numero_inventado():
     assert VoiceSearchService.frase_para_o_modelo([_produto("Prato Um", "0.00")]) == "Tem Prato Um."
 
 
-def test_busca_vazia_nao_tem_frase_pronta():
-    """O que dizer numa negativa depende do que o cliente pediu, e essa
-    pergunta o modelo tem. Frase vazia e o sinal, e o prompt cobre o caso em
-    uma linha."""
-    assert VoiceSearchService.frase_para_o_modelo([]) == ""
+# --------------------------------------------------------------------------
+# A NEGATIVA, que ate 25/08/2026 era do modelo
+#
+# O caso que a trouxe para ca: "voces tem picanha?" numa churrascaria, o modelo
+# nao entendeu a palavra, chamou `listar_categorias` em vez da busca, e
+# respondeu "nao tem no cardapio, mas tem Executivos e Bebidas".
+#
+# Enquanto a negativa fosse texto que o modelo escrevia, ele conseguia
+# escreve-la SEM TER BUSCADO. Sendo uma frase que so a busca devolve, "nao
+# temos" passa a ter uma origem unica — e e isso que estes testes guardam.
+# --------------------------------------------------------------------------
+
+
+def test_busca_vazia_devolve_a_negativa_pronta():
+    """Isto INVERTEU o teste que estava aqui, que afirmava frase vazia na busca
+    sem resultado. A frase vazia era o buraco por onde a negativa voltava a ser
+    decisao do modelo."""
+    assert VoiceSearchService.frase_para_o_modelo([]) == "Aqui a gente nao tem isso."
+
+
+def test_a_negativa_leva_ate_duas_categorias_para_oferecer():
+    """Escolher qual categoria oferecer era mais uma decisao do modelo ("se
+    vierem categorias junto, ofereca uma delas") sobre uma lista que este
+    metodo tem inteira na mao."""
+    frase = VoiceSearchService.frase_para_o_modelo(
+        [], [("Categoria Um", 8), ("Categoria Dois", 3), ("Categoria Tres", 1)]
+    )
+
+    assert frase == "Aqui a gente nao tem isso, mas tem Categoria Um e Categoria Dois."
+    assert "Categoria Tres" not in frase
+
+
+def test_a_negativa_com_uma_categoria_so_nao_fica_com_e_solto():
+    frase = VoiceSearchService.frase_para_o_modelo([], [("Categoria Um", 8)])
+
+    assert frase == "Aqui a gente nao tem isso, mas tem Categoria Um."
+
+
+def test_a_negativa_vem_antes_da_oferta():
+    """Apresentar outra coisa antes de dizer que nao tem o que ele pediu faz o
+    cliente ouvir que ganhou uma resposta quando levou uma negativa."""
+    frase = VoiceSearchService.frase_para_o_modelo([], [("Categoria Um", 8)])
+
+    assert frase.index("nao tem") < frase.index("mas tem")
+
+
+def test_a_busca_que_achou_algo_nunca_traz_negativa():
+    """A negativa e o ramo da lista vazia, e so ele. Uma negativa colada numa
+    frase com produto seria o atendente dizendo que nao tem o que acabou de
+    oferecer."""
+    frase = VoiceSearchService.frase_para_o_modelo(
+        [_produto("Prato Um", "23.90")], [("Categoria Um", 8)]
+    )
+
+    assert "nao tem" not in frase
 
 
 # --------------------------------------------------------------------------
@@ -122,7 +172,7 @@ def test_a_busca_vazia_leva_as_categorias_junto():
     junto com o "nao achei" e dado, e nao mais uma instrucao."""
     resultado = VoiceSearchService.resultado_para_o_modelo([], [("Categoria Um", 8)])
 
-    assert resultado.startswith("FRASE:\n")
+    assert resultado.startswith("FRASE: Aqui a gente nao tem isso, mas tem Categoria Um.")
     assert "Nenhum produto encontrado nesta loja." in resultado
     assert "Categoria Um (8)" in resultado
 
@@ -135,3 +185,12 @@ def test_a_categoria_nao_entra_quando_a_busca_achou_algo():
     )
 
     assert "Categoria Um" not in resultado
+
+
+def test_a_busca_nunca_devolve_frase_vazia():
+    """FRASE vazia era o sinal de "nao achei" e virou a negativa pronta. O
+    rotulo sozinho sobrou so para `listar_categorias`, onde ele quer dizer
+    outra coisa: a loja nao tem nada vendavel agora."""
+    resultado = VoiceSearchService.resultado_para_o_modelo([], None)
+
+    assert resultado.startswith("FRASE: Aqui a gente nao tem isso.")

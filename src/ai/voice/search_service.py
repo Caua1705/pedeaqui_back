@@ -93,6 +93,28 @@ _TETO_DE_CATEGORIAS = 12
 # mandava; agora a frase ja vem com dois, e a secao saiu.
 TETO_FALADO = 2
 
+# A NEGATIVA, escrita aqui e nao montada pelo modelo (25/08/2026).
+#
+# O caso: o cliente perguntou "voces tem picanha?" numa churrascaria, o modelo
+# nao entendeu a palavra, chamou `listar_categorias` em vez da busca — e
+# respondeu "nao tem no cardapio, mas tem Executivos e Bebidas". Dois turnos
+# depois negou bebida, tendo acabado de listar "Bebidas" como categoria.
+#
+# O padrao e o pior possivel: sem entender a palavra, ele NEGA o produto em vez
+# de dizer que nao entendeu — a NAO INVENTE ao contrario, e o cliente ouve que
+# a churrascaria nao tem picanha.
+#
+# Enquanto a negativa fosse texto que o modelo escrevia, ele conseguia
+# escreve-la sem ter buscado. Sendo uma frase que so a BUSCA devolve, "nao
+# temos" passa a ter uma origem unica e verificavel: sem busca no turno, o
+# modelo nao tem a frase, e a saida que sobra e "nao entendi, pode repetir?".
+#
+# E o quarto movimento da mesma familia de `frase_para_o_modelo`: tirar a
+# decisao do modelo entregando o dado ja na forma em que ele vai ser usado.
+#
+# Sem o ponto final: a mesma frase continua em "..., mas tem X e Y".
+_NEGATIVA = "Aqui a gente nao tem isso"
+
 # As expressoes que pedem ORDENACAO, e o que cada uma quer dizer (crescente).
 # Sao reconhecidas na consulta e ARRANCADAS dela: "a bebida mais barata" busca
 # "bebida" ordenado, e nao "bebida mais barata" — o texto do superlativo nao se
@@ -457,7 +479,10 @@ class VoiceSearchService:
         )
 
     @staticmethod
-    def frase_para_o_modelo(produtos: list) -> str:
+    def frase_para_o_modelo(
+        produtos: list,
+        categorias: list[tuple[str, int]] | None = None,
+    ) -> str:
         """A frase pronta para ser DITA, com o teto de dois ja aplicado.
 
         ELA EXISTE PARA TIRAR DUAS DECISOES DO MODELO (25/08/2026), e as duas
@@ -486,12 +511,25 @@ class VoiceSearchService:
         vai dar errado exatamente assim — o modelo repetindo a frase do turno
         anterior — e e isso que se procura na bancada.
 
-        Vazia quando a busca nao achou nada. Nao ha frase pronta para a
-        negativa: o que dizer depende do que o cliente pediu, e o modelo tem a
-        pergunta dele. O prompt cobre esse caso em uma linha.
+        BUSCA VAZIA TAMBEM TEM FRASE, desde 25/08/2026, e isto inverteu o que
+        estava escrito aqui ("nao ha frase pronta para a negativa: o que dizer
+        depende do que o cliente pediu"). Dependia mesmo — e era o modelo que
+        decidia, entao ele conseguia negar um produto SEM TER BUSCADO. Foi o
+        que aconteceu com "voces tem picanha?" numa churrascaria; o relato
+        esta em `_NEGATIVA`.
+
+        Com a negativa vindo daqui, "nao temos" tem uma origem so, e ela e uma
+        busca que voltou vazia NAQUELE turno. Nao e mais uma regra pedindo ao
+        modelo que busque antes de negar: e a frase da negativa nao existir
+        antes da busca.
+
+        `categorias` entra na propria frase quando a busca nao achou nada,
+        pelo mesmo motivo do teto: escolher qual categoria oferecer era mais
+        uma decisao ("se vierem categorias junto, ofereca uma delas") sobre
+        uma lista que este metodo tem inteira na mao.
         """
         if not produtos:
-            return ""
+            return _frase_da_negativa(categorias)
 
         if len(produtos) == 1:
             return _frase_de_um(produtos[0])
@@ -523,10 +561,12 @@ class VoiceSearchService:
         mandar a lista do que a loja TEM junto com o "nao achei" e dado em vez
         de mais uma instrucao.
         """
-        frase = VoiceSearchService.frase_para_o_modelo(produtos)
+        frase = VoiceSearchService.frase_para_o_modelo(produtos, categorias)
         linhas = [
             # Sem espaco sobrando quando nao ha frase: "FRASE: " com um branco
             # no fim e um rotulo com conteudo invisivel, e o modelo le rotulo.
+            # A busca sempre tem frase desde 25/08/2026 — a vazia e a negativa
+            # —, mas o ramo fica: ele e o mesmo contrato das duas ferramentas.
             f"FRASE: {frase}" if frase else "FRASE:",
             "DADOS (nao leia em voz alta; so para responder pergunta sobre produto ja citado):",
             VoiceSearchService.resumo_para_o_modelo(produtos),
@@ -624,6 +664,28 @@ def _frase_de_um(produto) -> str:
     if not falado:
         return f"Tem {produto.name}."
     return f"Tem {produto.name} por {falado}."
+
+
+def _frase_da_negativa(categorias: list[tuple[str, int]] | None) -> str:
+    """A negativa falada, com ate duas categorias para oferecer no lugar.
+
+    "isso" e nao o nome do que ele pediu, e a escolha e deliberada: o termo que
+    chegaria aqui e a CONSULTA — o que o modelo escreveu, ja reescrito por
+    `_reescrever_consulta` —, e nao a palavra do cliente. Repeti-la produziria
+    "aqui a gente nao tem bebida mais barata". "Isso" vem logo depois do que ele
+    pediu e nao corre esse risco.
+
+    A negativa vem primeiro e a oferta depois, sempre nessa ordem: apresentar
+    outra coisa antes de dizer que nao tem o pedido e o que faz o cliente ouvir
+    que ganhou uma resposta quando levou uma negativa.
+    """
+    if not categorias:
+        return f"{_NEGATIVA}."
+
+    nomes = [nome for nome, _ in categorias[:TETO_FALADO]]
+    if len(nomes) == 1:
+        return f"{_NEGATIVA}, mas tem {nomes[0]}."
+    return f"{_NEGATIVA}, mas tem {nomes[0]} e {nomes[1]}."
 
 
 def _ordenados_por_preco(produtos: list, crescente: bool) -> list:

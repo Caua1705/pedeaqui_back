@@ -351,10 +351,31 @@ Pergunta de 25/08/2026, e a resposta é curta: **o formulário do app pede CEP,
 endereço, número, complemento, bairro, cidade e estado, e o Mercado Pago não
 exige nenhum deles para tokenizar um cartão.** Foi precaução.
 
-O que `createCardToken` usa é o que o próprio cartão tem: número, nome
-impresso, validade, CVV, e o documento do portador. Endereço não entra na
-tokenização — no `POST /v1/payments` ele existe como campo **opcional** de
-`additional_info`, que alimenta o escore do antifraude e nada mais.
+O que `createCardToken` usa é o que o próprio cartão tem, e a lista inteira
+cabe numa tabela. Conferida na documentação do Mercado Pago em 27/08/2026, em
+três fontes que descrevem a mesma chamada (o `sdk-js`, o `sdk-react` e o guia
+de integração via Core Methods):
+
+| Campo | Exigido |
+|---|---|
+| `cardNumber` | sim |
+| `expirationMonth`, `expirationYear` | sim |
+| `securityCode` | sim |
+| `cardholderName` | sim |
+| `identificationType` + `identificationNumber` (o CPF) | sim |
+| `cardholderEmail` | não |
+
+**Não há linha de endereço nessa tabela, e a diferença não é de grau.** Não é
+que os sete sejam opcionais na tokenização: eles **não existem** lá. CEP, rua,
+número, complemento, bairro, cidade e estado não têm para onde ir em
+`POST /v1/card_tokens` — nem no `POST /v1/customers/{id}/cards`, que pendura o
+cartão no customer e recebe **um campo só**, o `token`.
+
+Endereço só aparece um andar acima, no `POST /v1/payments`, como
+`additional_info.payer.address` — **opcional**, entrada do escore do antifraude
+e nada mais. É por isso que a orientação deles sobre aprovação fala em enviar
+todas as informações possíveis, e nunca em campo exigido: endereço move
+probabilidade de análise, jamais a aceitação da chamada.
 
 **O backend nunca recebeu nenhum desses sete campos**, e é o que torna a
 resposta verificável em vez de opinativa: não há campo de endereço em
@@ -368,15 +389,35 @@ teste** é o desfecho, e não a exigência: pode voltar `in_process` (análise) 
 vez de `approved`. Isso não é o gateway pedindo endereço; é a mesma análise
 antifraude que a seção acima descreve.
 
-**A recomendação é tirar os sete.** São sete campos de atrito num checkout de
-delivery de bairro, num formulário em que cada campo a mais é um cliente a
-menos — e o endereço de entrega o app já tem, noutra tela, para o pedido.
+**Os sete saíram do formulário, e a decisão está fechada.** São sete campos de
+atrito num checkout de delivery de bairro, num formulário em que cada campo a
+mais é um cliente a menos — e o endereço de entrega o app já tem, noutra tela,
+para o pedido.
 
 O que se perde ao tirar: alguns pontos no escore do antifraude do Mercado Pago,
 que podem virar um `in_review` a mais em vez de um `paid` direto. Não vira
 recusa; vira análise. Se um dia o volume de `in_review` incomodar, o campo que
 tem efeito de verdade é **`payer_document_number` (o CPF)**, que já está no
 contrato e já é enviado — e o passo seguinte é 3DS, não endereço.
+
+### Por que isto está escrito, e não só decidido
+
+*"Pedir o endereço melhora a aprovação"* é verdade o bastante para alguém
+repor os sete campos numa tarde de tuning do checkout — e a frase, sozinha,
+soa como melhoria. **Reposta hoje, ela não compra escore nenhum.**
+
+O dado não teria para onde ir. A tokenização não tem campo que o receba
+(tabela acima), e o corpo que `_mercadopago_body` monta em
+`payment_gateway.py` não tem `additional_info`. Sete campos a mais no
+formulário seriam atrito puro, coletando dado pessoal que morre no navegador
+— e o `in_review` que motivou a mexida continuaria exatamente igual, o que faz
+o próximo palpite ser pior ainda.
+
+Quem quiser mesmo o ganho de antifraude começa pelo outro lado: construir
+`additional_info` no backend, medir, e só então decidir de onde vem cada
+campo. O endereço de entrega o pedido já tem gravado — provavelmente sem
+perguntar nada de novo ao cliente. A conversa é essa; não é a do formulário
+de cartão.
 
 ---
 

@@ -1454,6 +1454,17 @@ durante a análise vira prejuízo do lojista quando ela recusa. Ele existe
 separado de `pending` só para a TELA e a comanda dizerem a verdade: uma espera
 pede ligar para o cliente, a outra pede não ligar.
 
+**E `in_review` demais NÃO se conserta pedindo endereço no formulário.** É a
+reação que a palavra "antifraude" provoca, e ela reabre sete campos que uma
+rodada já tirou: CEP, rua, número, complemento, bairro, cidade e estado. O
+Mercado Pago **não os exige** — confirmado na documentação em 27/08/2026 —, e
+`POST /v1/card_tokens` não tem sequer onde recebê-los. Endereço só existe como
+`additional_info.payer.address` no `POST /v1/payments`, e `_mercadopago_body`
+não monta `additional_info`: repostos hoje, os sete seriam atrito puro
+coletando dado pessoal que morre no navegador, com o `in_review` intacto. A
+tabela dos campos que a tokenização de fato aceita, e o caminho de quem quiser
+mesmo o escore, estão em `docs/cartao-salvo.md`.
+
 **3. Estorno parcial não muda `payment_status` nenhum.** No Mercado Pago
 devolver parte do valor mantém o pagamento em `approved` → `paid`, que é onde o
 pedido já está. O `if order.payment_status == event.payment_status: return

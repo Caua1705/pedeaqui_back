@@ -16,7 +16,9 @@ O que estes testes PROVAM:
 - remover cartao apaga NOS DOIS LADOS, na ordem gateway->banco, e um 404
   deles conta como sucesso;
 - a cobranca com cartao salvo manda `payer.type=customer` e `payer.id`, e a
-  BANDEIRA sai do banco, nunca do corpo que o cliente enviou.
+  BANDEIRA sai do banco, nunca do corpo que o cliente enviou;
+- a LISTAGEM devolve os DOIS ids — o nosso UUID e o `card_id` do Mercado
+  Pago —, porque o navegador nao consegue tokenizar sem o segundo.
 
 O que ISSO NAO PROVA — so uma chamada real contra a credencial de teste do
 Mercado Pago prova:
@@ -30,6 +32,7 @@ Mercado Pago prova:
 
 import unittest
 import uuid
+from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -603,6 +606,55 @@ class AutorizacaoDoCartaoSalvoTests(unittest.TestCase):
         self.assertIsNone(card.provider_customer_id)
         self.assertEqual(card.payment_method_id, "visa")
         self.assertEqual(service.saved_card_repository.consultas, 0)
+
+
+class OsDoisIdsDaListagemTests(unittest.TestCase):
+    """`SavedCardResponse` carrega o `card_id` do Mercado Pago, e nao so o nosso.
+
+    A versao anterior deste contrato so publicava o UUID da nossa tabela. O
+    navegador mandava esse UUID para `/v1/card_tokens` — que e o unico jeito
+    de nascer o token de `card_id` + CVV — e o Mercado Pago respondia
+    `400 {"message":"invalid card_id","cause":[{"code":"E201"}]}`. Nenhuma
+    confirmacao de cartao salvo funcionava, e o backend estava certo em todo
+    o resto: o valor gravado sempre foi o `id` que eles devolvem.
+
+    O model e construido de VERDADE, transiente, sem banco: um objeto de
+    atributos livres responderia `provider_card_id` porque o teste o
+    escreveu, que e exatamente o erro que este teste existe para pegar.
+    """
+
+    def _cartao(self):
+        from src.models.customer_saved_card_model import CustomerSavedCard
+
+        return CustomerSavedCard(
+            id=uuid.uuid4(),
+            payment_profile_id=uuid.uuid4(),
+            provider_card_id=CARD_ID,
+            brand="master",
+            last_four_digits="4321",
+            expiration_month=11,
+            expiration_year=2030,
+            created_at=datetime(2026, 8, 27, 12, 0, tzinfo=timezone.utc),
+        )
+
+    def test_a_listagem_publica_o_card_id_do_mercado_pago(self):
+        from src.schemas.saved_card_schema import SavedCardResponse
+
+        cartao = self._cartao()
+        corpo = SavedCardResponse.model_validate(cartao).model_dump()
+
+        self.assertEqual(corpo["provider_card_id"], CARD_ID)
+        # E o nosso UUID continua saindo, que e o que volta em `saved_card_id`.
+        self.assertEqual(corpo["id"], cartao.id)
+        self.assertNotEqual(str(corpo["provider_card_id"]), str(corpo["id"]))
+
+    def test_o_campo_e_obrigatorio_no_contrato(self):
+        """Torna-lo opcional traria de volta o `invalid card_id` sem nenhum
+        teste vermelho."""
+        from src.schemas.saved_card_schema import SavedCardResponse
+
+        campo = SavedCardResponse.model_fields["provider_card_id"]
+        self.assertTrue(campo.is_required())
 
 
 class _ClienteDublado:

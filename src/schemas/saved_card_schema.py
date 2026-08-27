@@ -36,17 +36,37 @@ class SaveCardRequest(BaseModel):
 
 
 class SavedCardResponse(BaseModel):
-    """O cartao como a tela precisa dele: para reconhecer, nao para cobrar.
+    """O cartao como a tela precisa dele: para reconhecer E para tokenizar.
 
     `id` e o nosso UUID, e e ele que volta em `card.saved_card_id` na hora
-    de pagar. O id do cartao no Mercado Pago **nao sai daqui** — ele so tem
-    sentido dentro da conta do restaurante, e publica-lo nao ajudaria o
-    front em nada.
+    de pagar.
+
+    `provider_card_id` e o id do cartao na conta do Mercado Pago do lojista,
+    e ele SAI daqui de proposito. A versao anterior deste contrato o retinha
+    ("nao ajudaria o front em nada") e isso contradizia o
+    `CardPaymentPayload` deste mesmo backend, que exige um `token` gerado no
+    navegador "a partir do `card_id` mais o CVV". Sem este campo o navegador
+    mandava o nosso UUID no lugar e a tokenizacao voltava
+    `400 {"message":"invalid card_id", "cause":[{"code":"E201"}]}` —
+    a tela de CVV nunca conseguia confirmar cartao salvo nenhum.
+
+    Publicar o valor nao afrouxa nada: ele so vale acompanhado do CVV (que
+    esta pessoa acabou de digitar) ou do access_token do lojista (que nunca
+    sai do servidor), a rota e `/customers/me/cards` autorizada pelo Bearer
+    do dono do cartao, e a propria referencia do Mercado Pago carrega esse id
+    num input escondido do navegador.
     """
 
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    provider_card_id: str = Field(
+        description=(
+            "Id do cartao na conta do Mercado Pago do restaurante. O SDK do "
+            "navegador precisa dele para gerar o token de cobranca a partir "
+            "de `card_id` + CVV."
+        ),
+    )
     brand: str = Field(
         description='Bandeira, no vocabulario do gateway: "visa", "master", "elo".',
     )

@@ -315,10 +315,12 @@ def list_saved_cards(
     teste para producao. Nos tres casos a tela e a mesma: oferecer o cadastro
     de um cartao novo.
 
-    ## O que NAO sai daqui
+    ## Os DOIS ids, e para que serve cada um
 
-    O id do cartao no Mercado Pago. O `id` da resposta e o nosso UUID, e e
-    ele que volta em `card.saved_card_id` na hora de pagar.
+    `id` e o nosso UUID, e e ele que volta em `card.saved_card_id` na hora
+    de pagar. `provider_card_id` e o id do cartao na conta do Mercado Pago
+    do lojista, e o navegador precisa dele para gerar o token da cobranca
+    (`card_id` + CVV) — sem ele a tokenizacao volta `invalid card_id`.
     """
     return SavedCardService(db).list_cards(current_customer, restaurant_slug)
 

@@ -11233,7 +11233,7 @@
         "type": "object"
       },
       "SavedCardResponse": {
-        "description": "O cartao como a tela precisa dele: para reconhecer, nao para cobrar.\n\n`id` e o nosso UUID, e e ele que volta em `card.saved_card_id` na hora\nde pagar. O id do cartao no Mercado Pago **nao sai daqui** — ele so tem\nsentido dentro da conta do restaurante, e publica-lo nao ajudaria o\nfront em nada.",
+        "description": "O cartao como a tela precisa dele: para reconhecer E para tokenizar.\n\n`id` e o nosso UUID, e e ele que volta em `card.saved_card_id` na hora\nde pagar.\n\n`provider_card_id` e o id do cartao na conta do Mercado Pago do lojista,\ne ele SAI daqui de proposito. A versao anterior deste contrato o retinha\n(\"nao ajudaria o front em nada\") e isso contradizia o\n`CardPaymentPayload` deste mesmo backend, que exige um `token` gerado no\nnavegador \"a partir do `card_id` mais o CVV\". Sem este campo o navegador\nmandava o nosso UUID no lugar e a tokenizacao voltava\n`400 {\"message\":\"invalid card_id\", \"cause\":[{\"code\":\"E201\"}]}` —\na tela de CVV nunca conseguia confirmar cartao salvo nenhum.\n\nPublicar o valor nao afrouxa nada: ele so vale acompanhado do CVV (que\nesta pessoa acabou de digitar) ou do access_token do lojista (que nunca\nsai do servidor), a rota e `/customers/me/cards` autorizada pelo Bearer\ndo dono do cartao, e a propria referencia do Mercado Pago carrega esse id\nnum input escondido do navegador.",
         "properties": {
           "brand": {
             "description": "Bandeira, no vocabulario do gateway: \"visa\", \"master\", \"elo\".",
@@ -11276,10 +11276,16 @@
             "description": "Os quatro ultimos digitos, para a tela.",
             "title": "Last Four Digits",
             "type": "string"
+          },
+          "provider_card_id": {
+            "description": "Id do cartao na conta do Mercado Pago do restaurante. O SDK do navegador precisa dele para gerar o token de cobranca a partir de `card_id` + CVV.",
+            "title": "Provider Card Id",
+            "type": "string"
           }
         },
         "required": [
           "id",
+          "provider_card_id",
           "brand",
           "last_four_digits",
           "created_at"
@@ -17519,7 +17525,7 @@
     },
     "/customers/me/cards": {
       "get": {
-        "description": "Os cartoes que esta pessoa salvou NESTE restaurante.\n\n## Lista vazia nao quer dizer \"nunca salvou\"\n\nEla tambem e a resposta para quem salvou cartao em outra loja da\nplataforma, e para quem salvou antes de o ambiente do gateway virar de\nteste para producao. Nos tres casos a tela e a mesma: oferecer o cadastro\nde um cartao novo.\n\n## O que NAO sai daqui\n\nO id do cartao no Mercado Pago. O `id` da resposta e o nosso UUID, e e\nele que volta em `card.saved_card_id` na hora de pagar.",
+        "description": "Os cartoes que esta pessoa salvou NESTE restaurante.\n\n## Lista vazia nao quer dizer \"nunca salvou\"\n\nEla tambem e a resposta para quem salvou cartao em outra loja da\nplataforma, e para quem salvou antes de o ambiente do gateway virar de\nteste para producao. Nos tres casos a tela e a mesma: oferecer o cadastro\nde um cartao novo.\n\n## Os DOIS ids, e para que serve cada um\n\n`id` e o nosso UUID, e e ele que volta em `card.saved_card_id` na hora\nde pagar. `provider_card_id` e o id do cartao na conta do Mercado Pago\ndo lojista, e o navegador precisa dele para gerar o token da cobranca\n(`card_id` + CVV) — sem ele a tokenizacao volta `invalid card_id`.",
         "operationId": "list_saved_cards_customers_me_cards_get",
         "parameters": [
           {

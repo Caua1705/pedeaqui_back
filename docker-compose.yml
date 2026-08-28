@@ -107,15 +107,24 @@ services:
     networks:
       - n8n_default
 
-  # Rede de segurança do estorno automático. Quem estorna de verdade é o
-  # `PaymentRefundService`, na hora do cancelamento; isto aqui só volta no que
-  # ficou para trás porque o Mercado Pago não respondeu naquele minuto.
+  # As duas varreduras de dinheiro do pedido que acabou mal.
+  #
+  # A primeira é a rede de segurança do estorno automático. Quem estorna de
+  # verdade é o `PaymentRefundService`, na hora do cancelamento; ela só volta
+  # no que ficou para trás porque o Mercado Pago não respondeu naquele minuto.
+  #
+  # A segunda cancela o pedido online cuja cobrança voltou recusada e que
+  # ninguém retomou — hoje ele fica em `pending` para sempre, cobrando
+  # comissão, segurando o cupom e o cashback do cliente e travando a exclusão
+  # de conta. Ela não fala com o gateway em chamada nenhuma (`failed` está
+  # fora de PAYMENT_STATUSES_WITH_LIVE_CHARGE), então sai de graça aqui.
   #
   # CONTAINER PRÓPRIO, e não mais uma linha no `limpeza`, por causa da
   # CADÊNCIA. Aquele laço dorme 24h, e o que ele faz é apagar linha vencida —
   # um dia de atraso não custa nada. Aqui o atraso é dinheiro de cliente parado
-  # na conta do restaurante. Juntar os dois obrigaria a escolher uma cadência
-  # errada para um deles.
+  # na conta do restaurante, e um cupom que o cliente não consegue reusar por
+  # um dia inteiro. Juntar os dois obrigaria a escolher uma cadência errada
+  # para um deles.
   estorno:
     build:
       context: .
@@ -131,16 +140,21 @@ services:
     # `docker-entrypoint.sh` roda `alembic upgrade head`, e só a API migra.
     entrypoint: []
     # 15 min no caminho feliz (que é uma varredura que não acha nada e não
-    # gasta chamada nenhuma ao gateway) e 5 min depois de uma falha. O script
-    # sai com 0 mesmo deixando pedido pendente — de propósito, senão um pedido
-    # irrecuperável faria o laço girar em cima dele para sempre. Ver o
-    # docstring dele.
+    # gasta chamada nenhuma ao gateway) e 5 min depois de uma falha. Os dois
+    # scripts saem com 0 mesmo deixando pedido pendente — de propósito, senão
+    # um pedido irrecuperável faria o laço girar em cima dele para sempre. Ver
+    # o docstring deles.
+    #
+    # Encadeados com `&&` como os do `limpeza`, e é seguro pelo mesmo motivo:
+    # já que os dois só saem diferente de 0 quando o BANCO não respondeu,
+    # `&&` significa "banco fora do ar, tenta os dois em 5 min" — e nunca
+    # "o gateway falhou, então o cancelamento não roda".
     command:
       - sh
       - -c
       - |
         while true; do
-          if python scripts/estorna_pedidos_cancelados.py; then
+          if python scripts/estorna_pedidos_cancelados.py && python scripts/cancela_pedidos_sem_pagamento.py; then
             sleep 900
           else
             echo "[estorno] falhou; nova tentativa em 5 min"

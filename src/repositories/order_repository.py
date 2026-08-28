@@ -602,6 +602,77 @@ class OrderRepository:
         )
         return list(self.db.scalars(stmt).all())
 
+    def list_orders_abandoned_after_payment_failure(
+        self,
+        older_than: datetime,
+        since: datetime,
+        limit: int = 200,
+    ) -> list[Order]:
+        """Pedidos online cuja cobranca foi recusada e que ninguem retomou.
+
+        O pedido nasce ANTES da cobranca. Quando ela volta recusada, o pedido
+        fica gravado em `pending` sem pagamento nenhum, e nada o move dali: o
+        lojista nao consegue aceita-lo (`ensure_payment_allows_order_status`
+        recusa), a comanda de producao nao sai, e nenhuma limpeza apaga
+        pedido. Ele fica cobrando comissao no extrato, segurando o cupom e o
+        cashback que o cliente gastou nele, e travando a exclusao de conta
+        pela LGPD — para sempre.
+
+        As quatro condicoes tem um jeito errado de escrever, e os quatro
+        custam dinheiro:
+
+        - **`status == "pending"`, e nao `not_in(TERMINAL_ORDER_STATUSES)`.**
+          Hoje `pending` e o unico estado nao-terminal alcancavel por um
+          pedido sem pagamento, justamente porque a trava do aceite existe;
+          a igualdade e o que mantem esta varredura correta se um dia o
+          grafo mudar. Pedido que o lojista ja moveu e assunto dele.
+        - **`payment_status == "failed"`, e nunca `!= "paid"`.** E a
+          armadilha 47 inteira: o negativo varreria `pending` (pix que o
+          cliente ainda consegue pagar) e `in_review` (antifraude que pode
+          aprovar em ate 48h uteis). Cancelar um `in_review` e cancelar
+          dinheiro que esta entrando.
+        - **`payment_flow == "online"`**, porque em `on_delivery` nunca
+          houve cobranca a falhar.
+        - **`updated_at < older_than`**, a carencia. Ela existe porque
+          `failed` NAO e o fim da linha: `PAYMENT_STATUS_TRANSITIONS`
+          permite `failed -> pending/in_review/paid` e `PAYABLE_STATUSES`
+          aceita `failed` de proposito — o cliente cujo cartao foi recusado
+          tenta o segundo cartao, e e para isso que existe o
+          `previous_payment_id` da armadilha 6. Cancelar no instante da
+          recusa mataria essa tentativa, e `cancelled` e terminal: nao ha
+          volta, o cliente refaz o carrinho.
+
+        `updated_at` mede a ultima ESCRITA na linha, e nao a ultima tentativa
+        de pagamento. Quem o move nao e o `onupdate` do ORM: e o gatilho
+        `trg_orders_updated_at` (BEFORE UPDATE, no baseline), que sobrepoe
+        qualquer valor — inclusive um `UPDATE` cru com data no passado. Num
+        pedido parado as duas coisas coincidem, porque as unicas escritas sao
+        `attach_payment_intent` e `update_payment_status`; se um dia deixarem
+        de coincidir, a fonte exata e a ultima linha `payment:failed` de
+        `order_status_history`, ao preco de um subselect aqui.
+
+        Consequencia pratica de o gatilho existir, e ela custa uma tarde:
+        **um teste NAO consegue envelhecer um pedido com `UPDATE`.** A unica
+        forma de gravar `updated_at` no passado e no proprio INSERT.
+
+        Sem coluna de fila, pelo mesmo motivo de `list_orders_awaiting_refund`
+        logo acima: o conjunto pendente E a consulta, e o pedido sai dele
+        sozinho no minuto em que e cancelado.
+        """
+        stmt = (
+            select(Order)
+            .where(
+                Order.status == "pending",
+                Order.payment_flow == "online",
+                Order.payment_status == "failed",
+                Order.updated_at < older_than,
+                Order.created_at >= since,
+            )
+            .order_by(Order.created_at)
+            .limit(limit)
+        )
+        return list(self.db.scalars(stmt).all())
+
     def attach_payment_intent(
         self,
         order: Order,

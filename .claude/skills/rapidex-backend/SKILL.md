@@ -1888,3 +1888,74 @@ INVISÍVEL: confira se é isso que você quer antes de acrescentar um.
 Desenho inteiro em `docs/cupons.md`, com o que ficou registrado e não
 implementado (restrição por forma de pagamento, por horário e por item do
 cardápio) e o preço de cada um.
+
+---
+
+## 48. Pedido sem pagamento não morre sozinho — e o que ele segura não é a tela
+
+O pedido nasce ANTES da cobrança. Quando ela volta recusada, ele fica gravado
+em `pending` com `payment_status='failed'` e **nada o move dali**: o lojista
+não consegue aceitá-lo (`ensure_payment_allows_order_status` recusa), a comanda
+de produção não sai (`_production_jobs` devolve `[]`), o agente só imprime no
+`trigger_status`, e nenhuma limpeza apaga pedido — `cleanup_idempotency_keys.py`
+mexe em três tabelas e `orders` não é uma delas.
+
+A parte fácil de ver é a lista do painel poluída. **As três que custam
+dinheiro não aparecem em tela nenhuma:**
+
+- **cobra comissão.** `billable_order_conditions` exclui `cancelled`,
+  `rejected` e `payment_status='refunded'`. `pending` + `failed` passa nos
+  três, e `commission_amount` foi congelado na criação. A plataforma cobra o
+  lojista por um pedido que ninguém pagou e ninguém preparou — e o
+  faturamento que ele vê na tela sobe junto;
+- **segura o cupom e o cashback.** `create_redemption` e
+  `register_redemption` rodam dentro do `create_order`, e só voltam em
+  `REVERSING_STATUSES`. O cliente cujo cartão foi recusado perdeu o cupom
+  (a redenção `applied` conta contra `usage_limit_per_customer`) e o saldo,
+  num pedido que não existe;
+- **trava a exclusão de conta.** `_ensure_no_order_in_flight` recusa com 409
+  e a frase *"tente novamente quando eles forem concluídos"*. Este pedido
+  nunca conclui: é recusa permanente vestida de temporária, num caminho de
+  LGPD.
+
+O conserto (28/08/2026) é `scripts/cancela_pedidos_sem_pagamento.py`, no
+container `estorno`, cancelando o que passou de **30 minutos** desde a última
+tentativa. Três coisas dele parecem detalhe e não são:
+
+- **`payment_status == "failed"`, nunca `!= "paid"`.** É a armadilha 47
+  aplicada a `PAYMENT_STATUSES`: o negativo varreria `pending` (pix que o
+  cliente ainda consegue pagar) e `in_review` (antifraude que pode aprovar em
+  até 48h úteis). Cancelar um `in_review` é cancelar dinheiro entrando.
+- **A carência existe porque `failed` NÃO é o fim da linha.**
+  `PAYMENT_STATUS_TRANSITIONS` permite `failed -> pending/in_review/paid`,
+  `PAYABLE_STATUSES` aceita `failed`, e o `previous_payment_id` da armadilha 6
+  existe para a segunda cobrança nascer limpa. Cancelar no veredito trocaria
+  "recusado, tente outro cartão" por "seu pedido foi cancelado" — e
+  `cancelled` é terminal, então o cliente refaz o carrinho inteiro.
+- **A releitura dentro de `_cancel_one` não é cerimônia.**
+  `ensure_payment_allows_order_status` libera `cancelled` em QUALQUER estado
+  de pagamento, de propósito (é a saída para o pagamento que não chegou), então
+  ela não barra a corrida do cliente que voltou e pagou entre o `SELECT` e a
+  escrita. Quem barra é a reconferência.
+
+**E o buraco que a varredura escancarou, que é o mais caro dos dois.**
+`start_online_payment` conferia `payment_flow` e `payment_status`, e **nunca
+olhava `order.status`**. Um pedido CANCELADO com a cobrança em `failed`
+continua casando com `PAYABLE_STATUSES` — então o cliente que voltasse ao link
+criava, e pagava, uma cobrança por um pedido que ninguém ia produzir. O
+dinheiro voltava pelo webhook (`_refund_payment_on_terminal_order`), mas **a
+tarifa do gateway não volta**: R$ 3,58 no cartão, que o lojista come, mais um
+cliente cobrado e estornado sem entender por quê. Já valia para o cancelamento
+pelo lojista; a varredura só transformou raro em rotina.
+
+A trava (`order.status in TERMINAL_ORDER_STATUSES`) fica ANTES do I/O, e **de
+propósito não se repete depois dele.** A assimetria é o ponto: a cobrança já
+existe no gateway, e sair sem `attach_payment_intent` a deixa órfã — sem
+`provider_payment_id` gravado, nem o estorno automático nem a varredura
+conseguem achá-la, e o dinheiro do cliente fica invisível deste lado.
+Gravando, o pedido cai em `list_orders_awaiting_refund` e a máquina que já
+existe devolve sozinha.
+
+Ficou de fora, e é decisão: **`payment_status='pending'` sem cobrança
+criada** — o cliente que fechou o app antes de clicar em pagar. É o "já que
+estou aqui" que cancelaria pix ainda pagável, e tem vida útil diferente.

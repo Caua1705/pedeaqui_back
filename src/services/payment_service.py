@@ -178,6 +178,24 @@ class PaymentService:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Pedido não encontrado"
             )
+        # Pedido que ja acabou nao aceita cobranca nova, e esta linha custou
+        # dinheiro de verdade antes de existir. `payment_status` sozinho nao
+        # responde por ela: um pedido CANCELADO com a cobranca em `failed`
+        # continua casando com PAYABLE_STATUSES, entao o cliente que voltasse
+        # ao link do pedido criava uma cobranca — e pagava — por um pedido
+        # que ninguem ia produzir. O dinheiro voltava depois, pelo webhook
+        # (`_refund_payment_on_terminal_order`), mas a TARIFA do gateway nao
+        # volta: R$ 3,58 no cartao, que o lojista come, mais um cliente
+        # cobrado e estornado sem entender por que.
+        #
+        # A varredura `cancela_pedidos_sem_pagamento.py` transformou isso de
+        # raro em rotina — todo pedido abandonado depois de uma recusa passa
+        # a ser um pedido cancelado com `payment_status='failed'`.
+        if order.status in TERMINAL_ORDER_STATUSES:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Pedido em '{order.status}' não recebe pagamento.",
+            )
         if order.payment_flow != "online":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -262,6 +280,18 @@ class PaymentService:
                 )
             # Reconferido depois do I/O: um webhook pode ter chegado
             # enquanto esperavamos o gateway responder.
+            #
+            # A trava de pedido TERMINAL de propósito NAO se repete aqui, e a
+            # assimetria e o ponto: a cobranca ja existe no gateway, e sair
+            # sem `attach_payment_intent` a deixa orfa — sem
+            # `provider_payment_id` gravado, nem o estorno automatico nem a
+            # varredura conseguem acha-la, e o dinheiro do cliente fica
+            # invisivel deste lado. Gravando, o pedido cai em
+            # `list_orders_awaiting_refund` (terminal + cobranca viva) e a
+            # maquina que ja existe devolve o dinheiro sozinha. A corrida que
+            # isto cobre e o cancelamento acontecendo DURANTE a chamada ao
+            # gateway, de segundos; o caso comum — cliente voltando ao link
+            # de um pedido ja cancelado — morre na trava la de cima.
             if order.payment_status not in PAYABLE_STATUSES:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,

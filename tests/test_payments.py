@@ -467,6 +467,59 @@ class StartPaymentTests(unittest.TestCase):
         self.assertEqual(order.provider_payment_id, "mp-2")
         self.assertEqual(order.payment_status, "pending")
 
+    def test_cancelled_order_does_not_accept_a_new_charge(self):
+        # `payment_status` sozinho nao responde por isto: `failed` esta em
+        # PAYABLE_STATUSES de proposito (a segunda tentativa e o desenho), e
+        # o cancelamento nao o move. Sem a trava por `order.status`, o
+        # cliente que voltasse ao link de um pedido ja cancelado criava — e
+        # PAGAVA — uma cobranca por um pedido que ninguem ia produzir. O
+        # dinheiro voltaria pelo webhook, mas a tarifa do gateway nao volta.
+        order = make_order(status="cancelled", payment_status="failed")
+        service = build_service(order)
+
+        with self.assertRaises(HTTPException) as raised:
+            service.start_online_payment("junior", "token-do-pedido")
+
+        self.assertEqual(raised.exception.status_code, 409)
+
+    def test_rejected_order_does_not_accept_a_new_charge_either(self):
+        # A outra ponta: o lojista recusou. Mesmo estado final, mesmo
+        # estrago — a trava le TERMINAL_ORDER_STATUSES, nao um literal.
+        order = make_order(status="rejected", payment_status="pending")
+        service = build_service(order)
+
+        with self.assertRaises(HTTPException) as raised:
+            service.start_online_payment("junior", "token-do-pedido")
+
+        self.assertEqual(raised.exception.status_code, 409)
+
+    def test_the_gateway_is_not_called_for_a_cancelled_order(self):
+        # A trava roda ANTES do I/O, e e isso que a torna util: recusar
+        # depois da chamada deixaria a cobranca criada no gateway sem
+        # `provider_payment_id` gravado deste lado — dinheiro invisivel para
+        # o estorno automatico e para a varredura.
+        order = make_order(status="cancelled", payment_status="failed")
+        service = build_service(order)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "sandbox"), patch(
+            "src.services.payment_service.create_payment"
+        ) as mocked_create_payment:
+            with self.assertRaises(HTTPException):
+                service.start_online_payment("junior", "token-do-pedido")
+
+        mocked_create_payment.assert_not_called()
+
+    def test_a_live_order_still_pays_normally(self):
+        # O contrapeso: a trava e sobre estado FINAL, e um pedido aceito e
+        # esperando o pix continua sendo cobravel.
+        order = make_order(status="accepted")
+        service = build_service(order)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "sandbox"):
+            response = service.start_online_payment("junior", "token-do-pedido")
+
+        self.assertEqual(response.payment_status, "pending")
+
     def test_payer_email_is_not_resolved_for_the_sandbox_provider(self):
         # O sandbox nao usa e-mail nenhum: nao ha por que gastar uma consulta
         # ao customer_repository so para descartar o resultado.

@@ -964,6 +964,227 @@ class StartPaymentErrorTests(unittest.TestCase):
         self.assertIn("code=gateway_unavailable", logged)
         self.assertIn("internal_error", logged)
 
+    def test_the_order_number_reaches_the_gateway_call_for_the_log(self):
+        """A linha que traz o texto do Mercado Pago e escrita dentro de
+        `_call_mercadopago`, e ela so consegue carimbar o pedido se ele
+        chegar ate `create_payment`.
+
+        Quem investiga um 502 chega com "#10973" na mao, nunca com o
+        `order_id` — e ate 28/08/2026 nenhuma das duas linhas da falha citava
+        pedido nenhum."""
+        order = make_order(order_number=10973)
+        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        service = build_service(order, credential=credential)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment"
+        ) as create:
+            create.return_value = SimpleNamespace(
+                provider="mercadopago",
+                provider_payment_id="mp-1",
+                payment_status="pending",
+                checkout_url=None,
+                qr_code=None,
+                raw_status="pending",
+                raw_status_detail=None,
+            )
+            service.start_online_payment("junior", "token-do-pedido")
+
+        self.assertEqual(create.call_args.kwargs["order_number"], 10973)
+
+    def test_the_failure_log_carries_the_order_number(self):
+        order = make_order(order_number=10973)
+        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        service = build_service(order, credential=credential)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment",
+            side_effect=PaymentGatewayError(
+                "Mercado Pago recusou a requisicao (status 400, code=2062)",
+                provider_error_code="2062",
+            ),
+        ):
+            with self.assertLogs("uvicorn.error", level="WARNING") as captured:
+                with self.assertRaises(HTTPException):
+                    service.start_online_payment("junior", "token-do-pedido")
+
+        self.assertIn("pedido=#10973", "\n".join(captured.output))
+
+
+class CardMinimumAmountTests(unittest.TestCase):
+    """O pudim de R$ 0,01.
+
+    O Mercado Pago recusava com `Invalid transaction_amount` (4037), e isso
+    virava um 502 dizendo "o provedor recusou esta cobranca" — verdadeiro e
+    inutil: o cliente trocava de cartao, e nenhum ia funcionar.
+    """
+
+    def _service(self, total):
+        order = make_order(
+            total=total, payment_method="credit_card", order_number=10973, customer_id=uuid.uuid4()
+        )
+        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        customer = SimpleNamespace(id=order.customer_id, email="cliente@exemplo.com")
+        service = build_service(order, credential=credential, customer=customer)
+        return service, customer
+
+    def _card_payload(self):
+        from src.schemas.payment_schema import CardPaymentPayload, StartPaymentRequest
+
+        return StartPaymentRequest(
+            card=CardPaymentPayload(token="token-do-navegador", payment_method_id="master")
+        )
+
+    def test_an_order_below_the_minimum_is_refused_before_the_gateway(self):
+        service, customer = self._service(Decimal("0.01"))
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment"
+        ) as create:
+            with self.assertRaises(HTTPException) as raised:
+                service.start_online_payment(
+                    "junior", "token-do-pedido", self._card_payload(), customer
+                )
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertEqual(raised.exception.detail["code"], "amount_below_minimum")
+        self.assertFalse(raised.exception.detail["retryable"])
+        # O ponto todo: o gateway nao chega a ser chamado.
+        create.assert_not_called()
+
+    def test_the_message_says_the_minimum_and_the_way_out(self):
+        service, customer = self._service(Decimal("0.01"))
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment"
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                service.start_online_payment(
+                    "junior", "token-do-pedido", self._card_payload(), customer
+                )
+
+        message = raised.exception.detail["message"]
+        self.assertIn("R$ 0,50", message)
+        self.assertIn("Pix", message)
+
+    def test_exactly_the_minimum_still_goes_through(self):
+        """O piso e inclusivo. `>` no lugar de `>=` recusaria o pedido de
+        R$ 0,50, que o Mercado Pago aceita."""
+        service, customer = self._service(Decimal("0.50"))
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment"
+        ) as create:
+            create.return_value = SimpleNamespace(
+                provider="mercadopago",
+                provider_payment_id="mp-1",
+                payment_status="paid",
+                checkout_url=None,
+                qr_code=None,
+                raw_status="approved",
+                raw_status_detail="accredited",
+            )
+            service.start_online_payment(
+                "junior", "token-do-pedido", self._card_payload(), customer
+            )
+
+        create.assert_called_once()
+
+    def test_pix_of_one_cent_is_not_touched(self):
+        """O piso e do CARTAO. Um piso inventado para o pix recusaria cobranca
+        que o Mercado Pago aceita hoje."""
+        order = make_order(total=Decimal("0.01"), payment_method="pix")
+        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        service = build_service(order, credential=credential)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment"
+        ) as create:
+            create.return_value = SimpleNamespace(
+                provider="mercadopago",
+                provider_payment_id="mp-1",
+                payment_status="pending",
+                checkout_url=None,
+                qr_code="qr",
+                raw_status="pending",
+                raw_status_detail=None,
+            )
+            service.start_online_payment("junior", "token-do-pedido")
+
+        create.assert_called_once()
+
+
+class ProviderErrorCodeMessageTests(unittest.TestCase):
+    """A tradução dos códigos que o cliente pode ver.
+
+    O `provider_error_code` sempre atravessou para a resposta; o que faltava
+    era a MENSAGEM mudar junto com ele. Os textos originais são os da tabela
+    publicada pelo próprio Mercado Pago (cart-magento2,
+    `Core/Helper/Response.php`).
+    """
+
+    def _message_for(self, provider_error_code):
+        order = make_order()
+        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        service = build_service(order, credential=credential)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment",
+            side_effect=PaymentGatewayError(
+                f"Mercado Pago recusou a requisicao (status 400, code={provider_error_code})",
+                provider_error_code=provider_error_code,
+            ),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                service.start_online_payment("junior", "token-do-pedido")
+        return raised.exception.detail
+
+    def test_4037_says_it_is_the_amount_not_the_card(self):
+        detail = self._message_for("4037")
+
+        self.assertEqual(detail["provider_error_code"], "4037")
+        self.assertIn("R$ 0,50", detail["message"])
+        self.assertIn("Pix", detail["message"])
+
+    def test_2006_asks_for_the_card_again_not_for_another_one(self):
+        # Token de uso unico que venceu com a tela aberta: o cartao esta bom.
+        self.assertIn("expiraram", self._message_for("2006")["message"])
+
+    def test_2002_points_at_the_saved_card(self):
+        self.assertIn("cartão salvo", self._message_for("2002")["message"])
+
+    def test_an_unknown_code_falls_back_to_the_generic_message(self):
+        """Traduzir tudo trocaria uma frase inutil por varias frases inuteis:
+        codigo que nao muda o que a pessoa faz fica na generica."""
+        detail = self._message_for("9999")
+
+        self.assertIn("recusou esta cobrança", detail["message"])
+        # E o codigo continua saindo, para citar num chamado de suporte.
+        self.assertEqual(detail["provider_error_code"], "9999")
+
+    def test_a_charge_refused_without_any_code_still_answers(self):
+        order = make_order()
+        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        service = build_service(order, credential=credential)
+
+        with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
+            "src.services.payment_service.create_payment",
+            side_effect=PaymentGatewayError("Mercado Pago recusou a requisicao"),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                service.start_online_payment("junior", "token-do-pedido")
+
+        self.assertIn("recusou esta cobrança", raised.exception.detail["message"])
+        self.assertIsNone(raised.exception.detail["provider_error_code"])
+
+    def test_the_translated_message_never_carries_the_gateway_own_text(self):
+        """A frase e NOSSA. Ecoar o texto deles traria de volta o e-mail do
+        pagador para dentro da resposta — o motivo de ele ficar so no log."""
+        detail = self._message_for("4037")
+
+        self.assertNotIn("Mercado Pago", detail["message"])
+        self.assertNotIn("transaction_amount", detail["message"])
+
 
 class WebhookTests(unittest.TestCase):
     def setUp(self):

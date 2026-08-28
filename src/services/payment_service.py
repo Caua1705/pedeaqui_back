@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from src.core.config import settings
 from src.integrations.payment_gateway import (
+    MERCADOPAGO_CARD_MIN_AMOUNT,
     MERCADOPAGO_PROVIDER,
     CardPaymentInput,
     PaymentGatewayCredentialError,
@@ -111,6 +112,88 @@ _SAVED_CARD_NOT_FOUND_MESSAGE = (
     "Este cartão não está mais salvo na sua conta. "
     "Escolha outro cartão ou cadastre novamente."
 )
+_MINIMO_DO_CARTAO_EM_REAIS = f"{MERCADOPAGO_CARD_MIN_AMOUNT:.2f}".replace(".", ",")
+_AMOUNT_BELOW_MINIMUM_MESSAGE = (
+    f"Pedidos abaixo de R$ {_MINIMO_DO_CARTAO_EM_REAIS} não podem ser pagos com cartão. "
+    "Você pode pagar com Pix ou na entrega."
+)
+
+# Mensagem propria para os codigos de erro do Mercado Pago que o CLIENTE pode
+# ver, no mesmo espirito do que o front ja fazia com o `status_detail`.
+#
+# O `provider_error_code` sempre atravessou para a resposta, mas sozinho ele
+# so serve para citar num chamado — quem esta com o pedido fechado le a
+# mensagem, e ate 28/08/2026 ela era a mesma frase generica para todos. Foi
+# assim que um pudim de R$ 0,01 virou "o provedor recusou esta cobranca":
+# verdade, e inutil.
+#
+# A lista e CURTA de proposito, e o criterio das duas colunas nao e o mesmo:
+#
+#   1. o codigo tem que ser alcancavel pelo corpo que NOS montamos
+#      (_mercadopago_body). "transaction_amount nao pode ser nulo" nao entra:
+#      a coluna e NOT NULL e nao ha caminho ate ele;
+#   2. a mensagem tem que mudar o que a PESSOA faz a seguir. Codigo que so
+#      muda o diagnostico interno fica de fora e cai na frase generica, que
+#      continua certa para ele — traduzir tudo trocaria uma frase inutil por
+#      varias frases inuteis.
+#
+# Os textos originais sao os da tabela publicada pelo proprio Mercado Pago em
+# mercadopago/cart-magento2, `src/MercadoPago/Core/Helper/Response.php`
+# (PAYMENT_CREATION_ERRORS). Codigo desconhecido cai no _PAYMENT_REJECTED_MESSAGE.
+#
+# `retryable` NAO e decidido aqui, e isso e deliberado: ele sai do tipo da
+# excecao (a familia de PaymentGatewayError), que e o que de fato diz se
+# repetir a MESMA chamada tem chance. Deixar um codigo virar o `retryable`
+# faria a mesma pergunta ter duas respostas em lugares diferentes.
+_MERCADOPAGO_REJECTION_MESSAGES = {
+    # "Already posted the same request in the last minute."
+    "2001": (
+        "Já recebemos esta tentativa de pagamento. "
+        "Aguarde alguns instantes antes de tentar de novo."
+    ),
+    # "Customer not found." — o `payer.id` do cartao salvo nao existe nesta
+    # conta do Mercado Pago (loja trocou de credencial, cadastro removido la).
+    "2002": (
+        "Este cartão salvo não vale mais neste restaurante. "
+        "Escolha outro cartão ou cadastre novamente."
+    ),
+    # "Card Token not found." — o token do navegador tem vida curta e e de
+    # uso unico; tela aberta ha muito tempo cai aqui.
+    "2006": (
+        "Os dados do cartão expiraram antes da cobrança. "
+        "Preencha o cartão novamente."
+    ),
+    # "The customer can't be equal to the collector."
+    "2060": (
+        "Não é possível pagar com um cartão da mesma conta que recebe o pagamento. "
+        "Use outro cartão."
+    ),
+    # "Invalid card_id for this payment_method_id."
+    "3026": (
+        "Não foi possível usar este cartão salvo. "
+        "Escolha outro cartão ou cadastre novamente."
+    ),
+    # "Invalid payment_method_id." — a bandeira nao bate com o cartao.
+    "3028": (
+        "A bandeira deste cartão não foi reconhecida. "
+        "Confira os dados ou use outro cartão."
+    ),
+    # "Invalid transaction_amount." — o caso do pedido de R$ 0,01. Continua
+    # aqui mesmo com a trava de _ensure_amount_is_chargeable_on_card: ela usa
+    # um piso nosso, e quem manda no piso e eles (ver MERCADOPAGO_CARD_MIN_AMOUNT).
+    "4037": (
+        f"O valor deste pedido não pode ser cobrado no cartão "
+        f"(o mínimo é R$ {_MINIMO_DO_CARTAO_EM_REAIS}). "
+        "Você pode pagar com Pix ou na entrega."
+    ),
+}
+
+
+def _rejection_message(provider_error_code: str | None) -> str:
+    """A frase que o cliente le quando o gateway recusou a cobranca."""
+    if provider_error_code is None:
+        return _PAYMENT_REJECTED_MESSAGE
+    return _MERCADOPAGO_REJECTION_MESSAGES.get(provider_error_code, _PAYMENT_REJECTED_MESSAGE)
 
 
 class PaymentService:
@@ -239,8 +322,9 @@ class PaymentService:
         # Cartao e resolvido ANTES do commit e antes do gateway: recusar aqui
         # custa uma resposta, recusar depois custa uma cobranca criada.
         card = self._resolve_card_input(
-            payment_method, payload, current_customer, restaurant_id
+            payment_method, payload, current_customer, restaurant_id, order_number
         )
+        self._ensure_amount_is_chargeable_on_card(card, amount, order_number)
 
         access_token = None
         payer_email = None
@@ -262,6 +346,7 @@ class PaymentService:
             order_id=order_id,
             amount=amount,
             payment_method=payment_method,
+            order_number=order_number,
             description=f"Pedido #{order_number}",
             access_token=access_token,
             payer_email=payer_email,
@@ -349,6 +434,7 @@ class PaymentService:
         payload: StartPaymentRequest | None,
         current_customer: Customer | None,
         restaurant_id: uuid.UUID,
+        order_number: int | None = None,
     ) -> CardPaymentInput | None:
         """Monta o que so o cartao precisa, ou recusa o pedido de cobranca.
 
@@ -368,6 +454,7 @@ class PaymentService:
                 message=_LOGIN_REQUIRED_MESSAGE,
                 retryable=False,
                 cause=ValueError("cobranca de cartao sem cliente autenticado"),
+                order_number=order_number,
             )
         if payload is None or payload.card is None:
             raise self._payment_error(
@@ -376,6 +463,7 @@ class PaymentService:
                 message=_CARD_TOKEN_REQUIRED_MESSAGE,
                 retryable=False,
                 cause=ValueError("cobranca de cartao sem token do navegador"),
+                order_number=order_number,
             )
 
         card = payload.card
@@ -388,7 +476,9 @@ class PaymentService:
                 payer_document_number=card.payer_document_number,
             )
 
-        saved = self._resolve_saved_card(card.saved_card_id, current_customer, restaurant_id)
+        saved = self._resolve_saved_card(
+            card.saved_card_id, current_customer, restaurant_id, order_number
+        )
         return CardPaymentInput(
             token=card.token,
             # A bandeira sai do que foi GRAVADO no cadastro, e nao do corpo:
@@ -401,11 +491,62 @@ class PaymentService:
             provider_customer_id=saved.profile.provider_customer_id,
         )
 
+    def _ensure_amount_is_chargeable_on_card(
+        self,
+        card: CardPaymentInput | None,
+        amount,
+        order_number: int,
+    ) -> None:
+        """Recusa aqui o pedido abaixo do piso que o gateway cobra no cartao.
+
+        **O caso concreto: um pudim de R$ 0,01.** O Mercado Pago recusou com
+        `400 Invalid transaction_amount` (codigo 4037), o que virava um 502
+        `payment_rejected` com a frase generica "o provedor recusou esta
+        cobranca" — verdadeira e inutil, porque nao diz que o problema e o
+        VALOR e nao o cartao. O cliente redigitava o cartao, tentava outro, e
+        nenhum ia funcionar.
+
+        Recusar antes de chamar o gateway compra duas coisas que a traducao
+        do 4037 sozinha nao compra: uma chamada externa a menos no caminho de
+        um desfecho ja conhecido, e um codigo proprio (`amount_below_minimum`)
+        que o front liga ao botao certo — "pagar com Pix" — em vez de a um
+        "tentar de novo" que nunca vai dar.
+
+        **Nao substitui a traducao do 4037**, e as duas convivem de proposito:
+        o piso e deles e pode subir sem aviso (ver MERCADOPAGO_CARD_MIN_AMOUNT).
+        Quando subir, esta trava fica permissiva demais e a recusa volta a
+        acontecer la — com mensagem propria, e nao com a frase generica de
+        antes.
+
+        Pix nao passa por aqui (`card is None`): a cobranca de R$ 0,01 em pix
+        o Mercado Pago aceita, e um piso inventado por nos recusaria pedido
+        que hoje funciona.
+        """
+        if card is None:
+            return
+        if settings.PAYMENT_PROVIDER != MERCADOPAGO_PROVIDER:
+            return
+        if to_decimal(amount) >= MERCADOPAGO_CARD_MIN_AMOUNT:
+            return
+
+        raise self._payment_error(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code=PaymentErrorCode.AMOUNT_BELOW_MINIMUM,
+            message=_AMOUNT_BELOW_MINIMUM_MESSAGE,
+            retryable=False,
+            cause=ValueError(
+                f"total {to_decimal(amount)} abaixo do minimo do cartao "
+                f"({MERCADOPAGO_CARD_MIN_AMOUNT})"
+            ),
+            order_number=order_number,
+        )
+
     def _resolve_saved_card(
         self,
         saved_card_id: uuid.UUID,
         current_customer: Customer,
         restaurant_id: uuid.UUID,
+        order_number: int | None = None,
     ):
         """O cartao salvo desta pessoa NESTE restaurante, ou 404.
 
@@ -431,6 +572,7 @@ class PaymentService:
                 message=_SAVED_CARD_NOT_FOUND_MESSAGE,
                 retryable=False,
                 cause=ValueError("cartao salvo inexistente para este cliente/restaurante"),
+                order_number=order_number,
             )
         # O ambiente do perfil nao e conferido aqui de proposito: virar
         # MERCADOPAGO_ENVIRONMENT muda a conta do gateway, e o perfil do
@@ -811,6 +953,7 @@ class PaymentService:
         order_id: uuid.UUID,
         amount,
         payment_method: str | None,
+        order_number: int,
         description: str,
         access_token: str | None,
         payer_email: str | None = None,
@@ -825,6 +968,7 @@ class PaymentService:
                 amount=amount,
                 payment_method=payment_method or "other",
                 description=description,
+                order_number=order_number,
                 access_token=access_token,
                 payer_email=payer_email,
                 previous_payment_id=previous_payment_id,
@@ -842,6 +986,7 @@ class PaymentService:
                 message=_GATEWAY_UNAVAILABLE_MESSAGE,
                 retryable=True,
                 cause=exc,
+                order_number=order_number,
             ) from exc
         except PaymentGatewayCredentialError as exc:
             # Token invalido, revogado ou de outra conta. Insistir nao troca
@@ -852,18 +997,25 @@ class PaymentService:
                 message=_PAYMENT_UNAVAILABLE_MESSAGE,
                 retryable=False,
                 cause=exc,
+                order_number=order_number,
             ) from exc
         except PaymentGatewayError as exc:
             # 400/422: o gateway entendeu e RECUSOU a cobranca. 502 e nao
             # 503 — 503 diz "volte depois", e aqui voltar depois com a mesma
             # cobranca da no mesmo.
+            #
+            # A MENSAGEM sai do codigo deles quando ele e um dos que o cliente
+            # consegue agir a respeito; nos outros continua a frase generica.
+            # O `code` da resposta NAO muda por isso: payment_rejected e o
+            # desfecho, e o front ja o consome — quem detalha e a mensagem.
             raise self._payment_error(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 code=PaymentErrorCode.PAYMENT_REJECTED,
-                message=_PAYMENT_REJECTED_MESSAGE,
+                message=_rejection_message(exc.provider_error_code),
                 retryable=False,
                 cause=exc,
                 provider_error_code=exc.provider_error_code,
+                order_number=order_number,
             ) from exc
         except (PaymentProviderNotConfiguredError, PaymentProviderUnknownError) as exc:
             # Restaurante sem credencial para o ambiente ativo, metodo nao
@@ -876,6 +1028,7 @@ class PaymentService:
                 message=_PAYMENT_UNAVAILABLE_MESSAGE,
                 retryable=False,
                 cause=exc,
+                order_number=order_number,
             ) from exc
 
     def _payment_error(
@@ -887,6 +1040,7 @@ class PaymentService:
         retryable: bool,
         cause: Exception,
         provider_error_code: str | None = None,
+        order_number: int | None = None,
     ) -> HTTPException:
         """Monta o erro que o cliente recebe e manda o motivo para o log.
 
@@ -895,9 +1049,30 @@ class PaymentService:
         a mensagem crua do gateway ainda pode ecoar o e-mail de quem pagou.
         O que atravessa para o cliente e o codigo, a mensagem escrita para
         ele e o `retryable`.
+
+        **`pedido=#N` abre a linha porque sem ele o log nao responde a
+        pergunta que sempre se faz dele.** Quem investiga chega com o numero
+        do pedido na mao — e do lojista, do cliente ou do painel que ele
+        vem — e ate 28/08/2026 nao havia por onde entrar: nem esta linha nem
+        a do gateway (`[Pagamento][mercadopago] erro ...`, que e a que traz o
+        `message` e o `cause` que o Mercado Pago mandou) citavam pedido
+        nenhum. Descobrir o que eles responderam para UM pedido virava
+        correlacao por horario, num log onde toda cobranca daquele minuto
+        parece igual.
+
+        O numero e o do lojista (`orders.order_number`), e nao o `id`, de
+        proposito: o `id` ninguem tem na mao.
+
+        Esta linha **nao substitui** a do gateway — ela nao carrega o texto
+        deles, e nao deve carregar (ver _call_mercadopago). As duas e que se
+        carimbam com o mesmo `pedido=#N`, e e isso que faz um `grep` unico
+        devolver a chamada e o desfecho dela sem depender de as linhas
+        sairem coladas — o que, com varias cobrancas em voo, elas nao saem.
         """
         logger.warning(
-            "[Pagamento] cobranca nao criada code=%s retryable=%s provider_code=%s motivo=%s",
+            "[Pagamento] cobranca nao criada pedido=#%s code=%s retryable=%s "
+            "provider_code=%s motivo=%s",
+            order_number if order_number is not None else "-",
             code.value,
             retryable,
             provider_error_code or "-",

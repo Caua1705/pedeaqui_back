@@ -33,6 +33,12 @@ class PaymentErrorCode(str, Enum):
     # removido entre a tela de checkout e o clique em pagar. O front tem que
     # recarregar a lista de cartoes — insistir com o mesmo id nao muda nada.
     SAVED_CARD_NOT_FOUND = "saved_card_not_found"
+    # Total do pedido abaixo do piso que o gateway cobra no cartao. Nao e
+    # falha de ninguem e nao adianta tentar de novo: o caminho e outro meio
+    # de pagamento. Existe separado de PAYMENT_REJECTED porque o desfecho e
+    # sabido ANTES de falar com o gateway — ver
+    # PaymentService._ensure_amount_is_chargeable_on_card.
+    AMOUNT_BELOW_MINIMUM = "amount_below_minimum"
 
 
 class CardPaymentPayload(BaseModel):

@@ -1959,3 +1959,71 @@ existe devolve sozinha.
 Ficou de fora, e é decisão: **`payment_status='pending'` sem cobrança
 criada** — o cliente que fechou o app antes de clicar em pagar. É o "já que
 estou aqui" que cancelaria pix ainda pagável, e tem vida útil diferente.
+
+---
+
+## 49. O cartão tem PISO, e a recusa por valor chegava vestida de recusa de cartão
+
+28/08/2026, Júnior da Picanha: um pedido de **R$ 0,01** (um pudim) com
+cartão salvo. O Mercado Pago respondeu `400 Invalid transaction_amount`,
+código **4037** — abaixo do `min_allowed_amount` deles, que no Brasil é
+**R$ 0,50** para as bandeiras de crédito (`GET /v1/payment_methods`).
+
+Do lado de cá isso virava `502 payment_rejected` com a frase genérica *"o
+provedor de pagamento recusou esta cobrança"*. Verdadeira, e inútil: ela não
+diz que o problema é o VALOR e não o cartão. **O cliente redigita o cartão,
+tenta outro, e nenhum vai funcionar** — não há cartão no mundo que pague
+R$ 0,01 ali.
+
+Três coisas do conserto que não são intercambiáveis:
+
+- **A trava (`_ensure_amount_is_chargeable_on_card`) é do CARTÃO, não do
+  pedido.** Pix de R$ 0,01 o Mercado Pago aceita, e um piso inventado para
+  ele recusaria cobrança que hoje funciona. Por isso ela sai cedo quando
+  `card is None`.
+- **O piso é inclusivo** (`>=`). `>` recusaria o pedido de R$ 0,50, que eles
+  aceitam.
+- **A trava NÃO substitui a tradução do 4037, e é por isso que as duas
+  existem.** `MERCADOPAGO_CARD_MIN_AMOUNT` é uma cópia nossa de um número
+  que é deles e pode subir sem aviso. Quando subir, a trava fica permissiva
+  demais e a recusa volta a acontecer no gateway — só que agora com mensagem
+  própria em vez da genérica. **Número desatualizado degrada a mensagem, não
+  a correção**, e é isso que torna aceitável não consultar
+  `/v1/payment_methods` a cada cobrança.
+
+**E a metade que vale além de valor: `provider_error_code` sozinho não é
+mensagem.** Ele sempre atravessou para a resposta, e serve para citar num
+chamado — não para a pessoa que está com o pedido fechado ler. Quem fala com
+ela é `message`, e ela era a MESMA frase para todos os códigos.
+`_MERCADOPAGO_REJECTION_MESSAGES` traduz os poucos que mudam **o que a pessoa
+faz a seguir** (4037 valor, 2006 token vencido, 2002/3026 cartão salvo, 3028
+bandeira, 2060 cartão da própria conta, 2001 tentativa repetida). Os textos
+originais saem da tabela publicada pelo próprio Mercado Pago em
+`mercadopago/cart-magento2`, `src/MercadoPago/Core/Helper/Response.php`.
+
+Dois critérios que a lista respeita, e que valem para a próxima linha nela:
+
+- **código alcançável pelo corpo que NÓS montamos.** "transaction_amount não
+  pode ser nulo" não entra: a coluna é `NOT NULL` e não há caminho até ele.
+- **mensagem que muda a ação.** Código que só muda o diagnóstico interno fica
+  de fora e cai na genérica, que continua certa para ele — traduzir tudo
+  troca uma frase inútil por várias frases inúteis.
+
+**`retryable` continua saindo do TIPO da exceção, nunca do código.** Ele
+responde "repetir a mesma chamada tem chance?", e essa pergunta já tem dono
+(a família de `PaymentGatewayError`, armadilha 39). Deixar um código do
+Mercado Pago virar `retryable` faria a mesma pergunta ter duas respostas em
+lugares diferentes.
+
+Correlato de investigação: foi este caso que mostrou que **nenhuma das duas
+linhas de log da falha citava pedido** — nem a nossa (`[Pagamento] cobranca
+nao criada`) nem a do gateway (`[Pagamento][mercadopago] erro`, que é a que
+traz `message` e `cause` deles). "Veja o log desse pedido" só se resolvia
+correlacionando por horário. As duas passaram a carimbar `pedido=#N`, e a
+linha de SUCESSO também — porque a primeira pergunta de todo 502 é "a
+cobrança chegou a sair daqui?", e ela se responde pela ausência da linha.
+
+E uma pista que economiza a investigação inteira: **um 502 nosso sai com os
+cabeçalhos de CORS** (o `CORSMiddleware` é a camada mais externa, armadilha
+22) e com corpo JSON legível. 502 que o navegador reporta como falta de CORS
+não é nosso — é o Traefik, e a aplicação não respondeu.

@@ -122,6 +122,23 @@ BRANCH_AVAILABILITY_RATE_LIMIT = "20/minute;200/hour"
 # uma tabela alem de gastar a cota do Google.
 DELIVERY_ESTIMATE_RATE_LIMIT = "20/minute;200/hour"
 
+# Resgate de codigo de cupom no Clube. **E uma rota de ADIVINHACAO**, e o
+# limite e a defesa principal: sem ele, alguem varre "PROMO1", "PROMO2",
+# "VOLTA10" ate acertar um codigo privado que existe, e o desconto que o
+# lojista mandou para dez clientes por WhatsApp vira desconto para a
+# internet inteira.
+#
+# A segunda metade da defesa esta no service, e uma sozinha nao basta: a
+# recusa e SEMPRE a mesma frase e o mesmo 404, entao acertar o codigo de uma
+# campanha que nao serve para aquela pessoa nao se distingue de errar o
+# codigo (armadilha 18). O limite encarece a varredura; a resposta uniforme
+# faz o que ela devolve nao valer nada.
+#
+# Mais apertado que o cadastro porque digitar codigo de cupom e uma coisa que
+# se faz uma vez, quando chega a mensagem — nao ha uso legitimo que precise
+# de cinco por minuto, e muito menos de trinta por hora.
+COUPON_CLAIM_RATE_LIMIT = "5/minute;30/hour"
+
 # Cadastro. Uma pessoa cria uma conta; um IP compartilhado (wi-fi do salao,
 # CGNAT de operadora movel) pode legitimamente criar algumas. Vinte por hora
 # cobre isso com folga e ainda assim fecha a porta de inflar a base — e cada

@@ -129,18 +129,23 @@ def build_service(*, saldo=Decimal("0"), coupon_discount=None, ordem=None):
     service.customer_repository = SimpleNamespace(
         lock_customer=lambda customer_id: (ordem is not None) and ordem.append("cliente")
     )
-    if coupon_discount is not None:
-        cupom = SimpleNamespace(id=uuid.uuid4(), code="SAVE", discount_type="fixed")
+    cupom = SimpleNamespace(id=uuid.uuid4(), code="SAVE", discount_type="fixed")
 
-        def travar_cupom(**kwargs):
-            if ordem is not None:
-                ordem.append("cupom")
-            return cupom, coupon_discount
+    def travar_cupom(**kwargs):
+        if ordem is not None:
+            ordem.append("cupom")
+        return cupom, coupon_discount
 
-        service.coupon_service = SimpleNamespace(
-            lock_and_validate_for_order=travar_cupom,
-            create_redemption=lambda *args, **kwargs: None,
-        )
+    # O dublê é ligado SEMPRE, e não só quando o teste tem cupom. Desde a
+    # auto-aplicação (28/08/2026), `create_order` chama o CouponService
+    # mesmo sem cupom no corpo — para descobrir se há campanha automática —,
+    # e o service de verdade sobre um `FakeDb` estoura num `scalars` que
+    # nada aqui montou, longe de onde este dublê é lido.
+    service.coupon_service = SimpleNamespace(
+        lock_and_validate_for_order=travar_cupom,
+        auto_apply_for_order=lambda **kwargs: None,
+        create_redemption=lambda *args, **kwargs: None,
+    )
 
     body = {
         "branch_id": str(branch.id),

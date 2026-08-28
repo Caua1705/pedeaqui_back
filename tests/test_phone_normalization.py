@@ -178,6 +178,12 @@ def build_order_service(db, restaurant_id, phone=DIGITS):
         list_active_by_ids=lambda restaurant, ids: [product]
     )
     service.order_repository = FakeOrderRepository(db)
+    # Sem cupom nenhum no corpo, `create_order` ainda pergunta ao
+    # CouponService se ha campanha automatica (28/08/2026). O service de
+    # verdade sobre o `FakeDb` deste teste estoura num `scalars` que ninguem
+    # montou — e o erro nao teria nada a ver com telefone, que e o que este
+    # arquivo testa.
+    service.coupon_service = SimpleNamespace(auto_apply_for_order=lambda **kwargs: None)
 
     payload = CreateOrderRequest.model_validate({
         "branch_id": str(branch.id),

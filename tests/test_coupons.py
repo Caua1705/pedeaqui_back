@@ -12,21 +12,41 @@ from sqlalchemy.exc import IntegrityError
 
 from src.schemas.admin_order_schema import UpdateOrderStatusRequest
 from src.api.dependencies.admin_scope import AdminScope
+from src.models.coupon_model import (
+    COUPON_VISIBILITY_PRIVATE,
+    COUPON_VISIBILITY_PUBLIC,
+    COUPON_VISIBILITY_SEGMENT,
+    RestaurantCoupon,
+)
+from src.models.customer_model import Customer
 from src.models.order_model import Order
 from src.schemas.coupon_schema import CouponCampaignFields, CouponPreviewRequest
 from src.schemas.order_schema import CreateOrderRequest
 from src.services.admin_order_service import AdminOrderService
-from src.services.coupon_service import CouponService
+from src.services.coupon_service import CouponService, CustomerAudience
 from src.services.order_service import OrderService
 
 
 NOW = datetime(2026, 7, 22, 12, tzinfo=timezone.utc)
 
 
-def make_coupon(**overrides):
+def make_coupon(**overrides) -> RestaurantCoupon:
+    """Um cupom TRANSIENTE — o model de verdade, sem sessao e sem banco.
+
+    Era `SimpleNamespace`, e a troca fecha exatamente a porta que o CLAUDE.md
+    descreve. A revisao 20260828_0043 acrescentou `visibility` e
+    `target_segment` a `restaurant_coupons`; com o objeto de atributos livres,
+    todo teste desta suite continuaria verde descrevendo um cupom **sem
+    `visibility`**, e `_can_see` levantaria `AttributeError` em toda avaliacao
+    de cupom em producao — que e a primeira linha de todo checkout com cupom.
+
+    Com o model real, coluna nova nao passada vale `None` em vez de estourar,
+    e nome errado (`make_coupon(is_publico=True)`) e `TypeError` na hora.
+    """
     values = {
         "id": uuid.uuid4(),
         "restaurant_id": uuid.uuid4(),
+        "coupon_template_id": uuid.uuid4(),
         "code": "PROMO10",
         "title": "Promocao",
         "description": None,
@@ -40,13 +60,27 @@ def make_coupon(**overrides):
         "usage_limit_per_customer": None,
         "cooldown_days": None,
         "first_order_only": False,
-        "is_public": True,
+        "visibility": COUPON_VISIBILITY_PUBLIC,
+        "target_segment": None,
         "is_active": True,
         "sort_order": 0,
         "created_at": NOW,
     }
     values.update(overrides)
-    return SimpleNamespace(**values)
+    # Instancia transiente nao aplica `default=` de coluna — ele so entra no
+    # INSERT —, entao os campos vao todos escritos acima, de proposito.
+    return RestaurantCoupon(**values)
+
+
+def make_customer(**overrides) -> Customer:
+    """Cliente transiente. `phone` importa: e por ele que o segmento e medido."""
+    values = {"id": uuid.uuid4(), "phone": "85999990000"}
+    values.update(overrides)
+    return Customer(**values)
+
+
+PUBLICO = CustomerAudience(segment="fiel", claimed_coupon_ids=frozenset())
+CONVIDADO = CustomerAudience(segment=None, claimed_coupon_ids=frozenset())
 
 
 class FakeCouponRepository:
@@ -58,6 +92,8 @@ class FakeCouponRepository:
         self.last_applied_at = None
         self.redemptions = []
         self.lock_calls = 0
+        self.segment = "fiel"
+        self.claims = set()
 
     def count_applied_total(self, coupon_id):
         return self.total
@@ -71,8 +107,21 @@ class FakeCouponRepository:
     def get_last_applied_redemption_for_customer(self, coupon_id, customer_id):
         return self.last_applied_at
 
-    def list_public_available(self, restaurant_id, now=None):
+    def list_in_window(self, restaurant_id, now=None):
         return [self.coupon] if self.coupon.restaurant_id == restaurant_id else []
+
+    def segment_of_customer(self, restaurant_id, customer_phone, now):
+        return self.segment
+
+    def claimed_coupon_ids(self, customer_id):
+        return set(self.claims)
+
+    def get_claim(self, coupon_id, customer_id):
+        return object() if coupon_id in self.claims else None
+
+    def create_claim(self, coupon_id, customer_id):
+        self.claims.add(coupon_id)
+        return object()
 
     def customer_has_valid_order(self, customer_id, restaurant_id):
         return self.has_order
@@ -83,6 +132,8 @@ class FakeCouponRepository:
         return None
 
     def get_by_code_and_restaurant(self, code, restaurant_id, for_update=False):
+        if self.coupon.code is None:
+            return None
         if self.coupon.code.lower() == code.lower() and self.coupon.restaurant_id == restaurant_id:
             return self.coupon
         return None
@@ -111,7 +162,7 @@ class FakeCouponRepository:
 class CouponServiceTests(unittest.TestCase):
     def setUp(self):
         self.coupon = make_coupon()
-        self.customer = SimpleNamespace(id=uuid.uuid4())
+        self.customer = make_customer()
         self.service = CouponService(SimpleNamespace())
         self.repository = FakeCouponRepository(self.coupon)
         self.service.repository = self.repository
@@ -124,7 +175,7 @@ class CouponServiceTests(unittest.TestCase):
             subtotal=overrides.pop("subtotal", Decimal("100.00")),
             delivery_fee=overrides.pop("delivery_fee", Decimal("8.00")),
             customer=overrides.pop("customer", self.customer),
-            require_public=overrides.pop("require_public", True),
+            audience=overrides.pop("audience", PUBLICO),
             now=overrides.pop("now", NOW),
             **overrides,
         )
@@ -346,7 +397,7 @@ class CouponServiceTests(unittest.TestCase):
             subtotal=Decimal("100"),
             delivery_fee=Decimal("0"),
             customer=self.customer,
-            require_public=True,
+            audience=PUBLICO,
             now=NOW,
         )
         self.assertEqual(result.reason, "cooldown_active")
@@ -371,23 +422,99 @@ class CouponServiceTests(unittest.TestCase):
         self.assertEqual(response.next_available_at, NOW + timedelta(days=29))
         self.assertEqual(self.repository.redemptions, [])
 
-    def test_available_keeps_cooldown_coupon_as_ineligible_for_compatibility(self):
-        self.coupon.cooldown_days = 30
-        self.repository.last_applied_at = NOW - timedelta(days=2)
+    def _list(self, **overrides):
         restaurant = SimpleNamespace(id=self.coupon.restaurant_id)
         self.service.restaurant_service = SimpleNamespace(get_active_restaurant=lambda slug: restaurant)
-        response = self.service.get_available(
+        return self.service.list_for_customer(
             "restaurant",
-            subtotal=Decimal("100"),
-            delivery_fee=Decimal("0"),
-            order_type="pickup",
-            customer=self.customer,
+            subtotal=overrides.pop("subtotal", Decimal("100")),
+            delivery_fee=overrides.pop("delivery_fee", Decimal("0")),
+            order_type=overrides.pop("order_type", "pickup"),
+            customer=overrides.pop("customer", self.customer),
         )
-        self.assertEqual(len(response.coupons), 1)
-        item = response.coupons[0]
-        self.assertFalse(item.eligible)
-        self.assertEqual(item.ineligibility_reason, "cooldown_active")
-        self.assertEqual(item.next_available_at, NOW + timedelta(days=28))
+
+    def test_cupom_em_cooldown_nao_aparece_na_lista(self):
+        """Cooldown correndo nao e conserto que caiba nesta sacola.
+
+        Este teste inverteu o sentido em 28/08/2026, e a inversao e a regra
+        do item 4 da frente. Ele afirmava o contrario — o cupom vinha na
+        lista com `eligible: false` e `ineligibility_reason: cooldown_active`
+        —, e o resultado era um card cinza dizendo ao cliente que ele nao
+        pode usar, sem nada que ele possa fazer a respeito.
+
+        O que ENTRA na lista sao os dois motivos que ele resolve agora: por
+        mais coisa na sacola, e entrar na conta.
+        """
+        self.coupon.cooldown_days = 30
+        self.repository.last_applied_at = NOW - timedelta(days=2)
+        self.assertEqual(self._list().coupons, [])
+
+    def test_cupom_de_segmento_vem_com_etiqueta_e_o_publico_vem_sem(self):
+        """A etiqueta so existe para o cupom de segmento.
+
+        "Para todos" num cupom que todo mundo ve e ruido, e ocupa o espaco do
+        card. E ela nunca fala de disponibilidade: quem diz se da para usar e
+        o `state`.
+        """
+        self.assertIsNone(self._list().coupons[0].label)
+
+        self.coupon.visibility = COUPON_VISIBILITY_SEGMENT
+        self.coupon.target_segment = "em_risco"
+        self.repository.segment = "em_risco"
+        card = self._list().coupons[0]
+        self.assertEqual(card.label, "selected_for_you")
+        self.assertEqual(card.state, "applicable")
+
+    def test_cupom_de_outro_segmento_nao_aparece(self):
+        self.coupon.visibility = COUPON_VISIBILITY_SEGMENT
+        self.coupon.target_segment = "perdido"
+        self.repository.segment = "fiel"
+        self.assertEqual(self._list().coupons, [])
+
+    def test_cupom_privado_so_aparece_depois_do_resgate(self):
+        """E o vazamento do item 1, travado dos dois lados.
+
+        Sem resgate o cupom nao esta na lista — nao como card cinza, nao como
+        "entre para usar": ausente. Com resgate ele aparece inteiro.
+        """
+        self.coupon.visibility = COUPON_VISIBILITY_PRIVATE
+        self.assertEqual(self._list().coupons, [])
+
+        self.repository.claims.add(self.coupon.id)
+        card = self._list().coupons[0]
+        self.assertEqual(card.code, "PROMO10")
+        self.assertIsNone(card.label)
+
+    def test_convidado_nao_ve_privado_nem_segmento(self):
+        """Convidado enxerga so o publico, e nem sequer soube que havia outro.
+
+        Se a recusa saisse como `login_required`, o card viria na lista com
+        titulo e codigo — que e exatamente o que `private` existe para nao
+        publicar.
+        """
+        for visibilidade, alvo in ((COUPON_VISIBILITY_PRIVATE, None), (COUPON_VISIBILITY_SEGMENT, "fiel")):
+            with self.subTest(visibilidade=visibilidade):
+                self.coupon.visibility = visibilidade
+                self.coupon.target_segment = alvo
+                self.assertEqual(self._list(customer=None).coupons, [])
+
+    def test_falta_valor_vem_na_lista_com_o_quanto_falta(self):
+        self.coupon.min_order_value = Decimal("50.00")
+        card = self._list(subtotal=Decimal("38.00")).coupons[0]
+        self.assertEqual(card.state, "missing_amount")
+        self.assertEqual(card.missing_amount, Decimal("12.00"))
+        # Zero, e nao o desconto que uma sacola maior daria: o card nao pode
+        # anunciar um valor que este checkout nao vai dar.
+        self.assertEqual(card.discount_amount, Decimal("0.00"))
+
+    def test_cupom_vencido_nao_aparece(self):
+        self.coupon.valid_until = NOW - timedelta(seconds=1)
+        self.assertEqual(self._list().coupons, [])
+
+    def test_primeira_compra_para_quem_ja_comprou_nao_aparece(self):
+        self.coupon.first_order_only = True
+        self.repository.has_order = True
+        self.assertEqual(self._list().coupons, [])
 
     def test_order_final_validation_rechecks_cooldown(self):
         self.coupon.cooldown_days = 30

@@ -5,9 +5,11 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
+from src.models.coupon_claim_model import CouponClaim
 from src.models.coupon_model import CouponTemplate, RestaurantCoupon
 from src.models.coupon_redemption_model import CouponRedemption
 from src.models.order_model import Order
+from src.services.customer_segment import segment_expression
 
 
 class CouponRepository:
@@ -57,18 +59,36 @@ class CouponRepository:
             return self.get_by_code_and_restaurant(coupon_code, restaurant_id, for_update=True)
         return None
 
-    def list_public_available(
+    def list_in_window(
         self,
         restaurant_id: uuid.UUID,
         now: datetime | None = None,
     ) -> list[RestaurantCoupon]:
+        """As campanhas ativas e dentro da janela — de TODAS as visibilidades.
+
+        Substituiu `list_public_available`, e a diferenca e o ponto do item 7
+        da frente: **a consulta nao filtra mais quem pode ver.** Ela devolve
+        os candidatos, e o gate (`public` / `segment` / `private`) roda uma
+        vez so, dentro de `CouponService.evaluate`.
+
+        O que se perde ao filtrar aqui, e que ja custou caro em outros
+        lugares: com o `WHERE is_public` na consulta, cada superficie precisa
+        lembrar de repeti-lo — a vitrine do cardapio, a lista do cliente, o
+        preview e o checkout. Quatro copias de uma regra que muda de tres
+        valores para tres condicoes diferentes e a divergencia esperando
+        acontecer, e o sintoma dela e cupom aparecendo para quem nao devia,
+        sem erro e sem log.
+
+        O custo de nao filtrar e ler algumas linhas a mais por restaurante —
+        campanhas simultaneas sao unidades, nao milhares — e o indice
+        `ix_restaurant_coupons_visibility_window` cobre o resto do WHERE.
+        """
         current = now or datetime.now(timezone.utc)
         stmt = (
             select(RestaurantCoupon)
             .options(joinedload(RestaurantCoupon.template))
             .where(
                 RestaurantCoupon.restaurant_id == restaurant_id,
-                RestaurantCoupon.is_public.is_(True),
                 RestaurantCoupon.is_active.is_(True),
                 RestaurantCoupon.valid_from <= current,
                 RestaurantCoupon.valid_until >= current,
@@ -76,6 +96,71 @@ class CouponRepository:
             .order_by(RestaurantCoupon.sort_order.asc(), RestaurantCoupon.created_at.desc())
         )
         return list(self.db.scalars(stmt).unique().all())
+
+    def segment_of_customer(
+        self,
+        restaurant_id: uuid.UUID,
+        customer_phone: str,
+        now: datetime,
+    ) -> str:
+        """O rotulo RFV deste cliente NESTE restaurante.
+
+        As expressoes sao as de `src/services/customer_segment.py`, as mesmas
+        que a listagem de clientes do painel usa. **Nao ha segunda
+        implementacao**, e o cabecalho daquele modulo registra o que custou a
+        primeira: uma janela de ate 24h por cliente em que a versao Python e
+        a SQL discordavam do rotulo, invisivel em leitura de codigo. O cupom
+        de segmento tinha que herdar a mesma escada, ou o lojista veria
+        "em_risco" na tela de clientes e o cupom de em_risco nao apareceria
+        para aquela pessoa.
+
+        **O recorte e por TELEFONE, e nao por `customer_id`** — de novo, o
+        mesmo do painel. Quem pediu como convidado antes de criar a conta
+        aparece na mesma linha, e por isso um cupom de `novo` nao vai parar
+        na mao de quem ja pediu tres vezes sem estar logado.
+
+        O telefone chega ja normalizado (so digitos) porque
+        `orders.customer_phone_snapshot` e gravado assim — comparar com um
+        `(85) 99999-9999` nao casaria linha nenhuma, e o cliente sairia
+        `novo` para sempre (armadilha 27).
+
+        Sem pedido nenhum a agregacao devolve uma linha com contagem zero e
+        datas nulas, e a escada cai em `novo` pelo primeiro ramo do CASE. E
+        por isso esta funcao devolve `str` e nunca `None`.
+        """
+        orders_count = func.count(Order.id)
+        first_order_at = func.min(Order.created_at)
+        last_order_at = func.max(Order.created_at)
+        stmt = select(
+            segment_expression(orders_count, first_order_at, last_order_at, now)
+        ).where(
+            Order.restaurant_id == restaurant_id,
+            Order.customer_phone_snapshot == customer_phone,
+        )
+        return self.db.scalar(stmt)
+
+    def claimed_coupon_ids(self, customer_id: uuid.UUID) -> set[uuid.UUID]:
+        """Os cupons que este cliente ja resgatou, numa consulta so.
+
+        Conjunto e nao lista porque a pergunta e de pertinencia, e conjunto
+        porque a listagem confere um cupom por linha: `has_claim` por cupom
+        seria uma ida ao banco por card da tela (N+1).
+        """
+        stmt = select(CouponClaim.coupon_id).where(CouponClaim.customer_id == customer_id)
+        return set(self.db.scalars(stmt).all())
+
+    def get_claim(self, coupon_id: uuid.UUID, customer_id: uuid.UUID) -> CouponClaim | None:
+        stmt = select(CouponClaim).where(
+            CouponClaim.coupon_id == coupon_id,
+            CouponClaim.customer_id == customer_id,
+        )
+        return self.db.scalar(stmt)
+
+    def create_claim(self, coupon_id: uuid.UUID, customer_id: uuid.UUID) -> CouponClaim:
+        claim = CouponClaim(coupon_id=coupon_id, customer_id=customer_id)
+        self.db.add(claim)
+        self.db.flush()
+        return claim
 
     def list_by_restaurant(self, restaurant_id: uuid.UUID) -> list[RestaurantCoupon]:
         stmt = (

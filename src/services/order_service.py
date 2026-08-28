@@ -150,15 +150,13 @@ class OrderService:
             # pedidos simultaneos do mesmo cliente leem o mesmo saldo e
             # gastam o dinheiro duas vezes.
             self._lock_customer_for_cashback(payload, current_customer)
-            if payload.coupon_id is not None or payload.coupon_code is not None:
-                coupon, coupon_discount = self.coupon_service.lock_and_validate_for_order(
-                    restaurant_id=restaurant.id,
-                    coupon_id=payload.coupon_id,
-                    coupon_code=payload.coupon_code,
-                    subtotal=subtotal,
-                    delivery_fee=delivery_fee,
-                    customer=current_customer,
-                )
+            coupon, coupon_discount = self._resolve_coupon(
+                payload,
+                restaurant_id=restaurant.id,
+                subtotal=subtotal,
+                delivery_fee=delivery_fee,
+                current_customer=current_customer,
+            )
             cashback_redeemed = self._redeem_cashback(
                 payload,
                 current_customer,
@@ -762,6 +760,55 @@ class OrderService:
             )
             subtotal += (to_decimal(product.price) + options_total) * item.quantity
         return quantize_money(subtotal)
+
+    def _resolve_coupon(
+        self,
+        payload: CreateOrderRequest,
+        *,
+        restaurant_id,
+        subtotal: Decimal,
+        delivery_fee: Decimal,
+        current_customer,
+    ) -> tuple:
+        """O cupom deste pedido: o escolhido, ou o automatico, ou nenhum.
+
+        **UM CUPOM POR PEDIDO, e a estrutura garante isso** — nao ha lista
+        aqui, `orders.coupon_id` e uma coluna so e `coupon_redemptions` tem
+        UNIQUE em `order_id`. Trocar de cupom nao precisa de rota de
+        "remover": o corpo do pedido carrega o ultimo escolhido, e o
+        anterior simplesmente nao foi mandado.
+
+        **Seletor explicito desliga a auto-aplicacao.** Sem essa ordem, o
+        cliente que escolhe um cupom de R$ 10 ganharia tambem o automatico de
+        R$ 5 — dois cupons no mesmo pedido pela porta dos fundos, exatamente
+        o que a coluna unica existe para impedir.
+
+        A auto-aplicacao roda dentro da MESMA transacao e com o mesmo lock do
+        caminho explicito: ela termina em `lock_and_validate_for_order`.
+
+        Cupom e cashback CONTINUAM ACUMULANDO. Sao coisas diferentes — o
+        cupom e campanha do lojista, o cashback e dinheiro que o cliente ja
+        tinha — e o teto do resgate ja desconta o cupom (`subtotal -
+        coupon_discount`), entao os dois juntos nunca passam do subtotal.
+        """
+        if payload.coupon_id is not None or payload.coupon_code is not None:
+            return self.coupon_service.lock_and_validate_for_order(
+                restaurant_id=restaurant_id,
+                coupon_id=payload.coupon_id,
+                coupon_code=payload.coupon_code,
+                subtotal=subtotal,
+                delivery_fee=delivery_fee,
+                customer=current_customer,
+            )
+        automatico = self.coupon_service.auto_apply_for_order(
+            restaurant_id=restaurant_id,
+            subtotal=subtotal,
+            delivery_fee=delivery_fee,
+            customer=current_customer,
+        )
+        if automatico is None:
+            return None, ZERO
+        return automatico
 
     def _lock_customer_for_cashback(
         self,

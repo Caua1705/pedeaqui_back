@@ -10,6 +10,7 @@ from src.models.branch_payment_method_model import BranchPaymentMethod
 from src.models.cashback_rule_model import CashbackRule, CashbackRuleWeekday
 from src.models.cashback_transaction_model import CashbackTransaction
 from src.models.category_model import Category
+from src.models.coupon_claim_model import CouponClaim
 from src.models.coupon_model import CouponTemplate, RestaurantCoupon
 from src.models.coupon_redemption_model import CouponRedemption
 from src.models.customer_model import Customer, CustomerAddress, EmailVerificationCode, PasswordResetCode
@@ -50,6 +51,7 @@ __all__ = [
     "CashbackRuleWeekday",
     "CashbackTransaction",
     "Category",
+    "CouponClaim",
     "CouponTemplate",
     "CouponRedemption",
     "Customer",

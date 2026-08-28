@@ -3750,153 +3750,6 @@
         "title": "AdminUserUpdate",
         "type": "object"
       },
-      "AvailableCouponResponse": {
-        "properties": {
-          "code": {
-            "title": "Code",
-            "type": "string"
-          },
-          "cooldown_days": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Cooldown Days"
-          },
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "discount_type": {
-            "enum": [
-              "fixed",
-              "percent",
-              "free_delivery"
-            ],
-            "title": "Discount Type",
-            "type": "string"
-          },
-          "discount_value": {
-            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
-            "title": "Discount Value",
-            "type": "string"
-          },
-          "eligible": {
-            "title": "Eligible",
-            "type": "boolean"
-          },
-          "estimated_discount": {
-            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
-            "title": "Estimated Discount",
-            "type": "string"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "ineligibility_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ineligibility Reason"
-          },
-          "max_discount_amount": {
-            "anyOf": [
-              {
-                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Discount Amount"
-          },
-          "min_order_value": {
-            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
-            "title": "Min Order Value",
-            "type": "string"
-          },
-          "missing_amount": {
-            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
-            "title": "Missing Amount",
-            "type": "string"
-          },
-          "next_available_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Next Available At"
-          },
-          "requires_login": {
-            "default": false,
-            "title": "Requires Login",
-            "type": "boolean"
-          },
-          "title": {
-            "title": "Title",
-            "type": "string"
-          },
-          "valid_until": {
-            "format": "date-time",
-            "title": "Valid Until",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "code",
-          "title",
-          "discount_type",
-          "discount_value",
-          "min_order_value",
-          "valid_until",
-          "eligible",
-          "estimated_discount",
-          "missing_amount"
-        ],
-        "title": "AvailableCouponResponse",
-        "type": "object"
-      },
-      "AvailableCouponsResponse": {
-        "properties": {
-          "coupons": {
-            "items": {
-              "$ref": "#/components/schemas/AvailableCouponResponse"
-            },
-            "title": "Coupons",
-            "type": "array"
-          }
-        },
-        "required": [
-          "coupons"
-        ],
-        "title": "AvailableCouponsResponse",
-        "type": "object"
-      },
       "BannerResponse": {
         "properties": {
           "banner_type": {
@@ -5815,8 +5668,15 @@
         "description": "O cupom como o painel do lojista o le.\n\n`total_usage_count` e o par de `total_usage_limit`, e conta a mesma coisa\nque `evaluate` conta para decidir se o cupom ainda vale: redencoes em\n`applied`, so. Redencao estornada (o pedido foi cancelado) devolve a vaga e\nsai da conta — a tela mostra o numero que barra o proximo cliente, nao um\nhistorico de tentativas. Sem ele o painel exibia \"limite: 100\" e nao sabia\nquantos ja tinham usado.\n\nOPCIONAL com default, e nao obrigatorio: o numero e preenchido pelo\nservice, nao sai de coluna nenhuma, entao um `model_validate(coupon)` novo\nque esqueca de passa-lo devolve `null` em vez de estourar na serializacao.",
         "properties": {
           "code": {
-            "title": "Code",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
           },
           "cooldown_days": {
             "anyOf": [
@@ -5884,10 +5744,6 @@
             "title": "Is Active",
             "type": "boolean"
           },
-          "is_public": {
-            "title": "Is Public",
-            "type": "boolean"
-          },
           "max_discount_amount": {
             "anyOf": [
               {
@@ -5909,6 +5765,16 @@
             "format": "uuid",
             "title": "Restaurant Id",
             "type": "string"
+          },
+          "target_segment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CustomerSegment"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "title": {
             "title": "Title",
@@ -5968,13 +5834,15 @@
             "format": "date-time",
             "title": "Valid Until",
             "type": "string"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/CouponVisibility"
           }
         },
         "required": [
           "id",
           "restaurant_id",
           "coupon_template_id",
-          "code",
           "title",
           "discount_type",
           "discount_value",
@@ -5982,13 +5850,13 @@
           "valid_from",
           "valid_until",
           "first_order_only",
-          "is_public",
+          "visibility",
           "is_active"
         ],
         "title": "CouponAdminResponse",
         "type": "object"
       },
-      "CouponCreate": {
+      "CouponClaimRequest": {
         "additionalProperties": false,
         "properties": {
           "code": {
@@ -5996,6 +5864,41 @@
             "minLength": 1,
             "title": "Code",
             "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "CouponClaimRequest",
+        "type": "object"
+      },
+      "CouponClaimResponse": {
+        "description": "O cupom que acabou de virar do cliente.\n\nVem no MESMO formato da lista, e nao numa resposta propria, para o app\npoder inserir o card resgatado direto na tela sem uma segunda chamada —\ne para nao existirem duas descricoes de cupom que precisem concordar.\n\nO `state` aqui e calculado sobre uma sacola VAZIA (o resgate acontece no\nClube, sem carrinho), entao um cupom com pedido minimo volta como\n`missing_amount` com o minimo inteiro faltando. Isso e o certo: ele foi\nresgatado, ele e do cliente, e ainda nao cabe.",
+        "properties": {
+          "coupon": {
+            "$ref": "#/components/schemas/CustomerCouponResponse"
+          }
+        },
+        "required": [
+          "coupon"
+        ],
+        "title": "CouponClaimResponse",
+        "type": "object"
+      },
+      "CouponCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
           },
           "cooldown_days": {
             "anyOf": [
@@ -6057,11 +5960,6 @@
             "title": "Is Active",
             "type": "boolean"
           },
-          "is_public": {
-            "default": true,
-            "title": "Is Public",
-            "type": "boolean"
-          },
           "max_discount_amount": {
             "anyOf": [
               {
@@ -6091,6 +5989,16 @@
             ],
             "default": "0.00",
             "title": "Min Order Value"
+          },
+          "target_segment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CustomerSegment"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "title": {
             "maxLength": 200,
@@ -6131,11 +6039,14 @@
             "format": "date-time",
             "title": "Valid Until",
             "type": "string"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/CouponVisibility",
+            "default": "public"
           }
         },
         "required": [
           "coupon_template_id",
-          "code",
           "title",
           "discount_type",
           "discount_value",
@@ -6215,8 +6126,15 @@
       "CouponPreviewResponse": {
         "properties": {
           "coupon_code": {
-            "title": "Coupon Code",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coupon Code"
           },
           "coupon_id": {
             "format": "uuid",
@@ -6283,7 +6201,6 @@
         "required": [
           "valid",
           "coupon_id",
-          "coupon_code",
           "discount_type",
           "discount_amount",
           "subtotal",
@@ -6364,7 +6281,6 @@
             "anyOf": [
               {
                 "maxLength": 100,
-                "minLength": 1,
                 "type": "string"
               },
               {
@@ -6462,17 +6378,6 @@
             ],
             "title": "Is Active"
           },
-          "is_public": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Is Public"
-          },
           "max_discount_amount": {
             "anyOf": [
               {
@@ -6504,6 +6409,16 @@
               }
             ],
             "title": "Min Order Value"
+          },
+          "target_segment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CustomerSegment"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "title": {
             "anyOf": [
@@ -6565,10 +6480,30 @@
               }
             ],
             "title": "Valid Until"
+          },
+          "visibility": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CouponVisibility"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "CouponUpdate",
         "type": "object"
+      },
+      "CouponVisibility": {
+        "description": "Quem enxerga o cupom. Substituiu o `is_public` na revisao 20260828_0043.\n\n`str, Enum` e nao `Literal` pelo mesmo motivo de `PaymentErrorCode` e de\n`CustomerSegment`: so assim a LISTA de valores sai nomeada no\n`/openapi.json`, e o painel gera o seletor a partir do documento em vez\nde decorar tres strings.\n\nOs valores espelham o CHECK `ck_restaurant_coupons_visibility`.",
+        "enum": [
+          "public",
+          "segment",
+          "private"
+        ],
+        "title": "CouponVisibility",
+        "type": "string"
       },
       "CreateCustomerAddressRequest": {
         "additionalProperties": false,
@@ -7252,6 +7187,141 @@
           }
         },
         "title": "CustomerCancelOrderRequest",
+        "type": "object"
+      },
+      "CustomerCouponLabel": {
+        "description": "A etiqueta que o app pinta no card do cupom.\n\n**So existe UMA etiqueta, e cupom publico vem sem nenhuma.** Se todo\nmundo ve, \"para todos\" e ruido no card — o espaco e caro e a frase nao\ninforma nada que a presenca do cupom na lista ja nao diga.\n\nE ela **nunca fala de disponibilidade**. \"Selecionado para voce\" diz de\nquem e a campanha, e nao se da para usar agora; quem responde isso e o\n`state`. Sem essa separacao a etiqueta e o botao se contradizem na mesma\ntela — \"selecionado para voce\" ao lado de \"faltam R$ 12\".\n\nNao ha `exclusivo`: o alvo e um SEGMENTO, nao uma pessoa, e prometer\nexclusividade para um recorte de milhares de clientes e propaganda que\nnao se sustenta.",
+        "enum": [
+          "selected_for_you"
+        ],
+        "title": "CustomerCouponLabel",
+        "type": "string"
+      },
+      "CustomerCouponResponse": {
+        "description": "Um cupom no app do cliente, com o estado JA DECIDIDO pelo backend.\n\nO front nao calcula nada aqui — nem o desconto, nem se cabe, nem quanto\nfalta. Ele pinta `label`, pinta `state` e mostra `discount_amount`.\n\n**Por que a conta nao pode ser do lado de la.** Ela depende de\n`max_discount_amount`, do teto por cliente, do cooldown, do\nprimeira-compra e de qual parte da sacola o desconto morde\n(`free_delivery` desconta a taxa, os outros dois descontam o subtotal).\nReproduzir isso no app seria a segunda implementacao da regra de cupom, e\na divergencia apareceria onde mais custa: o card promete R$ 15, o\ncheckout tira R$ 10, e o cliente ve o desconto encolher entre uma tela e\na outra.\n\n## O que NAO vem aqui, e nao e esquecimento\n\n`discount_value`, `max_discount_amount`, `total_usage_limit`,\n`usage_limit_per_customer` e `cooldown_days` sao PARAMETROS da conta e\nlimites internos da campanha. Quem precisa deles e quem calcula, e quem\ncalcula e o backend. Publicados, so serviriam para alguem refazer a\nconta errado — ou para mapear os limites da campanha de fora.\n\n`min_order_value` fica, porque ele nao e parametro: e a frase \"pedido\nminimo R$ 30\" que o card precisa escrever. E `valid_until` fica pelo\nmesmo motivo — \"valido ate\" e texto de card.",
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "discount_amount": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Discount Amount",
+            "type": "string"
+          },
+          "discount_type": {
+            "enum": [
+              "fixed",
+              "percent",
+              "free_delivery"
+            ],
+            "title": "Discount Type",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CustomerCouponLabel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "min_order_value": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Min Order Value",
+            "type": "string"
+          },
+          "missing_amount": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Missing Amount",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/CustomerCouponState"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "valid_until": {
+            "format": "date-time",
+            "title": "Valid Until",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "discount_type",
+          "min_order_value",
+          "valid_until",
+          "state",
+          "discount_amount",
+          "missing_amount"
+        ],
+        "title": "CustomerCouponResponse",
+        "type": "object"
+      },
+      "CustomerCouponState": {
+        "description": "O que o botao do card pode fazer com ESTA sacola.\n\nNao ha valor para \"nao aparece\": cupom sem conserto nesta sacola —\nvencido, primeira-compra para quem ja comprou, de outro segmento, teto\nestourado, cooldown correndo — simplesmente nao entra na lista. Um card\ncinza com \"voce nao pode usar\" so ocupa a tela com uma negativa que a\npessoa nao tem como resolver.\n\nO que ENTRA e o que ela consegue mudar agora: colocar mais coisa na\nsacola (`missing_amount`) ou entrar na conta (`login_required`).",
+        "enum": [
+          "applicable",
+          "missing_amount",
+          "login_required"
+        ],
+        "title": "CustomerCouponState",
+        "type": "string"
+      },
+      "CustomerCouponsResponse": {
+        "properties": {
+          "coupons": {
+            "items": {
+              "$ref": "#/components/schemas/CustomerCouponResponse"
+            },
+            "title": "Coupons",
+            "type": "array"
+          }
+        },
+        "required": [
+          "coupons"
+        ],
+        "title": "CustomerCouponsResponse",
         "type": "object"
       },
       "CustomerDataExportResponse": {
@@ -10271,8 +10341,15 @@
         "description": "Legacy menu contract. Eligibility must be checked by the coupon endpoints.",
         "properties": {
           "code": {
-            "title": "Code",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
           },
           "discount_type": {
             "title": "Discount Type",
@@ -10328,7 +10405,6 @@
         },
         "required": [
           "id",
-          "code",
           "name",
           "discount_type",
           "discount_value",
@@ -18185,9 +18261,10 @@
         ]
       }
     },
-    "/restaurants/{restaurant_slug}/coupons/available": {
+    "/restaurants/{restaurant_slug}/coupons": {
       "get": {
-        "operationId": "list_available_coupons_restaurants__restaurant_slug__coupons_available_get",
+        "description": "Os cupons desta loja para QUEM ESTA OLHANDO, com o estado pronto.\n\nSubstituiu `GET .../coupons/available`. O front nao calcula nada: cada\ncard ja vem com a etiqueta, o estado do botao e o desconto que aquele\ncupom daria NESTA sacola. O porque de a conta nao poder ser do outro lado\nesta em `CustomerCouponResponse`.\n\n**A sacola e opcional.** Sem `subtotal` a rota responde a tela do Clube —\nos cupons que a pessoa tem, com o minimo inteiro faltando em quem tem\nminimo. Com `subtotal` ela responde a tela do checkout.\n\n**Sem token, so sai o que e publico.** Cupom de segmento e cupom privado\nnao aparecem para convidado nem como \"entre para usar\": a existencia\ndeles, com titulo e codigo, e justamente o que eles nao publicam.\n\nCupom sem conserto nesta sacola nao vem na lista — nem vencido, nem de\noutro segmento, nem primeira-compra para quem ja comprou. Cupom em que\nfalta valor VEM, com `state = \"missing_amount\"` e o quanto falta.",
+        "operationId": "list_customer_coupons_restaurants__restaurant_slug__coupons_get",
         "parameters": [
           {
             "in": "path",
@@ -18262,7 +18339,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AvailableCouponsResponse"
+                  "$ref": "#/components/schemas/CustomerCouponsResponse"
                 }
               }
             },
@@ -18284,7 +18361,65 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "List Available Coupons",
+        "summary": "List Customer Coupons",
+        "tags": [
+          "coupons"
+        ]
+      }
+    },
+    "/restaurants/{restaurant_slug}/coupons/claim": {
+      "post": {
+        "description": "Digitar um codigo SEM SACOLA — o cupom passa a ser do cliente.\n\nA porta do Clube, e o par de `GET .../coupons`: resgatado aqui, o cupom\naparece na lista e aplica depois, no checkout.\n\nRESGATE nao e USO. A linha vai para `coupon_claims`, que nao tem pedido\nnem valor e concede visibilidade; `coupon_redemptions` continua sendo o\nregistro de uso, e e ela que conta no teto da campanha. Gravar resgate la\nfaria o cupom de 100 usos se esgotar com gente que so digitou o codigo.\n\n**Idempotente**: resgatar de novo devolve o mesmo cupom, 201, sem erro.\n\nO `request` na assinatura nao e decoracao — o `@limiter.limit` do slowapi\no exige por posicao, e sem ele a rota levanta no boot.",
+        "operationId": "claim_coupon_restaurants__restaurant_slug__coupons_claim_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "restaurant_slug",
+            "required": true,
+            "schema": {
+              "title": "Restaurant Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CouponClaimRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CouponClaimResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Claim Coupon",
         "tags": [
           "coupons"
         ]

@@ -64,7 +64,7 @@ def criar_cupom(db, restaurante, template, *, code: str, total_usage_limit: int 
         valid_until=AGORA + timedelta(days=30),
         total_usage_limit=total_usage_limit,
         first_order_only=False,
-        is_public=True,
+        visibility="public",
         is_active=True,
     )
     db.add(cupom)

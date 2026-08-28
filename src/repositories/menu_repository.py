@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from src.models.branch_model import Branch
 from src.models.category_model import Category
-from src.models.coupon_model import CouponTemplate, RestaurantCoupon
+from src.models.coupon_model import COUPON_VISIBILITY_PUBLIC, CouponTemplate, RestaurantCoupon
 from src.models.product_model import Product
 from src.models.product_option_model import ProductOptionGroup
 from src.models.restaurant_banner_model import RestaurantBanner
@@ -79,6 +79,23 @@ class MenuRepository:
         return list(self.db.scalars(stmt).all())
 
     def get_active_coupons(self, restaurant_id: uuid.UUID) -> list[RestaurantCoupon]:
+        """A vitrine do cardapio: SO cupom `public`, e so ele.
+
+        Esta consulta e a unica superficie de cupom que nao passa por
+        `CouponService.evaluate` — ela nao tem cliente para avaliar contra
+        (`GET /{slug}/menu` e anonima) e existe para o card decorativo do
+        cardapio, nao para dizer se o cupom serve.
+
+        **Por isso o filtro tem que ser `= 'public'`, e nunca
+        `!= 'private'`.** A segunda forma parece equivalente e publica os
+        cupons de SEGMENTO para todo mundo — a campanha "para quem sumiu"
+        aparecendo, com codigo, na vitrine que qualquer pessoa abre sem
+        login. Nao daria erro, nao daria log, e o sintoma seria o lojista
+        pagando desconto de reativacao para quem pede toda semana.
+
+        Cupom privado e cupom de segmento aparecem em `GET /{slug}/coupons`,
+        que tem token e roda o gate.
+        """
         stmt = (
             select(RestaurantCoupon)
             .join(CouponTemplate, CouponTemplate.id == RestaurantCoupon.coupon_template_id)
@@ -86,7 +103,7 @@ class MenuRepository:
             .where(
                 RestaurantCoupon.restaurant_id == restaurant_id,
                 RestaurantCoupon.is_active.is_(True),
-                RestaurantCoupon.is_public.is_(True),
+                RestaurantCoupon.visibility == COUPON_VISIBILITY_PUBLIC,
                 RestaurantCoupon.valid_from <= datetime.now(timezone.utc),
                 RestaurantCoupon.valid_until >= datetime.now(timezone.utc),
                 CouponTemplate.is_active.is_(True),

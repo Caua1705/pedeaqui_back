@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from decimal import Decimal
 from typing import NoReturn
 from uuid import UUID
@@ -9,24 +10,35 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from src.models.coupon_model import CouponTemplate, RestaurantCoupon
+from src.models.coupon_model import (
+    COUPON_VISIBILITY_PRIVATE,
+    COUPON_VISIBILITY_PUBLIC,
+    COUPON_VISIBILITY_SEGMENT,
+    CouponTemplate,
+    RestaurantCoupon,
+)
 from src.models.customer_model import Customer
 from src.core.constants import ORDER_TYPES
 from src.repositories.coupon_repository import CouponRepository
 from src.repositories.restaurant_repository import RestaurantRepository
 from src.schemas.coupon_schema import (
-    AvailableCouponResponse,
-    AvailableCouponsResponse,
     CouponAdminResponse,
+    CouponClaimRequest,
+    CouponClaimResponse,
     CouponCreate,
     CouponTemplateResponse,
     CouponPreviewRequest,
     CouponPreviewResponse,
     CouponUpdate,
     CouponCampaignFields,
+    CustomerCouponLabel,
+    CustomerCouponResponse,
+    CustomerCouponState,
+    CustomerCouponsResponse,
 )
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import ZERO, quantize_money, to_decimal
+from src.utils.normalization import normalize_digits
 from src.utils.storage import build_storage_url
 
 
@@ -59,6 +71,45 @@ class CouponEvaluation:
     reason: str | None = None
     requires_login: bool = False
     next_available_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class CustomerAudience:
+    """O que o GATE de visibilidade precisa saber sobre quem esta olhando.
+
+    Existe para a lista do cliente nao ir ao banco por card: o segmento sai
+    de uma agregacao e os resgates de um `IN`, os dois uma vez por
+    requisicao, e `evaluate` consulta este objeto em memoria.
+
+    `segment is None` significa **convidado** (sem token), e nao "cliente sem
+    segmento" — todo cliente tem um, `novo` inclusive. A distincao decide
+    o gate inteiro: convidado nao enxerga cupom de segmento nem cupom
+    privado, porque nao ha de quem eles sejam.
+    """
+
+    segment: str | None
+    claimed_coupon_ids: frozenset[UUID]
+
+    @property
+    def is_guest(self) -> bool:
+        return self.segment is None
+
+
+# Motivo da recusa -> o que o card do cliente vira.
+#
+# **Esta tabela E a regra do item 4 da frente**, e o que nao esta nela e a
+# outra metade: motivo que nao aparece aqui NAO VIRA CARD. Vencido, de outro
+# segmento, primeira-compra para quem ja comprou, teto estourado, cooldown
+# correndo, privado sem resgate — nada disso e conserto que o cliente possa
+# fazer nesta sacola, e um card cinza com uma negativa que ele nao consegue
+# resolver so ocupa a tela.
+#
+# Os dois que sobram sao exatamente os que ele consegue mexer agora: por
+# mais coisa na sacola, ou entrar na conta.
+REASON_TO_STATE = {
+    "minimum_order_not_reached": CustomerCouponState.MISSING_AMOUNT,
+    "login_required": CustomerCouponState.LOGIN_REQUIRED,
+}
 
 
 class CouponService:
@@ -96,10 +147,29 @@ class CouponService:
         subtotal: Decimal,
         delivery_fee: Decimal,
         customer: Customer | None,
-        require_public: bool,
+        audience: CustomerAudience | None = None,
         now: datetime | None = None,
     ) -> CouponEvaluation:
+        """CABE OU NAO CABE. A unica resposta para essa pergunta no sistema.
+
+        Chamam esta funcao a listagem do app, o preview, a auto-aplicacao e a
+        criacao do pedido. As tres primeiras sao PREVIEW; a validacao que
+        vale e a da criacao do pedido, que roda esta mesma funcao com o cupom
+        travado (`SELECT ... FOR UPDATE`) dentro da transacao.
+
+        **O parametro `require_public` saiu, e a saida e o ponto.** Ele fazia
+        "de qual superficie eu vim" ser decisao do chamador, e uma superficie
+        nova que esquecesse de passar `True` publicava cupom privado sem erro
+        nenhum. Hoje quem responde e a coluna `visibility`, sempre, aqui
+        dentro.
+
+        A ORDEM DOS RAMOS e legivel de cima para baixo e nao e arbitraria:
+        primeiro o que o cliente nao enxerga, depois o que ja passou, depois
+        o que estourou, e so no fim o que falta na sacola. O ultimo e o unico
+        que o cliente resolve, e por isso e o unico que sai com numero.
+        """
         current = self._aware(now or self.clock())
+        audience = audience or self.audience_of(customer, restaurant_id, now=current)
         valid_from = self._aware(coupon.valid_from)
         valid_until = self._aware(coupon.valid_until)
         subtotal = quantize_money(to_decimal(subtotal))
@@ -109,8 +179,8 @@ class CouponService:
             return CouponEvaluation(False, reason="coupon_from_another_restaurant")
         if not coupon.is_active:
             return CouponEvaluation(False, reason="inactive")
-        if require_public and not coupon.is_public:
-            return CouponEvaluation(False, reason="not_public")
+        if not self._can_see(coupon, audience):
+            return CouponEvaluation(False, reason="not_visible")
         if current < valid_from:
             return CouponEvaluation(False, reason="not_started")
         if current > valid_until:
@@ -133,25 +203,9 @@ class CouponService:
                 requires_login=True,
             )
         if customer is not None:
-            if coupon.usage_limit_per_customer is not None:
-                usages = self.repository.count_applied_redemptions_for_customer(coupon.id, customer.id)
-                if usages >= coupon.usage_limit_per_customer:
-                    return CouponEvaluation(False, reason="customer_limit_reached")
-            if coupon.cooldown_days is not None:
-                last_applied_at = self.repository.get_last_applied_redemption_for_customer(
-                    coupon.id,
-                    customer.id,
-                )
-                if last_applied_at is not None:
-                    next_available_at = self._aware(last_applied_at) + timedelta(days=coupon.cooldown_days)
-                    if current < next_available_at:
-                        return CouponEvaluation(
-                            False,
-                            reason="cooldown_active",
-                            next_available_at=next_available_at,
-                        )
-            if coupon.first_order_only and self.repository.customer_has_valid_order(customer.id, restaurant_id):
-                return CouponEvaluation(False, reason="first_order_only")
+            limite = self._customer_limit_reason(coupon, customer, restaurant_id, current)
+            if limite is not None:
+                return limite
 
         if subtotal < minimum:
             return CouponEvaluation(
@@ -164,7 +218,97 @@ class CouponService:
             discount=self.calculate_discount(coupon, subtotal, delivery_fee),
         )
 
-    def get_available(
+    @staticmethod
+    def _can_see(coupon: RestaurantCoupon, audience: CustomerAudience) -> bool:
+        """O gate de visibilidade, e o unico lugar que le `coupon.visibility`.
+
+        **Convidado enxerga so o que e publico, e isso vale inclusive para o
+        motivo da recusa.** Devolver "entre na conta para usar" num cupom
+        privado seria anunciar a existencia dele — junto com o titulo e o
+        codigo, que e exatamente o que `private` existe para nao publicar. O
+        cupom simplesmente nao esta la.
+
+        O mesmo para `segment`: um convidado poderia se encaixar depois de
+        logar, mas nao ha como saber antes, e mostrar a campanha "para quem
+        sumiu" a quem nunca pediu e pior do que nao mostrar nada.
+        """
+        if coupon.visibility == COUPON_VISIBILITY_PUBLIC:
+            return True
+        if audience.is_guest:
+            return False
+        if coupon.visibility == COUPON_VISIBILITY_PRIVATE:
+            return coupon.id in audience.claimed_coupon_ids
+        if coupon.visibility == COUPON_VISIBILITY_SEGMENT:
+            return coupon.target_segment == audience.segment
+        # Valor que o CHECK do banco nao deixa entrar. Se um dia chegar aqui,
+        # o cupom fica INVISIVEL — errar para o lado de nao publicar.
+        return False
+
+    def _customer_limit_reason(
+        self,
+        coupon: RestaurantCoupon,
+        customer: Customer,
+        restaurant_id: UUID,
+        current: datetime,
+    ) -> CouponEvaluation | None:
+        """Os tres tetos que dependem de QUEM esta pedindo. `None` = passou.
+
+        Separado de `evaluate` porque sao tres idas ao banco condicionais
+        empilhadas, e dentro dela custavam dois niveis de indentacao a mais
+        sem acrescentar nada a leitura da escada principal.
+        """
+        if coupon.usage_limit_per_customer is not None:
+            usages = self.repository.count_applied_redemptions_for_customer(coupon.id, customer.id)
+            if usages >= coupon.usage_limit_per_customer:
+                return CouponEvaluation(False, reason="customer_limit_reached")
+        if coupon.cooldown_days is not None:
+            last_applied_at = self.repository.get_last_applied_redemption_for_customer(
+                coupon.id,
+                customer.id,
+            )
+            if last_applied_at is not None:
+                next_available_at = self._aware(last_applied_at) + timedelta(days=coupon.cooldown_days)
+                if current < next_available_at:
+                    return CouponEvaluation(
+                        False,
+                        reason="cooldown_active",
+                        next_available_at=next_available_at,
+                    )
+        if coupon.first_order_only and self.repository.customer_has_valid_order(customer.id, restaurant_id):
+            return CouponEvaluation(False, reason="first_order_only")
+        return None
+
+    def audience_of(
+        self,
+        customer: Customer | None,
+        restaurant_id: UUID,
+        *,
+        now: datetime | None = None,
+    ) -> CustomerAudience:
+        """Segmento e resgates de quem esta olhando, em duas consultas.
+
+        Montado UMA vez por requisicao e repassado a `evaluate` de cada
+        cupom da lista — sem isso a tela do Clube faria duas idas ao banco
+        por card.
+
+        O telefone e normalizado aqui de novo, e nao so no cadastro: contas
+        antigas podem ter `(85) 99999-9999` gravado, e
+        `orders.customer_phone_snapshot` e sempre digitos. A comparacao com o
+        telefone cru nao casa linha nenhuma e devolveria `novo` para um
+        cliente fiel — sem erro, sem log (armadilha 27).
+        """
+        if customer is None:
+            return CustomerAudience(segment=None, claimed_coupon_ids=frozenset())
+        return CustomerAudience(
+            segment=self.repository.segment_of_customer(
+                restaurant_id,
+                normalize_digits(customer.phone),
+                self._aware(now or self.clock()),
+            ),
+            claimed_coupon_ids=frozenset(self.repository.claimed_coupon_ids(customer.id)),
+        )
+
+    def list_for_customer(
         self,
         restaurant_slug: str,
         *,
@@ -172,56 +316,177 @@ class CouponService:
         delivery_fee: Decimal | None,
         order_type: str | None,
         customer: Customer | None,
-    ) -> AvailableCouponsResponse:
+    ) -> CustomerCouponsResponse:
+        """A lista de cupons do app, com o estado JA DECIDIDO.
+
+        Substituiu `get_available` (`GET .../coupons/available`), e nao e so
+        troca de nome: aquela devolvia todo cupom publico com um
+        `eligible: false` e um `ineligibility_reason` cru, e o app tinha que
+        traduzir sete motivos em ingles para decidir o que pintar. Hoje o
+        backend decide, e o que chega ao app sao tres estados e uma etiqueta.
+
+        O que NAO entra na lista esta em `REASON_TO_STATE`, junto do porque.
+        """
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
         if order_type is not None and order_type not in ORDER_TYPES:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de pedido inválido")
         products_subtotal = quantize_money(to_decimal(subtotal))
         fee = quantize_money(to_decimal(delivery_fee))
+        # Retirada nao tem taxa a descontar, entao um cupom de frete gratis
+        # anunciaria um desconto que o checkout nao vai dar.
         if order_type == "pickup":
             fee = ZERO
-        responses: list[AvailableCouponResponse] = []
 
         current = self._aware(self.clock())
-        for coupon in self.repository.list_public_available(restaurant.id, now=current):
+        audience = self.audience_of(customer, restaurant.id, now=current)
+        cards = []
+        for coupon in self.repository.list_in_window(restaurant.id, now=current):
             evaluation = self.evaluate(
                 coupon,
                 restaurant_id=restaurant.id,
                 subtotal=products_subtotal,
                 delivery_fee=fee,
                 customer=customer,
-                require_public=True,
+                audience=audience,
                 now=current,
             )
-            if customer is not None and evaluation.reason in {"customer_limit_reached", "first_order_only"}:
-                continue
-            if evaluation.reason == "total_limit_reached":
-                continue
-            responses.append(
-                AvailableCouponResponse(
-                    id=coupon.id,
-                    code=coupon.code,
-                    title=coupon.title,
-                    description=coupon.description,
-                    discount_type=coupon.discount_type,
-                    discount_value=quantize_money(to_decimal(coupon.discount_value)),
-                    max_discount_amount=(
-                        quantize_money(to_decimal(coupon.max_discount_amount))
-                        if coupon.max_discount_amount is not None
-                        else None
-                    ),
-                    min_order_value=quantize_money(to_decimal(coupon.min_order_value)),
-                    valid_until=coupon.valid_until,
-                    cooldown_days=coupon.cooldown_days,
-                    eligible=evaluation.valid,
-                    requires_login=evaluation.requires_login,
-                    estimated_discount=evaluation.discount,
-                    missing_amount=evaluation.missing_amount,
-                    ineligibility_reason=evaluation.reason,
-                    next_available_at=evaluation.next_available_at,
-                )
-            )
-        return AvailableCouponsResponse(coupons=responses)
+            card = self._customer_card(coupon, evaluation)
+            if card is not None:
+                cards.append(card)
+        return CustomerCouponsResponse(coupons=cards)
+
+    @staticmethod
+    def _customer_card(
+        coupon: RestaurantCoupon,
+        evaluation: CouponEvaluation,
+    ) -> CustomerCouponResponse | None:
+        """Um card, ou `None` quando o cupom nao deve aparecer.
+
+        `None` e o caso comum e nao um erro: a maioria das campanhas de um
+        restaurante nao e para quem esta olhando naquele momento.
+        """
+        if evaluation.valid:
+            state = CustomerCouponState.APPLICABLE
+        else:
+            state = REASON_TO_STATE.get(evaluation.reason)
+        if state is None:
+            return None
+
+        template = coupon.template
+        return CustomerCouponResponse(
+            id=coupon.id,
+            code=coupon.code,
+            title=coupon.title,
+            description=coupon.description,
+            image_url=build_storage_url(template.image_path) if template is not None else None,
+            discount_type=coupon.discount_type,
+            min_order_value=quantize_money(to_decimal(coupon.min_order_value)),
+            valid_until=coupon.valid_until,
+            label=CouponService._label(coupon),
+            state=state,
+            discount_amount=evaluation.discount,
+            missing_amount=evaluation.missing_amount,
+        )
+
+    @staticmethod
+    def _label(coupon: RestaurantCoupon) -> CustomerCouponLabel | None:
+        """Cupom de segmento tem etiqueta; cupom publico nao tem nenhuma.
+
+        A regra inteira cabe em duas linhas e a segunda e a que costuma ser
+        esquecida: se todo mundo ve, "para todos" nao informa nada e so gasta
+        o espaco do card.
+
+        Cupom PRIVADO tambem sai sem etiqueta. Ele chegou ali porque a pessoa
+        digitou o codigo — ela sabe de onde ele veio melhor que o card.
+        """
+        if coupon.visibility == COUPON_VISIBILITY_SEGMENT:
+            return CustomerCouponLabel.SELECTED_FOR_YOU
+        return None
+
+    def claim(
+        self,
+        restaurant_slug: str,
+        payload: CouponClaimRequest,
+        customer: Customer,
+    ) -> CouponClaimResponse:
+        """Resgatar um codigo SEM SACOLA — o cupom passa a ser do cliente.
+
+        E a porta do Clube: a pessoa digita `VOLTA15`, o cupom entra na lista
+        dela e aplica depois, no checkout. Nada de valor acontece aqui.
+
+        **O resgate grava VISIBILIDADE, e nada mais.** Janela, minimo, teto
+        total, teto por cliente, cooldown e primeira-compra continuam sendo
+        conferidos na criacao do pedido, sobre a sacola daquele momento. Por
+        isso a linha em `coupon_claims` nao tem valor nem status: nao ha
+        estado a percorrer, e antecipar qualquer uma dessas regras aqui
+        criaria a segunda resposta para "este cupom vale?".
+
+        **A recusa e SEMPRE a mesma frase, e o 404 tambem.** Codigo que nao
+        existe, codigo de outro restaurante, campanha desativada e cupom de
+        segmento que nao e o desta pessoa saem identicos. Distinguir os casos
+        transformaria a rota num oraculo de quais codigos existem — que e o
+        que o limite por IP (`COUPON_CLAIM_RATE_LIMIT`) encarece e esta
+        resposta torna inutil (armadilha 18).
+
+        Idempotente: resgatar de novo devolve o mesmo cupom, sem erro. O
+        UNIQUE `(coupon_id, customer_id)` e a rede embaixo disso — duas
+        requisicoes simultaneas nao criam duas linhas.
+        """
+        restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
+        coupon = self.repository.get_by_code_and_restaurant(payload.code, restaurant.id)
+        if coupon is None or not coupon.is_active:
+            self._raise_unknown_code()
+
+        current = self._aware(self.clock())
+        audience = self.audience_of(customer, restaurant.id, now=current)
+        # Cupom de SEGMENTO nao se resgata digitando: quem se encaixa ja o
+        # ve na lista, e quem nao se encaixa nao passa a ver por ter o
+        # codigo. Um cupom publico resgatado nao muda nada e nao e erro —
+        # a pessoa digitou um codigo que existe, e ele ja era dela.
+        if coupon.visibility == COUPON_VISIBILITY_SEGMENT and not self._can_see(coupon, audience):
+            self._raise_unknown_code()
+
+        if self.repository.get_claim(coupon.id, customer.id) is None:
+            try:
+                self.repository.create_claim(coupon.id, customer.id)
+                self.db.commit()
+            except IntegrityError:
+                # Duas requisicoes ao mesmo tempo: a outra ganhou, e o
+                # resultado que a pessoa queria ja aconteceu.
+                self.db.rollback()
+            except Exception:
+                self.db.rollback()
+                raise
+            audience = self.audience_of(customer, restaurant.id, now=current)
+
+        # A sacola do Clube e VAZIA: o card volta com o minimo inteiro
+        # faltando quando a campanha tem minimo, e e essa a verdade — o
+        # cupom e dele e ainda nao cabe.
+        evaluation = self.evaluate(
+            coupon,
+            restaurant_id=restaurant.id,
+            subtotal=ZERO,
+            delivery_fee=ZERO,
+            customer=customer,
+            audience=audience,
+            now=current,
+        )
+        card = self._customer_card(coupon, evaluation)
+        if card is None:
+            self._raise_unknown_code()
+        return CouponClaimResponse(coupon=card)
+
+    @staticmethod
+    def _raise_unknown_code() -> NoReturn:
+        """UMA resposta para todos os jeitos de o codigo nao servir.
+
+        Ver o docstring de `claim`. Mudar esta mensagem em um dos chamadores
+        e so em um reabre a enumeracao de codigos.
+        """
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Código de cupom inválido ou indisponível",
+        )
 
     def preview(
         self,
@@ -245,7 +510,6 @@ class CouponService:
             subtotal=payload.subtotal,
             delivery_fee=effective_delivery_fee,
             customer=customer,
-            require_public=True,
         )
         subtotal = quantize_money(payload.subtotal)
         delivery_fee = quantize_money(effective_delivery_fee)
@@ -272,6 +536,12 @@ class CouponService:
         delivery_fee: Decimal,
         customer: Customer | None,
     ) -> tuple[RestaurantCoupon, Decimal]:
+        """A VALIDACAO QUE VALE. Tudo antes disto e preview.
+
+        Roda com o cupom travado (`SELECT ... FOR UPDATE`) e dentro da
+        transacao do pedido — e o que impede dois pedidos simultaneos de
+        furarem o mesmo `total_usage_limit`.
+        """
         if customer is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Cliente autenticado obrigatório para usar cupom")
         coupon = self._find_coupon(
@@ -286,11 +556,92 @@ class CouponService:
             subtotal=subtotal,
             delivery_fee=delivery_fee,
             customer=customer,
-            require_public=True,
         )
         if not evaluation.valid:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=evaluation.reason or "Cupom inválido")
         return coupon, evaluation.discount
+
+    def auto_apply_for_order(
+        self,
+        *,
+        restaurant_id: UUID,
+        subtotal: Decimal,
+        delivery_fee: Decimal,
+        customer: Customer | None,
+    ) -> tuple[RestaurantCoupon, Decimal] | None:
+        """O cupom SEM CODIGO que esta sacola ganha sozinha. `None` se nenhum.
+
+        Chamado no `create_order` **somente quando o corpo nao trouxe cupom
+        nenhum**. Seletor explicito vence sempre: e ele que faz "trocar de
+        cupom" funcionar sem erro, porque o cliente escolhendo outro nao
+        precisa desfazer o primeiro — o pedido carrega um cupom so, e o
+        ultimo escolhido e o que vai.
+
+        **So vale para cliente logado**, e nao e politica: `coupon_redemptions`
+        tem `customer_id NOT NULL`, entao um desconto automatico para
+        convidado nao teria onde registrar o uso — e o teto por cliente da
+        campanha deixaria de existir para quem nao entrasse na conta.
+
+        ## Por que escolher pelo MAIOR desconto, e o que desempata
+
+        Entre dois cupons automaticos que cabem, o cliente nao tem tela para
+        escolher — ele nem sabe que ha dois. Dar o menor seria a casa
+        anunciando um desconto e entregando outro.
+
+        O empate e resolvido por `sort_order` e depois por `id`, e o segundo
+        criterio existe para a escolha ser **deterministica**: sem ele, dois
+        cupons de R$ 10 se revezariam entre requisicoes e o total do mesmo
+        pedido mudaria de nome de cupom entre o preview e o checkout.
+
+        A confirmacao final passa por `lock_and_validate_for_order`, e nao
+        pelo resultado desta busca: entre escolher e gravar, o teto total da
+        campanha pode ter sido atingido por outro pedido.
+        """
+        if customer is None:
+            return None
+        current = self._aware(self.clock())
+        # As campanhas automaticas sao lidas ANTES do publico, e a ordem e
+        # economia no caminho mais quente do sistema: restaurante sem cupom
+        # automatico — que e a maioria — paga UMA consulta a mais no
+        # checkout, e nao tres. Montar a audiencia primeiro custaria a
+        # agregacao de RFV e a lista de resgates em todo pedido, para nada.
+        automaticos = [
+            coupon
+            for coupon in self.repository.list_in_window(restaurant_id, now=current)
+            if coupon.code is None
+        ]
+        if not automaticos:
+            return None
+
+        audience = self.audience_of(customer, restaurant_id, now=current)
+        candidatos = []
+        for coupon in automaticos:
+            evaluation = self.evaluate(
+                coupon,
+                restaurant_id=restaurant_id,
+                subtotal=subtotal,
+                delivery_fee=delivery_fee,
+                customer=customer,
+                audience=audience,
+                now=current,
+            )
+            if evaluation.valid and evaluation.discount > ZERO:
+                candidatos.append((evaluation.discount, coupon))
+        if not candidatos:
+            return None
+
+        escolhido = max(
+            candidatos,
+            key=lambda par: (par[0], -(par[1].sort_order or 0), str(par[1].id)),
+        )[1]
+        return self.lock_and_validate_for_order(
+            restaurant_id=restaurant_id,
+            coupon_id=escolhido.id,
+            coupon_code=None,
+            subtotal=subtotal,
+            delivery_fee=delivery_fee,
+            customer=customer,
+        )
 
     def create_redemption(self, coupon: RestaurantCoupon, customer: Customer, order_id: UUID, discount: Decimal):
         existing = self.repository.get_redemption_by_order_id(order_id)
@@ -346,9 +697,13 @@ class CouponService:
         self._get_restaurant(restaurant_id)
         template = self._load_active_template(payload.coupon_template_id)
         self._ensure_template_agrees(template, payload.discount_type, payload.discount_value)
-        if self.repository.get_by_code_and_restaurant(payload.code, restaurant_id):
+        # Cupom sem codigo nao colide com nada: o UNIQUE do Postgres trata
+        # NULL como distinto, e varias campanhas automaticas convivem no
+        # mesmo restaurante. Sem esta guarda, `get_by_code_and_restaurant`
+        # recebia `None` e estourava em `code.strip()`.
+        if payload.code is not None and self.repository.get_by_code_and_restaurant(payload.code, restaurant_id):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Código de cupom já existe neste restaurante")
-        coupon = RestaurantCoupon(restaurant_id=restaurant_id, **payload.model_dump())
+        coupon = RestaurantCoupon(restaurant_id=restaurant_id, **self._campaign_columns(payload))
         try:
             self.repository.create_coupon(coupon)
             self.db.commit()
@@ -402,10 +757,11 @@ class CouponService:
             self._raise_merged_validation(exc)
         template = self._template_do_patch(coupon, validated.coupon_template_id)
         self._ensure_template_agrees(template, validated.discount_type, validated.discount_value)
-        code_owner = self.repository.get_by_code_and_restaurant(validated.code, restaurant_id)
-        if code_owner is not None and code_owner.id != coupon.id:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Código de cupom já existe neste restaurante")
-        for field, value in validated.model_dump().items():
+        if validated.code is not None:
+            code_owner = self.repository.get_by_code_and_restaurant(validated.code, restaurant_id)
+            if code_owner is not None and code_owner.id != coupon.id:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Código de cupom já existe neste restaurante")
+        for field, value in self._campaign_columns(validated).items():
             setattr(coupon, field, value)
         try:
             self.repository.save_coupon(coupon)
@@ -421,6 +777,24 @@ class CouponService:
         # sairia mais barato e faria a linha editada perder o contador na tela,
         # bem no momento em que o lojista esta olhando para ela.
         return self._admin_response(coupon, self.repository.count_applied_total(coupon.id))
+
+    @staticmethod
+    def _campaign_columns(campaign: CouponCampaignFields) -> dict:
+        """Os campos da campanha na forma que a COLUNA aceita.
+
+        `visibility` e `target_segment` sao `str, Enum` no schema e `text` no
+        banco, e `model_dump()` devolve o membro do enum, nao a string. Um
+        membro chegando na coluna depende do adaptador do driver desembrulhar
+        a subclasse de `str` sozinho — funciona hoje, e o dia em que parar de
+        funcionar grava `CouponVisibility.PUBLIC` numa coluna com CHECK e o
+        erro aparece como violacao de constraint, longe daqui.
+
+        Desembrulhar explicitamente custa tres linhas e tira a duvida.
+        """
+        return {
+            field: value.value if isinstance(value, Enum) else value
+            for field, value in campaign.model_dump().items()
+        }
 
     @staticmethod
     def _raise_unprocessable(errors: list[dict]) -> NoReturn:

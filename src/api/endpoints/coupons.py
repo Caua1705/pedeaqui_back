@@ -1,7 +1,7 @@
 from decimal import Decimal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.admin_scope import (
@@ -13,15 +13,18 @@ from src.api.dependencies.admin_scope import (
 )
 from src.api.dependencies.customer_auth import get_current_customer, get_optional_current_customer
 from src.api.dependencies.database import get_db
+from src.api.rate_limit import COUPON_CLAIM_RATE_LIMIT, limiter
 from src.models.customer_model import Customer
 from src.schemas.coupon_schema import (
-    AvailableCouponsResponse,
     CouponAdminResponse,
+    CouponClaimRequest,
+    CouponClaimResponse,
     CouponCreate,
     CouponPreviewRequest,
     CouponPreviewResponse,
     CouponTemplateResponse,
     CouponUpdate,
+    CustomerCouponsResponse,
 )
 from src.services.coupon_service import CouponService
 
@@ -55,22 +58,72 @@ admin_router = APIRouter(prefix="/admin/coupons", tags=["admin coupons"])
 template_router = APIRouter(prefix="/admin/coupon-templates", tags=["admin coupons"])
 
 
-@router.get("/{restaurant_slug}/coupons/available", response_model=AvailableCouponsResponse)
-def list_available_coupons(
+@router.get("/{restaurant_slug}/coupons", response_model=CustomerCouponsResponse)
+def list_customer_coupons(
     restaurant_slug: str,
     subtotal: Decimal | None = Query(default=None, ge=0),
     delivery_fee: Decimal | None = Query(default=None, ge=0),
     order_type: str | None = Query(default=None),
     current_customer: Customer | None = Depends(get_optional_current_customer),
     db: Session = Depends(get_db),
-) -> AvailableCouponsResponse:
-    return CouponService(db).get_available(
+) -> CustomerCouponsResponse:
+    """Os cupons desta loja para QUEM ESTA OLHANDO, com o estado pronto.
+
+    Substituiu `GET .../coupons/available`. O front nao calcula nada: cada
+    card ja vem com a etiqueta, o estado do botao e o desconto que aquele
+    cupom daria NESTA sacola. O porque de a conta nao poder ser do outro lado
+    esta em `CustomerCouponResponse`.
+
+    **A sacola e opcional.** Sem `subtotal` a rota responde a tela do Clube —
+    os cupons que a pessoa tem, com o minimo inteiro faltando em quem tem
+    minimo. Com `subtotal` ela responde a tela do checkout.
+
+    **Sem token, so sai o que e publico.** Cupom de segmento e cupom privado
+    nao aparecem para convidado nem como "entre para usar": a existencia
+    deles, com titulo e codigo, e justamente o que eles nao publicam.
+
+    Cupom sem conserto nesta sacola nao vem na lista — nem vencido, nem de
+    outro segmento, nem primeira-compra para quem ja comprou. Cupom em que
+    falta valor VEM, com `state = "missing_amount"` e o quanto falta.
+    """
+    return CouponService(db).list_for_customer(
         restaurant_slug,
         subtotal=subtotal,
         delivery_fee=delivery_fee,
         order_type=order_type,
         customer=current_customer,
     )
+
+
+@router.post(
+    "/{restaurant_slug}/coupons/claim",
+    response_model=CouponClaimResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+@limiter.limit(COUPON_CLAIM_RATE_LIMIT)
+def claim_coupon(
+    request: Request,
+    restaurant_slug: str,
+    payload: CouponClaimRequest,
+    current_customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+) -> CouponClaimResponse:
+    """Digitar um codigo SEM SACOLA — o cupom passa a ser do cliente.
+
+    A porta do Clube, e o par de `GET .../coupons`: resgatado aqui, o cupom
+    aparece na lista e aplica depois, no checkout.
+
+    RESGATE nao e USO. A linha vai para `coupon_claims`, que nao tem pedido
+    nem valor e concede visibilidade; `coupon_redemptions` continua sendo o
+    registro de uso, e e ela que conta no teto da campanha. Gravar resgate la
+    faria o cupom de 100 usos se esgotar com gente que so digitou o codigo.
+
+    **Idempotente**: resgatar de novo devolve o mesmo cupom, 201, sem erro.
+
+    O `request` na assinatura nao e decoracao — o `@limiter.limit` do slowapi
+    o exige por posicao, e sem ele a rota levanta no boot.
+    """
+    return CouponService(db).claim(restaurant_slug, payload, current_customer)
 
 
 @router.post("/{restaurant_slug}/coupons/preview", response_model=CouponPreviewResponse)

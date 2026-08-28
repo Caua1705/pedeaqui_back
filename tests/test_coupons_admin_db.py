@@ -120,7 +120,7 @@ def gravar_cupom_divergente(db, restaurante, template: CouponTemplate) -> Restau
         valid_from=AGORA - timedelta(days=1),
         valid_until=AGORA + timedelta(days=30),
         first_order_only=False,
-        is_public=True,
+        visibility="public",
         is_active=True,
     )
     db.add(cupom)

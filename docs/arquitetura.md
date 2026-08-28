@@ -117,6 +117,7 @@ valor mínimo do pedido ...................... 400
 taxa de serviço / taxa de entrega
 ──────────────────────────────────────────────────
 ►►► try ◄◄◄
+resolve o cupom: o escolhido, ou o automático  _resolve_coupon
 trava e valida o cupom (SELECT FOR UPDATE) .. 400/401/404
 total = subtotal + serviço + entrega − descontos
 comissão da plataforma (congelada no pedido)  _calculate_commission
@@ -209,6 +210,7 @@ aparece como valor errado semanas depois.
 | **Valor mínimo do pedido** (compara com o subtotal) | `services/order_service.py` | `_validate_minimum_order_value` |
 | **Taxa de entrega** = base + km × valor/km, com piso e teto | `services/delivery_estimate_service.py` | ver entrega-e-horarios.md |
 | **Desconto do cupom** (fixo / percentual / frete grátis) | `services/coupon_service.py` | `calculate_discount` |
+| **Cabe ou não cabe** (visibilidade, janela, tetos, mínimo) — listagem, preview e pedido | `services/coupon_service.py` | `evaluate`; ver [cupons.md](cupons.md) |
 | **Total** = subtotal + serviço + entrega − descontos | `services/order_service.py` | dentro de `create_order` |
 | **Comissão da plataforma** | `services/order_service.py` | `_calculate_commission` |
 | **Cobrança criada no gateway** | `integrations/payment_gateway.py` | `create_payment` |

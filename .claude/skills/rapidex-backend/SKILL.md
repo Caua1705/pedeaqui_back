@@ -1837,3 +1837,54 @@ argumento de latência. Esta armadilha é a outra metade da conta.
 
 Ver [[44]] — exemplo solto na SAÍDA vira molde — e [[45]], sobre ler o log
 certo antes de mexer no código de corte.
+
+---
+
+## 47. Filtro de visibilidade por EXCLUSÃO publica o que ninguém autorizou
+
+Desde a revisão `20260828_0043`, `restaurant_coupons.is_public` virou
+`visibility` com três valores: `public`, `segment`, `private`. A migração do
+booleano para os três valores tem uma armadilha que não dá erro, não dá log e
+o teste não pega, porque **as duas formas parecem equivalentes e não são**:
+
+```python
+RestaurantCoupon.visibility != COUPON_VISIBILITY_PRIVATE   # ERRADO
+RestaurantCoupon.visibility == COUPON_VISIBILITY_PUBLIC    # certo
+```
+
+O reflexo ao trocar `is_public.is_(True)` é escrever a primeira — ela é a
+tradução literal de "não é privado", que era o que o booleano dizia. Com o
+terceiro valor no meio, ela **publica os cupons de SEGMENTO**.
+
+O estrago não é o cupom aparecer: é o cupom aparecer **com código, na vitrine
+anônima do cardápio**. A campanha de reativação — "sumiu há dois meses, volte
+com R$ 15" — passa a ser vista e usada por quem pede toda semana, e o lojista
+descobre pela receita. Ninguém reclama de um desconto que recebeu.
+
+O lugar concreto é `MenuRepository.get_active_coupons`: ela é a **única**
+superfície de cupom que não passa por `CouponService.evaluate`, porque
+`GET /{slug}/menu` é anônima e não tem cliente para avaliar contra.
+
+**A regra geral, e ela vale além de cupom:** quando um booleano vira enum de
+três valores, todo filtro que era `== True` vira `== <o valor específico>`, e
+nunca `!= <o outro>`. A negação era equivalente quando havia dois valores; ela
+deixa de ser no minuto em que entra o terceiro, e o novo valor cai
+silenciosamente do lado permissivo.
+
+**Correlato, e é a outra metade do mesmo conserto: o parâmetro booleano
+`require_public` saiu de `evaluate` na mesma frente.** Ele fazia "de qual
+superfície eu vim" ser decisão do CHAMADOR — e uma rota nova que esquecesse de
+passar `True` publicava cupom privado sem erro nenhum. É a mesma família da
+armadilha 46: quando a regra depende de alguém lembrar de aplicá-la, ela é uma
+recomendação. Hoje quem responde é a coluna, dentro da função, sempre.
+
+E há uma dependência nova que não está no gate: **a negativa da lista do
+cliente só é honesta porque o que ela esconde é escolhido por uma tabela
+explícita** (`REASON_TO_STATE`, em `coupon_service.py`). Motivo que não está
+nela não vira card — é o comportamento certo, e é também o jeito de sumir com
+um cupom sem perceber. Motivo de recusa NOVO nasce fora da tabela, ou seja,
+INVISÍVEL: confira se é isso que você quer antes de acrescentar um.
+
+Desenho inteiro em `docs/cupons.md`, com o que ficou registrado e não
+implementado (restrição por forma de pagamento, por horário e por item do
+cardápio) e o preço de cada um.

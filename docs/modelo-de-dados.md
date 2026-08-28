@@ -114,8 +114,10 @@ uma loja não vale na outra.
 erDiagram
     coupon_templates ||--o{ restaurant_coupons : "a arte, catálogo global"
     restaurants ||--o{ restaurant_coupons : "o cupom da casa"
-    restaurant_coupons ||--o{ coupon_redemptions : "teto de uso"
-    orders ||--o{ coupon_redemptions : "o resgate, com o pedido junto"
+    restaurant_coupons ||--o{ coupon_redemptions : "USO: tem pedido, conta no teto"
+    orders ||--o{ coupon_redemptions : "o uso, com o pedido junto"
+    restaurant_coupons ||--o{ coupon_claims : "RESGATE: só concede visibilidade"
+    customers ||--o{ coupon_claims : "digitou o código no Clube"
     restaurants ||--o{ cashback_rules : "enabled nasce FALSO"
     branches |o--o{ cashback_rules : "regra por loja, quando há"
     cashback_rules ||--o{ cashback_rule_weekdays : "em que dias vale"
@@ -234,8 +236,9 @@ o endereço textual fica em colunas próprias do pedido.
 | Tabela | Guarda | Notas |
 |---|---|---|
 | `coupon_templates` | catálogo GLOBAL de arte/tipo | |
-| `restaurant_coupons` | `code`, `discount_type`, `discount_value`, `max_discount_amount`, limites e janelas | UNIQUE `(restaurant_id, code)` |
-| `coupon_redemptions` | `coupon_id`, `customer_id`, `order_id`, `discount_amount`, `status` | UNIQUE em `order_id` **e** em `idempotency_key` |
+| `restaurant_coupons` | `code` (**nullable**), `visibility`, `target_segment`, `discount_type`, `discount_value`, `max_discount_amount`, limites e janelas | UNIQUE `(restaurant_id, code)`; `code` nulo = **aplica sozinho no checkout** |
+| `coupon_redemptions` | **USO**: `coupon_id`, `customer_id`, `order_id`, `discount_amount`, `status` | UNIQUE em `order_id` **e** em `idempotency_key` |
+| `coupon_claims` | **RESGATE**: `coupon_id`, `customer_id`, `claimed_at` | UNIQUE `(coupon_id, customer_id)`. Sem pedido e sem valor — só concede visibilidade. Ver [cupons.md](cupons.md) |
 | `cashback_transactions` | `customer_id`, `amount`, `type`, `status` | Ver o aviso abaixo |
 | `cashback_rules` | `restaurant_id`, `branch_id` (NULL = padrão da rede), `enabled`, `default_percent`, `min_redeem_balance`, `expiry_days` | Herança por **linha**: a filial tem a regra inteira ou herda a inteira. Ver [cashback.md](cashback.md) |
 | `cashback_rule_weekdays` | `rule_id`, `weekday` (0 = segunda), `percent` | O percentual do dia fraco. **Dia ausente herda `default_percent`**, nunca zero |

@@ -9210,7 +9210,8 @@
           "payment_rejected",
           "login_required",
           "card_token_required",
-          "saved_card_not_found"
+          "saved_card_not_found",
+          "amount_below_minimum"
         ],
         "title": "PaymentErrorCode",
         "type": "string"
@@ -18987,7 +18988,7 @@
                 }
               }
             },
-            "description": "Cobranca de cartao sem o token do navegador"
+            "description": "Cobranca de cartao que nao pode ser criada como pedida: sem o token do navegador, ou com o total abaixo do minimo do gateway"
           },
           "401": {
             "content": {

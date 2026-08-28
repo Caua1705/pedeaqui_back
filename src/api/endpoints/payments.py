@@ -33,7 +33,13 @@ router = APIRouter(tags=["payments"])
 # detail na raiz faria o frontend escrever o parser contra um formato que a
 # rota nunca devolve.
 _PAYMENT_ERROR_RESPONSES = {
-    400: {"model": PaymentErrorResponse, "description": "Cobranca de cartao sem o token do navegador"},
+    400: {
+        "model": PaymentErrorResponse,
+        "description": (
+            "Cobranca de cartao que nao pode ser criada como pedida: sem o "
+            "token do navegador, ou com o total abaixo do minimo do gateway"
+        ),
+    },
     401: {"model": PaymentErrorResponse, "description": "Cartao exige cliente autenticado"},
     502: {"model": PaymentErrorResponse, "description": "Cobranca recusada pelo provedor"},
     503: {"model": PaymentErrorResponse, "description": "Pagamento indisponivel no momento"},

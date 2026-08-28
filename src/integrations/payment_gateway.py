@@ -114,6 +114,27 @@ SANDBOX_SUPPORTED_PAYMENT_METHODS = ("pix",)
 # parcelas sem essa decisao comercial mudaria o que o lojista recebe sem ele
 # ter pedido.
 CARD_INSTALLMENTS = 1
+
+# PISO da cobranca no cartao, em reais. Pix nao tem este piso (R$ 0,01 passa),
+# e por isso a checagem que usa esta constante e so do cartao.
+#
+# O numero e o `min_allowed_amount` que o Mercado Pago publica por meio de
+# pagamento em `GET /v1/payment_methods` — 0.5 para as bandeiras de credito no
+# Brasil (MLB), com `max_allowed_amount` de 60000.
+#
+# **A AUTORIDADE E DELES, NAO ESTA LINHA, e isso muda o que fazer quando ela
+# envelhecer.** Se eles subirem o piso, a nossa checagem passa a ser
+# permissiva demais e a cobranca volta a ser recusada la — com o codigo 4037,
+# que desde 28/08/2026 tem mensagem propria (ver _MERCADOPAGO_REJECTION_MESSAGES
+# no payment_service). Ou seja: numero desatualizado degrada a mensagem, e
+# nao a correcao. Baixa-lo abaixo do piso real seria o inverso e nao tem
+# ganho nenhum — deixaria a cobranca sair para morrer no gateway.
+#
+# Nao e lido de `GET /v1/payment_methods` em tempo de cobranca de proposito:
+# seria uma chamada paga a mais no caminho de todo pedido, com cache por
+# conta de restaurante, para um numero que muda de ano em ano.
+MERCADOPAGO_CARD_MIN_AMOUNT = Decimal("0.50")
+
 # Tolerancia da assinatura do webhook: uma notificacao capturada e reenviada
 # por terceiros horas depois nao pode passar so porque o HMAC bate.
 MERCADOPAGO_SIGNATURE_MAX_AGE_SECONDS = 300
@@ -373,6 +394,7 @@ def create_payment(
     payer_email: str | None = None,
     previous_payment_id: str | None = None,
     card: CardPaymentInput | None = None,
+    order_number: int | None = None,
 ) -> PaymentIntent:
     """Cria a cobranca no gateway.
 
@@ -395,6 +417,11 @@ def create_payment(
     preenchido so quando a anterior foi recusada. E o que faz a chave de
     idempotencia mudar e uma cobranca nova nascer; ver
     _mercadopago_idempotency_key.
+
+    `order_number` nao entra no corpo nem na chave: ele so carimba as duas
+    linhas de log da chamada, para que o que o Mercado Pago respondeu seja
+    procuravel pelo numero do pedido. Opcional para nao quebrar quem chama
+    isto sem ter um pedido em maos.
     """
     if provider == SANDBOX_PROVIDER:
         return _create_sandbox_payment(order_id, payment_method)
@@ -433,6 +460,7 @@ def create_payment(
                     order_id, body, previous_payment_id
                 )
             },
+            pedido=order_number,
         )
         return _mercadopago_intent(payload)
 
@@ -1118,6 +1146,7 @@ def _call_mercadopago(
     access_token: str,
     json_body: dict | None = None,
     extra_headers: dict[str, str] | None = None,
+    pedido: int | None = None,
 ) -> dict:
     """POST/GET/PUT/DELETE autenticado na API do Mercado Pago.
 
@@ -1132,6 +1161,18 @@ def _call_mercadopago(
     `payer.email` recusado de chave de idempotencia repetida. O e-mail do
     pagador sai mascarado desse texto (ver _redact_payer_data); o
     access_token nunca esteve nele.
+
+    `pedido` existe SO para o log, e por isso e opcional: as chamadas de
+    cartao salvo e de customer nao acontecem dentro de um pedido e saem com
+    `pedido=#-`. Nas que acontecem, ele e o unico jeito de ligar a resposta
+    do Mercado Pago ao pedido que a provocou — a `X-Idempotency-Key` comeca
+    com o `order_id`, mas ela nao e logada (armadilha do log sem dado
+    sensivel) e `order_id` nao e o numero que quem investiga tem na mao.
+
+    Ele vai na linha de SUCESSO tambem, de proposito: a pergunta "a cobranca
+    deste pedido chegou a sair daqui?" e a primeira de toda investigacao de
+    502, e ela se responde pela ausencia da linha — o que so funciona se a
+    linha for procuravel pelo pedido.
     """
     headers = {"Authorization": f"Bearer {access_token}"}
     if extra_headers:
@@ -1158,7 +1199,8 @@ def _call_mercadopago(
         ) from exc
     finally:
         logger.info(
-            "[Pagamento][mercadopago] method=%s path=%s status=%s latency_ms=%.2f",
+            "[Pagamento][mercadopago] pedido=#%s method=%s path=%s status=%s latency_ms=%.2f",
+            pedido if pedido is not None else "-",
             method,
             path,
             status_code,
@@ -1172,8 +1214,9 @@ def _call_mercadopago(
         # falha sem sair do nosso log — e sem o codigo da causa nao ha nem o
         # que informar num chamado de suporte.
         logger.warning(
-            "[Pagamento][mercadopago] erro method=%s path=%s status=%s "
+            "[Pagamento][mercadopago] erro pedido=#%s method=%s path=%s status=%s "
             "error=%s code=%s message=%s cause=%s",
+            pedido if pedido is not None else "-",
             method,
             path,
             status_code,

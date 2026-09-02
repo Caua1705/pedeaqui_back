@@ -207,6 +207,81 @@
         "title": "AddressInput",
         "type": "object"
       },
+      "AdminBranchCourierFeeResponse": {
+        "properties": {
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
+          "courier_fee_base": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Courier Fee Base"
+          },
+          "courier_fee_per_km": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Courier Fee Per Km"
+          }
+        },
+        "required": [
+          "branch_id"
+        ],
+        "title": "AdminBranchCourierFeeResponse",
+        "type": "object"
+      },
+      "AdminBranchCourierFeeUpdate": {
+        "description": "A taxa do entregador DESTA filial. Dois estados por campo:\n\n- campo ausente do corpo: nao mexe;\n- campo com valor, ou com `null` explicito: grava. `null` e \"sem taxa\"\n  (a atribuicao passa a congelar snapshot nulo), e nao \"volta a herdar\"\n  — aqui nao ha heranca, como nas cinco colunas do frete do cliente.",
+        "properties": {
+          "courier_fee_base": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Courier Fee Base"
+          },
+          "courier_fee_per_km": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Courier Fee Per Km"
+          }
+        },
+        "title": "AdminBranchCourierFeeUpdate",
+        "type": "object"
+      },
       "AdminBranchDeliveryPauseRequest": {
         "description": "Pausa a entrega desta filial por um tempo, e so por um tempo.\n\n`minutes` conta a partir de AGORA. `0` retoma a entrega na hora — e o\nbotao \"voltamos\" de quem parou por 60 minutos e resolveu em 20.\n\n**Por que a pausa tem prazo, se `accepts_delivery` ja existe.** Aquele\nresolve \"desligar sem apagar configuracao\"; o que ele nao resolve e o\n*temporariamente*. Uma chave manual precisa de alguem que lembre de\ndesliga-la, e o dia em que ela e usada — chuva as 19h, entregador que\nsumiu — e exatamente o dia em que ninguem lembra. A loja amanhece aberta\nsem aceitar entrega, e o unico sintoma e a ausencia de pedido, que nao\nacende alarme nenhum.\n\nO teto de 24h e o que impede esta rota de virar um segundo\n`accepts_delivery`: pausa de tres dias e a chave estrutural com passos a\nmais, e ai a distincao acima deixa de existir.\n\n`reason` e mostrado AO CLIENTE junto do horario de volta (\"Voltamos a\nentregar as 20:30\"). Sem prazo, o cliente fecha o app; com prazo, ele\nvolta.",
         "properties": {
@@ -12605,6 +12680,112 @@
         "summary": "Replace Branch Cashback Rule",
         "tags": [
           "admin cashback"
+        ]
+      }
+    },
+    "/admin/branches/{branch_id}/courier-fee": {
+      "get": {
+        "description": "Quanto esta filial paga ao entregador por corrida.\n\n`null` nos dois campos e \"sem taxa configurada\": a atribuicao congela\nsnapshot nulo e o historico do entregador mostra a corrida sem valor.\nNao e zero, de proposito.",
+        "operationId": "get_courier_fee_admin_branches__branch_id__courier_fee_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "branch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Branch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminBranchCourierFeeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Courier Fee",
+        "tags": [
+          "admin couriers"
+        ]
+      },
+      "patch": {
+        "description": "`base + km x por_km`, congelada em cada atribuicao a partir daqui.\n\nMotoboy pago por corrida: `courier_fee_base` preenchida e\n`courier_fee_per_km` em `0` (ou ausente). Campo ausente do corpo nao e\ntocado; `null` explicito apaga. **Nao mexe em nenhuma corrida ja\natribuida** — a taxa e congelada no momento da atribuicao.\n\nNenhum numero que o CLIENTE paga muda com isto.",
+        "operationId": "update_courier_fee_admin_branches__branch_id__courier_fee_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "branch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Branch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminBranchCourierFeeUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminBranchCourierFeeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Courier Fee",
+        "tags": [
+          "admin couriers"
         ]
       }
     },

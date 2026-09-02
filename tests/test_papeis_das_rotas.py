@@ -115,6 +115,13 @@ PAPEL_ESPERADO = {
     ("GET", "/admin/branches/{branch_id}/print-agent"): PESSOAS,
     ("GET", "/admin/branches/{branch_id}/printers"): GERENCIA,
     ("POST", "/admin/branches/{branch_id}/print-test"): PESSOAS,
+    # --- entregadores
+    #
+    # A taxa e o que a LOJA PAGA por corrida: ler e termo comercial (GERENCIA,
+    # como o cupom), escrever e dinheiro (SOMENTE_DONO). Nenhuma rota daqui
+    # aceita o agente de impressao.
+    ("GET", "/admin/branches/{branch_id}/courier-fee"): GERENCIA,
+    ("PATCH", "/admin/branches/{branch_id}/courier-fee"): SOMENTE_DONO,
     # --- clientes e relatorios: o que uma senha vazada nao pode alcancar
     ("GET", "/admin/customers"): GERENCIA,
     ("GET", "/admin/reports/commission"): SOMENTE_DONO,

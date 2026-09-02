@@ -20,7 +20,7 @@ cadastrar rápido.**
 | 0 | As três perguntas | **respondidas** — nenhuma muda o desenho |
 | 1 | Schema: `couriers`, `courier_assignments`, taxa do entregador em `branches` | **feito** — revisão `20260903_0045` |
 | 2 | Ferramenta: varredura de escopo cobre `/courier` (antes das rotas) | **feito** |
-| 3 | Admin: taxa do entregador da filial | pendente |
+| 3 | Admin: taxa do entregador da filial | **feito** — `GET`/`PATCH /admin/branches/{id}/courier-fee` |
 | 4 | Admin: cadastro (listar, criar, editar, ativar/desativar, excluir) + código | pendente |
 | 5 | Admin: atribuir e desatribuir pedidos | pendente |
 | 6 | Entregador: autenticação (link + código), lista, saiu/entregue, histórico | pendente |
@@ -279,6 +279,19 @@ antes das rotas.
 **Lição desta rodada:** `git checkout <arquivo>` para desfazer uma mutação
 reverte o patch inteiro não commitado. Mutação se desfaz com o `sed` inverso,
 ou se faz depois do commit.
+
+## 3. A taxa da filial
+
+`GET` (GERENCIA) e `PATCH` (SOMENTE_DONO) em `/admin/branches/{id}/courier-fee`.
+A fórmula é `calculate_courier_fee` em `src/services/courier_fee.py`, pura:
+nulo+nulo → nulo; só base → base; sem distância → só a base; só por-km sem
+distância → nulo. `AdminCourierService._get_branch` copia as duas
+conferências de `AdminSettingsService._get_branch` (a varredura exige as
+duas).
+
+Vermelho visto: coleta interrompida (módulos inexistentes) e, com os módulos
+de pé, `test_as_rotas_estao_registradas` — que é o vermelho que vale para
+"a rota existe". 17 verdes depois. `openapi.json` regenerado.
 
 ## Portão
 

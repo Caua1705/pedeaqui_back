@@ -31,7 +31,7 @@ A rodada anterior está em `scratchpad/rodada-back.md` e continua válida.
 | 0 | Scratchpad da rodada | **feito** |
 | 1.1 | As 16 colunas: caminho de leitura que quebra | **feito** — 8 com risco real, 4 silenciosas, 4 sem risco |
 | 1.2 | Teste que prova que os 2 models não são instanciados | **feito** |
-| 1.3 | Revisão de alinhamento escrita, sem aplicar | pendente |
+| 1.3 | Revisão de alinhamento escrita, sem aplicar | **feito** — e executada contra o Postgres de teste |
 | 1.4 | `divergencias_orm_schema.py` no portão como aviso | pendente |
 | 2 | Dublês falsos na suíte inteira | pendente |
 | 3 | Testes dependentes da hora | pendente |
@@ -210,3 +210,98 @@ restaurei o script.
 
 `tests/` fica de fora da varredura de propósito: é lá que os models **podem**
 ser construídos, inclusive no terceiro teste deste mesmo arquivo.
+
+---
+
+## 1.3 A revisão de alinhamento, escrita e não aplicada
+
+**Nada foi executado contra produção.** As duas revisões moram em
+`alembic/preparadas/`, diretório que o Alembic **não lê** (`script_location =
+alembic` faz ele enxergar só `versions/`).
+
+### Por que duas etapas, e não um `SET NOT NULL`
+
+`SET NOT NULL` toma `ACCESS EXCLUSIVE` **e** varre a tabela. `ACCESS EXCLUSIVE`
+bloqueia `SELECT` também. Vezes 16 colunas, numa transação só (o `env.py` não
+usa `transaction_per_migration`), isso é a plataforma parada pela **soma** das
+varreduras.
+
+O caminho escolhido:
+
+| | lock | varre? |
+|---|---|---|
+| `ADD CONSTRAINT ... CHECK (c IS NOT NULL) NOT VALID` | `ACCESS EXCLUSIVE`, ms | não |
+| `VALIDATE CONSTRAINT` | `SHARE UPDATE EXCLUSIVE` — não bloqueia leitura nem escrita | sim |
+| `SET NOT NULL` com a CHECK válida | `ACCESS EXCLUSIVE`, instantâneo | **não** (PG ≥ 12 aceita a CHECK como prova) |
+| `DROP CONSTRAINT` | instantâneo | não |
+
+**E as duas etapas não podem ir no mesmo `alembic upgrade`** — pelo mesmo
+motivo da transação única: o `VALIDATE` rodaria dentro da transação que ainda
+segura o `ACCESS EXCLUSIVE` do `ADD CONSTRAINT`, e o ganho evapora. São duas
+execuções, com `ALEMBIC_TARGET` na primeira.
+
+Ganho que não é de lock: **a etapa 1 já recusa nulo novo**. Do commit dela em
+diante o buraco para de crescer, mesmo que a etapa 2 demore semanas — e quando
+o `VALIDATE` rodar, não há corrida com escrita concorrente.
+
+### Esta migração não tem ponto sem volta
+
+**Nenhum dado é tocado pelas duas etapas.** Os dois downgrades são completos.
+Vale dizer em voz alta porque é o oposto exato do outro roteiro do repositório:
+a `0017` do `tracking_token` recria a coluna vazia e não há volta.
+
+### A conferência de nulos, antes
+
+`scripts/nulos_nas_colunas_em_desacordo.py` (novo, só leitura, `count(*)` toma
+apenas `ACCESS SHARE`). Uma consulta por **tabela**, com
+`count(*) FILTER (WHERE col IS NULL)` — tabela grande varrida uma vez, não uma
+vez por coluna. A lista de colunas **não está escrita nele**: sai de
+`divergencias_orm_schema.comparar()`, extraída para função nesta rodada. Uma
+segunda cópia da regra seria a divergência entre os dois scripts esperando
+acontecer — o defeito que o próprio script existe para nomear.
+
+Saída: `PRONTA para SET NOT NULL` (0 nulos) ou `DECIDIR O DADO ANTES` (N > 0),
+com código de saída 2 no segundo caso.
+
+### **A revisão foi executada de verdade — contra o Postgres de teste**
+
+`tests/test_revisoes_preparadas.py` tem seis testes; o sexto é o que muda a
+natureza da entrega:
+
+- as duas revisões **não estão na cadeia** — perguntado ao `ScriptDirectory`
+  do Alembic, que é quem o `upgrade` consulta, e não ao caminho do arquivo;
+- as duas etapas listam **as mesmas** 16 colunas (a duplicação da lista é
+  deliberada: import entre revisões quebraria no `git mv`);
+- a lista ainda **descreve o schema de hoje** — comparada com
+  `comparar(...).orm_mais_estrito` do banco montado. Revisão futura que alinhe
+  ou crie divergência derruba este teste, em vez de a preparada envelhecer
+  calada;
+- **as duas etapas rodam, as 16 colunas ficam `NOT NULL` de verdade, e os dois
+  downgrades devolvem tudo** — dentro de uma transação que volta (o Postgres
+  tem DDL transacional), com `finally`, para não estragar o schema de sessão
+  que os outros 612 testes `db` compartilham.
+
+Ou seja: "pronta" aqui quer dizer **executada**. O primeiro lugar onde essa
+migração roda deixou de ser produção, de madrugada, com a API fora do ar.
+
+### Onde a decisão continua sendo do dono
+
+1. **Etapa 0 em produção**: contar os nulos. Coluna com nulo é decisão de
+   **dado** — preencher, apagar a linha, ou tirar a coluna da revisão.
+2. **`restaurant_coupons.valid_until` é a única das 16 em que a resposta pode
+   ser o contrário.** Cupom sem data de fim é campanha plausível, e há
+   precedente: a `20260828_0043` tornou `code` nulo *com significado*. Se o
+   produto quiser campanha permanente, o certo é relaxar o model e os schemas,
+   não apertar o banco. Hoje não é isso — os três schemas exigem a data e
+   `_aware(None)` levanta —, mas a pergunta é de produto e fica aqui escrita.
+
+### Arquivos
+
+`alembic/preparadas/LEIA-ME.md` · `alembic/preparadas/alinhamento_orm_schema_etapa_1.py`
+· `alembic/preparadas/alinhamento_orm_schema_etapa_2.py` ·
+`docs/alinhamento-orm-schema.md` · `scripts/nulos_nas_colunas_em_desacordo.py`
+· `scripts/divergencias_orm_schema.py` (extraída `comparar()`, saída idêntica)
+· `tests/test_revisoes_preparadas.py`.
+
+**Portão: 2812 testes verdes** (2200 rápidos + 612 `db`), ruff limpo, openapi e
+lock em dia.

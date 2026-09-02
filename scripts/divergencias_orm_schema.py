@@ -40,6 +40,7 @@ Sem `--url` ele usa a `DATABASE_URL` do ambiente, como qualquer script daqui.
 
 import argparse
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -47,6 +48,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from sqlalchemy import create_engine, inspect
+from sqlalchemy.engine.reflection import Inspector
 
 # `import src.models` e o que popula o `Base.metadata`: o `__init__` importa os
 # 34 modulos, e tabela cujo modulo nao esteja la simplesmente nao existe para o
@@ -61,30 +63,34 @@ from src.db.session import get_engine
 TABELAS_SEM_MODEL_ESPERADAS = {"alembic_version"}
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Compara Base.metadata com o schema do banco (somente leitura)."
-    )
-    parser.add_argument(
-        "--url",
-        help="URL do banco a conferir. Sem ela, usa a DATABASE_URL do ambiente.",
-    )
-    parser.add_argument(
-        "--schema",
-        default="public",
-        help="Schema a inspecionar (padrao: public).",
-    )
-    args = parser.parse_args()
+@dataclass(frozen=True)
+class Divergencias:
+    """As tres classes, ja separadas. Uma execucao da comparacao, um objeto.
 
-    engine = create_engine(args.url) if args.url else get_engine()
-    inspetor = inspect(engine)
+    Existe para haver UM lugar que decide o que e divergencia. Quem tambem
+    precisa da primeira lista e `scripts/nulos_nas_colunas_em_desacordo.py`
+    (a conferencia que antecede o `SET NOT NULL`), e uma segunda copia da
+    regra ali seria a divergencia entre os dois scripts esperando acontecer —
+    justamente o defeito que este arquivo existe para nomear.
+    """
 
-    tabelas_do_banco = set(inspetor.get_table_names(schema=args.schema))
+    orm_mais_estrito: list[tuple[str, str]]
+    banco_mais_estrito: list[tuple[str, str, str | None]]
+    nao_mapeadas: list[tuple[str, str, bool, str | None]]
+    so_no_banco: list[str]
+    so_no_orm: list[str]
+    tabelas_do_orm: int
+    tabelas_do_banco: int
+
+    @property
+    def total(self) -> int:
+        return len(self.orm_mais_estrito) + len(self.banco_mais_estrito) + len(self.nao_mapeadas)
+
+
+def comparar(inspetor: Inspector, schema: str = "public") -> Divergencias:
+    """Compara `Base.metadata` com o schema de um banco. Nao imprime nada."""
+    tabelas_do_banco = set(inspetor.get_table_names(schema=schema))
     tabelas_do_orm = set(Base.metadata.tables)
-
-    if not tabelas_do_banco:
-        print(f"Nenhuma tabela no schema '{args.schema}'. A URL aponta para o banco certo?")
-        return 1
 
     so_no_banco = sorted(tabelas_do_banco - tabelas_do_orm - TABELAS_SEM_MODEL_ESPERADAS)
     so_no_orm = sorted(tabelas_do_orm - tabelas_do_banco)
@@ -97,7 +103,7 @@ def main() -> int:
         tabela = Base.metadata.tables[nome_da_tabela]
         colunas_do_banco = {
             coluna["name"]: coluna
-            for coluna in inspetor.get_columns(nome_da_tabela, schema=args.schema)
+            for coluna in inspetor.get_columns(nome_da_tabela, schema=schema)
         }
 
         for coluna in tabela.columns:
@@ -127,12 +133,51 @@ def main() -> int:
                     )
                 )
 
-    total = len(orm_mais_estrito) + len(banco_mais_estrito) + len(nao_mapeadas)
+    return Divergencias(
+        orm_mais_estrito=orm_mais_estrito,
+        banco_mais_estrito=banco_mais_estrito,
+        nao_mapeadas=nao_mapeadas,
+        so_no_banco=so_no_banco,
+        so_no_orm=so_no_orm,
+        tabelas_do_orm=len(tabelas_do_orm),
+        tabelas_do_banco=len(tabelas_do_banco),
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Compara Base.metadata com o schema do banco (somente leitura)."
+    )
+    parser.add_argument(
+        "--url",
+        help="URL do banco a conferir. Sem ela, usa a DATABASE_URL do ambiente.",
+    )
+    parser.add_argument(
+        "--schema",
+        default="public",
+        help="Schema a inspecionar (padrao: public).",
+    )
+    args = parser.parse_args()
+
+    engine = create_engine(args.url) if args.url else get_engine()
+    inspetor = inspect(engine)
+
+    if not inspetor.get_table_names(schema=args.schema):
+        print(f"Nenhuma tabela no schema '{args.schema}'. A URL aponta para o banco certo?")
+        return 1
+
+    divergencias = comparar(inspetor, args.schema)
+    so_no_banco = divergencias.so_no_banco
+    so_no_orm = divergencias.so_no_orm
+    orm_mais_estrito = divergencias.orm_mais_estrito
+    banco_mais_estrito = divergencias.banco_mais_estrito
+    nao_mapeadas = divergencias.nao_mapeadas
 
     print("=" * 72)
     print(
-        f"{len(tabelas_do_orm)} tabela(s) no ORM, "
-        f"{len(tabelas_do_banco)} no banco  |  {total} divergencia(s) de coluna"
+        f"{divergencias.tabelas_do_orm} tabela(s) no ORM, "
+        f"{divergencias.tabelas_do_banco} no banco  |  "
+        f"{divergencias.total} divergencia(s) de coluna"
     )
     print("=" * 72)
 

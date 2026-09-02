@@ -15,7 +15,7 @@ qualquer coisa.**
 | 1 | `tracking_token` — plano das duas etapas | **feito** (só plano; nada executado) |
 | 2 | `print_agent` — criar a conta | **feito** (comando escrito; conta NÃO criada — exige o banco) |
 | 3 | Custo de IA por restaurante | **feito** |
-| 4.1 | Quebrar a tabela `branches` | **feito** (levantamento + plano; PARADO antes de executar) |
+| 4.1 | Quebrar a tabela `branches` | **PARADO** — levantamento e plano prontos; espera duas decisões suas |
 | 4.2 | README | **feito** |
 | 4.3 | Diagrama ER | **feito** |
 
@@ -712,3 +712,141 @@ dois CHECK, a agregação e a janela meio-aberta).
 **Portão: 2785 testes verdes** (rápida + `db`), `ruff` limpo,
 `export_openapi.py --check` em dia — a rota não entra no documento, então o
 `openapi.json` não mudou.
+
+---
+
+## 4.1 Quebrar a tabela `branches` — **PARADO, com plano**
+
+**Nada foi executado.** Toda quebra desta tabela termina em `DROP COLUMN`, que
+é destrutivo, e o briefing manda parar e trazer o plano. Este é o plano — e ele
+vem com uma recomendação que contraria o pedido, com o motivo escrito.
+
+### 4.1.1 O que ela guarda hoje: 48 colunas, 6 grupos
+
+| Grupo | Colunas | O que são |
+|---|---|---|
+| **Identidade** (9) | `id`, `restaurant_id`, `name`, `slug`, `display_name`, `is_main`, `is_active`, `created_at`, `updated_at` | quem é a loja |
+| **Contato** (3) | `email`, `phone`, `whatsapp` | |
+| **Endereço — o conjunto vivo** (7) | `address`, `neighborhood`, `city`, `state` (**NOT NULL**), `zipcode`, `latitude`, `longitude` | é o que o painel escreve |
+| **Endereço — o conjunto morto** (6) | `address_street`, `address_number`, `address_neighborhood`, `address_city`, `address_state`, `address_zipcode` | **nada no código escreve nelas** |
+| **Precificação de entrega** (10) | `delivery_base_fee`, `delivery_fee_per_km`, `delivery_min_fee`, `delivery_max_fee`, `delivery_max_distance_km`, `default_delivery_fee`, `estimated_delivery_time_min/max`, `free_delivery_enabled`, `free_delivery_min_order_value` | termo comercial; `NULL` = herda |
+| **Estado do dia** (5) | `is_open`, `accepts_delivery`, `accepts_pickup`, `delivery_paused_until`, `delivery_pause_reason` | o que o balcão aperta; NOT NULL, não herda |
+| **Termo comercial** (3) | `min_order_value`, `service_fee_enabled`, `service_fee_amount` | `NULL` = herda |
+| **Impressão** (5) | `print_customer_copies_delivery/pickup`, `print_production_copies_delivery/pickup`, `receipt_footer_message` | descrevem o balcão |
+
+### 4.1.2 O que deveria sair, e isso é o achado da rodada
+
+**As seis colunas `address_*` são código morto no banco — e não são inertes.**
+
+- **Ninguém escreve nelas.** `AdminBranchUpdate` (o `PATCH /admin/branches/{id}`)
+  aceita `address`, `neighborhood`, `city`, `state`, `zipcode` e mais nada. Grep
+  em `src/`, `scripts/` e `docs/` não acha um único `branch.address_street = `.
+  Elas vêm do schema pré-Alembic, criado à mão no Supabase (estão no
+  `schema_baseline.sql`, e nenhuma revisão as toca).
+- **Mas alguém LÊ, e lê antes.** `RestaurantService._build_address` resolve
+  assim:
+
+  ```python
+  street       = branch.address_street       or branch.address
+  neighborhood = branch.address_neighborhood or branch.neighborhood
+  city         = branch.address_city         or branch.city
+  ...
+  ```
+
+  O conjunto morto **vence**. Ele é a resposta de `GET /restaurants/{slug}` —
+  o endereço que o cliente vê no app.
+
+**O defeito, em uma frase:** numa filial cujas `address_*` estejam preenchidas,
+**o lojista corrige o endereço no painel e o app do cliente continua mostrando o
+antigo.** Sem erro, sem log, sem tela onde conferir — o painel exibe o valor
+novo (ele lê `branch.address`) e o cliente vê o velho. É a família da armadilha
+35: a coluna crua responde "o que está sobrescrito", que quase nunca é a
+pergunta.
+
+**Eu não sei se isso está acontecendo hoje**, porque não consulto produção nesta
+sessão. O comando que responde é só leitura:
+
+```bash
+docker exec pedeaqui-api python -c "
+from sqlalchemy import text
+from src.db.session import SessionLocal
+with SessionLocal() as db:
+    for linha in db.execute(text('''
+        SELECT name,
+               address        AS painel_rua,
+               address_street AS morta_rua,
+               neighborhood   AS painel_bairro,
+               address_neighborhood AS morta_bairro,
+               (address_street IS NOT NULL
+                 OR address_neighborhood IS NOT NULL
+                 OR address_city IS NOT NULL) AS o_conjunto_morto_vence
+          FROM branches ORDER BY name
+    ''')):
+        print(linha)
+"
+```
+
+- Se **`o_conjunto_morto_vence` for falso em todas as filiais**: o defeito é
+  latente, e o conserto é limpeza pura.
+- Se for **verdadeiro em alguma**: aquela filial está mostrando ao cliente um
+  endereço que o painel não consegue corrigir. **Isso é um chamado esperando
+  acontecer**, e vale conferir de olho se o texto bate com o endereço real da
+  loja.
+
+#### As duas saídas, e a que eu recomendo
+
+| | O que faz | Reversível? |
+|---|---|---|
+| **A. Só código** | `_build_address` passa a ler só o conjunto vivo; as seis colunas ficam no banco, órfãs | **sim** — é um revert |
+| **B. Código + migração** | o mesmo, e uma revisão faz `DROP COLUMN` nas seis depois de conferir que ninguém lê | o DROP **não** volta com dado |
+
+**Recomendo A agora e B depois** — exatamente a forma das revisões 0016/0017: a
+etapa reversível primeiro, a janela de conferência no meio, o irreversível
+depois. E A já fecha o defeito inteiro; B só devolve espaço e tira a armadilha
+do caminho de quem ler o model.
+
+**Mas A é decisão de produto, e por isso está parada aqui.** Se alguma filial
+tiver as duas preenchidas com valores diferentes, A **muda o endereço que o
+cliente vê**. Qual dos dois é o certo é uma pergunta sobre a loja, não sobre o
+código, e não está no briefing. Rode o comando acima e me diga; com o resultado
+na mão, A é meia hora.
+
+### 4.1.3 Os outros dois cortes possíveis, e por que eu NÃO os recomendo
+
+O pedido era "quebrar a tabela". Os dois candidatos naturais, para registro:
+
+- **`branch_print_settings`** (`print_*_copies_*` + `receipt_footer_message`, 5
+  colunas). Já tem rota própria (`GET/PATCH
+  /admin/branches/{id}/print-settings`), e o resto da configuração de impressão
+  já mora fora (`printing_sectors`).
+- **`branch_delivery_settings`** (as 10 de precificação + as 3 de termo
+  comercial, 13 colunas).
+
+**Contra os dois, e o argumento é medido, não estético:**
+
+1. **`resolve_branch_operation` lê 15 colunas de `branches` numa chamada só**, e
+   ela roda no caminho mais quente do sistema: `/menu`, tela de escolha de
+   filial, criação de pedido, `/chat` e `/voice`. Quebrar em duas satélites põe
+   **dois JOINs** ali para arrumar o nome das coisas.
+2. **48 colunas não são um problema do Postgres.** A linha é estreita (texto
+   curto, numeric, boolean), são duas filiais hoje, e nenhuma consulta é lenta
+   por causa disso. Não há sintoma a consertar — o único sintoma real desta
+   tabela é o endereço duplicado do 4.1.2, e ele **não** se resolve quebrando.
+3. **Toda quebra termina em `DROP COLUMN`** e exige a mesma dança de duas
+   etapas, com o mesmo `ACCESS EXCLUSIVE` da seção 1.2 desta rodada. É custo de
+   deploy sem defeito do outro lado.
+4. **A tabela já tem um vocabulário que funciona**, e ele está documentado no
+   model e em `docs/operacao-por-filial.md`: *estado do dia* (NOT NULL, não
+   herda) contra *termo comercial* (`NULL` = herda). Os comentários agrupados
+   já separam os blocos para quem lê. Uma satélite acrescentaria uma terceira
+   coisa a lembrar sem tirar nenhuma.
+
+**Se ainda assim você quiser a quebra**, o roteiro é o das duas etapas: revisão
+que CRIA a satélite e COPIA (reversível) → deploy com o código lendo da satélite
+e escrevendo nas duas → janela de conferência → revisão que faz o `DROP COLUMN`
+(irreversível). Com uma diferença importante da 0016: aqui a tabela é pequena e
+o backfill é um `INSERT ... SELECT`, não um `UPDATE` por linha, então a janela é
+de segundos e não de minutos.
+
+**Estado: parado.** Preciso de duas decisões suas — qual endereço é o certo (se
+divergirem) e se a quebra em satélites vale mesmo o deploy.

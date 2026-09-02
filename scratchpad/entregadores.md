@@ -21,7 +21,7 @@ cadastrar rápido.**
 | 1 | Schema: `couriers`, `courier_assignments`, taxa do entregador em `branches` | **feito** — revisão `20260903_0045` |
 | 2 | Ferramenta: varredura de escopo cobre `/courier` (antes das rotas) | **feito** |
 | 3 | Admin: taxa do entregador da filial | **feito** — `GET`/`PATCH /admin/branches/{id}/courier-fee` |
-| 4 | Admin: cadastro (listar, criar, editar, ativar/desativar, excluir) + código | pendente |
+| 4 | Admin: cadastro (listar, criar, editar, ativar/desativar, excluir) + código | **feito** — `/admin/couriers`, `/admin/couriers/{id}`, `/admin/couriers/{id}/access` |
 | 5 | Admin: atribuir e desatribuir pedidos | pendente |
 | 6 | Entregador: autenticação (link + código), lista, saiu/entregue, histórico | pendente |
 | 7 | Docs, contrato para o painel e para o app, fase 2 | pendente |
@@ -292,6 +292,33 @@ duas).
 Vermelho visto: coleta interrompida (módulos inexistentes) e, com os módulos
 de pé, `test_as_rotas_estao_registradas` — que é o vermelho que vale para
 "a rota existe". 17 verdes depois. `openapi.json` regenerado.
+
+## 4. O cadastro e o código
+
+Seis rotas em `/admin/couriers`. Lista e leitura PESSOAS (o atendente atribui
+e precisa da lista); criar, editar, excluir e gerar acesso GERENCIA — o
+código é credencial e não sai da senha que mais circula.
+
+Decisões que só aparecem no código:
+
+- **desativar fecha as corridas abertas** (`mark_open_assignments_unassigned`)
+  e o painel reatribui. Inativo não consegue marcar nada, e um pedido preso
+  com ele só apareceria como "atribuído". Reativar não reabre nada e **não
+  recria o acesso** — o par gerado antes continua valendo;
+- **excluir** = `deleted_at` + `is_active=false` + hashes nulos + corridas
+  fechadas. O telefone fica livre (índice parcial);
+- **o HMAC do código usa o link como chave** (`hash_courier_access_code`). Há
+  teste provando que o mesmo código com outro link não confere — é o que
+  faz um dump sem o link não servir para força bruta. Nenhuma env var nova;
+- **inativo não ganha acesso** (409): seria um par que a dependência
+  recusaria, e o dono veria "funcionou" numa tela e "não entra" na outra;
+- nomes de método do repositório seguem os prefixos que
+  `escrita_e_transacao.py` classifica (`exists_`, `mark_`, `create`,
+  `list_`, `get_`) — nome fora da lista vira achado.
+
+Vermelho visto: `ImportError` na coleta (o vermelho de "não existe") e, com o
+módulo de pé, as rotas não registradas. 37 verdes rápidos + 9 de banco
+(`test_entregadores_repository_db.py`, o WHERE de verdade).
 
 ## Portão
 

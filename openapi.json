@@ -1449,6 +1449,176 @@
         "title": "AdminCategoryUpdate",
         "type": "object"
       },
+      "AdminCourierAccessResponse": {
+        "description": "A UNICA vez que o link e o codigo existem fora do hash.\n\nNao ha rota que os devolva de novo, e isso e propriedade: uma rota \"me\nmostra de novo\" seria uma rota que entrega a credencial de outra pessoa.\nSegunda via e chamar esta rota outra vez, que gera OUTRO par e mata o\nanterior na mesma resposta.\n\n`link_token` e o segredo do link; o painel monta a URL do app do\nentregador com ele. `access_code` e o que o motoboy digita uma vez.",
+        "properties": {
+          "access_code": {
+            "title": "Access Code",
+            "type": "string"
+          },
+          "access_generated_at": {
+            "format": "date-time",
+            "title": "Access Generated At",
+            "type": "string"
+          },
+          "courier_id": {
+            "format": "uuid",
+            "title": "Courier Id",
+            "type": "string"
+          },
+          "link_token": {
+            "title": "Link Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "courier_id",
+          "link_token",
+          "access_code",
+          "access_generated_at"
+        ],
+        "title": "AdminCourierAccessResponse",
+        "type": "object"
+      },
+      "AdminCourierCreate": {
+        "additionalProperties": false,
+        "description": "Nome e telefone. Nada mais, de proposito: e o que o dono sabe do\nmotoboy, e cada campo a mais e um que ninguem preenche.\n\n`extra=\"forbid\"` porque o corpo NAO e lugar de escolher codigo de acesso:\no codigo e sorteado pelo servidor em `POST /admin/couriers/{id}/access`.",
+        "properties": {
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "phone": {
+            "maxLength": 30,
+            "minLength": 8,
+            "title": "Phone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "branch_id",
+          "name",
+          "phone"
+        ],
+        "title": "AdminCourierCreate",
+        "type": "object"
+      },
+      "AdminCourierResponse": {
+        "properties": {
+          "access_generated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Generated At"
+          },
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "has_access": {
+            "title": "Has Access",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "phone": {
+            "title": "Phone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "branch_id",
+          "name",
+          "phone",
+          "is_active",
+          "has_access"
+        ],
+        "title": "AdminCourierResponse",
+        "type": "object"
+      },
+      "AdminCourierUpdate": {
+        "additionalProperties": false,
+        "description": "PATCH parcial. `is_active = false` fecha as corridas abertas e tira o\nacesso na hora; `true` de volta NAO recria o acesso — o par gerado antes\ncontinua valendo, que e o que \"raramente trocado\" pede.",
+        "properties": {
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "maxLength": 30,
+                "minLength": 8,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
+          }
+        },
+        "title": "AdminCourierUpdate",
+        "type": "object"
+      },
       "AdminCustomerListItem": {
         "properties": {
           "average_ticket": {
@@ -14187,6 +14357,307 @@
         "summary": "Update Admin Coupon",
         "tags": [
           "admin coupons"
+        ]
+      }
+    },
+    "/admin/couriers": {
+      "get": {
+        "description": "Os entregadores do restaurante do token, inativos inclusive.\n\nExcluidos nao aparecem. `has_access` diz se ja existe um link+codigo\nvalendo — o par em si nunca sai desta rota.",
+        "operationId": "list_couriers_admin_couriers_get",
+        "parameters": [
+          {
+            "description": "Filtra por filial. Quem so tem acesso a uma filial ja vem filtrado.",
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filtra por filial. Quem so tem acesso a uma filial ja vem filtrado.",
+              "title": "Branch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AdminCourierResponse"
+                  },
+                  "title": "Response List Couriers Admin Couriers Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Couriers",
+        "tags": [
+          "admin couriers"
+        ]
+      },
+      "post": {
+        "description": "Nome e telefone, numa filial. Nasce ativo e SEM acesso: o link e o\ncodigo saem de `POST /admin/couriers/{id}/access`.\n\nO telefone e unico por filial (409). Quem serve duas lojas tem dois\ncadastros, um por filial.",
+        "operationId": "create_courier_admin_couriers_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminCourierCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCourierResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Courier",
+        "tags": [
+          "admin couriers"
+        ]
+      }
+    },
+    "/admin/couriers/{courier_id}": {
+      "delete": {
+        "description": "Exclui o entregador: some das listas, perde o acesso na hora, os\npedidos abertos voltam para a fila. O historico de corridas dele\ncontinua existindo — e o que o dono usa para pagar.\n\nO telefone fica livre para um cadastro novo.",
+        "operationId": "delete_courier_admin_couriers__courier_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "courier_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Courier Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Courier",
+        "tags": [
+          "admin couriers"
+        ]
+      },
+      "get": {
+        "operationId": "get_courier_admin_couriers__courier_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "courier_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Courier Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCourierResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Courier",
+        "tags": [
+          "admin couriers"
+        ]
+      },
+      "patch": {
+        "description": "PATCH parcial: nome, telefone, ativo/inativo.\n\n`is_active: false` tira o acesso na hora e **devolve os pedidos abertos\ndele para a fila** (as atribuicoes sao fechadas). `true` de volta nao\nreabre nada e nao recria o acesso: o par gerado antes continua valendo.",
+        "operationId": "update_courier_admin_couriers__courier_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "courier_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Courier Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminCourierUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCourierResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Courier",
+        "tags": [
+          "admin couriers"
+        ]
+      }
+    },
+    "/admin/couriers/{courier_id}/access": {
+      "post": {
+        "description": "Gera (ou REGENERA) o link e o codigo do entregador.\n\nA resposta e a unica vez que os dois existem em claro. O painel monta a\nURL do app do entregador com `link_token` e entrega o par ao motoboy;\nele digita o codigo uma vez e o app guarda.\n\nChamar de novo gera outro par, e **o anterior morre na hora** — nao ha\nsessao nem token derivado que sobreviva. E o botao de \"o motoboy saiu\".\nEntregador inativo responde 409.",
+        "operationId": "generate_courier_access_admin_couriers__courier_id__access_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "courier_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Courier Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCourierAccessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Generate Courier Access",
+        "tags": [
+          "admin couriers"
         ]
       }
     },

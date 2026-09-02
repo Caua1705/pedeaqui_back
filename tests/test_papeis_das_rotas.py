@@ -122,6 +122,16 @@ PAPEL_ESPERADO = {
     # aceita o agente de impressao.
     ("GET", "/admin/branches/{branch_id}/courier-fee"): GERENCIA,
     ("PATCH", "/admin/branches/{branch_id}/courier-fee"): SOMENTE_DONO,
+    # Ler a lista e do balcao: e o atendente quem atribui pedido a motoboy.
+    # Cadastrar, editar, excluir e gerar o codigo sao da gerencia, como o
+    # setor de impressao — o codigo e credencial, e credencial nao sai da
+    # senha que mais circula.
+    ("GET", "/admin/couriers"): PESSOAS,
+    ("POST", "/admin/couriers"): GERENCIA,
+    ("GET", "/admin/couriers/{courier_id}"): PESSOAS,
+    ("PATCH", "/admin/couriers/{courier_id}"): GERENCIA,
+    ("DELETE", "/admin/couriers/{courier_id}"): GERENCIA,
+    ("POST", "/admin/couriers/{courier_id}/access"): GERENCIA,
     # --- clientes e relatorios: o que uma senha vazada nao pode alcancar
     ("GET", "/admin/customers"): GERENCIA,
     ("GET", "/admin/reports/commission"): SOMENTE_DONO,

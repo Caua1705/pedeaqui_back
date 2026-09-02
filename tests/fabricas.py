@@ -44,6 +44,7 @@ from src.models.branch_business_hour_model import BranchBusinessHour
 from src.models.branch_model import Branch
 from src.models.branch_payment_method_model import BranchPaymentMethod
 from src.models.coupon_model import CouponTemplate, RestaurantCoupon
+from src.models.courier_model import Courier, CourierAssignment
 from src.models.customer_model import Customer, CustomerAddress
 from src.models.order_model import Order
 from src.models.product_model import Product
@@ -446,3 +447,44 @@ def credencial_de_pagamento(**sobrescritas) -> ActivePaymentCredential:
     }
     campos.update(sobrescritas)
     return ActivePaymentCredential(**campos)
+
+
+def entregador(**sobrescritas) -> Courier:
+    """Um motoboy ativo, sem acesso gerado, de uma filial qualquer.
+
+    `access_link_hash` e `access_code_hash` nulos sao o estado em que todo
+    cadastro nasce — entre criar e gerar o codigo. Teste que precisa do
+    acesso gera pelo service, que e quem sabe a forma dos dois hashes.
+    """
+    campos = {
+        "id": uuid.uuid4(),
+        "restaurant_id": uuid.uuid4(),
+        "branch_id": uuid.uuid4(),
+        "name": "Zé do Baião",
+        "phone": "85999990000",
+        "is_active": True,
+        "access_link_hash": None,
+        "access_code_hash": None,
+        "access_generated_at": None,
+        "deleted_at": None,
+        "created_at": datetime(2026, 9, 1, 12, tzinfo=timezone.utc),
+    }
+    campos.update(sobrescritas)
+    return Courier(**campos)
+
+
+def atribuicao(**sobrescritas) -> CourierAssignment:
+    """Uma corrida ABERTA (`unassigned_at` nulo), com a taxa ja congelada."""
+    campos = {
+        "id": uuid.uuid4(),
+        "order_id": uuid.uuid4(),
+        "courier_id": uuid.uuid4(),
+        "assigned_by_admin_user_id": None,
+        "assigned_at": datetime(2026, 9, 1, 19, tzinfo=timezone.utc),
+        "unassigned_at": None,
+        "unassigned_by_admin_user_id": None,
+        "courier_fee_snapshot": Decimal("7.00"),
+        "distance_km_snapshot": Decimal("4.20"),
+    }
+    campos.update(sobrescritas)
+    return CourierAssignment(**campos)

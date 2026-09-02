@@ -6,12 +6,30 @@ Dinheiro sai como `float` via `money_to_float`, como o resto do painel
 pedido).
 """
 
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.schemas.common_schema import BaseResponse
+from src.utils.normalization import normalize_digits, normalize_text
+
+
+MAX_COURIER_NAME_LENGTH = 120
+# O mesmo piso do telefone do cliente (CustomerInput): sem DDD nao ha como
+# ligar para o motoboy, que e a unica coisa para que o telefone serve aqui.
+MIN_PHONE_DIGITS = 8
+
+
+def _phone_digits(value: str) -> str:
+    phone = normalize_digits(value)
+    if len(phone) < MIN_PHONE_DIGITS:
+        raise ValueError("telefone invalido")
+    return phone
+
+
+# --- A taxa da filial -------------------------------------------------------
 
 
 class AdminBranchCourierFeeUpdate(BaseModel):
@@ -31,3 +49,96 @@ class AdminBranchCourierFeeResponse(BaseResponse):
     branch_id: UUID
     courier_fee_base: float | None = None
     courier_fee_per_km: float | None = None
+
+
+# --- O cadastro -------------------------------------------------------------
+
+
+class AdminCourierCreate(BaseModel):
+    """Nome e telefone. Nada mais, de proposito: e o que o dono sabe do
+    motoboy, e cada campo a mais e um que ninguem preenche.
+
+    `extra="forbid"` porque o corpo NAO e lugar de escolher codigo de acesso:
+    o codigo e sorteado pelo servidor em `POST /admin/couriers/{id}/access`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    branch_id: UUID
+    name: str = Field(min_length=1, max_length=MAX_COURIER_NAME_LENGTH)
+    phone: str = Field(min_length=MIN_PHONE_DIGITS, max_length=30)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        # NFC, pela armadilha 31: o nome vai para `changed_by` do historico
+        # e para a tela do painel, e as duas comparam bytes.
+        name = normalize_text(value).strip()
+        if not name:
+            raise ValueError("nome invalido")
+        return name
+
+    @field_validator("phone")
+    @classmethod
+    def normalize_phone(cls, value: str) -> str:
+        return _phone_digits(value)
+
+
+class AdminCourierUpdate(BaseModel):
+    """PATCH parcial. `is_active = false` fecha as corridas abertas e tira o
+    acesso na hora; `true` de volta NAO recria o acesso — o par gerado antes
+    continua valendo, que e o que "raramente trocado" pede."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=MAX_COURIER_NAME_LENGTH)
+    phone: str | None = Field(default=None, min_length=MIN_PHONE_DIGITS, max_length=30)
+    is_active: bool | None = None
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        name = normalize_text(value).strip()
+        if not name:
+            raise ValueError("nome invalido")
+        return name
+
+    @field_validator("phone")
+    @classmethod
+    def normalize_phone(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _phone_digits(value)
+
+
+class AdminCourierResponse(BaseResponse):
+    id: UUID
+    branch_id: UUID
+    name: str
+    phone: str
+    is_active: bool
+    # Se ja existe um par link+codigo valendo. O par em si nao sai daqui —
+    # so em `POST /admin/couriers/{id}/access`, uma vez.
+    has_access: bool
+    access_generated_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+class AdminCourierAccessResponse(BaseModel):
+    """A UNICA vez que o link e o codigo existem fora do hash.
+
+    Nao ha rota que os devolva de novo, e isso e propriedade: uma rota "me
+    mostra de novo" seria uma rota que entrega a credencial de outra pessoa.
+    Segunda via e chamar esta rota outra vez, que gera OUTRO par e mata o
+    anterior na mesma resposta.
+
+    `link_token` e o segredo do link; o painel monta a URL do app do
+    entregador com ele. `access_code` e o que o motoboy digita uma vez.
+    """
+
+    courier_id: UUID
+    link_token: str
+    access_code: str
+    access_generated_at: datetime

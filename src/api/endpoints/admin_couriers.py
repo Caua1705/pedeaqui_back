@@ -9,11 +9,12 @@ impressao continua alcancando as quatro rotas de sempre e mais nenhuma.
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.admin_scope import (
     GERENCIA,
+    PESSOAS,
     SOMENTE_DONO,
     AdminScope,
     exigir_papel,
@@ -23,11 +24,18 @@ from src.api.dependencies.database import get_db
 from src.schemas.courier_schema import (
     AdminBranchCourierFeeResponse,
     AdminBranchCourierFeeUpdate,
+    AdminCourierAccessResponse,
+    AdminCourierCreate,
+    AdminCourierResponse,
+    AdminCourierUpdate,
 )
 from src.services.admin_courier_service import AdminCourierService
 
 
 router = APIRouter(prefix="/admin", tags=["admin couriers"])
+
+
+# --- A taxa da filial ---------------------------------------------------------
 
 
 @router.get(
@@ -74,3 +82,126 @@ def update_courier_fee(
     Nenhum numero que o CLIENTE paga muda com isto.
     """
     return AdminCourierService(db).update_courier_fee(scope, branch_id, payload)
+
+
+# --- O cadastro ---------------------------------------------------------------
+
+
+@router.get(
+    "/couriers",
+    response_model=list[AdminCourierResponse],
+    # PESSOAS: e o atendente quem atribui pedido a motoboy, e para isso ele
+    # precisa da lista. O que sai aqui e nome e telefone de funcionario, nao
+    # de cliente.
+    dependencies=[Depends(exigir_papel(PESSOAS))],
+)
+def list_couriers(
+    branch_id: UUID | None = Query(
+        default=None,
+        description="Filtra por filial. Quem so tem acesso a uma filial ja vem filtrado.",
+    ),
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> list[AdminCourierResponse]:
+    """Os entregadores do restaurante do token, inativos inclusive.
+
+    Excluidos nao aparecem. `has_access` diz se ja existe um link+codigo
+    valendo — o par em si nunca sai desta rota.
+    """
+    return AdminCourierService(db).list_couriers(scope, branch_id=branch_id)
+
+
+@router.post(
+    "/couriers",
+    response_model=AdminCourierResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
+def create_courier(
+    payload: AdminCourierCreate,
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> AdminCourierResponse:
+    """Nome e telefone, numa filial. Nasce ativo e SEM acesso: o link e o
+    codigo saem de `POST /admin/couriers/{id}/access`.
+
+    O telefone e unico por filial (409). Quem serve duas lojas tem dois
+    cadastros, um por filial.
+    """
+    return AdminCourierService(db).create_courier(scope, payload)
+
+
+@router.get(
+    "/couriers/{courier_id}",
+    response_model=AdminCourierResponse,
+    dependencies=[Depends(exigir_papel(PESSOAS))],
+)
+def get_courier(
+    courier_id: UUID,
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> AdminCourierResponse:
+    return AdminCourierService(db).get_courier(scope, courier_id)
+
+
+@router.patch(
+    "/couriers/{courier_id}",
+    response_model=AdminCourierResponse,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
+def update_courier(
+    courier_id: UUID,
+    payload: AdminCourierUpdate,
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> AdminCourierResponse:
+    """PATCH parcial: nome, telefone, ativo/inativo.
+
+    `is_active: false` tira o acesso na hora e **devolve os pedidos abertos
+    dele para a fila** (as atribuicoes sao fechadas). `true` de volta nao
+    reabre nada e nao recria o acesso: o par gerado antes continua valendo.
+    """
+    return AdminCourierService(db).update_courier(scope, courier_id, payload)
+
+
+@router.delete(
+    "/couriers/{courier_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
+def delete_courier(
+    courier_id: UUID,
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Exclui o entregador: some das listas, perde o acesso na hora, os
+    pedidos abertos voltam para a fila. O historico de corridas dele
+    continua existindo — e o que o dono usa para pagar.
+
+    O telefone fica livre para um cadastro novo.
+    """
+    AdminCourierService(db).delete_courier(scope, courier_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/couriers/{courier_id}/access",
+    response_model=AdminCourierAccessResponse,
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
+def generate_courier_access(
+    courier_id: UUID,
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> AdminCourierAccessResponse:
+    """Gera (ou REGENERA) o link e o codigo do entregador.
+
+    A resposta e a unica vez que os dois existem em claro. O painel monta a
+    URL do app do entregador com `link_token` e entrega o par ao motoboy;
+    ele digita o codigo uma vez e o app guarda.
+
+    Chamar de novo gera outro par, e **o anterior morre na hora** — nao ha
+    sessao nem token derivado que sobreviva. E o botao de "o motoboy saiu".
+    Entregador inativo responde 409.
+    """
+    return AdminCourierService(db).generate_access(scope, courier_id)

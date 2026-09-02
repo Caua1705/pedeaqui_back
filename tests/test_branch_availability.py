@@ -95,12 +95,10 @@ def filial(
         display_name=None,
         slug=nome.lower(),
         address=f"Rua {nome}, 1",
-        address_street=None,
+        # Das seis `address_*` (resto do schema pre-Alembic, que nada escreve)
+        # so `address_number` continua sendo lida: e a unica sem par vivo. As
+        # outras cinco sairam de `_build_address` — ver `test_restaurant_info`.
         address_number=None,
-        address_neighborhood=None,
-        address_city=None,
-        address_state=None,
-        address_zipcode=None,
         neighborhood="Centro",
         city="Fortaleza",
         state="CE",

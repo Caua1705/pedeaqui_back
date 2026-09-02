@@ -147,12 +147,38 @@ class RestaurantService:
 
     @staticmethod
     def _build_address(branch) -> BranchAddressResponse:
-        street = branch.address_street or branch.address
+        """O endereco publico da filial — o que o cliente ve no app.
+
+        SO LE O CONJUNTO VIVO (`address`, `neighborhood`, `city`, `state`,
+        `zipcode`), que e exatamente o que `AdminBranchUpdate` deixa o lojista
+        escrever no painel.
+
+        Ate aqui isto era `branch.address_street or branch.address`, com o
+        conjunto `address_*` VENCENDO — e `address_*` e um resto do schema
+        pre-Alembic que NADA no codigo escreve. O efeito, numa filial com essas
+        colunas preenchidas: o lojista corrige o endereco no painel, o painel
+        exibe o valor novo (ele le `branch.address`) e o app do cliente
+        continua mostrando o antigo. Sem erro, sem log, sem tela onde conferir.
+        E a familia da armadilha 35 — ler a coluna crua responde "o que esta
+        sobrescrito", que quase nunca e a pergunta.
+
+        As quatro do conjunto vivo sao NOT NULL, entao a troca nao introduz
+        buraco: o que sai daqui e sempre o que o painel gravou por ultimo.
+
+        `number` e a EXCECAO, e de proposito. Ele nao tem par vivo — nao existe
+        `branches.number` e `AdminBranchUpdate` nao tem campo de numero —,
+        entao `address_number` e a UNICA fonte que existe e nao esta
+        sobrescrevendo ninguem. Le-lo nao reabre o defeito acima; deixar de
+        le-lo apagaria o numero da casa do endereco publico de toda filial que
+        o tenha preenchido, sem nada para por no lugar. Das seis `address_*`,
+        e a unica que ainda nao da para largar.
+        """
+        street = branch.address
         number = branch.address_number
-        neighborhood = branch.address_neighborhood or branch.neighborhood
-        city = branch.address_city or branch.city
-        state = branch.address_state or branch.state
-        zipcode = branch.address_zipcode or branch.zipcode
+        neighborhood = branch.neighborhood
+        city = branch.city
+        state = branch.state
+        zipcode = branch.zipcode
 
         street_and_number = ", ".join(value for value in (street, number) if value)
         city_and_state = " - ".join(value for value in (city, state) if value)

@@ -181,11 +181,44 @@ skill). Esticar o prazo "porque disco é barato" troca uma coisa pela outra.
 |---|---|---|
 | `restaurants` | nome, `slug` (UNIQUE), cores da marca, logo, `is_active`, `description`, `assistant_notes` | O `slug` é a identidade pública na URL. Os dois textos têm públicos **opostos**: `description` é a vitrine (sai em `RestaurantPublicResponse`), `assistant_notes` é o contexto do assistente de IA e não sai em resposta pública nenhuma |
 | `restaurant_settings` | `min_order_value`, `service_fee_enabled/amount`, `estimated_delivery_time_min/max`, `default_delivery_fee`, `platform_commission_percent`, `voice_enabled` | **1:1 opcional.** Os seis primeiros são só o **padrão** que a filial herda — nenhum pedido os lê direto (ver `operacao-por-filial.md`) |
-| `branches` | endereço, lat/lng, regras de entrega da loja (base, por km, piso, teto, raio), **`is_open` / `accepts_delivery` / `accepts_pickup`** e as sobrescritas comerciais | A taxa de entrega e a **operação do dia** são por filial. Nas colunas comerciais homônimas de `restaurant_settings`, **NULL significa "herda"** |
+| `branches` | endereço, lat/lng, regras de entrega da loja (base, por km, piso, teto, raio), **`is_open` / `accepts_delivery` / `accepts_pickup`** e as sobrescritas comerciais | A taxa de entrega e a **operação do dia** são por filial. Nas colunas comerciais homônimas de `restaurant_settings`, **NULL significa "herda"**. O endereço tem **dois conjuntos**, e só um vale — ver abaixo |
 | `branch_business_hours` | uma linha por faixa de horário: `weekday`, `opens_at`, `closes_at`, `prep_time_min/max`, `is_closed` | **`weekday` 0 = segunda** (é o `datetime.weekday()` do Python) |
 | `branch_payment_methods` | `payment_flow` (`online`/`delivery`), `method_type`, `label`, `enabled`, `earns_cashback` | É a fonte da verdade das formas de pagamento aceitas — e por isso "quais formas geram cashback" é coluna daqui, não lista nova |
 | `printing_sectors` | `branch_id`, nome, `sort_order`, `is_active` | Pende de **filial**, porque impressora é objeto físico dentro de uma loja |
 | `admin_users` | `restaurant_id`, `branch_id` (nullable), `role`, e-mail UNIQUE global | `role` ∈ owner, manager, attendant, print_agent |
+
+#### Os dois conjuntos de endereço de `branches`
+
+A tabela tem **treze** colunas de endereço, e elas não são treze campos: são
+dois conjuntos que dizem a mesma coisa.
+
+- **O vivo (5):** `address`, `neighborhood`, `city`, `state`, `zipcode`. É o
+  que `AdminBranchUpdate` deixa o lojista escrever no painel, e as quatro
+  primeiras são `NOT NULL`.
+- **O morto (6):** `address_street`, `address_number`, `address_neighborhood`,
+  `address_city`, `address_state`, `address_zipcode`. Resto do schema
+  pré-Alembic — estão no `schema_baseline.sql` e nenhuma revisão as toca.
+  **Nada no código escreve nelas.**
+- E `latitude`/`longitude`, que são a origem do cálculo de rota e não têm par.
+
+**Até a correção, o conjunto morto vencia na leitura.** O
+`RestaurantService._build_address` resolvia `branch.address_street or
+branch.address`, e o resultado é a resposta de `GET /restaurants/{slug}` — o
+endereço que o cliente vê no app. Numa filial com as `address_*` preenchidas, o
+lojista corrigia o endereço no painel e o app continuava mostrando o antigo:
+sem erro, sem log, sem tela onde conferir, porque o painel exibe o valor novo
+(ele lê `branch.address`). É a família da armadilha 35 — a coluna crua responde
+"o que está sobrescrito", que quase nunca é a pergunta.
+
+Hoje `_build_address` **lê só o conjunto vivo**, e as cinco colunas mortas com
+par ficaram órfãs, prontas para sair numa revisão futura.
+
+**`address_number` é a exceção e continua sendo lida.** Ela não tem par vivo —
+não existe `branches.number` nem campo de número em `AdminBranchUpdate` —,
+então não sobrescreve ninguém, e largá-la apagaria o número da casa do endereço
+público de toda filial que o tenha preenchido. Das seis, é a única que ainda
+não dá para largar: quem for fazer o `DROP COLUMN` precisa primeiro decidir
+onde o número passa a ser escrito.
 
 ### O cardápio
 

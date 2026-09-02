@@ -19,11 +19,25 @@ class Branch(Base):
     slug: Mapped[str] = mapped_column(Text, nullable=False)
     display_name: Mapped[str | None] = mapped_column(Text)
     email: Mapped[str | None] = mapped_column(Text)
+    # --- Endereco: o conjunto VIVO. E o que `AdminBranchUpdate` grava e o
+    # unico que `RestaurantService._build_address` le. ---
     address: Mapped[str] = mapped_column(Text, nullable=False)
     neighborhood: Mapped[str] = mapped_column(Text, nullable=False)
     city: Mapped[str] = mapped_column(Text, nullable=False)
     state: Mapped[str] = mapped_column(Text, nullable=False)
     zipcode: Mapped[str | None] = mapped_column(Text)
+    # --- Endereco: o conjunto MORTO. Nao escreva nestas. ---
+    #
+    # Resto do schema pre-Alembic (estao no `schema_baseline.sql`, e nenhuma
+    # revisao as toca). NADA no codigo escreve nelas, e ate a correcao do
+    # `_build_address` elas eram LIDAS PRIMEIRO — venciam o conjunto vivo. O
+    # efeito numa filial com elas preenchidas: o lojista corrigia o endereco
+    # no painel, o painel exibia o valor novo (ele le `address`) e o app do
+    # cliente continuava mostrando o antigo, sem erro e sem log.
+    #
+    # Hoje sao orfas e podem sair numa revisao futura — MENOS
+    # `address_number`, que continua sendo lida por nao ter par vivo: nao
+    # existe `branches.number` nem campo de numero no painel.
     address_street: Mapped[str | None] = mapped_column(Text)
     address_number: Mapped[str | None] = mapped_column(Text)
     address_neighborhood: Mapped[str | None] = mapped_column(Text)

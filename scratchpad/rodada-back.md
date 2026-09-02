@@ -15,7 +15,7 @@ qualquer coisa.**
 | 1 | `tracking_token` — plano das duas etapas | **feito** (só plano; nada executado) |
 | 2 | `print_agent` — criar a conta | **feito** (comando escrito; conta NÃO criada — exige o banco) |
 | 3 | Custo de IA por restaurante | **feito** |
-| 4.1 | Quebrar a tabela `branches` | **PARADO** — levantamento e plano prontos; espera duas decisões suas |
+| 4.1 | Tabela `branches` | **feito** — quebra recusada com motivo; endereço duplicado corrigido |
 | 4.2 | README | **feito** |
 | 4.3 | Diagrama ER | **feito** |
 
@@ -848,8 +848,80 @@ e escrevendo nas duas → janela de conferência → revisão que faz o `DROP CO
 o backfill é um `INSERT ... SELECT`, não um `UPDATE` por linha, então a janela é
 de segundos e não de minutos.
 
-**Estado: parado.** Preciso de duas decisões suas — qual endereço é o certo (se
-divergirem) e se a quebra em satélites vale mesmo o deploy.
+### 4.1.4 A decisão, e o que ela virou
+
+**Decidido: não quebrar. Só o conserto A.** A quebra em satélites fica de fora
+pelos quatro motivos da 4.1.3 — o principal sendo os dois JOINs que ela poria
+em `resolve_branch_operation`, que roda em `/menu`, criação de pedido, `/chat`
+e `/voice`, para arrumar o nome das coisas num defeito que não existe.
+
+**O conserto A está feito.** `_build_address` passou a ler **só o conjunto
+vivo**: `branch.address`, `neighborhood`, `city`, `state`, `zipcode` — o que o
+painel grava. As quatro primeiras são `NOT NULL`, então a troca não abre
+buraco: o que sai é sempre o que o lojista gravou por último.
+
+#### A correção que o levantamento da 4.1.2 não tinha: `address_number`
+
+Ao abrir a função apareceu uma coisa que o plano dizia errado. As seis
+`address_*` **não** viram órfãs — **cinco** viram. `number` é diferente das
+outras cinco:
+
+```python
+street = branch.address_street or branch.address   # tem par vivo
+number = branch.address_number                     # NAO tem
+```
+
+**Não existe `branches.number`, e `AdminBranchUpdate` não tem campo de
+número.** `address_number` é a única fonte que existe, e ela não está
+sobrescrevendo ninguém — logo, não participa do defeito. Largá-la junto com as
+outras não seria limpeza: apagaria o número da casa do endereço público (e do
+`full_address`) de toda filial que o tenha preenchido, sem nada para pôr no
+lugar.
+
+Então ela **continua sendo lida**, com o porquê escrito no model e na função.
+Quem for fazer o `DROP COLUMN` das seis um dia precisa primeiro decidir onde o
+número passa a ser escrito — é a única das seis que ainda não dá para largar.
+
+#### Antes de subir isto: a pergunta que continua sendo de produção
+
+A outra decisão que estava parada — **qual endereço é o certo, se divergirem** —
+não some com o conserto: ela muda de "decidir antes de codar" para **"conferir
+antes de deployar"**. O comando é o da 4.1.2, só leitura. Se
+`o_conjunto_morto_vence` for falso em todas as filiais, este deploy não muda
+nada que o cliente veja e é limpeza pura. Se for verdadeiro em alguma, **aquela
+filial vai passar a mostrar o endereço do painel**, e vale olhar se ele bate
+com o endereço real da loja antes de subir.
+
+Não é bloqueio para o commit — o painel é a fonte que o lojista controla, e um
+endereço que ele não consegue corrigir é o defeito. É bloqueio para subir sem
+olhar.
+
+#### Os testes, e o dublê que o CLAUDE.md proíbe
+
+`tests/test_restaurant_info.py` dublava a **filial** com `SimpleNamespace` — o
+caso exato que o CLAUDE.md fecha. Trocado por `Branch(...)` transiente (sem
+sessão, sem banco), que é o que faz coluna não passada valer `None` e nome
+errado levantar `TypeError`. Com o dublê solto, um teste destes ficaria verde
+descrevendo uma filial que a aplicação não produz.
+
+Três testes novos: o conjunto morto preenchido e divergente não vence mais; o
+número continua saindo de `address_number`; e filial sem número monta o
+`full_address` do mesmo jeito.
+
+#### Arquivos
+
+`src/services/restaurant_service.py` (`_build_address`) ·
+`src/models/branch_model.py` (os dois conjuntos, comentados) ·
+`docs/modelo-de-dados.md` (subseção nova em "O restaurante e suas lojas") ·
+`tests/test_restaurant_info.py` · `tests/test_branch_availability.py`.
+
+**Portão: 2788 testes verdes** (2179 rápidos + 609 `db`), `ruff` limpo,
+`export_openapi.py --check` em dia — `BranchAddressResponse` não mudou de
+forma, só de fonte, então o `openapi.json` não mudou.
+
+**Estado: 4.1 fechado.** O que sobra é o `DROP COLUMN` das cinco órfãs, que é
+irreversível, não tem pressa e não depende de mais nada — e a sexta, que
+depende de decidir onde o número passa a morar.
 
 ---
 

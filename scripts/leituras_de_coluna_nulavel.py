@@ -21,6 +21,12 @@ Um acesso `objeto.coluna` cujo PAI na arvore sintatica faz uma destas coisas:
   num schema de resposta que declara o campo sem `| None`, e vira 500 na
   serializacao.
 
+E, numa SEGUNDA secao, a outra metade: **todo campo de schema Pydantic que
+declara uma dessas colunas sem `| None`**. Ela nao aparece na varredura de
+leituras — um campo e anotacao de classe, nao acesso a atributo — e e por ali
+que a maioria dos 500 nasce, derrubando a resposta INTEIRA e nao so o item
+quebrado.
+
 E ele considera PROTEGIDO quando o acesso esta claramente guardado: dentro de
 `if objeto.coluna`, `objeto.coluna is None`, `objeto.coluna or X`,
 `not objeto.coluna`, ou passado a `getattr(..., None)`.
@@ -154,6 +160,54 @@ def leituras(colunas: set[str]) -> list[tuple[str, int, str, str, str]]:
     return achados
 
 
+def campos_de_schema_sem_nulo(colunas: set[str]) -> list[tuple[str, str, str]]:
+    """Schema de resposta que declara a coluna SEM `| None`.
+
+    E a OUTRA metade, e ela nao aparece na varredura de leituras: um campo
+    Pydantic e uma anotacao de classe, nao um acesso a atributo. E e por aqui
+    que a maioria dos 500 nasce — `None` chegando num campo obrigatorio vira
+    `ValidationError` na serializacao, e derruba a resposta INTEIRA (a lista,
+    nao so o item quebrado).
+
+    Mesma ressalva das leituras, e mais forte: casa por NOME. `email` e campo
+    de meia duzia de schemas, e a maioria nao tem nada a ver com
+    `customers.email`. Serve para nao deixar nenhum passar, nao para acusar.
+    """
+    import importlib
+    import pkgutil
+
+    from pydantic import BaseModel
+
+    import src
+
+    for info in pkgutil.walk_packages(src.__path__, prefix="src."):
+        try:
+            importlib.import_module(info.name)
+        except Exception:
+            continue
+
+    achados = []
+    vistos: set[type] = set()
+    for nome_do_modulo, modulo in list(sys.modules.items()):
+        if not nome_do_modulo.startswith("src.") or modulo is None:
+            continue
+        for nome in dir(modulo):
+            objeto = getattr(modulo, nome, None)
+            if not isinstance(objeto, type) or objeto in vistos:
+                continue
+            if not (issubclass(objeto, BaseModel) and objeto is not BaseModel):
+                continue
+            vistos.add(objeto)
+            for campo, info_do_campo in objeto.model_fields.items():
+                if campo not in colunas:
+                    continue
+                anotacao = str(info_do_campo.annotation)
+                if "NoneType" in anotacao or "Optional" in anotacao:
+                    continue
+                achados.append((objeto.__name__, campo, anotacao.replace("<class '", "").replace("'>", "")))
+    return sorted(set(achados))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Acha leitura de coluna nulavel em forma que quebra com None."
@@ -206,24 +260,37 @@ def main() -> int:
         print()
         print("Nenhuma. Toda leitura dessas colunas trata o nulo.")
 
+    campos = campos_de_schema_sem_nulo(divergentes)
     print()
-    print("Nem toda leitura daqui e defeito: o casamento e por NOME de atributo,")
-    print("e o script nao sabe de qual tabela o objeto veio. O que ele garante e")
-    print("que nenhuma leitura DESSA FORMA passou despercebida.")
+    print("=" * 76)
+    print(f"E {len(campos)} campo(s) de schema declarando essas colunas SEM `| None`")
+    print("=" * 76)
+    print()
+    print("  Aqui nasce a maioria dos 500: `None` num campo obrigatorio e")
+    print("  ValidationError na serializacao, e derruba a resposta INTEIRA.")
+    print()
+    for schema, campo, tipo in campos:
+        print(f"  {schema}.{campo}: {tipo}")
 
+    print()
+    print("Nem tudo daqui e defeito: o casamento e por NOME, e o script nao sabe")
+    print("de qual tabela o objeto veio. O que ele garante e que nenhuma leitura")
+    print("nem nenhum campo DESSA FORMA passou despercebido.")
+
+    total = len(achados) + len(campos)
     if args.limite is not None:
-        if len(achados) > args.limite:
+        if total > args.limite:
             print()
             print(
-                f"::warning title=Leitura de coluna nulavel::{len(achados)} leitura(s) "
-                f"em forma que quebra com None, e o esperado era {args.limite}. "
-                f"{len(achados) - args.limite} nova(s). Ver a saida acima e "
-                "docs/alinhamento-orm-schema.md."
+                f"::warning title=Coluna nulavel lida como se nao fosse::{total} "
+                f"ponto(s) — {len(achados)} leitura(s) e {len(campos)} campo(s) de "
+                f"schema —, e o esperado era {args.limite}. {total - args.limite} "
+                "novo(s). Ver a saida acima e docs/alinhamento-orm-schema.md."
             )
-        elif len(achados) < args.limite:
+        elif total < args.limite:
             print()
             print(
-                f"::notice title=Leitura de coluna nulavel::{len(achados)} leitura(s), "
+                f"::notice title=Coluna nulavel lida como se nao fosse::{total} ponto(s), "
                 f"abaixo do limite de {args.limite}. Baixe o --limite no ci.yml."
             )
     return 0

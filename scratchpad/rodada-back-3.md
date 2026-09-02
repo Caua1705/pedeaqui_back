@@ -27,9 +27,9 @@ Rodadas anteriores: `scratchpad/rodada-back.md`, `scratchpad/rodada-back-2.md`.
 |---|---|---|
 | 4 | A varredura das leituras de coluna nulável (ferramenta) | **feito** |
 | 1 | `valid_until` — conserto no código, não no schema | **feito** |
-| 2 | As outras 7 das 16, na ordem de gravidade | pendente |
+| 2 | As outras 14, na ordem de gravidade | **feito** — 1 de código, 13 para a revisão |
 | 3 | Redis e LGPD — o comando, e se a exclusão alcança o Redis | **feito** — resposta: NÃO alcança, e há coordenada na chave |
-| 4b | As varreduras no portão como aviso | pendente |
+| 4b | As varreduras no portão como aviso | **feito** |
 
 ---
 
@@ -375,3 +375,150 @@ o `docs/lgpd-proposta.md` é onde ele deve ser declarado, não consertado.
 - **declarar o Redis no `docs/lgpd-proposta.md`**, que hoje não o menciona.
   Independente da resposta: o inventário de dados pessoais está incompleto
   enquanto ele estiver de fora.
+
+---
+
+## 2. As outras 14: código ou schema, uma a uma
+
+Sobraram **14** depois do `valid_until` (item 1). A ordem abaixo é a que você
+pediu: **as que não dão erro visível primeiro.**
+
+### O critério, antes da tabela
+
+"Tratar o nulo no código" só tem duas formas, e as duas custam mais que a
+migração:
+
+**(a) relaxar o schema de resposta** — `email: str | None`. Publica no contrato
+um estado que **não deve existir**, e empurra o `if` para todo cliente: painel,
+app e o gerador de tipos do front. O custo sai do backend e vira o de todo
+mundo.
+
+**(b) inventar um valor** — `email or ""`, `number or "S/N"`. O backend passa a
+**mentir** sobre o dado. É pior que o 500, porque o 500 é visível.
+
+Então a regra que usei, e ela tem exatamente duas saídas para "código":
+
+> **Trate no código quando (i) o nulo tem SIGNIFICADO de produto, ou (ii) o
+> tratamento não é nem relaxar contrato nem inventar valor. Fora disso,
+> alinhe o schema.**
+
+`valid_until` foi (i). **`ai_feedback.created_at` é (ii), e é a única.** As
+outras 13 caem em (a) ou (b), e por isso vão para a revisão — que já está
+escrita, testada e fora da cadeia em `alembic/preparadas/`.
+
+### As 4 silenciosas — sem 500, e por isso piores
+
+| Coluna | O que acontece hoje | Decisão |
+|---|---|---|
+| **`ai_feedback.created_at`** | `created_at < cutoff` com nulo não é falso, é **NULO** — a linha **nunca** casa e o texto em claro do cliente fica para sempre | **CÓDIGO, feito nesta rodada** + alinhar depois |
+| `coupon_redemptions.idempotency_key` | o `UNIQUE` não vale para NULL (no Postgres, NULL é distinto de NULL): a garantia de idempotência some justamente nas linhas nulas | **alinhar** |
+| `ai_product_embeddings.product_id` | o `JOIN products` descarta a linha e o `LEFT JOIN` de `list_stale_products` também: órfã invisível, nunca reaproveitada nem limpa | **alinhar** |
+| `ai_product_embeddings.embedding` | `1 - (NULL <=> vetor) >= :min` é NULO, não falso: o produto some da busca falada, em silêncio | **alinhar** |
+
+**Por que `ai_feedback.created_at` foi de código:** ali tratar não é (a) nem
+(b). Não há schema de resposta — nenhuma rota lê a tabela — e não se inventa
+valor nenhum. O `IS NULL` no DELETE apenas **alarga o alcance da varredura**,
+que é a intenção original dela. E não podia esperar: a migração não acontece
+esta noite e o buraco é de LGPD, ativo.
+
+**Sobre `idempotency_key`, uma observação que não estava no levantamento:** o
+`ON CONFLICT (restaurant_id, product_id)` do upsert do índice vetorial tem o
+mesmo problema. Com `product_id` nulo ele não dedupa, e a linha órfã poderia se
+multiplicar a cada varredura do `reindex`. É mais um argumento para alinhar as
+duas de `ai_product_embeddings` juntas.
+
+**Como saber se existem nulos hoje, em produção:** o script já existe desde a
+rodada 2 e cobre as 15 de uma vez —
+`python scripts/nulos_nas_colunas_em_desacordo.py`. Somente leitura,
+`count(*)` toma apenas `ACCESS SHARE`. Não rodei; é produção.
+
+### As 7 que dão 500
+
+Todas caem em (a): tratar significaria publicar `| None` num contrato para um
+estado que nenhum caminho de escrita produz.
+
+| Coluna | O que derruba | Decisão |
+|---|---|---|
+| `customers.email` | `GET /customers/me` e a exportação da LGPD | **alinhar** |
+| `customers.birth_date` | os mesmos dois | **alinhar** |
+| `customer_addresses.number` | `GET /me/addresses` — **a lista inteira**, não só o endereço quebrado | **alinhar** |
+| `customer_addresses.neighborhood` | idem | **alinhar** |
+| `order_item_options.option_group_id` | o detalhe do pedido, a comanda e o painel — **o pedido inteiro** | **alinhar** |
+| `order_item_options.option_id` | idem | **alinhar** |
+| `admin_users.is_active` | `GET /admin/users` inteiro; e no login falha **fechada** ("usuário ou senha inválido" para quem tem os dois certos) | **alinhar** |
+
+**`customer_addresses.number` merece uma frase, porque parece o `valid_until` e
+não é.** Endereço "S/N" existe de verdade no Brasil — a tentação é dizer que o
+nulo tem significado. Não tem: **"S/N" é um VALOR**, e o nulo seria a ausência
+dele. `valid_until` nulo diz uma coisa que nenhuma data diz ("não expira");
+`number` nulo não diz nada que `"S/N"` não diga melhor. Se o produto quiser
+aceitar endereço sem número, o conserto é o valor, não a coluna.
+
+**O raio de alcance das duas de `customer_addresses` e das duas de
+`order_item_options` é o pior da tabela** — um item quebrado derruba a coleção
+inteira, porque quem valida é a lista. Corrigir *isso* separadamente cairia em
+(a) ou em descartar o item em silêncio, que é pior. Fica anotado como o que a
+migração resolve de uma vez.
+
+### As 3 sem risco de leitura
+
+| Coluna | Por quê | Decisão |
+|---|---|---|
+| `customers.password_hash` | `verify_password` declara `str | None` e devolve `False` | **alinhar** |
+| `ai_feedback.user_message` | nenhuma rota lê a tabela | **alinhar** |
+| `ai_feedback.assistant_message` | idem — aparece só num `WHERE ... =`, onde nulo nunca casa (criaria linha nova em vez de UPDATE) | **alinhar** |
+| `ai_feedback.selected_product_ids` | idem | **alinhar** |
+
+**`password_hash` quase me levou a decidir errado, e vale registrar.** O
+raciocínio tentador: "o código já trata o nulo, então o model é que deveria
+dizer `str | None` — alinhar o ORM ao banco, sem migração nenhuma". Fui ler a
+docstring de `verify_password` antes de escrever isso, e ela **não** fala de
+conta sem senha: fala de **dois formatos de hash** convivendo (bcrypt e o
+pbkdf2 antigo). O `| None` é falha fechada defensiva, não uma declaração de que
+conta sem senha existe.
+
+Se eu tivesse seguido o raciocínio, teria **documentado como possível** um
+estado que o produto não tem — e um `Customer(...)` sem senha passaria a ser
+aceito pelo type checker. O `| None` fica onde está, como cinto; a coluna
+alinha como as outras.
+
+### O que isso deixa para você decidir
+
+**Nada de código.** As 13 esperam a revisão que já está pronta em
+`alembic/preparadas/`, e a decisão de aplicá-la é sua e é de produção.
+
+A **etapa 0** dela (contar os nulos) é o que responde se a etapa 2 passaria.
+Está em `docs/alinhamento-orm-schema.md`, é só leitura, e continua não tendo
+sido rodada.
+
+---
+
+## 4b. As varreduras no portão
+
+Três passos no job `banco` do CI, e a diferença entre eles é o ponto:
+
+| Passo | Limite | Vermelho? |
+|---|---|---|
+| `divergencias_orm_schema.py` | `--limite 41` | **não** — aviso |
+| `leituras_de_coluna_nulavel.py` | `--limite 182` | **não** — aviso |
+| `dubles_de_dado.py` | zero | **sim**, mas como TESTE (`tests/test_dubles_de_dado.py`) |
+
+**Por que dois avisos e um vermelho.** Os dois primeiros contam dívida
+**herdada** — o schema nasceu à mão antes do ORM, e nenhuma das 41 veio de um
+commit. Portão vermelho contra dívida herdada é portão que se aprende a
+ignorar, e o dia em que ele acusasse uma divergência *nova* seria o dia em que
+alguém o desligaria para entregar. Já os dublês de dado estão em **zero**, e
+zero que cresce não é dívida: é regressão.
+
+**Por que dois passos e não um** para os avisos: os números se movem por
+motivos diferentes. O primeiro muda quando o **schema** muda; o segundo, quando
+o **código** muda. Num passo só, "acrescentei uma coluna" e "acrescentei uma
+leitura" seriam o mesmo aviso.
+
+O terceiro passo (`if: failure()`) não repete o teste — ele só imprime a saída
+legível quando algo já falhou, para quem for ler o log não precisar rodar nada.
+
+**Linha de base de hoje: 41 divergências e 182 pontos** (81 leituras + 101
+campos de schema). Os dois são baseline, não contagem de defeitos: o casamento
+é por **nome** de coluna, e `email`, `created_at` e `is_active` são nomes de
+meia dúzia de tabelas.

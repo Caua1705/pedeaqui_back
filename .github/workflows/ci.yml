@@ -212,6 +212,43 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
 
+      # A SEGUNDA metade da mesma pergunta, e tambem AVISO.
+      #
+      # O passo acima conta QUANTAS colunas discordam; este conta em quantos
+      # LUGARES o codigo le uma delas como se ela nao pudesse ser nula —
+      # leitura que quebra (metodo em cima, comparacao de ordem, argumento de
+      # chamada) mais campo de schema declarado sem `| None`, que e por onde a
+      # maioria dos 500 nasce.
+      #
+      # Os dois numeros se movem por motivos diferentes: o de cima muda quando
+      # o SCHEMA muda, o de baixo quando o CODIGO muda. Um passo so nao
+      # distinguiria "acrescentei uma coluna" de "acrescentei uma leitura".
+      #
+      # O limite e LINHA DE BASE, nao conta de defeitos: o casamento e por nome
+      # de atributo, e `email` ou `created_at` sao colunas de meia duzia de
+      # tabelas. Ele responde "entrou leitura nova?" — e essa pergunta so tem
+      # valor se o numero nao crescer calado.
+      - name: Leituras de coluna nulavel (aviso)
+        if: always()
+        continue-on-error: true
+        run: python scripts/leituras_de_coluna_nulavel.py --url "$TEST_DATABASE_URL" --limite 182
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
+
+      # A terceira, e a unica das tres que e VERMELHO e nao aviso.
+      #
+      # `dubles_de_dado` ja roda como teste (`tests/test_dubles_de_dado.py`) e
+      # continua sendo assim: ali o numero certo e ZERO, e zero que cresce nao
+      # e divida herdada — e regressao. As outras duas sao aviso porque a
+      # divida existe e foi herdada; esta nao existe mais.
+      #
+      # Este passo nao repete o teste: ele so imprime a saida legivel quando
+      # alguem quiser ver o que o teste vermelho esta dizendo.
+      - name: Dubles de dado na suite (so a saida legivel)
+        if: failure()
+        continue-on-error: true
+        run: python scripts/dubles_de_dado.py
+
   print-agent:
     name: Testes do agente de impressão
     runs-on: ubuntu-latest

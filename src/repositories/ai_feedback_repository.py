@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from src.models.ai_feedback_model import AIFeedback
@@ -51,13 +51,44 @@ class AIFeedbackRepository:
         self.db.flush()
 
     def delete_created_before(self, cutoff: datetime) -> int:
-        """Apaga o feedback velho. Devolve quantos sairam.
+        """Apaga o feedback velho — E o que nao tem data. Devolve quantos sairam.
 
         Corta por `created_at` e nao por vencimento porque a linha nao tem
         vencimento: ela vale enquanto servir de amostra de qualidade das
         respostas do Rapi. Quem sabe ate quando e
         `chat_service.feedback_retention_cutoff`, e e de la que o `cutoff`
         tem que vir — o repositorio so consulta.
+
+        ## O `IS NULL`, e por que ele nao e paranoia
+
+        `ai_feedback.created_at` **aceita nulo** — e a unica das seis tabelas
+        com varredura de retencao em que isso acontece (as outras cinco sao
+        `NOT NULL`; conferido no `information_schema`). E `created_at < cutoff`
+        com nulo **nao e falso, e NULO**: a linha nunca casava, e o texto em
+        claro que a pessoa digitou para o Rapi ficava para sempre.
+
+        Sem 500, sem log, sem tela onde isso aparecesse. Era o pior modo de
+        falha do levantamento da armadilha 50 — pior que os que derrubam a
+        rota, porque ninguem percebe.
+
+        **Apagar e a escolha certa, e a alternativa deixa isso claro.** A linha
+        sem data nao tem como provar que e recente, e o que ela guarda e dado
+        pessoal em texto puro. Entre manter dado de idade desconhecida e perder
+        uma amostra de qualidade do Rapi, quem decide e a LGPD — e o que se
+        perde e uma linha que ja estava fora do inventario.
+
+        O nulo nao vem daqui: a coluna tem `DEFAULT now()` e o model sempre a
+        omite. Ele vem de INSERT feito por fora (armadilha 33). Quando o schema
+        for alinhado (`alembic/preparadas/`), este `or_` vira redundante — e
+        pode ficar, porque custa nada e o dia em que alguem afrouxar a coluna
+        de novo nao avisa ninguem.
         """
-        resultado = self.db.execute(delete(AIFeedback).where(AIFeedback.created_at < cutoff))
+        resultado = self.db.execute(
+            delete(AIFeedback).where(
+                or_(
+                    AIFeedback.created_at < cutoff,
+                    AIFeedback.created_at.is_(None),
+                )
+            )
+        )
         return resultado.rowcount or 0

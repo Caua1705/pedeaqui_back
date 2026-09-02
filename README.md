@@ -96,11 +96,28 @@ cumprir. Com o banco de teste de pé:
 py scripts/divergencias_orm_schema.py --url postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
 ```
 
-O CI roda o mesmo comando com `--limite 41` depois da suíte `db`, e ele é
-**aviso, não portão**: as 41 são dívida herdada e um vermelho contra dívida
+E onde o código **lê** uma dessas colunas como se ela não pudesse ser nula —
+leitura que quebra, mais campo de schema declarado sem `| None`, que é por onde
+a maioria dos 500 nasce:
+
+```powershell
+py scripts/leituras_de_coluna_nulavel.py --url postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
+py scripts/leituras_de_coluna_nulavel.py --url ... --coluna valid_until   # investigar uma
+```
+
+O CI roda os dois depois da suíte `db`, com `--limite 41` e `--limite 182`, e os
+dois são **aviso, não portão**: a dívida é herdada, e um vermelho contra dívida
 herdada é um vermelho que se aprende a ignorar. O que o aviso impede é o número
-crescer calado. O roteiro de alinhamento, já escrito e ainda não aplicado, está
-em [`docs/alinhamento-orm-schema.md`](docs/alinhamento-orm-schema.md).
+**crescer calado**.
+
+Os dois números se movem por motivos diferentes — o primeiro quando o *schema*
+muda, o segundo quando o *código* muda —, e por isso são dois passos e não um.
+E os dois são **linha de base, não conta de defeitos**: o casamento é por nome
+de coluna, e `email` ou `created_at` são nomes de meia dúzia de tabelas.
+
+O roteiro de alinhamento, já escrito e ainda não aplicado, está em
+[`docs/alinhamento-orm-schema.md`](docs/alinhamento-orm-schema.md); a decisão
+coluna a coluna (código × schema) está em `scratchpad/rodada-back-3.md`.
 
 O `print-agent/` é um projeto separado e **não** roda no `pytest` da raiz, de
 propósito.

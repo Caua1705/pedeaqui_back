@@ -2030,7 +2030,7 @@ não é nosso — é o Traefik, e a aplicação não respondeu.
 
 ---
 
-## 50. O `nullable=` do model NUNCA vira DDL — e em 42 colunas ele mente
+## 50. O `nullable=` do model NUNCA vira DDL — e em 41 colunas ele mente
 
 O schema deste projeto **não nasceu do ORM**: foi criado à mão no Supabase e só
 depois virou `alembic/schema_baseline.sql`. O `Base.metadata` foi escrito
@@ -2040,7 +2040,7 @@ cujo schema sai do baseline mais as revisões (armadilha 24) —, **o
 `nullable=False` do model nunca é cobrado por ninguém**.
 
 Ele orienta o type checker e decide se o SQLAlchemy manda a coluna no INSERT.
-Nada mais. `scripts/divergencias_orm_schema.py` conta **42 colunas** em que os
+Nada mais. `scripts/divergencias_orm_schema.py` conta **41 colunas** em que os
 dois lados discordam, em três classes com custos diferentes:
 
 - **16 — o ORM diz NOT NULL e o banco aceita NULL.** Risco de **leitura**: a
@@ -2054,15 +2054,30 @@ dois lados discordam, em três classes com custos diferentes:
 - **6 — coluna que o ORM não mapeia.** `Modelo.created_at` é `AttributeError`
   numa tabela que **tem** `created_at`.
 
-**A que morde de verdade é `restaurant_coupons.valid_until`**, e o caminho
-merece ser sabido de cor: `CouponService._aware(None)` levanta `AttributeError`,
+**A que mordia de verdade era `restaurant_coupons.valid_until`** — e ela foi
+**consertada em 03/09/2026, no CÓDIGO e não no schema.** O caminho merece ser
+sabido de cor porque a forma dele se repete: `CouponService._aware(None)` levanta `AttributeError`,
 e `evaluate` abre com ele. `preview` e `lock_and_validate_for_order` chegam ao
 cupom por `_find_coupon` — **id ou código, sem filtro de janela**. Ou seja: a
 consulta que protege a vitrine (`list_in_window`, com `valid_until >= now`)
 **não protege o checkout**. Uma linha com `valid_until` nulo é invisível na
 lista e derruba quem digitar o código.
 
-As outras sete de risco real derrubam pelo **schema de resposta**, com
+**Por que ela NÃO foi alinhada:** cupom sem data de fim é campanha permanente,
+e o precedente estava no mesmo módulo — a revisão `20260828_0043` tornou `code`
+nulo **com significado**. Nas outras 15 o banco estava frouxo e o model certo;
+nesta era o contrário. Ver as armadilhas 54 e 55, e
+`src/services/coupon_window.py`.
+
+**O critério que saiu disso, e que vale para a próxima:** tratar o nulo no
+código só tem duas formas, e as duas custam mais que a migração — *relaxar o
+schema de resposta* publica no contrato um estado que não deve existir e empurra
+o `if` para todo cliente; *inventar um valor* faz o backend mentir, o que é pior
+que o 500 porque o 500 é visível. **Trate no código quando o nulo tem
+SIGNIFICADO de produto, ou quando o tratamento não é nem uma coisa nem outra.
+Fora disso, alinhe o schema.**
+
+As sete de risco real que sobraram derrubam pelo **schema de resposta**, com
 `ValidationError` (500): `customers.email` e `.birth_date` (`GET
 /customers/me`), `customer_addresses.number` e `.neighborhood` (a lista inteira
 de endereços, não só o quebrado), `order_item_options.option_group_id` e
@@ -2268,3 +2283,118 @@ EXCLUSIVE` do `ADD CONSTRAINT`, e o ganho evapora. São duas execuções, com
 Ganho que não é de lock: **a etapa 1 já recusa nulo novo**. Do commit dela em
 diante o buraco para de crescer, mesmo que a etapa 2 demore semanas — e quando o
 `VALIDATE` rodar, não há corrida com escrita concorrente.
+
+---
+
+## 54. `NULL >= x` não é falso — é NULO. E a regra que vive em três cópias
+
+Duas metades da mesma armadilha, e ela custou o pior defeito do levantamento da
+armadilha 50.
+
+**A metade do SQL.** `WHERE valid_until >= agora` com a coluna nula **não
+descarta a linha por ser falsa**: a comparação é NULA, e o `WHERE` não a
+aceita. Do lado de fora as duas coisas parecem a mesma; a diferença aparece no
+dia em que o nulo passa a ter significado. Um cupom sem prazo — que *deveria*
+sempre valer — **sumia de toda consulta**. Sem erro, sem log, com o lojista
+jurando que criou a campanha.
+
+**A metade do Python.** A mesma janela também estava escrita em
+`CouponService.evaluate`, e ali o nulo não sumia: `_aware(None)` levantava
+`AttributeError`. **No checkout.**
+
+**E o motivo de as duas terem escapado é a terceira cópia.** A regra "está na
+janela?" existia em `coupon_repository.list_in_window` (SQL),
+`menu_repository` (SQL de novo) e `coupon_service.evaluate` (Python).
+Consertar duas faria a campanha permanente aparecer numa superfície e sumir na
+outra.
+
+Hoje mora em `src/services/coupon_window.py`, com as **duas formas lado a
+lado** — o predicado (que explica a recusa: `not_started` × `expired`, coisa
+que um `WHERE` não devolve) e a expressão SQL. Não dá para ter só uma; o que
+dá é fazer as duas mudarem juntas.
+
+**A regra geral:** coluna nulável em `WHERE` precisa de `IS NULL` explícito
+quando o nulo significa alguma coisa. E se a mesma pergunta é feita em SQL e em
+Python, as duas formas moram no mesmo arquivo.
+
+**Correlato de defesa em profundidade:** `_find_coupon` passou a aplicar o
+mesmo filtro. "Aparece na vitrine" e "chega ao checkout" viraram a mesma
+pergunta — antes, bastava digitar o código para o service receber uma linha que
+a vitrine jamais mostraria.
+
+---
+
+## 55. Com `server_default`, o SQLAlchemy IGNORA o `None` que você passou
+
+`Modelo(created_at=None)` numa coluna com `server_default=func.now()` **não
+grava `NULL`**. O SQLAlchemy trata o `None` explícito como "deixe o banco
+preencher" e **omite a coluna do INSERT**. A linha sai com `now()`.
+
+Medido, não deduzido, e apareceu escrevendo um teste que precisava justamente
+da linha sem data.
+
+**Duas consequências, e as duas importam:**
+
+1. **Teste que precisa do nulo tem que escrever por SQL cru.** Pelo ORM é
+   impossível, e um teste que tentasse ficaria verde descrevendo uma linha que
+   ele não criou.
+2. **É a prova, do lado de dentro, da armadilha 33.** Se o ORM não consegue
+   produzir aquele nulo nem quando se pede, então a linha nula que existe em
+   produção **só pode ter vindo de escrita feita por fora** — SQL manual no
+   Supabase, script de importação, correção à mão.
+
+Onde isso mordeu: `ai_feedback.created_at` nulo fazia
+`WHERE created_at < cutoff` **nunca alcançar a linha** (armadilha 54, a metade
+do SQL), e o texto em claro que a pessoa digitou para o Rapi ficava para
+sempre. Sem 500, sem log. `delete_created_before` passou a levar
+`OR created_at IS NULL`, e apagar é a escolha certa: a linha não tem como
+provar que é recente, e o que ela guarda é dado pessoal.
+
+**É a única das seis tabelas com varredura de retenção cujo `created_at` aceita
+nulo** — as outras cinco são `NOT NULL`, conferido no `information_schema`.
+
+---
+
+## 56. O Redis guarda dado pessoal, e a exclusão de conta não o alcança
+
+`CustomerAnonymizationService` **não menciona Redis em lugar nenhum**. Ele
+trabalha só no Postgres — e um dos passos dele apaga as linhas de
+`delivery_estimates` pelo `customer_id`. A cópia da mesma estimativa no Redis
+fica.
+
+**E o pior está na CHAVE:**
+
+```
+delivery-estimate:v1:{slug}:{branch_id}:{latitude:.4f}:{longitude:.4f}:...
+```
+
+Quatro casas decimais são **~11 metros** — identifica uma casa, não um bairro.
+O valor ao lado (`DeliveryEstimateResult` em JSON) carrega as coordenadas de
+novo.
+
+É exatamente o cuidado que `ChatCache.embedding_key` toma e explica com todas
+as letras, três arquivos ao lado: *"o que o cliente digita não vai para chave
+de Redis. É texto de pessoa, aparece em `KEYS`, em `MONITOR`, em qualquer
+dump."* A regra estava escrita; a estimativa de entrega não a seguiu — e o que
+ela põe na chave é mais preciso que o texto.
+
+**A chave não carrega `customer_id`, então não há como apagar por pessoa.** Não
+é um `DELETE` faltando: é uma chave com a forma errada. O conserto é o digest,
+como no cache de embedding.
+
+**O que segura hoje é o TTL — e só enquanto não houver persistência.** Com
+`RDB`/`AOF` ligado, um snapshot grava a chave em disco e o arquivo não expira
+sozinho: "10 minutos" vira "até alguém apagar o dump", e dump costuma ir para
+backup.
+
+**Ao investigar isso:** `INFO persistence` e não `CONFIG GET` (Redis gerenciado
+costuma bloquear `CONFIG`); `scan_iter` e não `KEYS` (que trava o Redis
+inteiro); e **conte, nunca imprima** — listar as chaves põe coordenada de
+cliente no terminal e no histórico do shell, que é o mesmo problema feito à
+mão.
+
+Inventário do que está lá: a estimativa (coordenada, TTL 600 s), o rate limit
+(**IP**, na chave, por desenho do `slowapi`), o cache de embedding (mensagem
+**hasheada** — o único que já nasceu certo) e o `MenuGeneration` (contador, sem
+dado pessoal). O `docs/lgpd-proposta.md` **não menciona o Redis**: o inventário
+está incompleto enquanto ele estiver de fora.

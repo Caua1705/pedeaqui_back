@@ -522,3 +522,51 @@ legível quando algo já falhou, para quem for ler o log não precisar rodar nad
 campos de schema). Os dois são baseline, não contagem de defeitos: o casamento
 é por **nome** de coluna, e `email`, `created_at` e `is_active` são nomes de
 meia dúzia de tabelas.
+
+---
+
+## Fechamento da rodada
+
+**Portão: 2838 testes verdes** (2222 rápidos + 616 `db`), 126 do agente de
+impressão, ruff limpo, `openapi.json` regravado e conferido, lock em dia.
+
+### A skill ganhou três armadilhas
+
+- **54.** `NULL >= x` não é falso, é **NULO** — e a regra de janela que vivia
+  em três cópias (duas em SQL, uma em Python).
+- **55.** Com `server_default`, o SQLAlchemy **ignora o `None` que você
+  passou** e omite a coluna do INSERT. É a prova, do lado de dentro, de que a
+  linha nula veio de escrita por fora do ORM.
+- **56.** O Redis guarda dado pessoal (coordenada da entrega, **na chave**) e a
+  exclusão de conta não o alcança.
+
+A armadilha 50 foi atualizada: 42 → 41, e o critério "código × schema" que saiu
+do item 2 entrou nela.
+
+### Um defeito que eu mesmo introduzi, e o que o pegou
+
+`TestALinhaSemData` nasceu **sem `@pytest.mark.db`** — a classe irmã tem o
+decorador e eu não copiei. O teste rodava na suíte rápida e só passava porque o
+Postgres ainda estava de pé na minha máquina.
+
+O que o pegou foi o `down -v` do fim do bloco: sem banco, os dois viraram
+`ERROR` na suíte rápida.
+
+**Não escrevi ferramenta para isso, e o motivo é que ela já existe:** o job
+`api` do CI roda `pytest -m "not db"` **sem serviço de Postgres**. Um teste `db`
+sem marcador erra lá, vermelho, sempre. O portão já cobre a classe — e rodar a
+suíte rápida com o banco derrubado é o hábito que reproduz o CI localmente.
+
+### O que continua fora, e esperando você
+
+- **o comando das filiais** — não rodei, não sugeri rodar. O `6fcaccc` continua
+  esperando;
+- **a revisão de alinhamento** (`alembic/preparadas/`) — as 13 colunas do item
+  2 dependem dela, e a etapa 0 (contar nulos em produção) é só leitura e ainda
+  não foi rodada;
+- **os três comandos do Redis** (item 3), todos só leitura;
+- **tirar a coordenada da chave da estimativa** — é código, cabe numa rodada, e
+  **não depende** da resposta dos comandos. Não fiz porque muda o formato da
+  chave de um cache de produção, e isso é deploy;
+- **declarar o Redis no `docs/lgpd-proposta.md`** — o inventário está
+  incompleto enquanto ele estiver de fora.

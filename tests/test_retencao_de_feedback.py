@@ -149,6 +149,7 @@ class TestExpurgoDoFeedback:
         assert removidos == 0
 
 
+@pytest.mark.db
 class TestALinhaSemData:
     """`created_at` NULO — a linha que a retencao nunca alcancava.
 

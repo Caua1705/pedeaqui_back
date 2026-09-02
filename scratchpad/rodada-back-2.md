@@ -35,7 +35,7 @@ A rodada anterior está em `scratchpad/rodada-back.md` e continua válida.
 | 1.4 | `divergencias_orm_schema.py` no portão como aviso | **feito** |
 | 2 | Dublês falsos na suíte inteira | **feito** — 141 achados, 141 convertidos |
 | 3 | Testes dependentes da hora | **feito** — 1 achado real, 3 serviços com relógio injetável |
-| 4 | Query do `tracking_token`, pronta para colar | pendente |
+| 4 | Query do `tracking_token`, pronta para colar | **feito** — testada nos tres estados possiveis |
 | 5.1 | Plano do histórico de chat em memória | pendente |
 | 5.2 | Plano do índice ANN no pgvector | pendente |
 | 8 | Relatório final + armadilhas novas na skill | pendente |
@@ -591,3 +591,135 @@ produziria falha falsa. Esses foram lidos à mão, um a um: `periodo_de_relatori
 `test_admin_avaliacoes_db` e `test_cardapio_por_filial_e2e_db` (janela de ±1
 dia), e as quatro suítes de retenção (margens em DIAS). Nenhum com margem de
 borda.
+
+---
+
+## 4. `tracking_token` — a query para colar amanhã
+
+A rodada 1 disse *"pelos três indícios, provavelmente já foi aplicado"*.
+Provavelmente não serve para o item mais perigoso da lista. Abaixo está o que
+**responde**.
+
+**Nada disto foi executado contra produção.** As duas consultas foram testadas
+contra o Postgres de teste, **nos três estados possíveis**, forçados à mão
+dentro de uma transação revertida.
+
+São duas, e a separação não é estética: a consulta 2 lê
+`orders.tracking_token_hash`, e o Postgres resolve nomes de coluna **antes** de
+executar. Numa base anterior à `0016` a coluna não existe e a consulta inteira
+morreria com `column does not exist` — falhando exatamente no cenário que ela
+existe para detectar. A consulta 1 só toca catálogo e sobrevive a qualquer
+estado.
+
+### Consulta 1 — o schema. Rode SEMPRE, e primeiro
+
+Cola direto no SQL editor do Supabase. Só leitura, `ACCESS SHARE`, sem
+`docker exec`.
+
+```sql
+SELECT 'coluna em claro (tracking_token)' AS o_que,
+       CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_schema='public' AND table_name='orders'
+               AND column_name='tracking_token')
+            THEN 'EXISTE' ELSE 'nao existe' END AS resposta
+UNION ALL
+SELECT 'coluna do hash (tracking_token_hash)',
+       CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_schema='public' AND table_name='orders'
+               AND column_name='tracking_token_hash')
+            THEN 'EXISTE' ELSE 'nao existe' END
+UNION ALL
+SELECT 'o hash aceita NULL?',
+       COALESCE((SELECT CASE WHEN is_nullable='YES' THEN 'ACEITA'
+                             ELSE 'NOT NULL' END
+                   FROM information_schema.columns
+                  WHERE table_schema='public' AND table_name='orders'
+                    AND column_name='tracking_token_hash'), 'a coluna nem existe')
+UNION ALL
+SELECT 'indice ix_orders_tracking_token_hash',
+       COALESCE((SELECT CASE WHEN indisunique THEN 'EXISTE e e UNIQUE'
+                             ELSE 'existe e NAO e unique' END
+                   FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid
+                  WHERE c.relname='ix_orders_tracking_token_hash'), 'nao existe')
+UNION ALL
+SELECT 'revisao do alembic',
+       COALESCE((SELECT string_agg(version_num, ', ') FROM alembic_version), 'tabela vazia')
+ORDER BY 1;
+```
+
+### O que cada resultado significa
+
+Leia pelas **duas primeiras linhas**; as outras três confirmam.
+
+| `tracking_token` | `tracking_token_hash` | Onde você está | O que fazer |
+|---|---|---|---|
+| não existe | EXISTE | **as duas revisões já rodaram** | **nada.** O deploy não está pendente; `docs/deploy-hash-do-tracking-token.md` e a §1 da rodada 1 não se aplicam mais |
+| EXISTE | EXISTE | **entre as duas etapas** | falta só a `0017`. Rode a consulta 2 e siga da "ETAPA 2" da rodada 1 |
+| EXISTE | não existe | **antes da `0016`** | o roteiro da rodada 1 vale inteiro, do começo |
+| não existe | não existe | **não é o banco certo** | pare. Confira a conexão — `orders` sem nenhuma das duas não é um estado que este repositório produz |
+
+As três linhas de confirmação, e o que uma resposta fora do esperado significa:
+
+- **`o hash aceita NULL?`** — `NOT NULL` só depois da `0017`. Se disser
+  `ACEITA` com `tracking_token` já ausente, alguém rodou o `DROP COLUMN` sem o
+  `SET NOT NULL`: schema num estado que nenhuma revisão produz.
+- **`indice ix_orders_tracking_token_hash`** — nasce na `0016` e nunca sai.
+  `nao existe` com a coluna do hash presente significa índice derrubado à mão,
+  e **a unicidade do token não está mais garantida** — dois pedidos podem
+  compartilhar link de acompanhamento. É o achado mais grave que esta consulta
+  pode produzir.
+- **`revisao do alembic`** — se for `20260902_0044` (o head de hoje), as duas
+  passaram no caminho e as duas primeiras linhas têm que concordar. **Se
+  discordarem, acredite nas colunas, não na revisão**: `alembic_version` é uma
+  linha de texto que um `stamp` errado reescreve sem tocar em nada. Mais de um
+  valor ali é banco com cabeça dividida — pare e não migre.
+
+### Consulta 2 — os pedidos. Só se a coluna do hash EXISTIR
+
+```sql
+SELECT count(*)                                                AS pedidos_no_total,
+       count(*) FILTER (WHERE tracking_token_hash IS NULL)     AS sem_hash,
+       count(*) FILTER (WHERE tracking_token_hash IS NOT NULL) AS com_hash,
+       min(created_at)::date                                   AS pedido_mais_antigo,
+       max(created_at)::date                                   AS pedido_mais_novo
+  FROM orders;
+```
+
+- **`sem_hash = 0`** é a condição de entrada da etapa 2. A `0017` conta isso
+  dentro da própria transação e **levanta antes do `DROP COLUMN`** se sobrar
+  alguma — então um número diferente de zero aqui não é perigo, é aviso de que
+  ela abortaria.
+- **`sem_hash > 0` com `tracking_token` já ausente** é outra coisa, e é grave:
+  esses pedidos **não têm link de acompanhamento em lugar nenhum**. Não há rota
+  de reemissão. Anote os ids antes de qualquer outra coisa.
+- **`pedidos_no_total`** é o número que faltava na §1.2 da rodada 1 para
+  dimensionar a janela do backfill. Se a consulta 1 disser que a `0016` ainda
+  não rodou, é este número que multiplica o custo do round-trip.
+
+### Por que não `scripts/estado_da_producao.py`
+
+Ele responde outras quatro perguntas (git_sha, revisão, Redis, Mercado Pago) e
+**não olha as colunas de `orders`**. A revisão que ele imprime sai de
+`alembic_version` — justamente a fonte em que não se deve confiar sozinha aqui.
+Rode os dois: ele para o panorama, estas duas para o `tracking_token`.
+
+### Como as duas foram conferidas
+
+Contra o Postgres de teste, com os três estados forçados dentro de uma
+transação revertida (`ALTER TABLE ... DROP COLUMN` / `ADD COLUMN`, depois
+`ROLLBACK`). Saída de cada um:
+
+| Estado forçado | `tracking_token` | `tracking_token_hash` | aceita NULL? | índice |
+|---|---|---|---|---|
+| head de hoje | não existe | EXISTE | NOT NULL | EXISTE e é UNIQUE |
+| antes da `0016` | EXISTE | não existe | a coluna nem existe | não existe |
+| entre as etapas | EXISTE | EXISTE | ACEITA | EXISTE e é UNIQUE |
+
+A linha do meio é a que importa: é o estado em que a consulta 2 quebraria, e a
+consulta 1 respondeu inteira.
+
+### O que ficou dependendo do resultado
+
+Nada desta rodada. Se a consulta 1 disser "antes da `0016`", a §1 da rodada 1
+volta à mesa com dois números novos (a contagem e o ms/round-trip da §1.2) —
+mas isso é decisão de outra madrugada.

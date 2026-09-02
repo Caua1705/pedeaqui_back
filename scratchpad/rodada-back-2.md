@@ -344,3 +344,68 @@ que é um aviso honesto e não um número errado.
 esperado vira um diff que alguém revisa.
 
 O README ganhou o comando local e a explicação de por que ele é aviso.
+
+---
+
+## 2. Dublês falsos: a varredura, e o que ela achou
+
+### O método, porque ele é reaproveitável
+
+Varredura por **AST**, não por grep. Para cada `SimpleNamespace(...)` da suíte,
+as chaves passadas são comparadas com:
+
+- as colunas de cada tabela do `Base.metadata` **mais os relacionamentos**
+  (`option_groups` é atributo legítimo de `Product` e não é coluna);
+- os campos de **todo `BaseModel` do `src/`** — inclusive `src/ai/schemas/`,
+  que a primeira versão da varredura não alcançava;
+- (acrescentado depois) as **dataclasses** de `src/integrations/`, que é onde
+  moram `PaymentIntent`, `PaymentWebhookEvent` e `DeliveryEstimateResult`.
+
+Casamento ≥ 60% das chaves = candidato a dublê de **dado**. O resto dos
+`SimpleNamespace` da suíte é dublê de **colaborador**, que o CLAUDE.md permite.
+
+**Resultado: 141 dublês de dado**, em 35 arquivos.
+
+O script está em `scratchpad/` de sessão, não no repositório — ele foi
+ferramenta de garimpo, e o que fica é o conserto.
+
+### O que a varredura corrigiu no meu próprio julgamento
+
+Três "atributos inventados" que ela acusou **não eram invenção**: eram
+casamento errado do meu lado, e o tipo real existe.
+
+- `raw_status`/`raw_status_detail` num "`StartPaymentResponse`" → o tipo é
+  **`PaymentIntent`**, a dataclass que `create_payment` devolve.
+- `event_id`/`raw_status` num "`orders`" → é **`PaymentWebhookEvent`**.
+- `latitude`/`longitude` numa "`DeliveryEstimateResponse`" → é
+  **`DeliveryEstimateResult`**, e **essa diferença morde de verdade**: o
+  `Result` (dataclass) tem as coordenadas e o `Response` (schema) **não** —
+  `to_response()` as remove. `OrderService` lê `delivery_estimate.latitude`
+  ao gravar o pedido. Quem dublasse o resultado com o schema da resposta
+  descreveria um objeto sem as duas coordenadas.
+
+### A fábrica: `tests/fabricas.py`
+
+Irmã de `fabricas_db.py`, e a diferença é a única que importa: aquela recebe
+`db` e **grava**; esta não toca em banco. `Branch(...)` sem `db.add()` é objeto
+Python comum — serve na suíte rápida inteira.
+
+Funções: `restaurante`, `filial`, `configuracoes`, `produto`, `cliente`,
+`endereco`, `usuario_do_painel`, `forma_de_pagamento`, `horario`,
+`estimativa_de_entrega`.
+
+**O que ela não dá, e está escrito no módulo:** `default=` de coluna
+(`Branch().is_open` é `None`, não `True` — o default é aplicado no INSERT), e
+consistência referencial. Por isso cada função escreve explicitamente o que o
+banco escreveria.
+
+Sem um lugar único, cada teste escreve a própria filial de mentira — foi assim
+que a suíte chegou a 141. Escrever `Branch(...)` à mão nos 141 também
+resolveria, com o defeito de a próxima coluna obrigatória exigir 141 edições.
+
+### Andamento
+
+| Arquivo | Antes | Agora |
+|---|---|---|
+| `test_order_acceptance.py` | 9 | **0** |
+| `test_payments.py` | 9 | **0** |

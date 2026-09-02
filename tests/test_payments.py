@@ -30,6 +30,7 @@ from src.integrations.payment_gateway import (
     PaymentIntent,
     PaymentProviderNotConfiguredError,
     PaymentProviderUnknownError,
+    PaymentWebhookEvent,
     PaymentWebhookPayloadError,
     create_payment,
     parse_webhook_event,
@@ -41,6 +42,8 @@ from src.services.idempotency_service import IdempotencyService
 from src.services.payment_refund_service import PaymentRefundService
 from src.services.order_state_machine import PAYMENT_STATUSES_THAT_RELEASE_ORDER
 from src.services.payment_service import PaymentService
+from src.models.idempotency_key_model import IdempotencyKey
+from tests import fabricas
 
 
 WEBHOOK_SECRET = "segredo-de-teste"
@@ -66,13 +69,14 @@ class FakeIdempotencyRepository:
         if (scope, key) in self.rows:
             return None
         record_id = uuid.uuid4()
-        self.rows[(scope, key)] = SimpleNamespace(
+        self.rows[(scope, key)] = IdempotencyKey(
             id=record_id,
             scope=scope,
             key=key,
             request_fingerprint=request_fingerprint,
             status="in_progress",
             response_body=None,
+            expires_at=expires_at,
         )
         return record_id
 
@@ -380,7 +384,7 @@ class StartPaymentTests(unittest.TestCase):
     def test_payer_email_uses_the_logged_in_customer_email(self):
         customer_id = uuid.uuid4()
         order = make_order(customer_id=customer_id)
-        customer = SimpleNamespace(id=customer_id, email="cliente@exemplo.com")
+        customer = fabricas.cliente(id=customer_id, email="cliente@exemplo.com")
         credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
         service = build_service(order, credential=credential, customer=customer)
 
@@ -542,7 +546,7 @@ class CardPaymentTests(unittest.TestCase):
         )
 
     def _customer(self):
-        return SimpleNamespace(id=uuid.uuid4(), email="cliente@exemplo.com")
+        return fabricas.cliente(email="cliente@exemplo.com")
 
     def _service_with_card_order(self, customer=None, **order_overrides):
         order = make_order(payment_method="credit_card", **order_overrides)
@@ -979,14 +983,11 @@ class StartPaymentErrorTests(unittest.TestCase):
         with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
             "src.services.payment_service.create_payment"
         ) as create:
-            create.return_value = SimpleNamespace(
+            create.return_value = PaymentIntent(
                 provider="mercadopago",
                 provider_payment_id="mp-1",
                 payment_status="pending",
-                checkout_url=None,
-                qr_code=None,
                 raw_status="pending",
-                raw_status_detail=None,
             )
             service.start_online_payment("junior", "token-do-pedido")
 
@@ -1024,7 +1025,7 @@ class CardMinimumAmountTests(unittest.TestCase):
             total=total, payment_method="credit_card", order_number=10973, customer_id=uuid.uuid4()
         )
         credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
-        customer = SimpleNamespace(id=order.customer_id, email="cliente@exemplo.com")
+        customer = fabricas.cliente(id=order.customer_id, email="cliente@exemplo.com")
         service = build_service(order, credential=credential, customer=customer)
         return service, customer
 
@@ -1075,12 +1076,10 @@ class CardMinimumAmountTests(unittest.TestCase):
         with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
             "src.services.payment_service.create_payment"
         ) as create:
-            create.return_value = SimpleNamespace(
+            create.return_value = PaymentIntent(
                 provider="mercadopago",
                 provider_payment_id="mp-1",
                 payment_status="paid",
-                checkout_url=None,
-                qr_code=None,
                 raw_status="approved",
                 raw_status_detail="accredited",
             )
@@ -1100,14 +1099,12 @@ class CardMinimumAmountTests(unittest.TestCase):
         with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
             "src.services.payment_service.create_payment"
         ) as create:
-            create.return_value = SimpleNamespace(
+            create.return_value = PaymentIntent(
                 provider="mercadopago",
                 provider_payment_id="mp-1",
                 payment_status="pending",
-                checkout_url=None,
                 qr_code="qr",
                 raw_status="pending",
-                raw_status_detail=None,
             )
             service.start_online_payment("junior", "token-do-pedido")
 
@@ -1403,12 +1400,11 @@ class MercadopagoWebhookWiringTests(unittest.TestCase):
         ), patch(
             "src.services.payment_service.parse_webhook_event"
         ) as mocked_parse:
-            mocked_parse.return_value = SimpleNamespace(
+            mocked_parse.return_value = PaymentWebhookEvent(
                 event_id="evt-1",
                 provider_payment_id="mp-1",
                 payment_status="paid",
                 raw_status="approved",
-                refunded_amount=Decimal("0"),
             )
             result = service.handle_webhook("mercadopago", b"{}", {})
 
@@ -1457,12 +1453,11 @@ class MercadopagoWebhookSignatureOrderingTests(unittest.TestCase):
         headers = mercadopago_signed_headers("mp-1", "segredo-do-junior")
 
         with patch("src.services.payment_service.parse_webhook_event") as mocked_parse:
-            mocked_parse.return_value = SimpleNamespace(
+            mocked_parse.return_value = PaymentWebhookEvent(
                 event_id="evt-1",
                 provider_payment_id="mp-1",
                 payment_status="paid",
                 raw_status="approved",
-                refunded_amount=Decimal("0"),
             )
             result = service.handle_webhook("mercadopago", raw_body, headers)
 

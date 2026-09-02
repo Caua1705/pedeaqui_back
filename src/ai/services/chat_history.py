@@ -35,9 +35,13 @@ virada, e ai a sessao seria limpa e regravada no mesmo pedido.
   e da sessao do Realtime, do lado da OpenAI.
 """
 
+import hashlib
+import json
 import logging
 from datetime import datetime, timedelta
 from typing import TypedDict
+
+from src.ai.services.chat_cache import cliente_redis
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -130,6 +134,177 @@ class HistoricoEmMemoria:
         self._sessoes.clear()
 
 
-# A instancia do processo. Trocada por `HistoricoNoRedis` quando houver
-# `REDIS_URL` — ver o commit seguinte.
-historico = HistoricoEmMemoria()
+# A VERSAO DO FORMATO da chave. Sobe quando o que esta guardado mudar de forma
+# — hoje uma lista JSON de `{role, content}`. Sem ela, um deploy que mudasse o
+# formato leria o velho como se fosse o novo, e o erro apareceria no meio de uma
+# conversa de cliente.
+_VERSAO_DA_CHAVE = "v1"
+
+
+class HistoricoNoRedis:
+    """A conversa compartilhada entre workers, deploys e replicas.
+
+    ## A chave vai HASHEADA, e nao e paranoia
+
+    `session_id` e escolhido pelo CLIENTE (`ChatRequest.session_id`,
+    `min_length=1`) e `POST /chat` nao tem autenticacao nenhuma. Nada impede um
+    front de usar o telefone ou o e-mail da pessoa como identificador de sessao
+    — e chave de Redis aparece em `KEYS`, em `SCAN`, em `MONITOR` e em qualquer
+    dump.
+
+    E a mesma regra de `ChatCache.embedding_key` e de `_cache_key` da estimativa
+    de entrega, e a armadilha 56 registra as duas vezes em que ela foi quebrada
+    por quem nao estava lendo o docstring do vizinho.
+
+    **O digest e do `session_id` CRU, sem normalizar.**
+    `ChatCache.message_digest` normaliza antes de hashear, e ali isso e certo
+    (duas perguntas iguais com caixa diferente devem colidir). Aqui seria
+    errado: `abc` e `ABC` sao duas sessoes, e faze-las colidir misturaria a
+    conversa de duas pessoas.
+
+    ## O VALOR e texto em claro, e nao ha como nao ser
+
+    Este e o unico item do Redis para o qual nao existe digest: o modelo precisa
+    LER o que a pessoa escreveu. Por isso as tres defesas em volta dele:
+
+    1. **TTL no proprio Redis** — `SETEX`, renovado a cada turno. Nao e a
+       varredura do backend de memoria, que so roda quando alguem conversa:
+       sessao parada de madrugada expira sozinha, sem depender de trafego.
+    2. **Nenhuma persistencia.** Conferido em producao em 04/09/2026:
+       `aof_enabled=0` e RDB desligado. Se isso mudar, o texto do cliente passa
+       a existir em disco alem do TTL — e este backend precisa de outra conversa
+       ANTES, nao depois.
+    3. **A chave nao liga a pessoa.** O digest do `session_id` nao identifica
+       ninguem, entao nao ha o que a exclusao de conta precise alcancar aqui.
+
+    ## Falha do Redis NAO derruba o turno
+
+    Nenhum caminho daqui levanta. Leitura que falha devolve historico VAZIO — o
+    Rapi responde sem contexto, que e uma resposta pior e nao um 500. Escrita
+    que falha e um turno que nao entrou no historico, e o proximo segue.
+
+    **Nao ha nivel de memoria por baixo**, e e escolha: ele traria de volta o
+    "depende de qual worker atendeu" que este backend existe para eliminar, num
+    caminho que so roda quando o Redis cai — ou seja, raramente exercitado e
+    facil de estar errado sem ninguem saber.
+    """
+
+    def __init__(
+        self,
+        cliente,
+        maximo_de_mensagens: int = MAXIMO_DE_MENSAGENS,
+        ttl: timedelta = TTL,
+    ) -> None:
+        self._cliente = cliente
+        self.maximo_de_mensagens = maximo_de_mensagens
+        self.ttl = ttl
+
+    def ler(self, session_id: str, agora: datetime) -> list[Mensagem]:
+        """`agora` nao e usado, e a assinatura o mantem de proposito.
+
+        Quem expira aqui e o Redis. Tirar o parametro faria os dois backends
+        terem interfaces diferentes, e o `ChatService` teria que saber qual
+        deles esta atendendo — que e exatamente o que este arquivo desfaz.
+        """
+        try:
+            bruto = self._cliente.get(self._chave(session_id))
+        except Exception:
+            logger.warning("[AI historico] redis_read_failed=true")
+            return []
+        if bruto is None:
+            return []
+        try:
+            mensagens = json.loads(bruto)
+        except (TypeError, ValueError):
+            # Valor num formato que nao entendemos. NAO e cache frio: alguem
+            # gravou outra coisa naquela chave, ou o formato mudou sem a versao
+            # subir. Sai com log proprio para nao se esconder entre as sessoes
+            # novas.
+            logger.warning("[AI historico] redis_formato_invalido=true")
+            return []
+        if not isinstance(mensagens, list):
+            logger.warning("[AI historico] redis_formato_invalido=true")
+            return []
+        return mensagens[-self.maximo_de_mensagens :]
+
+    def gravar(
+        self,
+        session_id: str,
+        pergunta: str,
+        resposta: str,
+        agora: datetime,
+    ) -> None:
+        mensagens = self.ler(session_id, agora)
+        mensagens.extend(
+            [
+                {"role": "user", "content": pergunta},
+                {"role": "assistant", "content": resposta},
+            ]
+        )
+        mensagens = mensagens[-self.maximo_de_mensagens :]
+        try:
+            # `setex` e nao `set` + `expire`: o TTL entra na MESMA operacao.
+            # Separados, um erro entre as duas deixaria a conversa do cliente no
+            # Redis para sempre — e o `maxmemory-policy volatile-lru` do compose
+            # so descarta chave COM expiracao, entao ela seria imune ao despejo
+            # tambem.
+            self._cliente.setex(
+                self._chave(session_id),
+                int(self.ttl.total_seconds()),
+                json.dumps(mensagens, ensure_ascii=False, separators=(",", ":")),
+            )
+        except Exception:
+            logger.warning("[AI historico] redis_write_failed=true")
+
+    @staticmethod
+    def _chave(session_id: str) -> str:
+        digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:32]
+        return f"chat:hist:{_VERSAO_DA_CHAVE}:{digest}"
+
+    def esquecer_tudo(self) -> None:
+        """So para teste, e ele NAO varre o Redis.
+
+        Um `SCAN` + `DEL` por prefixo num Redis compartilhado apagaria a
+        conversa de quem estiver falando com o Rapi agora. A suite roda sem
+        `REDIS_URL` e cai no backend de memoria; se um dia rodar com, e a
+        fixture que precisa mudar, nao este metodo.
+        """
+        logger.warning("[AI historico] esquecer_tudo ignorado: backend e o Redis")
+
+
+class Historico:
+    """A fachada. Escolhe o backend na PRIMEIRA CHAMADA, nao no import.
+
+    Pelo mesmo motivo de `cliente_redis` e de `get_engine`: construido no
+    import, ele congelaria `settings` no instante em que qualquer modulo de
+    `src` fosse importado — e a suite precisa poder apontar para outra
+    configuracao depois disso.
+    """
+
+    def __init__(self) -> None:
+        self._backend = None
+
+    @property
+    def backend(self):
+        if self._backend is None:
+            cliente = cliente_redis()
+            self._backend = (
+                HistoricoNoRedis(cliente) if cliente is not None else HistoricoEmMemoria()
+            )
+            logger.info(
+                "[AI historico] backend=%s",
+                "redis" if cliente is not None else "memoria",
+            )
+        return self._backend
+
+    def ler(self, session_id: str, agora: datetime) -> list[Mensagem]:
+        return self.backend.ler(session_id, agora)
+
+    def gravar(self, session_id: str, pergunta: str, resposta: str, agora: datetime) -> None:
+        self.backend.gravar(session_id, pergunta, resposta, agora)
+
+    def esquecer_tudo(self) -> None:
+        self.backend.esquecer_tudo()
+
+
+historico = Historico()

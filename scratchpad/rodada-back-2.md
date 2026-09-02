@@ -33,7 +33,7 @@ A rodada anterior está em `scratchpad/rodada-back.md` e continua válida.
 | 1.2 | Teste que prova que os 2 models não são instanciados | **feito** |
 | 1.3 | Revisão de alinhamento escrita, sem aplicar | **feito** — e executada contra o Postgres de teste |
 | 1.4 | `divergencias_orm_schema.py` no portão como aviso | **feito** |
-| 2 | Dublês falsos na suíte inteira | pendente |
+| 2 | Dublês falsos na suíte inteira | **feito** — 141 achados, 141 convertidos |
 | 3 | Testes dependentes da hora | pendente |
 | 4 | Query do `tracking_token`, pronta para colar | pendente |
 | 5.1 | Plano do histórico de chat em memória | pendente |
@@ -403,9 +403,58 @@ Sem um lugar único, cada teste escreve a própria filial de mentira — foi ass
 que a suíte chegou a 141. Escrever `Branch(...)` à mão nos 141 também
 resolveria, com o defeito de a próxima coluna obrigatória exigir 141 edições.
 
-### Andamento
+### Resultado: 141 → **0**
 
-| Arquivo | Antes | Agora |
-|---|---|---|
-| `test_order_acceptance.py` | 9 | **0** |
-| `test_payments.py` | 9 | **0** |
+Nenhum `SimpleNamespace` da suíte dubla model, schema ou dataclass deste
+repositório. Os que sobraram — e são muitos — dublam **colaborador**: um
+repositório, um serviço, um cliente HTTP, o `db`. É para isso que ele serve.
+
+Os tipos que entraram no lugar: `Branch`, `Product`, `RestaurantSetting`,
+`Restaurant`, `Customer`, `CustomerAddress`, `AdminUser`, `Order`,
+`OrderItem`, `OrderStatusHistory`, `BranchBusinessHour`, `BranchPaymentMethod`,
+`BranchDeliveryTimeBand`, `RestaurantBanner`, `RestaurantCoupon`,
+`CouponTemplate`, `CouponRedemption`, `Category`, `PrintingSector`,
+`PrintAgent`, `PrintAgentCommand`, `CashbackRule`, `CashbackTransaction`,
+`IdempotencyKey`, `EmailVerificationCode`, `PasswordResetCode`,
+`ProductOption`, `ProductOptionGroup` · `ProductResponse`, `AddressInput`,
+`OrderItemSelectedOptionInput`, `ChatLLMResponse` · `PaymentIntent`,
+`PaymentWebhookEvent`, `DeliveryEstimateResult`.
+
+### O que a conversão achou, além do que ela conserta
+
+1. **`restaurant_settings.payment_methods` (test_menu_service).** A coluna
+   **saiu da tabela** na revisão `20260820_0027` — quem manda em forma de
+   pagamento é `branch_payment_methods`. O dublê ainda a passava: o teste
+   estava verde descrevendo uma linha que não existe há 8 revisões.
+   `RestaurantSetting(payment_methods=...)` é `TypeError`.
+
+2. **`orders.tracking_token` (test_order_tracking, 2 lugares).** O model **não
+   mapeia** essa coluna — só `tracking_token_hash`. O dublê escrevia o token em
+   texto puro, descrevendo o pedido que a `20260812_0017` apagou. E o mesmo
+   arquivo tem, três funções acima, um `assertFalse(hasattr(stored,
+   "tracking_token"))` — o teste afirmava a ausência num lugar e a inventava no
+   outro.
+
+3. **`make_code_row` (test_auth_service) servia duas tabelas diferentes.**
+   Escrevia `reset_token_hash`/`reset_token_expires_at` **sempre**, mas
+   `email_verification_codes` não tem essas colunas — só
+   `password_reset_codes`. Virou um parâmetro `modelo`, e agora pedir
+   `reset_token_hash` de um código de e-mail levanta na hora.
+
+4. **`DeliveryEstimateResult` × `DeliveryEstimateResponse`.** O dataclass tem
+   `latitude`/`longitude`; o schema **não** (`to_response()` as remove). E
+   `OrderService` lê `delivery_estimate.latitude` ao gravar o pedido. Dublar o
+   resultado com a forma da resposta descreveria um objeto sem as coordenadas.
+
+5. **`total=10` em dublê de pedido** (dois arquivos). A coluna é `Numeric`, que
+   volta `Decimal`. `int` ali é outro tipo, e é o mesmo defeito do `price` que
+   o CLAUDE.md registra na voz.
+
+6. **Um teste meu, verde pelo motivo errado** — o do §1.1, com
+   `discount_type="percentage"`. Está contado lá.
+
+### O procedimento que ficou
+
+Todo `pytest.raises` novo passa por uma conferência: **a mesma chamada com o
+dado certo NÃO pode levantar.** Foi o que pegou o §1.1, e é barato.
+

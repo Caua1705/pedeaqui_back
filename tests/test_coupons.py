@@ -25,6 +25,7 @@ from src.schemas.order_schema import CreateOrderRequest
 from src.services.admin_order_service import AdminOrderService
 from src.services.coupon_service import CouponService, CustomerAudience
 from src.services.order_service import OrderService
+from src.models.coupon_redemption_model import CouponRedemption
 from tests import fabricas
 
 
@@ -149,7 +150,7 @@ class FakeCouponRepository:
         return next((item for item in self.redemptions if item.order_id == order_id), None)
 
     def create_redemption(self, **values):
-        redemption = SimpleNamespace(**values, status="applied", reversed_at=None)
+        redemption = CouponRedemption(**values, status="applied", reversed_at=None)
         self.redemptions.append(redemption)
         return redemption
 
@@ -607,11 +608,13 @@ class FakeOrderCouponService:
         return self.coupon, Decimal("10.00")
 
     def create_redemption(self, coupon, customer, order_id, discount):
-        self.redemption = SimpleNamespace(
+        self.redemption = CouponRedemption(
+            id=uuid.uuid4(),
             coupon_id=coupon.id,
             customer_id=customer.id,
             order_id=order_id,
             discount_amount=discount,
+            idempotency_key=f"order:{order_id}",
             status="applied",
         )
         self.db.events.append("redemption")
@@ -621,18 +624,10 @@ class FakeOrderCouponService:
 class OrderCouponIntegrationTests(unittest.TestCase):
     def test_order_recalculates_total_saves_snapshot_and_redemption(self):
         db = FakeDb()
-        restaurant = SimpleNamespace(id=uuid.uuid4())
+        restaurant = fabricas.restaurante()
         branch = fabricas.filial(is_open=True, accepts_delivery=True, accepts_pickup=True)
         product_id = uuid.uuid4()
-        product = SimpleNamespace(
-            id=product_id,
-            code="P1",
-        catalog_key=None,
-            name="Produto",
-            description=None,
-            price=Decimal("25.00"),
-            option_groups=[],
-        )
+        product = fabricas.produto(id=product_id, code="P1", name="Produto", price=Decimal("25.00"))
         coupon = make_coupon(restaurant_id=restaurant.id, code="SAVE10")
         customer = fabricas.cliente(name="Ana", phone="8599999999")
         payload = CreateOrderRequest.model_validate({

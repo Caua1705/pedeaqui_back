@@ -253,8 +253,11 @@ class PollTests(unittest.TestCase):
         now = datetime.now(timezone.utc)
         older = make_order(uuid.uuid4(), uuid.uuid4(), now - timedelta(seconds=30))
         newer = make_order(uuid.uuid4(), uuid.uuid4(), now)
-        history = SimpleNamespace(
-            id=uuid.uuid4(), created_at=now - timedelta(seconds=15), note=None
+        history = OrderStatusHistory(
+            id=uuid.uuid4(),
+            order_id=newer.id,
+            status="preparing",
+            created_at=now - timedelta(seconds=15),
         )
 
         events, _ = fetch_with(

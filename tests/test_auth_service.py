@@ -44,6 +44,8 @@ from src.services.auth_service import (
     AuthService,
     codes_retention_cutoff,
 )
+from src.models.customer_model import EmailVerificationCode, PasswordResetCode
+from tests import fabricas
 from src.utils.security import (
     generate_reset_token,
     hash_password,
@@ -163,22 +165,37 @@ def make_customer(**overrides):
         "is_active": True,
     }
     valores.update(overrides)
-    return SimpleNamespace(**valores)
+    return fabricas.cliente(**valores)
 
 
-def make_code_row(code=CODIGO, attempts=0, expires_in_minutes=10, used_at=None, created_at=None):
-    return SimpleNamespace(
+def make_code_row(
+    code=CODIGO, attempts=0, expires_in_minutes=10, used_at=None, created_at=None,
+    modelo=EmailVerificationCode,
+):
+    """Uma linha de codigo de 6 digitos — de verificacao OU de recuperacao.
+
+    `modelo` existe porque as duas tabelas nao sao a mesma:
+    `password_reset_codes` tem `reset_token_hash`/`reset_token_expires_at` e
+    `email_verification_codes` NAO. O dublê antigo escrevia as duas colunas
+    sempre, descrevendo uma linha que so existe metade das vezes. Com o tipo
+    real, pedir `reset_token_hash` de um codigo de e-mail levanta na hora.
+    """
+    campos = dict(
         id=uuid.uuid4(),
         customer_id=uuid.uuid4(),
+        email="joana@exemplo.com",
         code_hash=hash_verification_code(code),
         attempts_count=attempts,
         expires_at=utcnow() + timedelta(minutes=expires_in_minutes),
         used_at=used_at,
         created_at=created_at,
         resend_count=0,
-        reset_token_hash=None,
-        reset_token_expires_at=None,
     )
+    return modelo(**campos)
+
+
+def make_reset_code_row(**kwargs):
+    return make_code_row(modelo=PasswordResetCode, **kwargs)
 
 
 def make_service(db=None, repository=None):
@@ -535,7 +552,7 @@ class TestForgotPassword:
         assert response.message == FORGOT_PASSWORD_MESSAGE
 
     def test_the_cooldown_applies_here_too(self):
-        recente = make_code_row(created_at=utcnow() - timedelta(seconds=RESEND_COOLDOWN_SECONDS - 5))
+        recente = make_reset_code_row(created_at=utcnow() - timedelta(seconds=RESEND_COOLDOWN_SECONDS - 5))
         service = make_service(
             repository=FakeCustomerRepository(customer=make_customer(), reset_code=recente)
         )
@@ -552,7 +569,7 @@ class TestForgotPassword:
 
 class TestVerifyResetCode:
     def test_the_right_code_issues_a_reset_token(self):
-        code_row = make_code_row()
+        code_row = make_reset_code_row()
         service = make_service(repository=FakeCustomerRepository(reset_code=code_row))
 
         response = service.verify_reset_code(VerifyResetCodeRequest(email="joana@exemplo.com", code=CODIGO))
@@ -571,7 +588,7 @@ class TestVerifyResetCode:
         assert exc.value.status_code == 400
 
     def test_too_many_attempts_is_429(self):
-        code_row = make_code_row(attempts=MAX_CODE_ATTEMPTS)
+        code_row = make_reset_code_row(attempts=MAX_CODE_ATTEMPTS)
         service = make_service(repository=FakeCustomerRepository(reset_code=code_row))
 
         with pytest.raises(HTTPException) as exc:
@@ -580,7 +597,7 @@ class TestVerifyResetCode:
         assert exc.value.status_code == 429
 
     def test_a_wrong_code_counts_the_attempt(self):
-        code_row = make_code_row(attempts=1)
+        code_row = make_reset_code_row(attempts=1)
         service = make_service(repository=FakeCustomerRepository(reset_code=code_row))
 
         with pytest.raises(HTTPException):
@@ -592,7 +609,7 @@ class TestVerifyResetCode:
 class TestResetPassword:
     def make_valid_token_row(self, customer_id):
         token = generate_reset_token()
-        code_row = make_code_row()
+        code_row = make_reset_code_row()
         code_row.customer_id = customer_id
         code_row.reset_token_hash = hash_reset_token(token)
         code_row.reset_token_expires_at = utcnow() + timedelta(minutes=15)
@@ -660,7 +677,7 @@ class TestResetPassword:
         """Com o token valendo, as tres queixas de senha voltam a ser o que a
         pessoa precisa ouvir."""
         customer = make_customer()
-        code_row = make_code_row()
+        code_row = make_reset_code_row()
         code_row.customer_id = customer.id
         token = generate_reset_token()
         code_row.reset_token_hash = hash_reset_token(token)

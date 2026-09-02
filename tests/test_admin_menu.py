@@ -38,6 +38,7 @@ from src.schemas.admin_menu_schema import (
     ProductReorderRequest,
 )
 from src.services.admin_menu_service import AdminMenuService
+from tests import fabricas
 
 
 RESTAURANT_ID = uuid.uuid4()
@@ -316,7 +317,7 @@ class FakeBranchRepository:
     def get_active_by_id_and_restaurant(self, branch_id, restaurant_id):
         if RESTAURANT_BY_BRANCH.get(branch_id) != restaurant_id:
             return None
-        return SimpleNamespace(id=branch_id, restaurant_id=restaurant_id)
+        return fabricas.filial(id=branch_id, restaurant_id=restaurant_id)
 
 
 def build_service(repository):

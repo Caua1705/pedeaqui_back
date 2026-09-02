@@ -17,6 +17,7 @@ from src.schemas.delivery_schema import (
     DeliveryEstimateRequest,
 )
 from src.services.branch_hours_service import BranchHoursService
+from src.models.branch_delivery_time_band_model import BranchDeliveryTimeBand
 from src.services.delivery_estimate_service import (
     DELIVERY_TIMEZONE,
     DeliveryEstimateService,
@@ -69,47 +70,26 @@ class FakeCache:
 class DeliveryEstimateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.restaurant = fabricas.restaurante(slug="restaurante")
-        self.branch = SimpleNamespace(
-            id=uuid.uuid4(),
+        # A operacao e da filial desde a revisao 20260818_0025. Os campos
+        # nulos que a fabrica ja poe sao "herda o padrao do restaurante" — o
+        # estado de toda filial que ninguem configurou individualmente.
+        self.branch = fabricas.filial(
             latitude=Decimal("-3.7300000"),
             longitude=Decimal("-38.5200000"),
             address="Rua da Filial, 1",
             neighborhood="Centro",
-            city="Fortaleza",
-            state="CE",
-            zipcode=None,
-            is_main=True,
             delivery_base_fee=Decimal("5.00"),
             delivery_fee_per_km=Decimal("1.50"),
             delivery_min_fee=Decimal("8.00"),
             delivery_max_fee=Decimal("20.00"),
             delivery_max_distance_km=Decimal("10.00"),
-            # A operacao e da filial desde a revisao 20260818_0025. Os campos
-            # nulos sao "herda o padrao do restaurante" — o estado de toda
-            # filial que ninguem configurou individualmente.
-            is_open=True,
-            accepts_delivery=True,
-            accepts_pickup=True,
-            delivery_paused_until=None,
-            delivery_pause_reason=None,
-            min_order_value=None,
-            service_fee_enabled=None,
-            service_fee_amount=None,
-            estimated_delivery_time_min=None,
-            estimated_delivery_time_max=None,
-            default_delivery_fee=None,
-            free_delivery_enabled=None,
-            free_delivery_min_order_value=None,
         )
-        self.settings = SimpleNamespace(
+        self.settings = fabricas.configuracoes(
             min_order_value=None,
             service_fee_enabled=None,
             service_fee_amount=None,
             estimated_delivery_time_min=60,
             estimated_delivery_time_max=75,
-            default_delivery_fee=None,
-            free_delivery_enabled=None,
-            free_delivery_min_order_value=None,
         )
         self.maps = FakeMapsClient()
         self.cache = FakeCache()
@@ -392,7 +372,9 @@ if __name__ == "__main__":
 
 
 def band(max_distance_km, delivery_time_min, delivery_time_max):
-    return SimpleNamespace(
+    return BranchDeliveryTimeBand(
+        id=uuid.uuid4(),
+        branch_id=uuid.uuid4(),
         max_distance_km=Decimal(str(max_distance_km)),
         delivery_time_min=delivery_time_min,
         delivery_time_max=delivery_time_max,

@@ -18,42 +18,25 @@ nao virar uma consulta por produto). A classe `TestTheTwoExpressionsAgree`
 existe para as duas nao divergirem em silencio.
 """
 
-import uuid
 from decimal import Decimal
-from types import SimpleNamespace
 
 from src.services.menu_rules import blocking_required_group
+from tests import fabricas
 
 
 def make_option(is_active=True):
-    return SimpleNamespace(id=uuid.uuid4(), name="Ao ponto", is_active=is_active)
+    return fabricas.opcao(is_active=is_active)
 
 
 def make_group(name="Escolha o ponto", options=(), is_required=True, is_active=True):
-    return SimpleNamespace(
-        id=uuid.uuid4(),
-        name=name,
-        is_required=is_required,
-        is_active=is_active,
-        options=list(options),
+    return fabricas.grupo_de_opcoes(
+        name=name, is_required=is_required, is_active=is_active, options=list(options)
     )
 
 
 def make_product(groups=()):
-    return SimpleNamespace(
-        id=uuid.uuid4(),
-        category_id=uuid.uuid4(),
-        code=None,
-        name="Picanha",
-        slug="picanha",
-        description=None,
-        price=Decimal("89.00"),
-        image_path=None,
-        is_active=True,
-        is_available=True,
-        sort_order=0,
-        printing_sector_id=None,
-        option_groups=list(groups),
+    return fabricas.produto(
+        slug="picanha", price=Decimal("89.00"), option_groups=list(groups)
     )
 
 

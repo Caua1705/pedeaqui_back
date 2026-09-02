@@ -88,46 +88,25 @@ def filial(
     raio="10.00",
     is_open=True,
 ):
-    return SimpleNamespace(
-        id=uuid.uuid4(),
+    # Das seis `address_*` (resto do schema pre-Alembic, que nada escreve) so
+    # `address_number` continua sendo lida: e a unica sem par vivo. As outras
+    # cinco sairam de `_build_address` — ver `test_restaurant_info`.
+    #
+    # A operacao e da filial desde a revisao 20260818_0025. `is_open` e a pausa
+    # manual; os nulos que a fabrica ja poe dizem que esta filial herda os
+    # padroes comerciais do restaurante.
+    return fabricas.filial(
         name=nome,
-        display_name=None,
         slug=nome.lower(),
         address=f"Rua {nome}, 1",
-        # Das seis `address_*` (resto do schema pre-Alembic, que nada escreve)
-        # so `address_number` continua sendo lida: e a unica sem par vivo. As
-        # outras cinco sairam de `_build_address` — ver `test_restaurant_info`.
-        address_number=None,
         neighborhood="Centro",
-        city="Fortaleza",
-        state="CE",
-        zipcode=None,
-        phone=None,
-        whatsapp=None,
         latitude=Decimal(str(latitude)),
         longitude=Decimal(str(longitude)),
         is_main=is_main,
         delivery_base_fee=Decimal("5.00"),
         delivery_fee_per_km=Decimal("1.50"),
-        delivery_min_fee=None,
-        delivery_max_fee=None,
         delivery_max_distance_km=Decimal(raio),
-        # A operacao e da filial desde a revisao 20260818_0025. `is_open` e a
-        # pausa manual; os nulos abaixo dizem que esta filial herda os
-        # padroes comerciais do restaurante.
         is_open=is_open,
-        accepts_delivery=True,
-        accepts_pickup=True,
-        delivery_paused_until=None,
-        delivery_pause_reason=None,
-        min_order_value=None,
-        service_fee_enabled=None,
-        service_fee_amount=None,
-        estimated_delivery_time_min=None,
-        estimated_delivery_time_max=None,
-        default_delivery_fee=None,
-        free_delivery_enabled=None,
-        free_delivery_min_order_value=None,
     )
 
 
@@ -166,15 +145,8 @@ class BranchAvailabilityTests(unittest.TestCase):
         delivery.branch_hours_service = hours_service
         delivery.customer_repository = SimpleNamespace(get_address=lambda *_: None)
         menu_repository = SimpleNamespace(
-            get_settings=lambda restaurant_id: SimpleNamespace(
-                min_order_value=None,
-                service_fee_enabled=None,
-                service_fee_amount=None,
-                estimated_delivery_time_min=None,
-                estimated_delivery_time_max=None,
-                default_delivery_fee=None,
-                free_delivery_enabled=None,
-                free_delivery_min_order_value=None,
+            get_settings=lambda restaurant_id: fabricas.configuracoes(
+                min_order_value=None, service_fee_enabled=None, service_fee_amount=None
             )
         )
         delivery.menu_repository = menu_repository

@@ -108,15 +108,8 @@ class RestaurantInfoServiceTests(unittest.TestCase):
     def test_builds_public_info_with_multiple_periods_and_payment_flows(self):
         hours = [
             fabricas.horario(opens_at=time(11, 0), closes_at=time(14, 0)),
-            SimpleNamespace(
-                weekday=0,
-                opens_at=time(17, 30),
-                closes_at=time(22, 15),
-                is_closed=False,
-            ),
-            SimpleNamespace(
-                weekday=1, opens_at=None, closes_at=None, is_closed=True
-            ),
+            fabricas.horario(opens_at=time(17, 30), closes_at=time(22, 15)),
+            fabricas.horario(weekday=1, opens_at=None, closes_at=None, is_closed=True),
         ]
         methods = [
             fabricas.forma_de_pagamento(

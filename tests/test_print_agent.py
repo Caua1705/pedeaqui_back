@@ -24,7 +24,6 @@ certo.
 import unittest
 import uuid
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 
 from fastapi import HTTPException
 
@@ -37,6 +36,7 @@ from src.schemas.admin_printing_schema import (
     PrintTestRequest,
 )
 from src.services.print_agent_service import ONLINE_WINDOW_SECONDS, PrintAgentService
+from src.models.print_agent_model import PrintAgent
 from tests import fabricas
 
 
@@ -135,7 +135,7 @@ def make_scope(branch_id=BRANCH_ID):
 
 
 def make_branch(branch_id=BRANCH_ID, restaurant_id=RESTAURANT_ID):
-    return SimpleNamespace(id=branch_id, restaurant_id=restaurant_id)
+    return fabricas.filial(id=branch_id, restaurant_id=restaurant_id)
 
 
 def make_sector(name="Cozinha", branch_id=BRANCH_ID, printer_name=None):
@@ -160,7 +160,7 @@ def build_service(agent=None, printers=(), sectors=(), branches=None):
 
 
 def make_agent(branch_id=BRANCH_ID, version="1.0.0", seconds_ago=0):
-    return SimpleNamespace(
+    return PrintAgent(
         id=uuid.uuid4(),
         branch_id=branch_id,
         agent_version=version,

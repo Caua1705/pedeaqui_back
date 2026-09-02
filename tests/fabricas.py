@@ -47,6 +47,7 @@ from src.models.coupon_model import CouponTemplate, RestaurantCoupon
 from src.models.customer_model import Customer, CustomerAddress
 from src.models.order_model import Order
 from src.models.product_model import Product
+from src.models.product_option_model import ProductOption, ProductOptionGroup
 from src.models.restaurant_banner_model import RestaurantBanner
 from src.models.restaurant_model import Restaurant
 from src.models.restaurant_setting_model import RestaurantSetting
@@ -393,3 +394,32 @@ def cartao_de_produto(**sobrescritas) -> ProductResponse:
     }
     campos.update(sobrescritas)
     return ProductResponse(**campos)
+
+
+def grupo_de_opcoes(**sobrescritas) -> ProductOptionGroup:
+    campos = {
+        "id": uuid.uuid4(),
+        "product_id": uuid.uuid4(),
+        "name": "Escolha o ponto",
+        "min_select": 1,
+        "max_select": 1,
+        "is_required": True,
+        "sort_order": 0,
+        "is_active": True,
+        "options": [],
+    }
+    campos.update(sobrescritas)
+    return ProductOptionGroup(**campos)
+
+
+def opcao(**sobrescritas) -> ProductOption:
+    campos = {
+        "id": uuid.uuid4(),
+        "option_group_id": uuid.uuid4(),
+        "name": "Ao ponto",
+        "additional_price": Decimal("0.00"),
+        "sort_order": 0,
+        "is_active": True,
+    }
+    campos.update(sobrescritas)
+    return ProductOption(**campos)

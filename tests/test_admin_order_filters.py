@@ -11,7 +11,8 @@ Tres coisas sutis moram aqui e cada uma ja mordeu alguem em algum projeto:
 
 import unittest
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 
 from fastapi import HTTPException
@@ -20,6 +21,7 @@ from src.api.dependencies.admin_scope import AdminScope
 from src.core.constants import ORDER_STATUSES
 from src.repositories.order_repository import _build_search_condition
 from src.services.admin_order_service import MAX_LIST_DAYS, AdminOrderService
+from tests import fabricas
 
 
 class RecordingRepository:
@@ -174,11 +176,13 @@ class StatusFilterTests(unittest.TestCase):
 class PaginationTests(unittest.TestCase):
     def test_response_carries_the_total_of_the_filter(self):
         orders = [
-            SimpleNamespace(
-                id=uuid.uuid4(), order_number=index, branch_id=uuid.uuid4(),
-                customer_name_snapshot="Cliente", customer_phone_snapshot="85999999999",
-                order_type="delivery", status="pending", payment_method="cash",
-                payment_status="on_delivery", total=10, created_at=datetime.now(),
+            fabricas.pedido(
+                order_number=index, customer_name_snapshot="Cliente",
+                order_type="delivery", payment_method="cash",
+                payment_status="on_delivery", total=Decimal("10.00"),
+                # Instante FIXO, e nao `datetime.now()`: a lista nao le a hora
+                # para nada, e a hora real so faz o teste depender do relogio.
+                created_at=datetime(2026, 7, 15, 12, tzinfo=timezone.utc),
             )
             for index in range(3)
         ]

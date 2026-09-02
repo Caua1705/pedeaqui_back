@@ -15,6 +15,8 @@ from types import SimpleNamespace
 
 from src.schemas.cashback_schema import CashbackBalanceResponse
 from src.services.cashback_service import CashbackService
+from src.models.cashback_rule_model import CashbackRule
+from src.models.cashback_transaction_model import CashbackTransaction
 from tests import fabricas
 
 
@@ -26,7 +28,9 @@ def restaurante(nome="Júnior da Picanha", slug="junior-da-picanha"):
 
 
 def regra(expiry_days=60, enabled=True):
-    return SimpleNamespace(
+    return CashbackRule(
+        id=uuid.uuid4(),
+        restaurant_id=uuid.uuid4(),
         enabled=enabled,
         default_percent=Decimal("5.00"),
         min_redeem_balance=Decimal("5.00"),
@@ -238,9 +242,10 @@ class CashbackServiceTests(unittest.TestCase):
         self.assertIsNone(rule_repository.requested_ids)
 
     def test_lists_transactions_with_generated_description_and_numeric_amount(self):
-        customer = SimpleNamespace(id=uuid.uuid4())
-        transaction = SimpleNamespace(
+        customer = fabricas.cliente()
+        transaction = CashbackTransaction(
             id=uuid.uuid4(),
+            customer_id=customer.id,
             type="earned",
             amount=Decimal("10.00"),
             status="available",

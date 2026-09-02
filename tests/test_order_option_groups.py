@@ -15,43 +15,35 @@ vitrine esta em `test_menu_service.py::TestProductsOutOfSale`, e o sinal para
 o lojista em `test_admin_product_availability.py`.
 """
 
-import uuid
 from decimal import Decimal
-from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
 from src.services.order_service import OrderService
+from src.schemas.order_schema import OrderItemSelectedOptionInput
+from tests import fabricas
 
 
 def make_option(is_active=True, additional_price="0.00"):
-    return SimpleNamespace(
-        id=uuid.uuid4(),
-        name="Opcao",
-        is_active=is_active,
-        additional_price=Decimal(additional_price),
+    return fabricas.opcao(
+        name="Opcao", is_active=is_active, additional_price=Decimal(additional_price)
     )
 
 
 def make_group(name="Escolha o tamanho", options=(), is_required=True, is_active=True, min_select=1, max_select=1):
-    return SimpleNamespace(
-        id=uuid.uuid4(),
-        name=name,
-        is_active=is_active,
-        is_required=is_required,
-        min_select=min_select,
-        max_select=max_select,
-        options=list(options),
+    return fabricas.grupo_de_opcoes(
+        name=name, is_active=is_active, is_required=is_required,
+        min_select=min_select, max_select=max_select, options=list(options),
     )
 
 
 def make_product(groups=()):
-    return SimpleNamespace(id=uuid.uuid4(), name="Pizza Calabresa", option_groups=list(groups))
+    return fabricas.produto(name="Pizza Calabresa", option_groups=list(groups))
 
 
 def selecao(group, option):
-    return SimpleNamespace(option_group_id=group.id, option_id=option.id)
+    return OrderItemSelectedOptionInput(option_group_id=group.id, option_id=option.id)
 
 
 def service():

@@ -296,9 +296,7 @@ class ScopeRuleTests(unittest.TestCase):
 
     def test_manager_with_branch_is_restricted_to_it(self):
         branch_id = uuid.uuid4()
-        admin_user = SimpleNamespace(
-            role="manager", restaurant_id=uuid.uuid4(), branch_id=branch_id
-        )
+        admin_user = fabricas.usuario_do_painel(role="manager", branch_id=branch_id)
 
         scope = build_admin_scope(admin_user)
 
@@ -306,9 +304,7 @@ class ScopeRuleTests(unittest.TestCase):
         self.assertFalse(scope.sees_all_branches)
 
     def test_attendant_without_branch_sees_every_branch(self):
-        admin_user = SimpleNamespace(
-            role="attendant", restaurant_id=uuid.uuid4(), branch_id=None
-        )
+        admin_user = fabricas.usuario_do_painel(role="attendant", branch_id=None)
 
         scope = build_admin_scope(admin_user)
 

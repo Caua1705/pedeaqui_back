@@ -101,7 +101,7 @@ def build_service(*, saldo=Decimal("0"), coupon_discount=None, ordem=None):
     service.customer_repository = SimpleNamespace(
         lock_customer=lambda customer_id: (ordem is not None) and ordem.append("cliente")
     )
-    cupom = SimpleNamespace(id=uuid.uuid4(), code="SAVE", discount_type="fixed")
+    cupom = fabricas.cupom(code="SAVE", discount_type="fixed")
 
     def travar_cupom(**kwargs):
         if ordem is not None:

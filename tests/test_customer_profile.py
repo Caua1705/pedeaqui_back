@@ -32,6 +32,7 @@ from src.schemas.customer_schema import (
 )
 from src.services.customer_service import CustomerService
 from src.utils.security import hash_password, verify_password
+from src.models.order_item_model import OrderItem
 
 
 SENHA_ATUAL = "senha-atual-123"
@@ -690,15 +691,14 @@ def make_order_row(order_number=1042, itens=(), **overrides):
 
 
 def make_order_item(name="Pizza Calabresa", unit_price="45.00", quantity=1):
-    return SimpleNamespace(
+    return OrderItem(
         id=uuid.uuid4(),
+        order_id=uuid.uuid4(),
         product_id=uuid.uuid4(),
         product_code_snapshot="P1",
         product_name_snapshot=name,
-        product_description_snapshot=None,
         unit_price_snapshot=Decimal(unit_price),
         quantity=quantity,
-        observation=None,
         total=Decimal(unit_price) * quantity,
         created_at=datetime(2026, 8, 11, 20, 41, tzinfo=timezone.utc),
     )

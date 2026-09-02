@@ -157,12 +157,10 @@ class TokenGenerationTests(unittest.TestCase):
 class PublicLookupTests(unittest.TestCase):
     def test_order_is_found_by_its_token(self):
         restaurant_id = uuid.uuid4()
-        order = SimpleNamespace(
-            id=uuid.uuid4(),
-            tracking_token="token-do-pedido",
-            items=[],
-            status_history=[],
-        )
+        # SEM `tracking_token`: o model nao tem essa coluna desde a revisao
+        # 20260812_0017 — so `tracking_token_hash`. O dublê antigo a escrevia,
+        # e descrevia um pedido que a aplicacao nao produz.
+        order = fabricas.pedido(tracking_token_hash=hash_tracking_token("token-do-pedido"))
         repository = LookupRepository(orders_by_token={"token-do-pedido": order})
         service = build_lookup_service(repository, restaurant_id)
 
@@ -183,7 +181,7 @@ class PublicLookupTests(unittest.TestCase):
     def test_order_number_is_not_a_valid_key_anymore(self):
         # A defesa concreta contra a enumeracao: numero de pedido nao abre
         # mais nada.
-        order = SimpleNamespace(id=uuid.uuid4(), tracking_token="segredo", items=[], status_history=[])
+        order = fabricas.pedido(tracking_token_hash=hash_tracking_token("segredo"))
         service = build_lookup_service(LookupRepository(orders_by_token={"segredo": order}))
 
         with self.assertRaises(HTTPException):
@@ -201,9 +199,9 @@ class PublicLookupTests(unittest.TestCase):
 
 class AuthenticatedLookupTests(unittest.TestCase):
     def test_customer_reads_his_own_order_without_any_token(self):
-        customer = SimpleNamespace(id=uuid.uuid4())
-        order_id = uuid.uuid4()
-        order = SimpleNamespace(id=order_id, items=[], status_history=[])
+        customer = fabricas.cliente()
+        order = fabricas.pedido(customer_id=customer.id)
+        order_id = order.id
         repository = LookupRepository(orders_by_customer={(order_id, customer.id): order})
         service = build_lookup_service(repository)
 

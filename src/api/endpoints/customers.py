@@ -6,7 +6,11 @@ from sqlalchemy.orm import Session
 
 from src.api.dependencies.customer_auth import get_current_customer
 from src.api.dependencies.database import get_db
-from src.api.rate_limit import DELETE_ACCOUNT_RATE_LIMIT, limiter
+from src.api.rate_limit import (
+    CANCEL_ORDER_RATE_LIMIT,
+    DELETE_ACCOUNT_RATE_LIMIT,
+    limiter,
+)
 from src.models.customer_model import Customer
 from src.schemas.auth_schema import MessageResponse
 from src.schemas.cashback_schema import CashbackBalanceResponse, CashbackTransactionsResponse
@@ -24,9 +28,10 @@ from src.schemas.customer_schema import (
     UpdateCurrentCustomerRequest,
     UpdateCustomerAddressRequest,
 )
-from src.schemas.order_schema import OrderDetailResponse
+from src.schemas.order_schema import CustomerCancelOrderRequest, OrderDetailResponse
 from src.schemas.saved_card_schema import SaveCardRequest, SavedCardResponse
 from src.services.customer_anonymization_service import CustomerAnonymizationService
+from src.services.customer_order_cancel_service import CustomerOrderCancelService
 from src.services.customer_service import CustomerService
 from src.services.cashback_service import CashbackService
 from src.services.order_service import OrderService
@@ -223,6 +228,66 @@ def get_order(
     para vazar.
     """
     return OrderService(db).get_customer_order(current_customer, order_id)
+
+
+@router.post(
+    "/me/orders/{order_id}/cancel",
+    response_model=OrderDetailResponse,
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"description": "Nao autenticado"},
+        status.HTTP_404_NOT_FOUND: {"description": "Pedido nao encontrado, ou nao e deste cliente"},
+        status.HTTP_409_CONFLICT: {
+            "description": (
+                "O pedido ja saiu da janela em que o cliente cancela sozinho "
+                "(a partir de `preparing`), ou ja e um estado final"
+            )
+        },
+    },
+)
+@limiter.limit(CANCEL_ORDER_RATE_LIMIT)
+def cancel_order(
+    request: Request,
+    order_id: UUID,
+    payload: CustomerCancelOrderRequest | None = None,
+    current_customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+) -> OrderDetailResponse:
+    """O cliente logado desistindo do proprio pedido, de QUALQUER aparelho.
+
+    E a contrapartida autenticada de
+    `POST /{slug}/orders/track/{token}/cancel`, do mesmo jeito que a rota
+    acima e a de `/orders/track/{token}`: aqui o vinculo sai de
+    `orders.customer_id`, entao nao ha token nenhum para guardar nem para
+    vazar. O `tracking_token` so vive no `localStorage` do aparelho que fez o
+    pedido — quem pediu pelo celular e abriu o app no computador nao alcancava
+    o proprio pedido.
+
+    **A rota do token continua existindo**, e nao e redundancia: ela e a unica
+    saida do convidado, que nao tem conta para autenticar.
+
+    **Ate onde ela vai: `pending` e `accepted`**, a mesma janela da outra
+    porta. A partir de `preparing` o insumo ja saiu do estoque e quem decide
+    quem come o prejuizo passa a ser o lojista — a rota responde **409** e o
+    app manda o cliente falar com o restaurante.
+
+    **O corpo e opcional**, e o motivo dentro dele tambem, pelo mesmo motivo
+    da outra: exigir justificativa de quem desiste de um pedido que nem
+    comecou produz um campo preenchido com "a".
+
+    ## O que ela faz junto, e que o app nao precisa pedir
+
+    E a MESMA escrita do cancelamento pelo painel, entao o cupom volta a ficar
+    disponivel, o cashback resgatado volta para o saldo e **o pagamento online
+    e estornado**. O estorno acontece depois do commit e nao pode derrubar
+    esta resposta: se o gateway estiver fora do ar, o cancelamento vale e uma
+    varredura devolve o dinheiro depois.
+
+    **Sem `Idempotency-Key`**, e ela nao faz falta: o segundo clique chega com
+    o pedido ja em `cancelled` e leva 409 da maquina de estados.
+    """
+    return CustomerOrderCancelService(db).cancel_for_customer(
+        current_customer, order_id, payload
+    )
 
 
 @router.get("/me/addresses", response_model=list[CustomerAddressResponse])

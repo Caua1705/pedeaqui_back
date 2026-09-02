@@ -17996,6 +17996,81 @@
         ]
       }
     },
+    "/customers/me/orders/{order_id}/cancel": {
+      "post": {
+        "description": "O cliente logado desistindo do proprio pedido, de QUALQUER aparelho.\n\nE a contrapartida autenticada de\n`POST /{slug}/orders/track/{token}/cancel`, do mesmo jeito que a rota\nacima e a de `/orders/track/{token}`: aqui o vinculo sai de\n`orders.customer_id`, entao nao ha token nenhum para guardar nem para\nvazar. O `tracking_token` so vive no `localStorage` do aparelho que fez o\npedido — quem pediu pelo celular e abriu o app no computador nao alcancava\no proprio pedido.\n\n**A rota do token continua existindo**, e nao e redundancia: ela e a unica\nsaida do convidado, que nao tem conta para autenticar.\n\n**Ate onde ela vai: `pending` e `accepted`**, a mesma janela da outra\nporta. A partir de `preparing` o insumo ja saiu do estoque e quem decide\nquem come o prejuizo passa a ser o lojista — a rota responde **409** e o\napp manda o cliente falar com o restaurante.\n\n**O corpo e opcional**, e o motivo dentro dele tambem, pelo mesmo motivo\nda outra: exigir justificativa de quem desiste de um pedido que nem\ncomecou produz um campo preenchido com \"a\".\n\n## O que ela faz junto, e que o app nao precisa pedir\n\nE a MESMA escrita do cancelamento pelo painel, entao o cupom volta a ficar\ndisponivel, o cashback resgatado volta para o saldo e **o pagamento online\ne estornado**. O estorno acontece depois do commit e nao pode derrubar\nesta resposta: se o gateway estiver fora do ar, o cancelamento vale e uma\nvarredura devolve o dinheiro depois.\n\n**Sem `Idempotency-Key`**, e ela nao faz falta: o segundo clique chega com\no pedido ja em `cancelled` e leva 409 da maquina de estados.",
+        "operationId": "cancel_order_customers_me_orders__order_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CustomerCancelOrderRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Nao autenticado"
+          },
+          "404": {
+            "description": "Pedido nao encontrado, ou nao e deste cliente"
+          },
+          "409": {
+            "description": "O pedido ja saiu da janela em que o cliente cancela sozinho (a partir de `preparing`), ou ja e um estado final"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Cancel Order",
+        "tags": [
+          "customers"
+        ]
+      }
+    },
     "/customers/me/password": {
       "patch": {
         "operationId": "change_password_customers_me_password_patch",

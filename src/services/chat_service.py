@@ -20,6 +20,7 @@ from src.repositories.product_repository import ProductRepository
 from src.repositories.restaurant_repository import RestaurantRepository
 from src.schemas.admin_settings_schema import MAX_ASSISTANT_NOTES_LENGTH
 from src.schemas.ai_feedback_schema import AIFeedbackRequest, AIFeedbackResponse
+from src.services.ai_usage_service import AIUsageService
 from src.services.branch_hours_service import BRANCH_TIMEZONE, BranchHoursService
 from src.services.branch_operation import resolve_branch_operation, resolver_atendimento
 from src.services.menu_service import MenuService
@@ -312,6 +313,8 @@ class ChatService:
 
         llm_started_at = perf_counter()
         llm_response = self._invoke_llm(
+            restaurant=restaurant,
+            branch=branch,
             restaurant_context=restaurant_context,
             branch_state=branch_state,
             conversation=conversation,
@@ -608,8 +611,10 @@ class ChatService:
 
         return f"Aberta agora: {aberta}\nEntrega: {entrega}"
 
-    @staticmethod
     def _invoke_llm(
+        self,
+        restaurant,
+        branch,
         restaurant_context: str,
         branch_state: str,
         conversation: list[SessionMessage],
@@ -630,6 +635,15 @@ class ChatService:
         exatamente o caso que `embedding_service.py` ja mediu e resolveu com
         `lru_cache` (mediana de 654 ms para 340 ms). Medir antes de repetir a
         solucao e o ponto desta rodada.
+
+        **E daqui sai o CUSTO do turno**, e por isso a funcao deixou de ser
+        `@staticmethod`. Este e o unico ponto do pipeline que tem as duas
+        pontas ao mesmo tempo: o `usage` que a OpenAI devolveu e o restaurante
+        de quem e a conversa. A alternativa era devolver `(resposta, uso)` e
+        gravar no `_answer` — e isso poria em toda chamada um segundo item que
+        as vezes e None por um motivo que so o corpo explica.
+
+        A gravacao nao levanta: ver `AIUsageService.registrar_texto`.
         """
         client_started_at = perf_counter()
         llm_service = ChatLLMService()
@@ -648,6 +662,11 @@ class ChatService:
         logger.info(
             "[AI /chat] Structured Output | response_type=%s",
             llm_response.response_type,
+        )
+        AIUsageService(self.db).registrar_texto(
+            restaurant_id=restaurant.id,
+            branch_id=branch.id,
+            uso=llm_service.ultimo_uso,
         )
         return llm_response
 

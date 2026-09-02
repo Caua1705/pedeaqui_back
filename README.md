@@ -152,6 +152,7 @@ limites de corpo, TTLs).
 | [docs/cardapio-por-filial.md](docs/cardapio-por-filial.md) | por que o cardápio pende de filial e nada nele herda |
 | [docs/cashback.md](docs/cashback.md) | crédito, resgate, validade e por que ligar a chave mexe em faturamento |
 | [docs/busca-vetorial-e-indice-ann.md](docs/busca-vetorial-e-indice-ann.md) | **por que NÃO existe índice ANN** no pgvector — a medição, e o gatilho que sozinho não autoriza criá-lo |
+| [docs/custo-de-ia.md](docs/custo-de-ia.md) | **quanto o assistente custa por restaurante** — o que passou a ser medido, como ler, e por que a rota não é do painel |
 | [docs/testes.md](docs/testes.md) | as duas suítes, e por que o schema de teste não sai do `create_all` |
 | [docs/pagamentos-e-comissao.md](docs/pagamentos-e-comissao.md) | cobrança, Mercado Pago, comissão |
 | [docs/entrega-e-horarios.md](docs/entrega-e-horarios.md) | estimativa, taxa por km, horário de funcionamento |

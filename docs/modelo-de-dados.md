@@ -141,6 +141,9 @@ erDiagram
     admin_users |o--o{ print_agent_commands : "quem mandou"
     restaurants ||--o{ ai_feedback : "texto do cliente, expurgo por retenção"
     restaurants ||--o{ ai_voice_sessions : "cota e uso"
+    restaurants ||--o{ ai_usage_events : "o que a IA custou"
+    branches |o--o{ ai_usage_events : "no texto, de que loja"
+    ai_voice_sessions |o--o| ai_usage_events : "uma linha por sessão"
     restaurants ||--o{ admin_error_reports : "relato do lojista"
     branches |o--o{ admin_error_reports : "de que loja"
     admin_users |o--o{ admin_error_reports : "quem relatou"
@@ -263,6 +266,7 @@ expira — está em [cashback.md](cashback.md).
 | `delivery_estimates` | `token` (UNIQUE), `address_fingerprint`, taxa/distância/ETA, `expires_at` | Reaproveitada na criação do pedido |
 | `restaurant_payment_credentials` | `public_key`, `access_token_encrypted`, `webhook_secret_encrypted`, `environment` | Cifrados com Fernet. Uma linha por `(restaurant_id, environment)` |
 | `admin_error_reports` | `description`, `error_log`, `screen`, `order_number`, e o `restaurant_id`/`branch_id`/`admin_user_id` que saem do TOKEN | O "deu erro" do painel. Credencial é mascarada antes do INSERT; o resto **vence em 90 dias**, e é assim que sai do banco — a tabela não tem `customer_id` (armadilha 38). `order_number` é número solto, sem FK: é o que uma pessoa digitou |
+| `ai_usage_events` | `surface` (`text`/`voice`), `model`, `input_tokens`, `cached_input_tokens`, `output_tokens`, `cost_usd`, `voice_session_id` | Uma linha por turno do `/chat` e uma por **sessão** de voz. `cost_usd` **nulo é "modelo sem preço em `src/ai/custo.py`", nunca zero**; `cached_input_tokens` é subconjunto de `input_tokens`. UNIQUE parcial em `voice_session_id`: o aviso de fim da voz chega duas vezes, e sem ele o custo da conversa dobraria |
 
 ---
 

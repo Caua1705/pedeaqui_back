@@ -42,6 +42,7 @@ from src.ai.voice.realtime_client import hangup_call, issue_client_secret
 from src.core.config import settings
 from src.models.ai_voice_session_model import AIVoiceSession
 from src.repositories.voice_session_repository import VoiceSessionRepository
+from src.services.ai_usage_service import AIUsageService
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -294,6 +295,12 @@ class VoiceSessionService:
         # aconteceram esvaziaria a medicao justamente no caso que ela existe
         # para enxergar. O retorno continua `False`: a rota nao muda.
         self._gravar_uso(sessao, uso)
+        # O custo entra na MESMA transacao do encerramento, e por isso
+        # `registrar_voz` nao commita: um commit dela gravaria o custo de uma
+        # sessao que ainda pode nao ter sido fechada. Ela e idempotente pelo
+        # UNIQUE de `voice_session_id`, que e o que sustenta o aviso de fim
+        # poder chegar duas vezes.
+        AIUsageService(self.db).registrar_voz(sessao)
         if sessao.ended_at is not None:
             self.db.commit()
             return False

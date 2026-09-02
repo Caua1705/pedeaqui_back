@@ -578,3 +578,137 @@ painel a recusa com 403.
 
 **Nada disso foi alterado nesta sessão** — item 5 do briefing e a instrução
 explícita de não mexer no painel.
+
+---
+
+## 3. Custo de IA por restaurante
+
+**Implementado.** Desenho completo em [`docs/custo-de-ia.md`](../docs/custo-de-ia.md);
+aqui fica o resumo e o que eu decidi por conta própria.
+
+### 3.1 O que passou a ser medido
+
+Uma linha por chamada em `ai_usage_events` (revisão `20260902_0044`), com
+restaurante, filial, modelo, tokens de entrada (e a fatia que veio do cache),
+tokens de saída e **o custo em dólar já calculado**.
+
+| Superfície | Uma linha por | Gancho |
+|---|---|---|
+| `text` | turno do `/chat` | `ChatService._invoke_llm` |
+| `voice` | **sessão** de voz | `VoiceSessionService.encerrar` |
+
+A voz é por sessão e não por turno porque não existe turno visível daqui: o
+áudio vai do navegador direto para a OpenAI. O número chega uma vez só, no
+aviso de fim — **e esse aviso chega duas vezes** (vai com `keepalive`, o
+navegador reenvia ao fechar a aba). Por isso a linha carrega
+`voice_session_id` com UNIQUE parcial: a segunda chegada corrige a primeira em
+vez de dobrar o custo da conversa.
+
+### 3.2 Como eu leio
+
+```bash
+curl -s -H "X-Internal-Key: $PLATFORM_METRICS_KEY" \
+  "https://api.pederapidex.com/internal/ai-usage?start_date=2026-08-01&end_date=2026-08-31" \
+  | python -m json.tool
+```
+
+Sem parâmetro nenhum: últimos 30 dias, um bloco por restaurante. Aceita
+`start_date`, `end_date` (o dia entra INTEIRO) e `restaurant_id`.
+
+**Antes de ligar o servidor, ponha a chave no `.env`:**
+
+```bash
+echo "PLATFORM_METRICS_KEY=$(openssl rand -hex 32)" >> .env
+docker compose up -d
+```
+
+Sem ela, só essa rota responde **503** — o resto da API sobe igual. Foi
+deliberado: obrigatória, ela derrubaria o boot de todo mundo por causa de um
+relatório que uma pessoa lê.
+
+**Leia `calls_without_price` antes do total.** Ela conta chamadas cujo modelo
+não estava na tabela de preços: somam token e não somam dólar. Número grande
+ali é "falta preço", não "custou pouco".
+
+### 3.3 As decisões que eu tomei sozinho, e o porquê
+
+1. **A rota não é do painel.** É `/internal/ai-usage`, com chave própria e
+   `include_in_schema=False`. Quanto o assistente custa **à plataforma** é a
+   nossa margem; publicá-la no painel a poria na mesa de negociação da
+   comissão, com o lojista vendo o número antes de sentar. É o raciocínio da
+   armadilha 17 (`platform_commission_percent` fora de todo schema do painel),
+   e a armadilha 16 fecha a outra metade: o painel consome o `/openapi.json`, e
+   rota que não é dele não entra no contrato dele.
+
+2. **Segredo novo, não a `INTERNAL_API_KEY`.** Aquela está depreciada e o
+   `startup_checks` pede para removê-la do `.env`. Reaproveitá-la faria uma
+   chave "que nenhuma rota usa" voltar a valer alguma coisa em silêncio — é o
+   que a armadilha 32 registra. Comparação com `hmac.compare_digest`
+   (armadilha 18).
+
+3. **Dólar, não real.** O preço é publicado em dólar e a fatura vem em dólar.
+   Converter exigiria uma cotação que não temos, e qual cotação (do dia? do
+   fechamento do mês? do pagamento do cartão?) é decisão de contabilidade, não
+   de schema.
+
+4. **`Decimal` de 6 casas, não `float` de 2.** Um turno do `/chat` custa da
+   ordem de US$ 0,0005 — com duas casas, **todo turno seria zero**. Isto não
+   contradiz a armadilha 34 (que manda não converter schema isolado enquanto a
+   decisão `float × Decimal` não é tomada com o front): esta resposta é nova,
+   não tem consumidor e não entra no documento.
+
+5. **Modelo sem preço grava custo `NULL`, nunca zero.** Zero é um número que
+   soma, e um restaurante inteiro apareceria de graça no relatório que existe
+   para dizer quanto ele custa. Os tokens ficam gravados, então dá para
+   reprocessar quando a tabela de preços for atualizada. É o critério da
+   armadilha 49: número desatualizado degrada a mensagem, não a correção.
+
+6. **Medir não derruba o que está sendo medido.** As duas gravações engolem
+   falha e seguem, com `custo_nao_gravado=true` no log. Um `/chat` que responde
+   500 porque a contabilidade não gravou seria trocar a operação pela planilha.
+
+### 3.4 Os preços
+
+Conferidos em **02/09/2026** em `developers.openai.com/api/docs/pricing`, e
+gravados em `src/ai/custo.py` (USD por milhão de tokens):
+`gpt-5-mini` 0,25 / 0,025 / 2,00 · `gpt-5` 1,25 / 0,125 / 10,00 · `gpt-5-nano`
+0,05 / 0,005 / 0,40 · `gpt-realtime-mini` texto 0,60 e áudio 10,00 na entrada,
+2,40 e 20,00 na saída · `gpt-realtime` 4,00/32,00 e 16,00/64,00.
+
+**A tabela é uma cópia e envelhece.** Quando um preço mudar, é ali que se
+mexe — e as linhas antigas continuam com o valor do dia em que foram gravadas,
+de propósito: relatório que muda sozinho de valor não é confiável.
+
+### 3.5 O que ficou de fora, com o número que justifica
+
+- **Embedding não é medido.** `text-embedding-3-small` custa US$ 0,02 por
+  milhão de tokens, e uma pergunta de cliente tem ~20 tokens: **um milhão de
+  buscas custa US$ 0,40**, contra ~US$ 0,0005 por turno do `/chat`.
+  Instrumentar exigiria contar token com `tiktoken` no caminho quente da
+  busca, para medir um arredondamento. Se o modelo de embedding mudar de faixa
+  de preço, a conta muda.
+- **A transcrição da voz** não é ligada pelo backend (armadilha 43); quem liga
+  é a bancada, e ela é cobrada à parte por minuto.
+- **Painel, alerta e limite** — pedido explicitamente para ficar de fora.
+  Anotado o que cada um exigiria decidir: a que número alertar, quem recebe, e
+  o que acontece quando o teto bate (o assistente cala? responde sem busca? o
+  lojista paga o excedente?).
+
+### 3.6 Arquivos
+
+Migração `20260902_0044` · `src/ai/custo.py` (preços e as duas contas) ·
+`src/models/ai_usage_event_model.py` · `src/repositories/ai_usage_repository.py` ·
+`src/services/ai_usage_service.py` · `src/schemas/ai_usage_schema.py` ·
+`src/api/endpoints/internal_metrics.py` · `docs/custo-de-ia.md`.
+
+Ganchos: `ChatLLMService` (o `usage` deixou de morrer no log),
+`ChatService._invoke_llm`, `VoiceSessionService.encerrar`.
+
+Testes: `tests/test_custo_de_ia.py` (14, rápidos: a aritmética, o cache como
+subconjunto, modelo sem preço, e a porta da rota) e
+`tests/test_custo_de_ia_db.py` (13, contra o Postgres: a idempotência da voz, os
+dois CHECK, a agregação e a janela meio-aberta).
+
+**Portão: 2785 testes verdes** (rápida + `db`), `ruff` limpo,
+`export_openapi.py --check` em dia — a rota não entra no documento, então o
+`openapi.json` não mudou.

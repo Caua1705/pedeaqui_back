@@ -599,7 +599,7 @@ class TestOEstadoDaLojaChegaAoModelo:
         monkeypatch.setattr(
             chat_module,
             "ChatLLMService",
-            lambda: SimpleNamespace(invoke=fake_invoke),
+            lambda: SimpleNamespace(invoke=fake_invoke, ultimo_uso=None),
         )
 
         service.chat(uuid.uuid4(), BRANCH_ID, "sessao-1", "quero carne")
@@ -647,7 +647,7 @@ class TestOContextoChegaAoModelo:
         monkeypatch.setattr(
             chat_module,
             "ChatLLMService",
-            lambda: SimpleNamespace(invoke=fake_invoke),
+            lambda: SimpleNamespace(invoke=fake_invoke, ultimo_uso=None),
         )
 
         service.chat(uuid.uuid4(), BRANCH_ID, "sessao-1", "quero carne")
@@ -682,7 +682,9 @@ class TestOContextoChegaAoModelo:
         monkeypatch.setattr(
             chat_module,
             "ChatLLMService",
-            lambda: SimpleNamespace(invoke=lambda **kwargs: make_llm_response("text", "oi")),
+            lambda: SimpleNamespace(
+                invoke=lambda **kwargs: make_llm_response("text", "oi"), ultimo_uso=None
+            ),
         )
 
         service.chat(uuid.uuid4(), BRANCH_ID, "sessao-1", "quanto custa a picanha?")
@@ -861,7 +863,8 @@ class TestChatPipeline:
             chat_module,
             "ChatLLMService",
             lambda: SimpleNamespace(
-                invoke=lambda **kwargs: make_llm_response("products", "temos esta", [produto.id])
+                invoke=lambda **kwargs: make_llm_response("products", "temos esta", [produto.id]),
+                ultimo_uso=None,
             ),
         )
 

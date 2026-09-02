@@ -31,6 +31,7 @@ instante em que qualquer modulo de `src` fosse importado.
 """
 
 import logging
+from dataclasses import dataclass
 from functools import lru_cache
 from time import perf_counter
 from typing import Any
@@ -61,6 +62,25 @@ def get_chat_client(model: str) -> ChatOpenAI:
     )
 
 
+@dataclass(frozen=True)
+class UsoDoModelo:
+    """O que a OpenAI diz ter cobrado por UMA chamada. Nao e estimativa nossa.
+
+    `entrada_em_cache` e SUBCONJUNTO de `entrada`, e nao uma quarta parcela:
+    e a fatia do prompt que veio do cache da OpenAI e por isso saiu mais
+    barata. Somar os dois conta o cache duas vezes.
+
+    Nao carrega `reasoning_tokens` de proposito: eles ja estao DENTRO de
+    `saida` na cobranca, e uma coluna separada convidaria a soma errada. Quem
+    quer olhar para eles tem a linha `[AI /chat usage]`, que os mostra.
+    """
+
+    modelo: str
+    entrada: int
+    entrada_em_cache: int
+    saida: int
+
+
 class ChatLLMService:
     """LCEL chat service for Rapi structured responses."""
 
@@ -71,6 +91,17 @@ class ChatLLMService:
         # default de `MODEL_NAME` em `config.py` e o mesmo valor que estava
         # fixo aqui, entao nada muda para quem nao define a variavel.
         self.llm = get_chat_client(settings.MODEL_NAME)
+
+        # O uso da ULTIMA chamada desta instancia, ou None quando a OpenAI
+        # nao mandou `usage` (ou quando a resposta veio cortada e a excecao
+        # levou a resposta crua junto).
+        #
+        # Estado na instancia, e nao retorno de `invoke`, por um motivo so:
+        # `ChatLLMService` e construido POR REQUISICAO (ver `_invoke_llm` no
+        # `ChatService`), entao nao ha o que vazar entre turnos. Devolver a
+        # tupla `(resposta, uso)` faria toda chamada carregar um segundo item
+        # que as vezes e None por um motivo que so o corpo explica.
+        self.ultimo_uso: UsoDoModelo | None = None
 
     def build_chain(self):
         """Build the Prompt -> ChatOpenAI structured output LCEL chain.
@@ -155,8 +186,38 @@ class ChatLLMService:
         # que nao validou custou os mesmos tokens de uma que validou, e e
         # justamente nela que saber quantos foram explica o porque.
         self._log_usage(result.get("raw"))
+        self.ultimo_uso = self._uso_da_resposta(result.get("raw"))
         self._avisar_se_bateu_no_teto(result.get("raw"))
         return self._unwrap(result)
+
+    def _uso_da_resposta(self, raw: Any) -> UsoDoModelo | None:
+        """O mesmo `usage_metadata` do log, em objeto, para virar custo.
+
+        Separada de `_log_usage` de proposito, apesar de as duas lerem o mesmo
+        campo. As perguntas sao diferentes e os destinos tambem: `_log_usage`
+        escreve uma linha que alguem le no `docker logs`, com
+        `reasoning_tokens` e `total_tokens` juntos; esta devolve os tres
+        numeros que `src/ai/custo.py` sabe multiplicar por preco. Fundir as
+        duas faria uma funcao com um argumento decidindo qual das duas ela e.
+
+        Nao levanta: uso e observabilidade, e o cliente ja tem a resposta
+        dele. Formato que mude do lado da OpenAI vira `None` e uma linha no
+        log, nunca um 500.
+        """
+        try:
+            usage = getattr(raw, "usage_metadata", None)
+            if not usage:
+                return None
+            detalhes = usage.get("input_token_details") or {}
+            return UsoDoModelo(
+                modelo=self.llm.model_name,
+                entrada=int(usage.get("input_tokens") or 0),
+                entrada_em_cache=int(detalhes.get("cache_read") or 0),
+                saida=int(usage.get("output_tokens") or 0),
+            )
+        except Exception:
+            logger.warning("[AI /chat usage] leitura_do_uso_falhou=true", exc_info=True)
+            return None
 
     def _resgatar_resposta_cortada(self, erro: ValidationError) -> ChatLLMResponse | None:
         """O texto que sobrou de um JSON cortado no meio, ou None.

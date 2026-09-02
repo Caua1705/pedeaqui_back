@@ -139,7 +139,8 @@ class TestPipeline:
                     message="Ola! Como posso ajudar?",
                     response_type="text",
                     selected_product_ids=[],
-                )
+                ),
+                ultimo_uso=None,
             ),
         )
         return service, restaurante, filial

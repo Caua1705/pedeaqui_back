@@ -30,6 +30,7 @@ from src.api.endpoints import (
     customers,
     delivery,
     health,
+    internal_metrics,
     menu,
     orders,
     payments,
@@ -178,6 +179,7 @@ app.include_router(admin_customers.router)
 app.include_router(admin_reports.router)
 app.include_router(admin_reviews.router)
 app.include_router(admin_error_reports.router)
+app.include_router(internal_metrics.router)
 app.include_router(chat.router)
 
 # Atendimento por voz. `VOICE_ENABLED` e a CHAVE MESTRA: desligada, as rotas

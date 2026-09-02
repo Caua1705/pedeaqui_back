@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from src.models.branch_model import Branch
 from src.models.category_model import Category
+from src.services.coupon_window import filtro_de_janela
 from src.models.coupon_model import COUPON_VISIBILITY_PUBLIC, CouponTemplate, RestaurantCoupon
 from src.models.product_model import Product
 from src.models.product_option_model import ProductOptionGroup
@@ -104,8 +105,14 @@ class MenuRepository:
                 RestaurantCoupon.restaurant_id == restaurant_id,
                 RestaurantCoupon.is_active.is_(True),
                 RestaurantCoupon.visibility == COUPON_VISIBILITY_PUBLIC,
-                RestaurantCoupon.valid_from <= datetime.now(timezone.utc),
-                RestaurantCoupon.valid_until >= datetime.now(timezone.utc),
+                # A janela sai de `coupon_window`, e nao mais escrita aqui: era
+                # a SEGUNDA copia da mesma regra, e uma copia que consertasse o
+                # `valid_until` nulo sem a outra faria a campanha permanente
+                # aparecer numa superficie e sumir na outra.
+                #
+                # UM instante para as duas condicoes, e nao dois `now()`: lidas
+                # separadamente, elas podem cair em lados diferentes da virada.
+                *filtro_de_janela(datetime.now(timezone.utc)),
                 CouponTemplate.is_active.is_(True),
             )
             .order_by(RestaurantCoupon.sort_order.asc())

@@ -23,6 +23,7 @@ from src.models.order_model import Order
 from src.schemas.coupon_schema import CouponCampaignFields, CouponPreviewRequest
 from src.schemas.order_schema import CreateOrderRequest
 from src.services.admin_order_service import AdminOrderService
+from src.services.coupon_window import dentro_da_janela
 from src.services.coupon_service import CouponService, CustomerAudience
 from src.services.order_service import OrderService
 from src.models.coupon_redemption_model import CouponRedemption
@@ -128,23 +129,33 @@ class FakeCouponRepository:
     def customer_has_valid_order(self, customer_id, restaurant_id):
         return self.has_order
 
-    def get_by_id_and_restaurant(self, coupon_id, restaurant_id, for_update=False):
-        if self.coupon.id == coupon_id and self.coupon.restaurant_id == restaurant_id:
-            return self.coupon
-        return None
+    # `agora` NAO e enfeite de assinatura: quando ele vem, o SQL de verdade
+    # recorta pela janela de validade, e um dublê que o ignorasse devolveria
+    # cupom vencido para o checkout — deixando verde justamente o caminho que
+    # `_find_coupon` passou a fechar.
+    def get_by_id_and_restaurant(self, coupon_id, restaurant_id, for_update=False, agora=None):
+        if self.coupon.id != coupon_id or self.coupon.restaurant_id != restaurant_id:
+            return None
+        return self._recortado_pela_janela(agora)
 
-    def get_by_code_and_restaurant(self, code, restaurant_id, for_update=False):
+    def get_by_code_and_restaurant(self, code, restaurant_id, for_update=False, agora=None):
         if self.coupon.code is None:
             return None
-        if self.coupon.code.lower() == code.lower() and self.coupon.restaurant_id == restaurant_id:
-            return self.coupon
-        return None
+        if self.coupon.code.lower() != code.lower() or self.coupon.restaurant_id != restaurant_id:
+            return None
+        return self._recortado_pela_janela(agora)
 
-    def lock_coupon(self, restaurant_id, coupon_id=None, coupon_code=None):
+    def _recortado_pela_janela(self, agora):
+        if agora is None:
+            return self.coupon
+        dentro = dentro_da_janela(self.coupon.valid_from, self.coupon.valid_until, agora)
+        return self.coupon if dentro else None
+
+    def lock_coupon(self, restaurant_id, coupon_id=None, coupon_code=None, agora=None):
         self.lock_calls += 1
         if coupon_id is not None:
-            return self.get_by_id_and_restaurant(coupon_id, restaurant_id)
-        return self.get_by_code_and_restaurant(coupon_code, restaurant_id)
+            return self.get_by_id_and_restaurant(coupon_id, restaurant_id, agora=agora)
+        return self.get_by_code_and_restaurant(coupon_code, restaurant_id, agora=agora)
 
     def get_redemption_by_order_id(self, order_id):
         return next((item for item in self.redemptions if item.order_id == order_id), None)
@@ -244,6 +255,7 @@ class CouponServiceTests(unittest.TestCase):
             coupon_id=None,
             coupon_code="promo10",
             for_update=False,
+            agora=NOW,
         )
         self.assertIs(found, self.coupon)
 
@@ -261,7 +273,8 @@ class CouponServiceTests(unittest.TestCase):
         self.assertEqual(self.evaluate(restaurant_id=uuid.uuid4()).reason, "coupon_from_another_restaurant")
         with self.assertRaises(HTTPException):
             self.service._find_coupon(
-                uuid.uuid4(), coupon_id=self.coupon.id, coupon_code=None, for_update=False
+                uuid.uuid4(), coupon_id=self.coupon.id, coupon_code=None,
+                for_update=False, agora=NOW,
             )
 
     def test_preview_never_creates_redemption(self):

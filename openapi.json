@@ -5831,9 +5831,16 @@
             "type": "string"
           },
           "valid_until": {
-            "format": "date-time",
-            "title": "Valid Until",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
           },
           "visibility": {
             "$ref": "#/components/schemas/CouponVisibility"
@@ -5848,7 +5855,6 @@
           "discount_value",
           "min_order_value",
           "valid_from",
-          "valid_until",
           "first_order_only",
           "visibility",
           "is_active"
@@ -6036,9 +6042,16 @@
             "type": "string"
           },
           "valid_until": {
-            "format": "date-time",
-            "title": "Valid Until",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
           },
           "visibility": {
             "$ref": "#/components/schemas/CouponVisibility",
@@ -6050,8 +6063,7 @@
           "title",
           "discount_type",
           "discount_value",
-          "valid_from",
-          "valid_until"
+          "valid_from"
         ],
         "title": "CouponCreate",
         "type": "object"
@@ -7280,9 +7292,16 @@
             "type": "string"
           },
           "valid_until": {
-            "format": "date-time",
-            "title": "Valid Until",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
           }
         },
         "required": [
@@ -7290,7 +7309,6 @@
           "title",
           "discount_type",
           "min_order_value",
-          "valid_until",
           "state",
           "discount_amount",
           "missing_amount"

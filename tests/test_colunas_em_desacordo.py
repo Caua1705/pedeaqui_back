@@ -1,7 +1,7 @@
 """O que quebra quando o banco entrega NULL numa coluna que o model jura NOT NULL.
 
 `scripts/divergencias_orm_schema.py` acha 42 colunas em que o `nullable=` do
-model e o DDL do banco discordam, e 16 delas sao da classe que MORDE NA
+model e o DDL do banco discordam, e 15 delas sao da classe que MORDE NA
 LEITURA: o ORM diz `Mapped[str]`, o banco aceita NULL, e nada no repositorio
 confere os dois lados — `Base.metadata.create_all()` nao e usado (armadilha
 24), entao a anotacao nunca vira DDL.
@@ -44,10 +44,13 @@ from src.schemas.admin_user_schema import AdminUserDetailResponse
 from src.schemas.coupon_schema import CouponAdminResponse
 from src.schemas.customer_schema import CustomerAddressResponse
 from src.schemas.order_schema import CreateOrderRequest
-from src.services.coupon_service import CouponService
+from src.services.coupon_window import ja_acabou
 from src.services.customer_service import CustomerService
 from src.services.order_service import OrderService
 from src.utils.security import verify_password
+
+
+AGORA = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
 
 
 def cliente(**sobrescritas) -> Customer:
@@ -116,35 +119,41 @@ def usuario_do_painel(**sobrescritas) -> AdminUser:
     return AdminUser(**campos)
 
 
-# ── A pior das 16: `restaurant_coupons.valid_until` ─────────────────────────
+# ── `restaurant_coupons.valid_until`: CONSERTADA, e por outro caminho ───────
 #
-# Ela e a unica que quebra em Python ANTES de chegar ao schema de resposta, e o
-# lugar onde quebra e o checkout.
+# Ela era a pior das 16 — a unica que quebrava em Python antes de chegar a um
+# schema de resposta, e no checkout. **Nao foi alinhada.** Cupom sem data de
+# fim e campanha permanente, e o precedente estava no mesmo modulo (`code`
+# nulo significa "aplica sozinho" desde a revisao `20260828_0043`). Ali o
+# banco estava certo e quem mentia era o model.
+#
+# Os dois testes abaixo mudaram de lado: eles afirmavam o defeito, e agora
+# afirmam que ele nao volta. O caminho inteiro esta em
+# `tests/test_janela_do_cupom.py`.
 
 
-def test_cupom_sem_valid_until_derruba_a_avaliacao_do_checkout():
-    """`CouponService._aware(None)` levanta — e e ele que abre `evaluate`.
+def test_cupom_sem_valid_until_NAO_derruba_mais_a_avaliacao():
+    """Era `AttributeError` em `_aware(None)`, no caminho do dinheiro.
 
-    `evaluate` e alcancada por `preview` e por `lock_and_validate_for_order`,
-    e as duas chegam ao cupom por `_find_coupon` (id ou codigo), que NAO
-    filtra a janela de validade. Ou seja: a consulta que protege a vitrine
-    (`list_in_window`, com `valid_until >= now`) nao protege o checkout —
-    linha nula nunca casa naquele WHERE, mas chega inteira aqui.
+    O `_aware` continua levantando com `None` — ele nao mudou, e nao deve: e
+    um conversor de fuso, nao um tratador de nulo. O que mudou e que `evaluate`
+    nao o chama mais para a janela: quem responde e `coupon_window`, que e o
+    MESMO lugar de onde os dois repositorios tiram o `where()`.
     """
-    sem_validade = cupom(valid_until=None)
-
-    with pytest.raises(AttributeError):
-        CouponService._aware(sem_validade.valid_until)
+    assert ja_acabou(cupom(valid_until=None).valid_until, AGORA) is False
+    assert ja_acabou(cupom().valid_until, datetime(2027, 1, 1, tzinfo=timezone.utc)) is True
 
 
-def test_cupom_sem_valid_until_derruba_a_lista_do_painel():
-    """`list_admin` monta `CouponAdminResponse.model_validate(coupon)`.
+def test_cupom_sem_valid_until_NAO_derruba_mais_a_lista_do_painel():
+    """`CouponAdminResponse.valid_until` passou a ser `datetime | None`.
 
-    O campo e `valid_until: datetime`, sem `| None`: a linha nula vira 500 na
-    tela de campanhas — e derruba a LISTA inteira, nao so aquele cartao.
+    Sem essa metade, o conserto do service teria deixado a campanha permanente
+    funcionando no checkout e derrubando a tela onde o lojista a criou — a
+    LISTA inteira, nao so aquele cartao.
     """
-    with pytest.raises(ValidationError):
-        CouponAdminResponse.model_validate(cupom(valid_until=None))
+    resposta = CouponAdminResponse.model_validate(cupom(valid_until=None))
+
+    assert resposta.valid_until is None
 
 
 # ── O cliente: `customers.email` e `customers.birth_date` ───────────────────

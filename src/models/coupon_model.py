@@ -90,7 +90,17 @@ class RestaurantCoupon(Base):
     max_discount_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     min_order_value: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     valid_from: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
-    valid_until: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    # NULLABLE, e o nulo tem significado: **a campanha nao expira**.
+    #
+    # Esta e a EXCECAO da lista de 16 colunas em que o ORM dizia NOT NULL e o
+    # banco aceitava NULL (armadilha 50). Nas outras 15 o banco estava frouxo e
+    # o model certo; aqui era o contrario — o banco ja permitia a campanha
+    # permanente e o model e que mentia, e a mentira virava `AttributeError`
+    # em `_aware(None)`, no checkout.
+    #
+    # `nullable=False` continua FORA daqui de proposito: alinhar esta coluna
+    # apagaria uma possibilidade de produto. Ver `src/services/coupon_window.py`.
+    valid_until: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     total_usage_limit: Mapped[int | None] = mapped_column(Integer)
     usage_limit_per_customer: Mapped[int | None] = mapped_column(Integer)
     cooldown_days: Mapped[int | None] = mapped_column(Integer)

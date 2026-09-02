@@ -36,6 +36,7 @@ from src.schemas.coupon_schema import (
     CustomerCouponState,
     CustomerCouponsResponse,
 )
+from src.services.coupon_window import ja_acabou, ja_comecou
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import ZERO, quantize_money, to_decimal
 from src.utils.normalization import normalize_digits
@@ -170,8 +171,6 @@ class CouponService:
         """
         current = self._aware(now or self.clock())
         audience = audience or self.audience_of(customer, restaurant_id, now=current)
-        valid_from = self._aware(coupon.valid_from)
-        valid_until = self._aware(coupon.valid_until)
         subtotal = quantize_money(to_decimal(subtotal))
         minimum = quantize_money(to_decimal(coupon.min_order_value))
 
@@ -181,9 +180,14 @@ class CouponService:
             return CouponEvaluation(False, reason="inactive")
         if not self._can_see(coupon, audience):
             return CouponEvaluation(False, reason="not_visible")
-        if current < valid_from:
+        # A janela sai de `coupon_window`, que e o MESMO lugar de onde os dois
+        # repositorios tiram o `where()`. Enquanto a regra estava escrita aqui
+        # em Python e la em SQL, `valid_until` nulo — que significa "nao
+        # expira" — era `AttributeError` neste ponto: `_aware(None)`, no
+        # caminho do dinheiro.
+        if not ja_comecou(coupon.valid_from, current):
             return CouponEvaluation(False, reason="not_started")
-        if current > valid_until:
+        if ja_acabou(coupon.valid_until, current):
             return CouponEvaluation(False, reason="expired")
         if coupon.total_usage_limit is not None:
             if self.repository.count_applied_total(coupon.id) >= coupon.total_usage_limit:
@@ -498,11 +502,17 @@ class CouponService:
         if payload.order_type not in ORDER_TYPES:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de pedido inválido")
         effective_delivery_fee = ZERO if payload.order_type == "pickup" else payload.delivery_fee
+        # UM instante para a busca e para a avaliacao. Lendo o relogio duas
+        # vezes, o cupom podia passar pelo filtro e ser recusado por
+        # `expired` na linha seguinte — a resposta contaria uma historia que
+        # nunca foi verdade num unico momento.
+        agora = self._aware(self.clock())
         coupon = self._find_coupon(
             restaurant.id,
             coupon_id=payload.coupon_id,
             coupon_code=payload.coupon_code,
             for_update=False,
+            agora=agora,
         )
         evaluation = self.evaluate(
             coupon,
@@ -510,6 +520,7 @@ class CouponService:
             subtotal=payload.subtotal,
             delivery_fee=effective_delivery_fee,
             customer=customer,
+            now=agora,
         )
         subtotal = quantize_money(payload.subtotal)
         delivery_fee = quantize_money(effective_delivery_fee)
@@ -544,11 +555,14 @@ class CouponService:
         """
         if customer is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Cliente autenticado obrigatório para usar cupom")
+        # Ver o comentario do mesmo par em `preview`: um instante so.
+        agora = self._aware(self.clock())
         coupon = self._find_coupon(
             restaurant_id,
             coupon_id=coupon_id,
             coupon_code=coupon_code,
             for_update=True,
+            agora=agora,
         )
         evaluation = self.evaluate(
             coupon,
@@ -556,6 +570,7 @@ class CouponService:
             subtotal=subtotal,
             delivery_fee=delivery_fee,
             customer=customer,
+            now=agora,
         )
         if not evaluation.valid:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=evaluation.reason or "Cupom inválido")
@@ -849,18 +864,47 @@ class CouponService:
         coupon_id: UUID | None,
         coupon_code: str | None,
         for_update: bool,
+        agora: datetime,
     ) -> RestaurantCoupon:
+        """O cupom que o CLIENTE apontou — ja recortado pela janela de validade.
+
+        `agora` NAO e opcional aqui, e essa e a mudanca. Antes, as duas
+        superficies do cliente (`preview` e `lock_and_validate_for_order`)
+        chegavam ao cupom por id ou codigo **sem filtro nenhum**: a consulta que
+        protege a vitrine (`list_in_window`) nao protegia o checkout, e bastava
+        digitar o codigo para o service receber uma linha que a vitrine jamais
+        mostraria. Era por essa porta que o `valid_until` nulo chegava ao
+        `_aware` e virava 500.
+
+        O filtro e o MESMO de `coupon_window`, entao "aparece na vitrine" e
+        "chega ao checkout" passaram a ser a mesma pergunta.
+
+        **O que isso trocou, e vale saber:** codigo de campanha VENCIDA
+        respondia "expirado" (`ineligibility_reason`) e passa a responder 404
+        "Cupom nao encontrado". A recusa continua correta e o desconto nunca
+        saiu nos dois casos; o que mudou e a frase. Se a mensagem especifica
+        importar mais que a defesa em profundidade, e esta linha que volta
+        atras — os ramos `not_started`/`expired` de `evaluate` continuam vivos
+        e cobertos, porque as OUTRAS chamadas dele (a lista do cliente e a
+        auto-aplicacao) recebem cupom que ja veio de `list_in_window`.
+
+        O painel NAO passa por aqui: ele chama o repositorio direto, sem
+        `agora`, porque precisa enxergar a campanha vencida para edita-la.
+        """
         coupon = (
             self.repository.lock_coupon(
                 restaurant_id,
                 coupon_id=coupon_id,
                 coupon_code=coupon_code,
+                agora=agora,
             )
             if for_update
             else (
-                self.repository.get_by_id_and_restaurant(coupon_id, restaurant_id)
+                self.repository.get_by_id_and_restaurant(coupon_id, restaurant_id, agora=agora)
                 if coupon_id is not None
-                else self.repository.get_by_code_and_restaurant(coupon_code or "", restaurant_id)
+                else self.repository.get_by_code_and_restaurant(
+                    coupon_code or "", restaurant_id, agora=agora
+                )
             )
         )
         if coupon is None:

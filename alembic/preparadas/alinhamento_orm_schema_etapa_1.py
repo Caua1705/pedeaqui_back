@@ -13,7 +13,7 @@ alto.
 
 ## O que esta etapa faz, e o que ela nao faz
 
-Para cada uma das 16 colunas em que o ORM declara `nullable=False` e o banco
+Para cada uma das 15 colunas em que o ORM declara `nullable=False` e o banco
 aceita `NULL`, ela cria uma restricao:
 
     ALTER TABLE t ADD CONSTRAINT ck_t_col_nao_nula CHECK (col IS NOT NULL) NOT VALID
@@ -67,7 +67,7 @@ branch_labels = None
 depends_on = None
 
 
-# As 16 colunas da primeira classe de `scripts/divergencias_orm_schema.py`:
+# As 15 colunas da primeira classe de `scripts/divergencias_orm_schema.py`:
 # o ORM diz NOT NULL e o banco aceita NULL.
 #
 # A lista esta escrita AQUI, e nao lida do `Base.metadata` em tempo de
@@ -75,6 +75,13 @@ depends_on = None
 # disser NO DIA EM QUE RODAR, e o mesmo `alembic upgrade` faria coisas
 # diferentes em bancos diferentes. Migracao descreve UMA mudanca, sempre a
 # mesma. Se a lista mudar, muda-se a revisao.
+#
+# `restaurant_coupons.valid_until` ESTAVA aqui e SAIU em 03/09/2026. Ela era a
+# excecao da lista: nas outras o banco estava frouxo e o model certo; naquela o
+# banco ja permitia a campanha sem prazo e o model e que mentia. Alinha-la
+# apagaria uma possibilidade de produto. Quem cobrou a saida foi
+# `tests/test_revisoes_preparadas.py`, comparando a lista com a divergencia
+# real do schema — foi para isso que ele existe.
 COLUNAS = [
     ("admin_users", "is_active"),
     ("ai_feedback", "assistant_message"),
@@ -91,7 +98,6 @@ COLUNAS = [
     ("customers", "password_hash"),
     ("order_item_options", "option_group_id"),
     ("order_item_options", "option_id"),
-    ("restaurant_coupons", "valid_until"),
 ]
 
 

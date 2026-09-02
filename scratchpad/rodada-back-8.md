@@ -20,6 +20,7 @@ Os três itens vieram dos outros dois repositórios (painel e app).
 | 2 | Cliente logado não cancela o próprio pedido de outro aparelho | **feito** — rota autenticada, token não publicado |
 | 3 | Vitrine ordena cupom por `sort_order` e o painel não define esse valor | **feito** |
 | 4 | Varredura de teste que não roda (veio do erro do item 3) | **feito** |
+| 5 | Varredura de estado entre workers (escolha minha, critério da regra sem ferramenta) | **feito** |
 
 ---
 
@@ -493,3 +494,123 @@ roda).
 **Portão: 2967 verdes** (2340 rápidos + 627 `db`), ruff limpo. Nada de
 produção: o script lê código e roda a COLETA do pytest, que não executa teste
 nenhum e não abre banco.
+
+---
+
+## 5. Estado entre workers — a escolha, e como ela foi feita
+
+### Quais regras escritas ainda não tinham ferramenta
+
+Conferi em vez de lembrar. As varreduras que existem hoje cobrem: divergência
+ORM×schema, leitura de coluna nulável, dublê de dado, dado pessoal em chave de
+Redis, log com dado pessoal, escopo de tenant, escrita/commit/camadas, revisão
+preparada, model nunca instanciado e (deste round) teste mudo.
+
+Sobraram **cinco** regras escritas, de classe, sem ferramenta:
+
+| Regra da skill | Por que é classe |
+|---|---|
+| 16 — `HTTPException` embrulha em `detail`, e o OpenAPI precisa dizer | toda rota com `model=` num 4xx |
+| 18 — segredo se compara com `compare_digest` | toda comparação de segredo |
+| **20 — nada em memória sobrevive a mais de um worker** | todo estado de processo |
+| 34 — `money_to_float` na resposta | todo schema de resposta com dinheiro |
+| 47 — filtro de visibilidade por exclusão | todo `!=` em coluna de enum |
+
+### Por que a 20, e não as outras
+
+**1. O texto dela já estava errado.** A tabela dizia "o histórico do chat **não**
+tem caminho de Redis" — e tem, desde a rodada 7. Regra que ninguém reconfere é
+regra que deriva; a varredura conserta e mantém consertado.
+
+**2. É a de pior diagnóstico.** As outras falham de forma determinística. Esta
+falha **dependendo de qual worker atendeu**: sem erro, sem log, e não
+reproduzível na tentativa seguinte.
+
+**3. É latente atrás de UMA linha.** O `Dockerfile` sobe um worker
+(`CMD ["uvicorn", ...]`, sem `--workers`). No dia de escalar para o sábado
+cheio, tudo aparece de uma vez, em produção, sob carga. Enquanto isso não
+acontece **não há sintoma nenhum** para denunciar um varredor cego — o que faz o
+teste de anti-vacuidade ser a única coisa entre o zero e a cegueira.
+
+**4. Custa dinheiro e desliga um controle.** Cache de entrega em N processos são
+N× chamadas pagas ao Google; contador de rate limit em N processos é o limite
+efetivo virando N× o configurado — um controle de segurança silenciosamente
+afrouxado.
+
+### A primeira medição estava errada, e o erro definiu o critério
+
+Perguntei "que nome de módulo é estrutura mutável?" e achei **24**. As 24 eram
+tabela **constante** (`PAYMENT_METHOD_LABELS`, `ORDER_STATUS_TRANSITIONS`).
+Tabela só lida se compartilha de graça: cada processo tem a sua, idêntica.
+
+O que quebra é **escrita em tempo de requisição**. O critério virou *quem
+escreve*: `global` + atribuição, `X[chave] = ...`, `del X[chave]`, método que
+muta, e `X.campo = ...`.
+
+A troca de critério mudou o resultado: a medição por forma **não pegava os
+contadores** (um `int` não é dict, list nem set), que são justamente o que a
+regra não tinha anotado.
+
+### O que ele achou
+
+**15 sítios**, contra os 3 da tabela escrita à mão. Os cinco que faltavam são
+contadores e a flag de cold start em `chat_service.py` — `_resgates_por_nome`,
+`_turnos_com_llm`, `_turnos_com_contexto`, `_turnos_sem_cartao`,
+`_cold_start_pending`.
+
+**Todos os 15 são legítimos**, e cada um está em `ESPERADOS` com o motivo **e o
+que acontece com N workers** — que é a pergunta que a regra faz. Achado é o que
+está **fora** da lista.
+
+E a lista tem as duas travas: entrada nova fora dela é vermelho, **e entrada
+dela que não existe mais no código também** (grupo `declarados`). Sem a segunda,
+`ESPERADOS` viraria o cemitério que a tabela da skill já era.
+
+### Duas decisões de desenho
+
+**Tipo inerte é lista explícita, nunca dedução por exclusão.** `ZoneInfo`,
+`Decimal`, `APIRouter`, `getLogger`, `re.compile` — um a um, com o motivo.
+Deduzir "o que eu não conheço deve ser inerte" transformaria um tipo **novo** em
+estado invisível, que é o buraco que o script existe para fechar.
+
+**Mas dataclass congelada é regra MECÂNICA, e não lista.** `CustomerListFilters`,
+`_PadraoDoRestaurante` e `CashbackTerms` são sentinelas `frozen=True`. Listar as
+três seria dar manutenção numa lista que envelhece; a regra "classe do
+repositório com `frozen=True` não guarda estado" faz a próxima entrar sozinha —
+e faz uma que **deixe** de ser congelada voltar a ser achado.
+
+### A anti-vacuidade
+
+`tests/test_estado_entre_workers.py`, 14 testes sobre uma árvore plantada em
+`src/`. Iscas: dicionário escrito por chave, contador com `global`, lista com
+`append`, **escrita por atributo** (que faltava no script até este teste),
+instância de tipo do repositório não-congelado, `lru_cache` sobre dado de
+requisição. Legítimos: tabela constante, os seis tipos inertes, dataclass
+congelada, e dicionário **local** da função.
+
+Seis mutações, e as seis matam o grupo certo — três que cegam (as iscas morrem)
+e três que fazem acusar demais (os legítimos morrem).
+
+### Arquivos
+
+`scripts/estado_entre_workers.py` (novo) ·
+`tests/test_estado_entre_workers.py` (novo) · `.github/workflows/ci.yml` ·
+`.claude/skills/rapidex-backend/SKILL.md` (a armadilha 20 passou a apontar para
+a varredura, e a linha do histórico do chat foi corrigida).
+
+**Portão: 2982 verdes** (2355 rápidos + 627 `db`), ruff limpo, `openapi.json` em
+dia, as três varreduras novas em 0. Nada de produção: o script lê código-fonte e
+não abre banco.
+
+### O que sobra da classe, para a próxima
+
+Em ordem de custo, na minha leitura:
+
+1. **armadilha 47** — filtro de visibilidade por exclusão (`!= 'private'` em vez
+   de `== 'public'`). O sintoma escrito é o lojista pagando desconto de
+   reativação para quem já pede toda semana, sem erro e sem log;
+2. **armadilha 18** — segredo comparado com `==`/`!=` em vez de
+   `compare_digest`. Já aconteceu uma vez (`INTERNAL_API_KEY`);
+3. **armadilha 34** — `money_to_float` na resposta, com duas exceções que a
+   própria regra declara;
+4. **armadilha 16** — o `detail` do `HTTPException` no OpenAPI.

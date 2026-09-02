@@ -723,16 +723,32 @@ numeração por restaurante. O primeiro pedido de um restaurante novo pode ser o
 
 ## 20. Nada em memória sobrevive a mais de um worker
 
-Três estruturas são dicionários no processo:
+**Não confie nesta lista de cabeça — ela já esteve errada.** Quem responde é
+`scripts/estado_entre_workers.py`, que varre `src/` e cobra no portão. A lista
+escrita à mão aqui dizia *três* estruturas; a varredura achou **15 sítios**, e
+cinco deles eram contadores em `chat_service.py` que ninguém tinha anotado.
 
 | O quê | Efeito com N workers |
 |---|---|
-| Histórico de sessão do chat | o Rapi "esquece" a conversa quando cai em outro worker |
+| Histórico de sessão do chat | **resolvido em 04/09/2026**: `HistoricoNoRedis` com chave hasheada e TTL. Sem `REDIS_URL` cai no backend de memória, e aí o Rapi "esquece" ao mudar de worker |
 | Cache de estimativa de entrega | chamadas repetidas (e pagas) ao Google |
 | Contadores de rate limit | limite efetivo vira N × o configurado |
+| Contadores de diagnóstico do chat | cada worker conta a sua fatia; a razão que o log imprime continua valendo, e o número absoluto não decide nada |
+| Flag de cold start | N linhas de cold start, uma por processo — e isso é o certo |
 
-`REDIS_URL` resolve os dois últimos sem tocar em código. **O histórico do chat não
-tem caminho de Redis** — continuaria em memória.
+`REDIS_URL` resolve os três primeiros sem tocar em código, e
+`startup_checks` avisa no boot quando `--workers > 1` sem ela.
+
+**O critério da varredura não é "é um dicionário".** A primeira medição
+perguntou isso e achou 24 — as 24 eram tabela constante (`PAYMENT_METHOD_LABELS`,
+`ORDER_STATUS_TRANSITIONS`), que se compartilha de graça porque ninguém escreve.
+O que quebra é **escrita em tempo de requisição**: `global` + atribuição,
+`X[chave] = ...`, método que muta, e `X.campo = ...`.
+
+O que é estado de processo **de propósito** mora em `ESPERADOS`, com o motivo e
+o que acontece com N workers em cada caso. Sítio novo fora da lista é vermelho —
+e uma entrada da lista que deixar de existir no código também, para ela não
+virar cemitério.
 
 Foi por isso que o stream SSE do painel **não** usa fila em memória: com mais de
 um worker, o pedido criado no worker A nunca chegaria ao painel conectado no

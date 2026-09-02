@@ -129,6 +129,27 @@ jobs:
           python scripts/testes_mudos.py
           python scripts/testes_mudos.py --raiz print-agent
 
+      # Estado que mora no PROCESSO: VERMELHO, e nao aviso.
+      #
+      # A armadilha 20 diz que nada em memoria sobrevive a mais de um worker,
+      # e o `Dockerfile` sobe UM — entao nada disto quebra hoje. E por isso que
+      # a classe e perigosa: ela e latente atras de uma linha de configuracao,
+      # e no dia de escalar o sintoma depende de qual worker atendeu (sem erro
+      # e sem log).
+      #
+      # Aqui HA divida herdada, ao contrario das outras tres varreduras — mas
+      # ela esta DECLARADA com motivo em `ESPERADOS`, e e a lista que serve de
+      # linha de base. Sitio novo fora dela e regressao. A regra tinha uma
+      # tabela escrita a mao com 3 entradas; a varredura achou 15 sitios.
+      #
+      # Quem cobra e `tests/test_estado_entre_workers.py`, na suite rapida.
+      # `--tudo` imprime tambem o que e proposital, com o que acontece com N
+      # workers em cada caso.
+      - name: Estado entre workers (so a saida legivel)
+        if: failure()
+        continue-on-error: true
+        run: python scripts/estado_entre_workers.py --tudo
+
   banco:
     name: Testes contra o Postgres
     runs-on: ubuntu-latest

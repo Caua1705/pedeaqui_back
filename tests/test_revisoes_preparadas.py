@@ -19,12 +19,13 @@ lista com a divergencia REAL do schema montado e falha antes.
 
 import ast
 import importlib.util
+import uuid
 from pathlib import Path
 
 import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 
 from scripts.divergencias_orm_schema import comparar
 
@@ -147,11 +148,14 @@ def test_as_duas_etapas_rodam_e_desfazem_no_postgres_de_verdade(engine_de_teste)
 
     O que este teste cobra, em ordem:
 
-    - a etapa 1 aceita as 16 `CHECK ... NOT VALID`;
+    - a etapa 1 aceita as 15 `CHECK ... NOT VALID`;
     - a etapa 2 valida, aplica `SET NOT NULL` e derruba as restricoes — e
-      **as 16 colunas ficam NOT NULL de verdade**, lidas do `inspect()` e nao
+      **as 15 colunas ficam NOT NULL de verdade**, lidas do `inspect()` e nao
       do que a revisao acha que fez;
-    - os dois `downgrade` devolvem as 16 a `nullable`, sem sobra.
+    - os dois `downgrade` devolvem as 15 a `nullable`, sem sobra.
+
+    O que ele NAO prova esta logo abaixo dele, e e o motivo do desenho em duas
+    etapas: aqui a tabela esta VAZIA, e `VALIDATE` em tabela vazia passa sempre.
 
     TUDO DENTRO DE UMA TRANSACAO QUE VOLTA. O Postgres tem DDL transacional, e
     e por isso que este teste pode existir sem estragar o schema de sessao que
@@ -220,4 +224,212 @@ def _aceita_nulo(conexao, tabela: str, coluna: str) -> bool:
         info["nullable"]
         for info in inspect(conexao).get_columns(tabela)
         if info["name"] == coluna
+    )
+
+
+# ---------------------------------------------------------------------------
+# O que o teste acima NAO prova, e e o motivo inteiro do desenho em duas etapas
+# ---------------------------------------------------------------------------
+#
+# Ele roda contra o schema de sessao, que esta VAZIO. E `VALIDATE CONSTRAINT`
+# em tabela vazia passa sempre — nao ha linha para contradizer a regra.
+#
+# Ou seja: ate aqui, a revisao estava provada apenas no caminho feliz, e o
+# caminho feliz e o unico que nao precisa de duas etapas. Os tres testes abaixo
+# cobram o resto:
+#
+#   1. com linha DE VERDADE, as duas etapas passam e a coluna vira NOT NULL;
+#   2. depois da etapa 1, nulo NOVO ja e recusado — e o "o buraco para de
+#      crescer" da rodada 2 deixa de ser afirmacao e vira comportamento;
+#   3. com nulo ANTIGO, a etapa 2 falha NO VALIDATE, que e o lugar certo de
+#      falhar: antes de qualquer coluna ser alterada.
+#
+# A tabela escolhida e `ai_feedback`, por tres motivos: ela tem quatro das 15
+# colunas da revisao, precisa so de um restaurante para existir, e e a unica
+# cujo nulo tem consequencia conhecida em producao (a retencao da LGPD que
+# nunca alcancava a linha — armadilha 55).
+
+
+def _um_restaurante(conexao) -> uuid.UUID:
+    """Um restaurante cru, por SQL, sem passar pelo ORM.
+
+    A fabrica de `fabricas_db` precisa de uma `Session`, e estes testes
+    trabalham na CONEXAO — e nela que o DDL da migracao roda, e misturar as
+    duas faria a transacao que volta deixar de ser uma so.
+    """
+    identificador = uuid.uuid4()
+    conexao.execute(
+        text(
+            "INSERT INTO restaurants (id, name, slug, is_active) "
+            "VALUES (:id, 'Teste do alinhamento', :slug, true)"
+        ),
+        {"id": identificador, "slug": f"alinhamento-{identificador.hex[:12]}"},
+    )
+    return identificador
+
+
+def _feedback(conexao, restaurant_id: uuid.UUID, *, user_message: str | None) -> None:
+    """Uma linha de `ai_feedback`, por SQL CRU — e o `None` chega como NULL.
+
+    Pelo ORM seria impossivel escrever o nulo em `created_at` (armadilha 55:
+    com `server_default`, o SQLAlchemy trata o `None` explicito como "deixe o
+    banco preencher" e OMITE a coluna). Aqui a coluna e outra, mas a razao de
+    usar SQL cru e a mesma que vale para a origem real destes nulos: eles nao
+    vem do ORM, vem de escrita feita por fora (armadilha 33).
+    """
+    conexao.execute(
+        text(
+            "INSERT INTO ai_feedback ("
+            "  restaurant_id, session_id, user_message, assistant_message,"
+            "  response_type, selected_product_ids, feedback"
+            ") VALUES ("
+            "  :restaurant_id, :session_id, :user_message, 'Resposta',"
+            "  'text', '{}'::uuid[], 'like'"
+            ")"
+        ),
+        {
+            "restaurant_id": restaurant_id,
+            "session_id": f"sessao-{uuid.uuid4().hex[:8]}",
+            "user_message": user_message,
+        },
+    )
+
+
+@pytest.mark.db
+def test_as_duas_etapas_passam_com_a_tabela_CHEIA(engine_de_teste):
+    """`VALIDATE` em tabela vazia passa sempre. Aqui ele tem o que varrer.
+
+    Sem este teste, a unica prova que a revisao tinha era contra zero linhas —
+    e o `VALIDATE CONSTRAINT`, que e a operacao inteira da etapa 2, nao teria
+    sido exercitado uma vez.
+    """
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    etapa_1 = _carregar_revisao(PREPARADAS / "alinhamento_orm_schema_etapa_1.py")
+    etapa_2 = _carregar_revisao(PREPARADAS / "alinhamento_orm_schema_etapa_2.py")
+
+    conexao = engine_de_teste.connect()
+    transacao = conexao.begin()
+    try:
+        restaurante = _um_restaurante(conexao)
+        for _ in range(5):
+            _feedback(conexao, restaurante, user_message="quanto custa a picanha?")
+
+        with Operations.context(MigrationContext.configure(conexao)):
+            etapa_1.upgrade()
+            etapa_2.upgrade()
+
+        assert not _aceita_nulo(conexao, "ai_feedback", "user_message")
+        # As linhas continuam la: o alinhamento nao apaga nada.
+        assert conexao.execute(text("SELECT count(*) FROM ai_feedback")).scalar_one() == 5
+    finally:
+        transacao.rollback()
+        conexao.close()
+
+
+@pytest.mark.db
+def test_depois_da_etapa_1_o_nulo_NOVO_ja_e_recusado(engine_de_teste):
+    """"O buraco para de crescer" deixa de ser afirmacao e vira comportamento.
+
+    E a propriedade que justifica aplicar a etapa 1 sozinha e deixar assar:
+    ela nao repara nada, mas a partir do commit dela nenhuma linha nula NOVA
+    entra. Sem isso, esperar entre as duas etapas seria so esperar.
+
+    A recusa vem do `CHECK ... NOT VALID`, que ja cobra as linhas novas mesmo
+    sem ter validado as antigas — e essa e a metade menos obvia do que
+    `NOT VALID` significa.
+    """
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy.exc import IntegrityError
+
+    etapa_1 = _carregar_revisao(PREPARADAS / "alinhamento_orm_schema_etapa_1.py")
+
+    conexao = engine_de_teste.connect()
+    transacao = conexao.begin()
+    try:
+        restaurante = _um_restaurante(conexao)
+        # ANTES da etapa 1, o nulo entra sem reclamacao. E o estado de hoje.
+        _feedback(conexao, restaurante, user_message=None)
+
+        with Operations.context(MigrationContext.configure(conexao)):
+            etapa_1.upgrade()
+
+        # SAVEPOINT, e o `rollback()` explicito depois. O `with begin_nested()`
+        # nao serve aqui: o `pytest.raises` engole a excecao dentro dele, o
+        # SQLAlchemy conclui que deu tudo certo e tenta `RELEASE SAVEPOINT`
+        # numa transacao ja abortada — o erro que aparece entao e o do RELEASE,
+        # e nao o da CHECK que o teste veio medir.
+        ponto = conexao.begin_nested()
+        with pytest.raises(IntegrityError) as erro:
+            _feedback(conexao, restaurante, user_message=None)
+        ponto.rollback()
+
+        assert "ck_ai_feedback_user_message_nao_nula" in str(erro.value)
+    finally:
+        transacao.rollback()
+        conexao.close()
+
+
+@pytest.mark.db
+def test_a_etapa_2_falha_no_VALIDATE_quando_sobra_nulo_antigo(engine_de_teste):
+    """O desenho inteiro existe para falhar AQUI, e nunca depois.
+
+    A etapa 2 e `VALIDATE` -> `SET NOT NULL` -> `DROP CONSTRAINT`, nessa ordem.
+    Com uma linha nula antiga, ela tem que morrer no PRIMEIRO comando: nada
+    alterado, transacao inteira de volta, e o erro nomeando a restricao — de
+    onde sai a coluna, porque o nome e `ck_<tabela>_<coluna>_nao_nula`.
+
+    Se falhasse depois do `SET NOT NULL` de outras colunas, o banco ficaria com
+    metade do alinhamento aplicado. Nao fica: `alembic/env.py` roda o upgrade
+    inteiro numa transacao so, e este teste e a demonstracao disso valendo.
+
+    **E a etapa 0 (`scripts/nulos_nas_colunas_em_desacordo.py`) existe para
+    esta falha nunca acontecer em producao** — ela conta os nulos ANTES, com a
+    API no ar e sem lock nenhum. Este teste mostra o que ela evita.
+    """
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy.exc import IntegrityError
+
+    etapa_1 = _carregar_revisao(PREPARADAS / "alinhamento_orm_schema_etapa_1.py")
+    etapa_2 = _carregar_revisao(PREPARADAS / "alinhamento_orm_schema_etapa_2.py")
+
+    conexao = engine_de_teste.connect()
+    transacao = conexao.begin()
+    try:
+        restaurante = _um_restaurante(conexao)
+        _feedback(conexao, restaurante, user_message=None)
+
+        with Operations.context(MigrationContext.configure(conexao)):
+            etapa_1.upgrade()
+
+            with pytest.raises(IntegrityError) as erro:
+                etapa_2.upgrade()
+
+        texto = str(erro.value)
+        assert "ck_ai_feedback_user_message_nao_nula" in texto, texto
+        # O erro do Postgres para VALIDATE nao satisfeito. E a mensagem que o
+        # log do container vai carregar, e quem a ler precisa reconhecer.
+        assert "violated by some row" in texto or "violada" in texto, texto
+    finally:
+        transacao.rollback()
+        conexao.close()
+
+    # Depois do rollback, numa conexao NOVA: o schema nao mudou.
+    #
+    # A afirmacao vale mais do que parece. A transacao abortada e a garantia,
+    # mas quem a le no codigo esta lendo o `finally` — e o `finally` e
+    # exatamente o que uma refatoracao distraida remove.
+    with engine_de_teste.connect() as limpa:
+        assert _aceita_nulo(limpa, "ai_feedback", "user_message")
+        assert not _restricao_existe(limpa, "ck_ai_feedback_user_message_nao_nula")
+
+
+def _restricao_existe(conexao, nome: str) -> bool:
+    return bool(
+        conexao.execute(
+            text("SELECT 1 FROM pg_constraint WHERE conname = :nome"), {"nome": nome}
+        ).first()
     )

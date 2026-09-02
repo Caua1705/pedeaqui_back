@@ -5,12 +5,12 @@
 quando elas saem de lá.
 
 O problema que ele resolve está em `docs/modelo-de-dados.md`, §6, e em
-`scripts/divergencias_orm_schema.py`: em **16 colunas**, o model declara
+`scripts/divergencias_orm_schema.py`: em **15 colunas**, o model declara
 `nullable=False` e o banco aceita `NULL`. A anotação nunca virou DDL — o schema
 nasceu à mão no Supabase, `Base.metadata.create_all()` não é usado em lugar
 nenhum, e nada compara os dois lados.
 
-O que essas 16 custam hoje está levantado, uma a uma, em
+O que essas 15 custam hoje está levantado, uma a uma, em
 `scratchpad/rodada-back-2.md` §1.1, e provado em
 `tests/test_colunas_em_desacordo.py`: **oito têm caminho de leitura que
 responde 500**, a pior sendo `restaurant_coupons.valid_until`, que derruba a
@@ -25,7 +25,7 @@ toma **`ACCESS EXCLUSIVE`** sobre a tabela e **varre a tabela inteira** para
 provar que não há nulo. `ACCESS EXCLUSIVE` bloqueia `SELECT` também — não é
 "trava escrita", é trava tudo.
 
-Multiplicado por 16 colunas em `customers`, `orders`-adjacentes e
+Multiplicado por 15 colunas em `customers`, `orders`-adjacentes e
 `customer_addresses`, isso é a plataforma parada pelo tempo somado das
 varreduras. E como `alembic/env.py` abre **uma transação para o upgrade
 inteiro**, os locks só saem no commit final: a janela é a soma, não o máximo.
@@ -44,7 +44,9 @@ válida como prova e pula o scan. Produção é Supabase PG 17.
 
 **E há um ganho que não é de lock: a etapa 1 já cobra a regra das linhas
 novas.** Do commit dela em diante o buraco para de crescer, mesmo que a etapa 2
-demore semanas.
+demore semanas. Isso não é dedução do manual: está afirmado em
+`tests/test_revisoes_preparadas.py::test_depois_da_etapa_1_o_nulo_NOVO_ja_e_recusado`,
+contra o Postgres de verdade.
 
 ### As duas etapas NÃO podem ir no mesmo `alembic upgrade`
 
@@ -88,18 +90,28 @@ Para ver as linhas ofensoras de uma coluna:
 SELECT * FROM customer_addresses WHERE number IS NULL LIMIT 20;
 ```
 
-### A única das 16 em que a resposta pode ser "relaxe o model"
+### A que SAIU desta lista, e por quê
 
-`restaurant_coupons.valid_until`. Cupom **sem data de fim** é uma campanha
-plausível — e há precedente no próprio schema: a revisão `20260828_0043`
-tornou `code` nulo *com significado* ("cupom que aplica sozinho"). Se o produto
-quiser campanha permanente, o certo é o oposto deste documento: `valid_until`
-vira `datetime | None` no model, nos schemas de resposta, e
-`CouponService.evaluate` ganha o ramo do nulo.
+`restaurant_coupons.valid_until` estava aqui e **saiu em 03/09/2026** — foram
+16 e passaram a ser 15.
 
-Hoje **não é isso**: os schemas de cliente, painel e vitrine exigem a data, e
-`_aware(None)` levanta. Alinhar para `NOT NULL` é registrar o que já é verdade.
-A decisão de mudar o produto é outra conversa, e este documento não a toma.
+Cupom **sem data de fim** é uma campanha plausível, e havia precedente no
+próprio schema: a revisão `20260828_0043` tornou `code` nulo *com significado*
+("cupom que aplica sozinho"). Nas outras 15 o banco estava frouxo e o model
+certo; naquela era o contrário — **o banco já permitia a campanha permanente e
+quem mentia era o model.**
+
+O conserto foi no código: `src/services/coupon_window.py`, `datetime | None` no
+model e nos três schemas. Alinhar a coluna teria apagado uma possibilidade de
+produto.
+
+**O critério que saiu disso, e que decide a próxima:** tratar o nulo no código
+só tem duas formas, e as duas custam mais que a migração — *relaxar o schema de
+resposta* publica no contrato um estado que não deve existir e empurra o `if`
+para todo cliente; *inventar um valor* faz o backend mentir, o que é pior que o
+500 porque o 500 é visível. **Trate no código quando o nulo tem SIGNIFICADO de
+produto, ou quando o tratamento não é nem uma coisa nem outra. Fora disso,
+alinhe o schema.**
 
 ---
 
@@ -142,7 +154,7 @@ docker logs -f pedeaqui-api
 #   o ATENCAO e esperado NESTA etapa.
 ```
 
-**Conferência** — as 16 restrições existem e estão `NOT VALID`:
+**Conferência** — as 15 restrições existem e estão `NOT VALID`:
 
 ```sql
 SELECT conrelid::regclass AS tabela, conname, convalidated
@@ -151,14 +163,14 @@ SELECT conrelid::regclass AS tabela, conname, convalidated
  ORDER BY 1, 2;
 ```
 
-Espere `convalidated = false` nas 16. É o estado correto no fim desta etapa.
+Espere `convalidated = false` nas 15. É o estado correto no fim desta etapa.
 
 **Deixe assar.** Um dia inteiro de operação normal, no mínimo. O que se ganha
 com a espera: a etapa 1 já recusa nulo novo, então quando o `VALIDATE` rodar
 não há corrida com escrita concorrente — se ele falhar, é por linha que já
 existia, e não por algo que entrou no meio.
 
-**Rollback da etapa 1: completo e barato.** `alembic downgrade` derruba as 16
+**Rollback da etapa 1: completo e barato.** `alembic downgrade` derruba as 15
 restrições. Nenhum dado foi tocado, nenhuma coluna mudou. É o raro downgrade
 honesto — ao contrário do da `0017` do `tracking_token`, que recria a coluna
 vazia.
@@ -177,10 +189,16 @@ docker logs -f pedeaqui-api
 #   esperado: [entrypoint] alembic upgrade head   e NENHUM "ATENCAO".
 ```
 
-**Se o `VALIDATE` falhar**, a transação inteira volta: nenhuma das 16 colunas
+**Se o `VALIDATE` falhar**, a transação inteira volta: nenhuma das 15 colunas
 fica alterada e as restrições `NOT VALID` continuam no lugar, cobrando as
 linhas novas. Não existe estado pela metade. O erro nomeia a restrição, e o
 nome dela é `ck_<tabela>_<coluna>_nao_nula` — a coluna está no nome.
+
+**Isto também está demonstrado, e não apenas descrito:**
+`test_a_etapa_2_falha_no_VALIDATE_quando_sobra_nulo_antigo` planta uma linha
+nula, roda as duas etapas e prova que a segunda morre no **primeiro** comando,
+com a mensagem `violated by some row` — e que, depois do rollback, numa conexão
+nova, a coluna continua nulável e a restrição não existe.
 
 **Conferência final:**
 
@@ -189,7 +207,7 @@ docker exec pedeaqui-api python scripts/divergencias_orm_schema.py
 ```
 
 A seção "ORM diz NOT NULL, banco aceita NULL" tem que dizer **`Nenhuma.`**, e o
-total tem que cair de 42 para 26.
+total tem que cair de 41 para 26.
 
 **Rollback da etapa 2:** também completo — `DROP NOT NULL` e a CHECK volta como
 `NOT VALID`. Nenhum dado é tocado por nenhuma das duas etapas. **Esta migração

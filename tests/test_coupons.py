@@ -250,7 +250,7 @@ class CouponServiceTests(unittest.TestCase):
         self.assertEqual(result.reason, "login_required")
 
     def test_code_lookup_is_case_insensitive(self):
-        found = self.service._find_coupon(
+        found, dentro_da_janela = self.service._find_coupon(
             self.coupon.restaurant_id,
             coupon_id=None,
             coupon_code="promo10",
@@ -258,6 +258,9 @@ class CouponServiceTests(unittest.TestCase):
             agora=NOW,
         )
         self.assertIs(found, self.coupon)
+        # A segunda metade do retorno e o que separa "nao existe" de "existe e
+        # venceu". Aqui o cupom esta dentro da janela, e o `True` diz isso.
+        self.assertTrue(dentro_da_janela)
 
     def test_only_one_coupon_selector_is_accepted(self):
         with self.assertRaises(ValidationError):

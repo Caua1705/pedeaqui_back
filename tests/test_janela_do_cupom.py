@@ -28,6 +28,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.services.coupon_service import CouponService
+from src.schemas.coupon_schema import CouponPreviewRequest
 from src.services.coupon_window import dentro_da_janela, ja_acabou, ja_comecou
 from tests import fabricas
 
@@ -65,7 +66,16 @@ class FakeCouponRepository:
         return dentro_da_janela(self.coupon.valid_from, self.coupon.valid_until, agora)
 
     def get_by_code_and_restaurant(self, code, restaurant_id, *, for_update=False, agora=None):
+        """O CODIGO importa, e o dublê tem que respeita-lo.
+
+        Ele ignorava o `code` e devolvia o cupom para qualquer string — o que
+        fazia "codigo que nao existe" e "codigo que venceu" chegarem ao mesmo
+        lugar, apagando justamente a distincao que esta classe de testes mede.
+        O SQL real compara `lower(code)`.
+        """
         self.buscas.append((code, agora))
+        if self.coupon.code is None or self.coupon.code.lower() != code.strip().lower():
+            return None
         if agora is not None and not self._visivel(agora):
             return None
         return self.coupon
@@ -244,26 +254,161 @@ class AsDuasFormasDaRegraTests(unittest.TestCase):
         self.assertFalse(dentro_da_janela(ONTEM, ONTEM, AGORA))
 
 
+class ANaoExisteXVenceuTests(unittest.TestCase):
+    """"Nao existe" e "existe e venceu" nao podem ser a mesma resposta.
+
+    A diferenca decide o que a pessoa faz em seguida. **"Cupom nao encontrado"
+    para um codigo que existe manda ela conferir se digitou errado e tentar de
+    novo**; "cupom vencido" encerra o assunto. O primeiro e uma frase que o
+    cliente nao tem como resolver.
+
+    Isto foi consertado depois de a rodada anterior ter trocado as duas por um
+    404 so — o preco de aplicar o filtro de janela dentro de `_find_coupon`.
+    O filtro ficou; a mensagem voltou.
+    """
+
+    def _cupom_vencido(self):
+        return fabricas.cupom(
+            code="VENCIDO", valid_from=ONTEM - timedelta(days=30), valid_until=ONTEM
+        )
+
+    @staticmethod
+    def _tentar(service, codigo):
+        return service.lock_and_validate_for_order(
+            restaurant_id=service.repository.coupon.restaurant_id,
+            coupon_id=None,
+            coupon_code=codigo,
+            subtotal=Decimal("100.00"),
+            delivery_fee=Decimal("0.00"),
+            customer=fabricas.cliente(),
+        )
+
+    def test_codigo_que_existe_e_venceu_responde_VENCIDO(self):
+        service = build_service(self._cupom_vencido())
+
+        with self.assertRaises(HTTPException) as erro:
+            self._tentar(service, "VENCIDO")
+
+        self.assertEqual(erro.exception.status_code, 400)
+        self.assertEqual(erro.exception.detail, "expired")
+
+    def test_codigo_que_existe_e_nao_comecou_responde_NAO_COMECOU(self):
+        """Os dois motivos sao distintos, e a distincao tambem serve ao cliente.
+
+        "Ainda nao comecou" pede que ele volte depois; "venceu" nao. Colapsar
+        os dois num 404 apagava as duas informacoes de uma vez.
+        """
+        service = build_service(
+            fabricas.cupom(code="FUTURO", valid_from=AMANHA, valid_until=None)
+        )
+
+        with self.assertRaises(HTTPException) as erro:
+            self._tentar(service, "FUTURO")
+
+        self.assertEqual(erro.exception.status_code, 400)
+        self.assertEqual(erro.exception.detail, "not_started")
+
+    def test_codigo_que_NAO_existe_responde_404(self):
+        """O outro lado da distincao, e sem ele o teste de cima nao prova nada.
+
+        Se os dois casos respondessem 400 "expired", a mensagem teria voltado
+        errada — e quem digitasse um codigo inexistente leria "cupom vencido"
+        sobre um cupom que nunca existiu.
+        """
+        service = build_service(self._cupom_vencido())
+
+        with self.assertRaises(HTTPException) as erro:
+            self._tentar(service, "ESTE-NAO-EXISTE")
+
+        self.assertEqual(erro.exception.status_code, 404)
+
+    def test_o_preview_explica_em_vez_de_levantar(self):
+        """O preview nao levanta: ele DEVOLVE a resposta com o motivo.
+
+        E a superficie em que a distincao mais importa — o cliente esta com a
+        sacola aberta, e o card precisa dizer o que houve sem tirar ele da
+        tela.
+        """
+        coupon = self._cupom_vencido()
+        service = build_service(coupon)
+
+        resposta = service.preview(
+            "junior",
+            CouponPreviewRequest(
+                coupon_code="VENCIDO",
+                subtotal=Decimal("100.00"),
+                delivery_fee=Decimal("0.00"),
+                order_type="pickup",
+            ),
+            fabricas.cliente(),
+        )
+
+        self.assertFalse(resposta.valid)
+        self.assertEqual(resposta.ineligibility_reason, "expired")
+        self.assertEqual(resposta.coupon_id, coupon.id)
+
+
 class ADefesaEmProfundidadeTests(unittest.TestCase):
-    """`_find_coupon` recorta pela janela — a vitrine e o checkout viraram a mesma pergunta."""
+    """As duas formas da regra se conferem — e o desacordo vira 409.
 
-    def test_codigo_de_campanha_vencida_nao_chega_a_ser_avaliado(self):
-        """404 ANTES do `evaluate`, e nao "expirado" depois dele.
+    O `dentro_da_janela` sai do SQL (`filtro_de_janela`); o
+    `expired`/`not_started` sai do Python (`evaluate`). Sao as duas formas da
+    MESMA regra, e `lock_and_validate_for_order` cobra que elas concordem.
 
-        A recusa ja existia (`reason="expired"`), e o desconto nunca saiu nos
-        dois casos. O que mudou e onde ela acontece: o cupom fora da janela
-        deixa de ser CARREGADO pelo caminho do cliente. Era por essa porta que
-        `valid_until` nulo chegava ao `_aware` e virava 500.
+    Nao deveria haver como divergirem — as duas moram lado a lado em
+    `coupon_window.py`, exatamente para isso. Mas "nao deveria" foi o que a
+    rodada anterior encontrou escrito de tres jeitos diferentes, e aqui o preco
+    de estar errado e desconto aplicado num pedido pago.
+    """
 
-        `lock_calls` prova o outro lado: o `SELECT ... FOR UPDATE` foi feito e
-        voltou vazio, e nao foi pulado.
+    def test_sql_dizendo_fora_e_python_dizendo_valido_e_409(self):
+        """A guarda, com as duas formas em desacordo de proposito.
+
+        O dublê do repositorio passa a devolver `None` quando ha filtro de
+        janela e o cupom quando nao ha — enquanto o cupom esta, para o
+        `evaluate`, perfeitamente dentro da janela. Isso reproduz a divergencia
+        sem precisar de um bug real, e prova que a guarda responde 409 em vez
+        de aplicar o desconto.
+        """
+        coupon = fabricas.cupom(code="OK", valid_from=ONTEM, valid_until=AMANHA)
+        service = build_service(coupon)
+        service.repository.lock_coupon = lambda *args, **kwargs: (
+            None if kwargs.get("agora") is not None else coupon
+        )
+
+        with self.assertRaises(HTTPException) as erro:
+            service.lock_and_validate_for_order(
+                restaurant_id=coupon.restaurant_id,
+                coupon_id=None,
+                coupon_code="OK",
+                subtotal=Decimal("100.00"),
+                delivery_fee=Decimal("0.00"),
+                customer=fabricas.cliente(),
+            )
+
+        self.assertEqual(erro.exception.status_code, 409)
+
+    def test_a_segunda_consulta_nao_trava_a_linha(self):
+        """`FOR UPDATE` num cupom que ja se sabe que nao vai aplicar seguraria
+        a linha de outro pedido por nada.
+
+        A primeira busca pede trava; a segunda — a que so existe para separar
+        "nao existe" de "venceu" — nao pede.
         """
         coupon = fabricas.cupom(
             code="VENCIDO", valid_from=ONTEM - timedelta(days=30), valid_until=ONTEM
         )
         service = build_service(coupon)
+        travas = []
+        original = service.repository.lock_coupon
 
-        with self.assertRaises(HTTPException) as erro:
+        def registrando(*args, **kwargs):
+            travas.append(kwargs.get("agora"))
+            return original(*args, **kwargs)
+
+        service.repository.lock_coupon = registrando
+
+        with self.assertRaises(HTTPException):
             service.lock_and_validate_for_order(
                 restaurant_id=coupon.restaurant_id,
                 coupon_id=None,
@@ -273,30 +418,16 @@ class ADefesaEmProfundidadeTests(unittest.TestCase):
                 customer=fabricas.cliente(),
             )
 
-        self.assertEqual(erro.exception.status_code, 404)
-
-    def test_codigo_de_campanha_que_ainda_nao_comecou_tambem_nao(self):
-        coupon = fabricas.cupom(code="FUTURO", valid_from=AMANHA, valid_until=None)
-        service = build_service(coupon)
-
-        with self.assertRaises(HTTPException) as erro:
-            service.lock_and_validate_for_order(
-                restaurant_id=coupon.restaurant_id,
-                coupon_id=None,
-                coupon_code="FUTURO",
-                subtotal=Decimal("100.00"),
-                delivery_fee=Decimal("0.00"),
-                customer=fabricas.cliente(),
-            )
-
-        self.assertEqual(erro.exception.status_code, 404)
+        # UMA trava so, e a que pediu janela. A segunda busca foi pelo caminho
+        # sem `for_update`.
+        self.assertEqual(len(travas), 1)
+        self.assertIsNotNone(travas[0])
 
     def test_o_painel_continua_enxergando_a_campanha_vencida(self):
         """O outro lado do `agora` opcional, e o motivo de ele ser opcional.
 
         Se o filtro fosse do repositorio para sempre, o lojista perderia a tela
-        onde ele edita ou reativa a campanha que acabou — e o conserto teria
-        criado um defeito pior que o que fechou.
+        onde ele edita ou reativa a campanha que acabou.
         """
         coupon = fabricas.cupom(
             code="VENCIDO", valid_from=ONTEM - timedelta(days=30), valid_until=ONTEM

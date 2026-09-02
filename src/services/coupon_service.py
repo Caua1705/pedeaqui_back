@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -41,6 +42,11 @@ from src.services.restaurant_service import RestaurantService
 from src.utils.money import ZERO, quantize_money, to_decimal
 from src.utils.normalization import normalize_digits
 from src.utils.storage import build_storage_url
+
+
+# `uvicorn.error` e o logger do resto do repositorio: e ele que aparece no
+# `docker logs`.
+logger = logging.getLogger("uvicorn.error")
 
 
 # Nome do indice UNIQUE no Postgres -> o que dizer ao lojista.
@@ -507,7 +513,11 @@ class CouponService:
         # `expired` na linha seguinte — a resposta contaria uma historia que
         # nunca foi verdade num unico momento.
         agora = self._aware(self.clock())
-        coupon = self._find_coupon(
+        # O `dentro_da_janela` nao e usado aqui, e isso e deliberado: o preview
+        # existe para EXPLICAR, e quem explica e `evaluate` — com
+        # `not_started` ou `expired`, que dizem coisas diferentes ao cliente.
+        # Quem cobra que as duas formas da regra concordem e o checkout.
+        coupon, _ = self._find_coupon(
             restaurant.id,
             coupon_id=payload.coupon_id,
             coupon_code=payload.coupon_code,
@@ -557,7 +567,7 @@ class CouponService:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Cliente autenticado obrigatório para usar cupom")
         # Ver o comentario do mesmo par em `preview`: um instante so.
         agora = self._aware(self.clock())
-        coupon = self._find_coupon(
+        coupon, dentro_da_janela_pelo_sql = self._find_coupon(
             restaurant_id,
             coupon_id=coupon_id,
             coupon_code=coupon_code,
@@ -574,6 +584,31 @@ class CouponService:
         )
         if not evaluation.valid:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=evaluation.reason or "Cupom inválido")
+
+        # A SEGUNDA GUARDA, e ela so pode falhar se as duas formas da regra de
+        # janela divergirem: o SQL de `filtro_de_janela` disse que este cupom
+        # esta fora, e o Python de `evaluate` disse que ele vale.
+        #
+        # Isso nao deveria acontecer — as duas saem de `coupon_window.py`, lado
+        # a lado, justamente para nao poderem discordar. Mas "nao deveria" e o
+        # que a rodada anterior encontrou TRES vezes escrito de tres jeitos, e
+        # aqui o preco de estar errado e desconto aplicado num pedido pago.
+        #
+        # 409 e nao 400: nao ha nada que o cliente possa mudar no corpo dele
+        # para consertar isso. E defeito nosso, e o log tem que dizer isso alto.
+        if not dentro_da_janela_pelo_sql:
+            logger.error(
+                "[Cupom] as duas formas da janela divergiram | coupon_id=%s | "
+                "valid_from=%s | valid_until=%s | agora=%s",
+                coupon.id,
+                coupon.valid_from,
+                coupon.valid_until,
+                agora,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cupom indisponível neste momento",
+            )
         return coupon, evaluation.discount
 
     def auto_apply_for_order(
@@ -865,51 +900,85 @@ class CouponService:
         coupon_code: str | None,
         for_update: bool,
         agora: datetime,
-    ) -> RestaurantCoupon:
-        """O cupom que o CLIENTE apontou — ja recortado pela janela de validade.
+    ) -> tuple[RestaurantCoupon, bool]:
+        """O cupom que o CLIENTE apontou, E se ele esta dentro da janela.
 
-        `agora` NAO e opcional aqui, e essa e a mudanca. Antes, as duas
-        superficies do cliente (`preview` e `lock_and_validate_for_order`)
-        chegavam ao cupom por id ou codigo **sem filtro nenhum**: a consulta que
-        protege a vitrine (`list_in_window`) nao protegia o checkout, e bastava
-        digitar o codigo para o service receber uma linha que a vitrine jamais
-        mostraria. Era por essa porta que o `valid_until` nulo chegava ao
-        `_aware` e virava 500.
+        Devolve os DOIS, e a segunda metade e o ponto: sem ela, "nao existe" e
+        "existe e venceu" viram a mesma resposta — e para o cliente essa
+        diferenca decide o que ele faz em seguida. "Cupom nao encontrado" para
+        um codigo que existe manda a pessoa conferir se digitou errado e tentar
+        de novo; "cupom vencido" encerra o assunto.
 
-        O filtro e o MESMO de `coupon_window`, entao "aparece na vitrine" e
-        "chega ao checkout" passaram a ser a mesma pergunta.
+        ## Duas consultas, e a segunda so no caminho raro
 
-        **O que isso trocou, e vale saber:** codigo de campanha VENCIDA
-        respondia "expirado" (`ineligibility_reason`) e passa a responder 404
-        "Cupom nao encontrado". A recusa continua correta e o desconto nunca
-        saiu nos dois casos; o que mudou e a frase. Se a mensagem especifica
-        importar mais que a defesa em profundidade, e esta linha que volta
-        atras — os ramos `not_started`/`expired` de `evaluate` continuam vivos
-        e cobertos, porque as OUTRAS chamadas dele (a lista do cliente e a
-        auto-aplicacao) recebem cupom que ja veio de `list_in_window`.
+        A primeira usa `filtro_de_janela` — e o cupom aplicavel, e e o caminho
+        comum. So quando ela volta vazia e que a segunda pergunta, **sem
+        filtro**, se aquele codigo existe: e a diferenca entre as duas
+        respostas.
+
+        A segunda nunca pede `FOR UPDATE`. Travar linha que ja se sabe que nao
+        vai ser aplicada seguraria o cupom de outro pedido por nada.
+
+        ## A defesa em profundidade continua, e agora ela e CONFERIVEL
+
+        O `dentro_da_janela` que sai daqui vem do **SQL**; o `not_started` /
+        `expired` de `evaluate` vem do **Python**. Sao as duas formas da mesma
+        regra (`src/services/coupon_window.py`), e quem as usa cobra que elas
+        concordem — ver `lock_and_validate_for_order`. Duas formas que se
+        conferem valem mais que uma que ninguem contesta: o defeito que este
+        modulo inteiro existe para impedir e justamente elas divergirem.
 
         O painel NAO passa por aqui: ele chama o repositorio direto, sem
         `agora`, porque precisa enxergar a campanha vencida para edita-la.
         """
-        coupon = (
-            self.repository.lock_coupon(
+        dentro = self._buscar_cupom(
+            restaurant_id,
+            coupon_id=coupon_id,
+            coupon_code=coupon_code,
+            for_update=for_update,
+            agora=agora,
+        )
+        if dentro is not None:
+            return dentro, True
+
+        fora = self._buscar_cupom(
+            restaurant_id,
+            coupon_id=coupon_id,
+            coupon_code=coupon_code,
+            for_update=False,
+            agora=None,
+        )
+        if fora is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Cupom não encontrado para este restaurante",
+            )
+        return fora, False
+
+    def _buscar_cupom(
+        self,
+        restaurant_id: UUID,
+        *,
+        coupon_id: UUID | None,
+        coupon_code: str | None,
+        for_update: bool,
+        agora: datetime | None,
+    ) -> RestaurantCoupon | None:
+        """A consulta crua. `agora=None` traz o cupom seja qual for a janela."""
+        if for_update:
+            return self.repository.lock_coupon(
                 restaurant_id,
                 coupon_id=coupon_id,
                 coupon_code=coupon_code,
                 agora=agora,
             )
-            if for_update
-            else (
-                self.repository.get_by_id_and_restaurant(coupon_id, restaurant_id, agora=agora)
-                if coupon_id is not None
-                else self.repository.get_by_code_and_restaurant(
-                    coupon_code or "", restaurant_id, agora=agora
-                )
+        if coupon_id is not None:
+            return self.repository.get_by_id_and_restaurant(
+                coupon_id, restaurant_id, agora=agora
             )
+        return self.repository.get_by_code_and_restaurant(
+            coupon_code or "", restaurant_id, agora=agora
         )
-        if coupon is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cupom não encontrado para este restaurante")
-        return coupon
 
     def _get_restaurant(self, restaurant_id: UUID):
         restaurant = self.restaurant_repository.get_by_id(restaurant_id)

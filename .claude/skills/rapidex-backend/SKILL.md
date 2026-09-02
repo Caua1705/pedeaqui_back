@@ -2317,10 +2317,22 @@ dá é fazer as duas mudarem juntas.
 quando o nulo significa alguma coisa. E se a mesma pergunta é feita em SQL e em
 Python, as duas formas moram no mesmo arquivo.
 
-**Correlato de defesa em profundidade:** `_find_coupon` passou a aplicar o
-mesmo filtro. "Aparece na vitrine" e "chega ao checkout" viraram a mesma
-pergunta — antes, bastava digitar o código para o service receber uma linha que
-a vitrine jamais mostraria.
+**Correlato de defesa em profundidade, e a correção que ela precisou.**
+`_find_coupon` passou a aplicar o mesmo filtro — "aparece na vitrine" e "chega
+ao checkout" viraram a mesma pergunta. Mas a primeira versão disso **trocou a
+mensagem por um 404**, e isso foi um erro: *"cupom não encontrado" para um
+código que existe manda o cliente conferir se digitou errado e tentar de novo*.
+
+Hoje `_find_coupon` devolve **o cupom E se ele está dentro da janela**, com uma
+segunda consulta (sem `FOR UPDATE`) só no caminho em que a primeira volta
+vazia. "Não existe" continua 404; "existe e venceu" volta a ser 400 `expired`,
+e "existe e não começou", 400 `not_started`.
+
+E o par serve para mais do que a mensagem: `lock_and_validate_for_order`
+**cobra que as duas formas da regra concordem** — o `dentro_da_janela` vem do
+SQL, o `expired` vem do Python, e discordância entre elas vira **409 com log de
+erro**. Defesa em profundidade que ninguém contesta é um segundo filtro; duas
+formas que se conferem é uma defesa.
 
 ---
 

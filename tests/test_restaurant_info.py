@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from main import app
 from src.models.branch_model import Branch
 from src.services.restaurant_service import RestaurantService
+from tests import fabricas
 
 
 class FakeRestaurantRepository:
@@ -89,12 +90,8 @@ def make_branch(restaurant_id, **sobrescreve):
 
 class RestaurantInfoServiceTests(unittest.TestCase):
     def setUp(self):
-        self.restaurant = SimpleNamespace(
-            id=uuid.uuid4(),
-            slug="restaurante-teste",
-            name="Restaurante Teste",
-            logo_path=None,
-            is_active=True,
+        self.restaurant = fabricas.restaurante(
+            slug="restaurante-teste", name="Restaurante Teste"
         )
         self.branch = make_branch(self.restaurant.id)
 
@@ -110,12 +107,7 @@ class RestaurantInfoServiceTests(unittest.TestCase):
 
     def test_builds_public_info_with_multiple_periods_and_payment_flows(self):
         hours = [
-            SimpleNamespace(
-                weekday=0,
-                opens_at=time(11, 0),
-                closes_at=time(14, 0),
-                is_closed=False,
-            ),
+            fabricas.horario(opens_at=time(11, 0), closes_at=time(14, 0)),
             SimpleNamespace(
                 weekday=0,
                 opens_at=time(17, 30),
@@ -127,15 +119,13 @@ class RestaurantInfoServiceTests(unittest.TestCase):
             ),
         ]
         methods = [
-            SimpleNamespace(
-                id=uuid.uuid4(), payment_flow="online", method_type="pix",
-                brand=None, label="PIX", icon_key="pix", enabled=True,
-                requires_gateway=True,
+            fabricas.forma_de_pagamento(
+                payment_flow="online", method_type="pix", label="PIX",
+                icon_key="pix", requires_gateway=True,
             ),
-            SimpleNamespace(
-                id=uuid.uuid4(), payment_flow="delivery", method_type="cash",
-                brand=None, label="Dinheiro", icon_key="cash", enabled=True,
-                requires_gateway=False,
+            fabricas.forma_de_pagamento(
+                payment_flow="delivery", method_type="cash", label="Dinheiro",
+                icon_key="cash",
             ),
         ]
         service = self.make_service(hours, methods)

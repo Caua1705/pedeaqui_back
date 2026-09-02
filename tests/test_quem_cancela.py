@@ -38,9 +38,10 @@ from src.services.admin_order_service import AdminOrderService
 from src.services.customer_order_cancel_service import CustomerOrderCancelService
 from src.services.order_service import OrderService
 from src.services.order_status_change_service import OrderStatusChangeService
+from tests import fabricas
 
 
-ADMIN = SimpleNamespace(id=uuid.uuid4(), email="lojista@exemplo.com")
+ADMIN = fabricas.usuario_do_painel(email="lojista@exemplo.com")
 RESTAURANT_ID = uuid.uuid4()
 
 

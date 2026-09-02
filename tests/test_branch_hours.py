@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 
 from src.services.branch_hours_service import BranchHoursService
+from tests import fabricas
 
 
 TIMEZONE = ZoneInfo("America/Fortaleza")
@@ -28,7 +29,7 @@ TUESDAY = 1
 
 
 def period(opens_at, closes_at, prep_time_min=20, prep_time_max=30, is_closed=False):
-    return SimpleNamespace(
+    return fabricas.horario(
         opens_at=opens_at,
         closes_at=closes_at,
         prep_time_min=prep_time_min,

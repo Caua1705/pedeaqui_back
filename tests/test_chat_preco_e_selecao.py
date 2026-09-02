@@ -22,6 +22,8 @@ from src.ai.services.retrieval_service import RetrievalService
 from src.services import chat_service
 from src.services.chat_service import ChatService
 from src.utils.money import format_money_br
+from src.ai.schemas.chat_response_schema import ChatLLMResponse
+from tests import fabricas
 
 
 PUDIM = uuid.uuid4()
@@ -148,7 +150,7 @@ class TestADivergenciaDePreco:
 
     def test_preco_igual_nos_dois_lados_nao_gera_aviso(self, caplog):
         contexto = [retrieved(PUDIM, "Pudim", price="R$ 12,50")]
-        cartoes = [SimpleNamespace(id=PUDIM, price=12.50)]
+        cartoes = [fabricas.cartao_de_produto(id=PUDIM, name="Pudim", price=12.50)]
 
         ChatService._log_price_divergence(contexto, cartoes)
 
@@ -158,7 +160,7 @@ class TestADivergenciaDePreco:
         """O cartão está certo — vem do banco. O aviso existe para a
         divergência ter outra testemunha além do cliente."""
         contexto = [retrieved(PUDIM, "Pudim", price="R$ 12,50")]
-        cartoes = [SimpleNamespace(id=PUDIM, price=14.00)]
+        cartoes = [fabricas.cartao_de_produto(id=PUDIM, name="Pudim", price=14.00)]
 
         ChatService._log_price_divergence(contexto, cartoes)
 
@@ -169,7 +171,7 @@ class TestADivergenciaDePreco:
     def test_produto_sem_preco_no_contexto_nao_gera_aviso(self, caplog):
         """Nada foi mostrado ao modelo, então não há o que divergir."""
         contexto = [retrieved(PUDIM, "Pudim", price=None)]
-        cartoes = [SimpleNamespace(id=PUDIM, price=14.00)]
+        cartoes = [fabricas.cartao_de_produto(id=PUDIM, name="Pudim", price=14.00)]
 
         ChatService._log_price_divergence(contexto, cartoes)
 
@@ -292,13 +294,13 @@ class TestOResgateVirandoCartao:
     transforma a resposta de "text" em "products"."""
 
     def test_com_produto_resgatado_a_resposta_deixa_de_ser_texto(self):
-        llm = SimpleNamespace(response_type="text", selected_product_ids=[])
-        produtos = [SimpleNamespace(id=PUDIM)]
+        llm = ChatLLMResponse(message="Oi!", response_type="text")
+        produtos = [fabricas.cartao_de_produto(id=PUDIM, name="Pudim")]
 
         assert ChatService._response_type(llm, [PUDIM], produtos) == "products"
 
     def test_sem_nada_resgatado_continua_texto(self):
-        llm = SimpleNamespace(response_type="text", selected_product_ids=[])
+        llm = ChatLLMResponse(message="Oi!", response_type="text")
 
         assert ChatService._response_type(llm, [], []) == "text"
 

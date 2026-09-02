@@ -430,7 +430,7 @@ class CreateOrderIdempotencyTests(unittest.TestCase):
 def _admin(admin_id):
     """Lojista autenticado. O service so precisa de id (escopo da chave de
     idempotencia) e e-mail (assinatura no historico)."""
-    return SimpleNamespace(id=admin_id, email=f"lojista-{admin_id}@exemplo.com")
+    return fabricas.usuario_do_painel(id=admin_id, email=f"lojista-{admin_id}@exemplo.com")
 
 
 def _owner_scope(restaurant_id):

@@ -50,6 +50,7 @@ from src.models.product_model import Product
 from src.models.restaurant_banner_model import RestaurantBanner
 from src.models.restaurant_model import Restaurant
 from src.models.restaurant_setting_model import RestaurantSetting
+from src.schemas.product_schema import ProductResponse
 from src.services.delivery_estimate_service import DeliveryEstimateResult
 
 
@@ -368,3 +369,27 @@ def pedido(**sobrescritas) -> Order:
     }
     campos.update(sobrescritas)
     return Order(**campos)
+
+
+def cartao_de_produto(**sobrescritas) -> ProductResponse:
+    """O produto COMO A API o entrega — e como a voz e o `/chat` o leem.
+
+    E o schema da armadilha do `serves_people`: ele nasceu so no
+    `AdminProductResponse`, `ProductResponse` ficou sem, e `buscar_no_cardapio`
+    levantava `AttributeError` em toda busca falada. Dublê solto nao teria
+    denunciado nada; este constroi o schema de verdade, entao campo que sair
+    daqui quebra na hora.
+
+    `price` e `float` e nao `Decimal`, de proposito: e o que o schema declara,
+    e a coluna e `NOT NULL` — o produto que o cliente ve nunca tem preco nulo.
+    """
+    campos = {
+        "id": uuid.uuid4(),
+        "restaurant_id": uuid.uuid4(),
+        "branch_id": uuid.uuid4(),
+        "category_id": uuid.uuid4(),
+        "name": "Picanha",
+        "price": 50.0,
+    }
+    campos.update(sobrescritas)
+    return ProductResponse(**campos)

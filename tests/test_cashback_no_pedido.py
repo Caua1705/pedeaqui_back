@@ -301,13 +301,13 @@ class CreditoNaMudancaDeStatusTests(unittest.TestCase):
         service._apply_status_change(
             order_id=order.id,
             scope=AdminScope(
-                admin_user=SimpleNamespace(id=uuid.uuid4(), email="lojista@exemplo.com"),
+                admin_user=fabricas.usuario_do_painel(email="lojista@exemplo.com"),
                 restaurant_id=order.restaurant_id,
                 branch_id=None,
             ),
             new_status=novo_status,
             note=None,
-            admin_user=SimpleNamespace(id=uuid.uuid4(), email="lojista@exemplo.com"),
+            admin_user=fabricas.usuario_do_painel(email="lojista@exemplo.com"),
             idempotency_key=None,
             route="teste",
             # Cancelar pedido em preparo exige confirmação explícita desde

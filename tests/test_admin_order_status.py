@@ -18,9 +18,10 @@ from src.api.dependencies.admin_scope import AdminScope
 from src.models.order_model import Order
 from src.services.admin_order_service import AdminOrderService
 from src.services.order_service import OrderService
+from tests import fabricas
 
 
-ADMIN = SimpleNamespace(id=uuid.uuid4(), email="lojista@exemplo.com")
+ADMIN = fabricas.usuario_do_painel(email="lojista@exemplo.com")
 
 
 class FakeDb:

@@ -39,6 +39,7 @@ from src.services.chat_service import (
     _store_session_turn,
 )
 from src.services.menu_service import MenuService
+from src.ai.schemas.chat_response_schema import ChatLLMResponse
 from tests import fabricas
 
 
@@ -271,7 +272,13 @@ class TestValidateSelectedProductIds:
 
 
 def make_llm_response(response_type="text", message="Oi!", selected_product_ids=()):
-    return SimpleNamespace(
+    """O tipo REAL da decisao do modelo.
+
+    `ChatLLMResponse` valida `selected_product_ids` como `list[UUID]`: um
+    dublê solto aceitaria string, e o teste passaria descrevendo uma resposta
+    que o modelo nunca produz.
+    """
+    return ChatLLMResponse(
         response_type=response_type,
         message=message,
         selected_product_ids=list(selected_product_ids),

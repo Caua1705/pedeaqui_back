@@ -28,6 +28,7 @@ from src.ai.services.greeting import GREETINGS, is_greeting
 from src.models.branch_model import Branch
 from src.services import chat_service as chat_module
 from src.services.chat_service import _SESSION_HISTORY, ChatService
+from src.ai.schemas.chat_response_schema import ChatLLMResponse
 from tests import fabricas
 
 
@@ -134,10 +135,9 @@ class TestPipeline:
             chat_module,
             "ChatLLMService",
             lambda: SimpleNamespace(
-                invoke=lambda **kwargs: SimpleNamespace(
+                invoke=lambda **kwargs: ChatLLMResponse(
                     message="Ola! Como posso ajudar?",
                     response_type="text",
-                    selected_product_ids=[],
                 ),
                 ultimo_uso=None,
             ),

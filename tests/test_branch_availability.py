@@ -44,13 +44,11 @@ DIA_INTEIRO = (time(0, 0), time(23, 59))
 
 
 def faixa(opens_at=time(0, 0), closes_at=time(23, 59), prep_min=30, prep_max=45):
-    return SimpleNamespace(
-        weekday=0,
+    return fabricas.horario(
         opens_at=opens_at,
         closes_at=closes_at,
         prep_time_min=prep_min,
         prep_time_max=prep_max,
-        is_closed=False,
     )
 
 

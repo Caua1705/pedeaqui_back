@@ -60,7 +60,7 @@ class CreateOrderPhoneTests(unittest.TestCase):
         # snapshot do pedido tem que sair em digitos mesmo assim.
         db = FakeDb()
         service, payload = build_order_service(db, uuid.uuid4())
-        customer = SimpleNamespace(id=uuid.uuid4(), name="Ana", phone=FORMATTED)
+        customer = fabricas.cliente(name="Ana", phone=FORMATTED)
 
         service.create_order("junior", payload, customer)
 

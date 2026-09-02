@@ -13,6 +13,7 @@ diferentes e so a segunda pega um erro de SQL.
 
 import unittest
 import uuid
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -92,7 +93,7 @@ class TenantScopedOrderRepository:
 
 # Lojista autenticado usado nas chamadas de escrita: `changed_by` deixou de
 # vir do corpo e passou a sair do token (AdminOrderService._admin_signature).
-ADMIN_USER = SimpleNamespace(id=uuid.uuid4(), email="lojista@exemplo.com")
+ADMIN_USER = fabricas.usuario_do_painel(email="lojista@exemplo.com")
 
 
 def owner_scope(restaurant_id):
@@ -104,18 +105,14 @@ def branch_scope(restaurant_id, branch_id):
 
 
 def make_order(restaurant_id, branch_id=None):
-    return SimpleNamespace(
-        id=uuid.uuid4(),
+    return fabricas.pedido(
         restaurant_id=restaurant_id,
         branch_id=branch_id or uuid.uuid4(),
-        status="pending",
         payment_status="on_delivery",
         payment_method="cash",
-        order_number=1,
         customer_name_snapshot="Cliente",
-        customer_phone_snapshot="85999999999",
         order_type="delivery",
-        total=10,
+        total=Decimal("10.00"),
         created_at=None,
     )
 

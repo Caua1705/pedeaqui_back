@@ -32,12 +32,11 @@ def open_period(prep_time_min, prep_time_max, opens_at=time(0, 0), closes_at=tim
     "sempre aberto": ela e ignorada e a filial fica fechada. Os testes que
     antes usavam None/None passam a declarar o dia inteiro.
     """
-    return SimpleNamespace(
+    return fabricas.horario(
         opens_at=opens_at,
         closes_at=closes_at,
         prep_time_min=prep_time_min,
         prep_time_max=prep_time_max,
-        is_closed=False,
     )
 
 

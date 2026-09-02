@@ -726,7 +726,7 @@ class OrderCouponIntegrationTests(unittest.TestCase):
                 order.id,
                 AdminScope(admin_user=None, restaurant_id=restaurant_id, branch_id=None),
                 UpdateOrderStatusRequest(status="cancelled", note=None),
-                admin_user=SimpleNamespace(id=uuid.uuid4(), email="lojista@exemplo.com"),
+                admin_user=fabricas.usuario_do_painel(email="lojista@exemplo.com"),
             )
 
         self.assertEqual(result, "detail")

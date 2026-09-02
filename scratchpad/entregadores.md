@@ -24,7 +24,7 @@ cadastrar rápido.**
 | 4 | Admin: cadastro (listar, criar, editar, ativar/desativar, excluir) + código | **feito** — `/admin/couriers`, `/admin/couriers/{id}`, `/admin/couriers/{id}/access` |
 | 5 | Admin: atribuir e desatribuir pedidos | **feito** — `POST`/`GET /admin/couriers/{id}/assignments`, `GET`/`DELETE /admin/orders/{id}/courier` |
 | 6 | Entregador: autenticação (link + código), lista, saiu/entregue, histórico | **feito** — cinco rotas em `/courier/{link_token}/...` |
-| 7 | Docs, contrato para o painel e para o app, fase 2 | pendente |
+| 7 | Docs, contrato para o painel e para o app, fase 2 | **feito** — `docs/entregadores.md` |
 
 ---
 
@@ -403,6 +403,188 @@ Vermelho visto: `ImportError` na coleta, depois as rotas não registradas.
 Verdes: 40 rápidos + 5 e2e de banco. **Portão: 3126 verdes** (2475 rápidos
 + 651 `db`), ruff limpo, `openapi.json` regenerado, 41 divergências
 ORM×schema (inalterado), varreduras em 0.
+
+## 7. Docs e o relatório
+
+`docs/entregadores.md` (novo), `docs/arquitetura.md` (quatro portas, tabela
+de quem cancela, índice), `docs/autenticacao-e-escopo.md` (§3.1, o par),
+`docs/modelo-de-dados.md` (diagrama, feito no item 1) e a armadilha 25.1 da
+skill (quatro portas).
+
+---
+
+## RELATÓRIO
+
+### O que ficou pronto
+
+- **Schema** (revisão `20260903_0045`): `couriers`, `courier_assignments`,
+  `branches.courier_fee_base/per_km`.
+- **Painel** (`/admin`): taxa da filial (2 rotas), cadastro (6 rotas),
+  atribuição (4 rotas). Papéis na tabela de `test_papeis_das_rotas.py`.
+- **Entregador** (`/courier/{link_token}/...`): 5 rotas, link + código em
+  toda requisição, rate limit por IP.
+- **Máquina de estados:** quarta porta do writer, `ensure_courier_can_set`.
+  Nenhuma aresta nova.
+- **Ferramenta:** varredura de escopo cobre `/courier`, com iscas.
+- **Portão:** 3126 verdes (2475 rápidos + 651 `db`), ruff limpo,
+  `openapi.json` regenerado, 41 divergências ORM×schema (inalterado).
+- **Notificação ao cliente ("saiu para entrega"):** NÃO existe canal de
+  notificação de status para o cliente hoje. O evento aparece no `GET
+  .../track/{token}` (status e histórico) e no SSE do painel. Pendência
+  anotada, nada construído.
+
+### Pronto para colar no painel
+
+> **Entregadores — o que o painel precisa receber**
+>
+> Tudo com o Bearer de lojista de sempre. Nenhuma rota aceita `restaurant_id`;
+> `branch_id` só onde indicado, e o escopo de filial do token vale como no
+> resto.
+>
+> **Taxa que a loja paga por corrida (por filial)**
+>
+> | Rota | Papel | Corpo / resposta |
+> |---|---|---|
+> | `GET /admin/branches/{branch_id}/courier-fee` | GERENCIA | `{branch_id, courier_fee_base: float\|null, courier_fee_per_km: float\|null}` |
+> | `PATCH /admin/branches/{branch_id}/courier-fee` | SOMENTE_DONO | `{courier_fee_base?: number\|null, courier_fee_per_km?: number\|null}` — ausente não mexe, `null` apaga |
+>
+> `null` nos dois = "sem taxa configurada" (as corridas passam a ter taxa
+> nula, não zero). Motoboy pago por corrida: `courier_fee_base` preenchida e
+> `courier_fee_per_km: 0`. **Não muda nada do que o cliente paga.**
+>
+> **Cadastro**
+>
+> | Rota | Papel | Corpo / resposta |
+> |---|---|---|
+> | `GET /admin/couriers?branch_id=` | PESSOAS | lista de `AdminCourierResponse`; inativos vêm, excluídos não |
+> | `POST /admin/couriers` | GERENCIA | `{branch_id, name, phone}` → 201 `AdminCourierResponse`. 409 telefone repetido na filial; 404 filial fora do escopo |
+> | `GET /admin/couriers/{courier_id}` | PESSOAS | `AdminCourierResponse` |
+> | `PATCH /admin/couriers/{courier_id}` | GERENCIA | `{name?, phone?, is_active?}` parcial |
+> | `DELETE /admin/couriers/{courier_id}` | GERENCIA | 204 |
+> | `POST /admin/couriers/{courier_id}/access` | GERENCIA | → `{courier_id, link_token, access_code, access_generated_at}` |
+>
+> `AdminCourierResponse = {id, branch_id, name, phone, is_active, has_access,
+> access_generated_at, created_at}`. `phone` volta só com dígitos.
+>
+> **O acesso sai UMA vez.** A resposta do `POST .../access` é a única vez
+> que `link_token` e `access_code` existem em claro. Mostrem os dois na tela
+> com "copiar", e montem a URL do app do entregador com o token:
+> `https://<app-do-entregador>/entregador/{link_token}` (o caminho é de vocês;
+> o backend só conhece o token). Chamar de novo **regenera**: novo par, e o
+> antigo morre na hora — é o botão "o motoboy saiu / perdeu o celular".
+> Entregador inativo responde 409.
+>
+> `is_active: false` tira o acesso na hora e **devolve os pedidos abertos
+> dele para a fila** (as atribuições são fechadas; os já entregues ficam no
+> histórico). `true` de volta não recria o acesso: o par antigo continua
+> valendo. `DELETE` é exclusão lógica: some das listas, perde o acesso,
+> libera o telefone, mantém o histórico.
+>
+> **Atribuição**
+>
+> | Rota | Papel | Corpo / resposta |
+> |---|---|---|
+> | `POST /admin/couriers/{courier_id}/assignments` | PESSOAS | `{order_ids: [uuid, ...]}` (1–50) → `{items: [{order_id, ok, error?, assignment?}]}` |
+> | `GET /admin/couriers/{courier_id}/assignments` | PESSOAS | lista de `AdminAssignmentResponse` (as abertas, não terminais) |
+> | `GET /admin/orders/{order_id}/courier` | PESSOAS | `{assignment: AdminAssignmentResponse\|null, courier: AdminCourierResponse\|null}` — os dois nulos = ninguém ainda (200, não 404) |
+> | `DELETE /admin/orders/{order_id}/courier` | PESSOAS | 204; 409 se ninguém está com ele |
+>
+> `AdminAssignmentResponse = {id, order_id, order_number, order_status,
+> courier_id, assigned_at, courier_fee_snapshot: float\|null,
+> distance_km_snapshot: float\|null}`.
+>
+> **O lote responde por item, na ordem do corpo.** `error` ∈ `not_found`
+> (pedido fora do escopo), `not_delivery` (retirada), `order_closed`
+> (terminal), `other_branch` (o motoboy é de outra filial). Os `ok` são
+> gravados juntos; os outros não. A rota só dá erro HTTP para o entregador
+> em si (404 fora do escopo, 409 inativo).
+>
+> **Reatribuir é chamar o POST com outro entregador** — a anterior fecha e
+> a nova abre com a taxa de agora. Mesmo entregador de novo: `ok`, sem
+> mudar nada. Pedido em `out_for_delivery` ainda troca de motoboy.
+>
+> **O que NÃO está na listagem de pedidos:** `AdminOrderListItem` não ganhou
+> o nome do motoboy (seria junção na lista e no evento SSE). Por pedido há o
+> `GET .../courier`; por motoboy há a lista de abertas. Se a tela precisar
+> do nome na listagem, é a primeira coisa da fase 2.
+>
+> **`openapi.json` está regenerado** com tudo isto, inclusive os enums de
+> erro.
+
+### Pronto para colar no app do entregador
+
+> **App do entregador — o contrato**
+>
+> É uma tela nova, e **deve morar no repositório do front do cliente (o
+> app)**, não no painel e não num repositório separado. Três motivos:
+>
+> 1. **é a mesma natureza técnica**: uma página web pública, aberta por link,
+>    sem login de painel — exatamente como `/acompanhar/{tracking_token}` já
+>    é. O painel é uma SPA autenticada por Bearer de lojista, e o entregador
+>    nunca terá esse Bearer;
+> 2. **compartilha o cliente HTTP e os tipos gerados do `openapi.json`**, que
+>    o front já consome; um repositório separado seria uma terceira cópia do
+>    gerador para cinco rotas;
+> 3. **é a rota `/entregador/{link_token}`** ao lado das rotas públicas do
+>    app. Deploy e domínio já existem.
+>
+> Se um dia virar PWA instalável com push, a decisão pode ser revista — mas
+> push é fase 2 e nada aqui pede instalação.
+>
+> **Como autentica:** o link traz o `link_token`; a tela pede o código de 6
+> dígitos **uma vez**, chama `GET /courier/{link_token}/me` com o cabeçalho
+> `X-Courier-Code: <código>`; com 200, guarda os dois no `localStorage` e
+> manda o cabeçalho em **toda** requisição. Não há sessão nem token
+> derivado.
+>
+> | Código | Quando | O que mostrar |
+> |---|---|---|
+> | 404 `Link inválido` | link desconhecido, regenerado, entregador inativo ou excluído | "Este link não vale mais. Peça um novo ao restaurante." e apague o `localStorage` |
+> | 401 | código ausente ou errado | "Código incorreto" e peça de novo |
+> | 429 | 30/min ou 600/h por IP | tente mais tarde |
+>
+> **As rotas** (todas `/courier/{link_token}/...`, todas com o cabeçalho):
+>
+> | Rota | Resposta |
+> |---|---|
+> | `GET .../me` | `{name, branch_name}` |
+> | `GET .../orders` | lista de `CourierOrderResponse`, do mais antigo ao mais novo, só os abertos |
+> | `POST .../orders/out-for-delivery` `{order_ids: [...]}` | `{items: [{order_id, ok, error?, message?, order?}]}` |
+> | `POST .../orders/{order_id}/delivered` | `CourierOrderResponse` já em `completed`; 409 se ainda não saiu; 404 se não é dele |
+> | `GET .../history?start_date&end_date` | `{start_date, end_date, deliveries_count, deliveries_without_fee, fee_total, deliveries: [{order_id, order_number, delivered_at, address_neighborhood, distance_km, courier_fee}]}` |
+>
+> `CourierOrderResponse = {order_id, order_number, status, can_leave,
+> can_deliver, customer_name, customer_phone, address_street,
+> address_number, address_neighborhood, address_complement,
+> address_reference, address_city, delivery_latitude, delivery_longitude,
+> notes, payment_method, is_paid, amount_to_collect, total, courier_fee,
+> assigned_at, created_at}`.
+>
+> - **`can_leave` / `can_deliver` decidem o botão.** Pedido em preparo
+>   aparece na lista (para ele saber o que vem) mas nenhum dos dois é
+>   verdadeiro. Não deduzam do `status`; usem os dois campos.
+> - **`amount_to_collect` é o que receber na porta**: o total só quando o
+>   pedido é pago na entrega; pago online é `0` e `is_paid: true`.
+> - **`courier_fee` é a taxa DELE nesta corrida**, congelada na atribuição;
+>   `null` = a loja não configurou taxa. No histórico, `fee_total` soma só
+>   as que têm valor, e `deliveries_without_fee` conta as outras — é o
+>   número para ele levar ao dono.
+> - **"Saiu para entrega" aceita vários de uma vez** e responde por item.
+>   Os `ok` já saíram mesmo que outro tenha falhado — não desfaçam nada na
+>   tela; mostrem o `message` dos que falharam.
+> - **Histórico sem datas é hoje** (fuso de Fortaleza). Até 92 dias.
+> - O cliente vê "saiu para entrega" no acompanhamento dele no próximo poll.
+>   Não há push.
+
+### O que ficou para a fase 2
+
+Registrado com o que cada um exigiria em `docs/entregadores.md` §8 e na
+seção 2 deste arquivo: roteirização, despacho automático, agrupamento,
+**localização (só "última posição conhecida", nunca tempo real)**, push,
+QR Code, mapa de calor, tempo médio, tentativas fora da área — mais três
+que apareceram construindo: motoboy na listagem de pedidos do painel,
+relatório de taxas por entregador para o dono, e trava por falhas de
+código.
 
 ## Portão
 

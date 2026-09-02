@@ -879,7 +879,7 @@ Desenho inteiro em `docs/pagamentos-e-comissao.md`, seção 6.
 
 ---
 
-## 25.1 Há UMA escrita de status de pedido, e agora três portas chegam nela
+## 25.1 Há UMA escrita de status de pedido, e agora quatro portas chegam nela
 
 `OrderStatusChangeService.apply` é o único lugar do sistema que grava
 `orders.status`. Chegam nele:
@@ -887,7 +887,13 @@ Desenho inteiro em `docs/pagamentos-e-comissao.md`, seção 6.
 - `PATCH /admin/orders/{id}/status` — o lojista movendo o pedido;
 - `PATCH /admin/orders/{id}/cancel` — o lojista cancelando, com motivo;
 - `POST /restaurants/{slug}/orders/track/{token}/cancel` — o **cliente**
-  desistindo antes do preparo (rota de 25/08/2026).
+  desistindo antes do preparo (rota de 25/08/2026);
+- `POST /courier/{link}/orders/out-for-delivery` e `.../{id}/delivered` — o
+  **entregador** saindo e entregando (03/09/2026). A regra da porta é
+  `ensure_courier_can_set`, sobre `COURIER_TRANSITIONS`: só
+  `ready → out_for_delivery → completed`, sem abrir aresta nenhuma no
+  grafo. Quem autoriza é a atribuição aberta com o `courier.id`; ver
+  `docs/entregadores.md`.
 
 A regra já estava escrita quando havia só as duas primeiras: *"cancelar não é
 uma segunda escrita de status"*. A terceira é o teste dela — um cancelamento
@@ -896,9 +902,9 @@ cashback fica retido, o histórico não registra quem cancelou e o pagamento nã
 é estornado**. Quatro bugs de dinheiro por um copiar e colar.
 
 **O que esse service NÃO faz é autorizar**, e isso é desenho, não omissão. Ele
-recebe o pedido já carregado e já autorizado, porque as três portas autorizam
+recebe o pedido já carregado e já autorizado, porque as quatro portas autorizam
 de formas incomparáveis: escopo de lojista pelo token no painel,
-`tracking_token` no app do cliente. Um `if` aqui dentro decidindo de quem é o
+`tracking_token` no app do cliente, a atribuição aberta no app do entregador. Um `if` aqui dentro decidindo de quem é o
 pedido é exatamente onde esse tipo de coisa vaza.
 
 **Quem pode cancelar em que estado também fica de fora**, pelo mesmo motivo: é

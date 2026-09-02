@@ -1,8 +1,9 @@
 # Autenticação e escopo
 
-Três credenciais diferentes circulam por esta API: token de cliente, token de
-lojista e ticket de stream. Todos JWT HS256, todos com um campo `purpose` que os
-separa. **Não há refresh token**: expirou, loga de novo.
+Quatro credenciais diferentes circulam por esta API: token de cliente, token de
+lojista, ticket de stream — os três JWT HS256, com um campo `purpose` que os
+separa — e, desde 03/09/2026, o **par do entregador** (§3.1), que não é JWT.
+**Não há refresh token**: expirou, loga de novo.
 
 ---
 
@@ -78,6 +79,24 @@ válido por **30 segundos**.
 Existe porque o `EventSource` do navegador **não envia cabeçalho**: o stream só
 pode ser autenticado pela URL, e o token de 12h não pode ir para a querystring
 (log de proxy, `Referer`, histórico do navegador).
+
+---
+
+## 3.1 O par do entregador (link + código)
+
+| | |
+|---|---|
+| Emitido em | `POST /admin/couriers/{id}/access` → `services/admin_courier_service.py` |
+| Segredo | nenhum do ambiente: o link tem 256 bits e é guardado em `sha256`; o código de 6 dígitos é guardado em `HMAC(chave = o próprio link)` |
+| Viaja em | o link no caminho (`/courier/{link_token}/...`), o código no cabeçalho `X-Courier-Code` |
+| Validade | até ser regenerado, desativado ou excluído — **sem sessão e sem token derivado**, conferido no banco a cada requisição |
+| Verificado em | `api/dependencies/courier_auth.py` → `CourierDeliveryService.authenticate` |
+
+Não é `admin_user` e não passa por `AdminScope` nem por `exigir_papel`: o
+escopo dele é a **atribuição** (`courier_assignments` aberta com o
+`courier.id`), e rota nenhuma de `/courier` aceita restaurante, filial ou
+entregador como parâmetro. Bearer de lojista não abre `/courier`; o par não
+abre `/admin`. Detalhe em [entregadores.md](entregadores.md) §2.
 
 ---
 
@@ -167,6 +186,7 @@ proxy.
 | iniciar pagamento | `15/minute;60/hour` |
 | `POST /chat` | `20/minute;200/hour` |
 | `POST /chat/feedback` | `30/minute` |
+| rotas `/courier/*` (link + código) | `30/minute;600/hour` — a barreira contra força bruta dos 6 dígitos |
 
 **As rotas `/admin` não têm rate limit**, exceto o login. Elas só exigem JWT — o
 login de lojista já é limitado, que é a porta de força bruta.

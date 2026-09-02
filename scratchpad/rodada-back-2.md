@@ -36,8 +36,8 @@ A rodada anterior está em `scratchpad/rodada-back.md` e continua válida.
 | 2 | Dublês falsos na suíte inteira | **feito** — 141 achados, 141 convertidos |
 | 3 | Testes dependentes da hora | **feito** — 1 achado real, 3 serviços com relógio injetável |
 | 4 | Query do `tracking_token`, pronta para colar | **feito** — testada nos tres estados possiveis |
-| 5.1 | Plano do histórico de chat em memória | pendente |
-| 5.2 | Plano do índice ANN no pgvector | pendente |
+| 5.1 | Plano do histórico de chat em memória | **feito** — plano escrito, nada implementado |
+| 5.2 | Plano do índice ANN no pgvector | **feito** — os dois números que faltavam, medidos |
 | 8 | Relatório final + armadilhas novas na skill | pendente |
 
 ---
@@ -723,3 +723,278 @@ consulta 1 respondeu inteira.
 Nada desta rodada. Se a consulta 1 disser "antes da `0016`", a §1 da rodada 1
 volta à mesa com dois números novos (a contagem e o ms/round-trip da §1.2) —
 mas isso é decisão de outra madrugada.
+
+---
+
+## 5.1 Histórico do chat em memória — o plano, sem implementar
+
+**Nada foi implementado.** Isto é para você ver antes.
+
+### O que existe hoje, exatamente
+
+`src/services/chat_service.py`, três funções de módulo e um dicionário:
+
+```python
+_SESSION_HISTORY: dict[str, SessionState] = {}      # linha 52
+_MAX_SESSION_MESSAGES = 20                          # 10 turnos
+_SESSION_TTL = timedelta(hours=1)
+```
+
+`_get_session_conversation` lê, `_store_session_turn` escreve, e
+`_cleanup_inactive_sessions` varre o dicionário a cada turno apagando sessão
+parada há mais de uma hora.
+
+**A chave é o `session_id` que o CLIENTE manda** (`ChatRequest.session_id`,
+`min_length=1`), e `POST /chat` **não tem autenticação nenhuma** — de
+propósito: o Rapi existe para quem ainda não tem conta.
+
+### Por que isso não está quebrado hoje, e por que é frágil
+
+O `Dockerfile` sobe `uvicorn` **sem `--workers`**: um processo. Com um
+processo só, o dicionário funciona.
+
+O que ele já custa hoje:
+
+- **todo deploy zera a conversa.** Quem estava no meio de um pedido volta a
+  falar com um assistente que não lembra do que ele acabou de dizer. Não é
+  hipótese — é o comportamento de toda subida de imagem;
+- **é o único estado do processo que o cliente percebe.** `MenuGeneration`,
+  o cache de embedding e o contador de resgates também vivem no processo, mas
+  os três só custam trabalho repetido. Este custa a conversa.
+
+E o que ele custaria no dia em que alguém precisar de mais capacidade:
+`--workers 2` no `CMD`, ou uma segunda réplica atrás do Traefik, e a conversa
+passa a **existir em um worker e não no outro**. O cliente alterna entre
+lembrar e esquecer conforme o balanceamento. **Sem erro, sem log, sem nada** —
+a mesma forma dos piores defeitos que esta rodada catalogou.
+
+**É essa a razão de mexer agora**: hoje o conserto é uma troca de
+implementação com um worker de testemunha; depois de escalar, ele vira
+depuração de um sintoma intermitente em produção.
+
+### Para onde ele passa a morar: Redis
+
+Não há decisão nova a tomar sobre a peça. **O Redis já é dependência** e já
+guarda três coisas do mesmo caminho (`cliente_redis()` em
+`src/ai/services/chat_cache.py`): o cache de embedding, o `MenuGeneration` e o
+contador do rate limit. `REDIS_URL` é opcional e `startup_checks` já avisa,
+sem derrubar o boot, quando ela falta.
+
+**Postgres foi considerado e recusado.** Uma tabela `chat_sessions` daria
+durabilidade que ninguém pediu, e traria o custo que o Redis não tem: escrita
+no caminho quente de toda mensagem, `VACUUM` de linhas com TTL de uma hora, e
+uma tabela nova de dado pessoal em claro para a LGPD cuidar — quando o valor
+inteiro do histórico morre em 60 minutos.
+
+### O que muda no código
+
+Um módulo novo e três chamadas. **Nenhuma assinatura pública muda**, e
+`ChatService._answer` não sabe onde o histórico mora.
+
+1. **`src/ai/services/chat_history.py`** — uma classe com o mesmo contrato das
+   três funções de hoje:
+
+   - `ler(session_id) -> list[SessionMessage]`
+   - `gravar(session_id, mensagem_do_cliente, resposta, agora)`
+
+   Com Redis: uma chave `chat:hist:v1:{sha256(session_id)[:32]}`, valor JSON da
+   lista, `EXPIRE 3600` renovado a cada escrita — **o TTL do Redis substitui o
+   `_cleanup_inactive_sessions` inteiro**, e é mais correto que ele: hoje a
+   limpeza só roda quando alguém conversa, então sessão morta de madrugada
+   sobrevive até a manhã seguinte.
+
+   **`session_id` vai HASHEADO na chave, nunca cru.** É a mesma regra que
+   `ChatCache.embedding_key` já aplica à mensagem, e pelo mesmo motivo escrito
+   lá: chave aparece em `KEYS`, em `MONITOR`, em qualquer dump. O `session_id`
+   é escolhido pelo cliente e nada impede que um front use o telefone ou o
+   e-mail da pessoa como identificador de sessão.
+
+2. **Sem `REDIS_URL`, cai no dicionário de hoje.** Mesma disciplina do
+   `chat_cache`: `cliente_redis()` devolvendo `None` significa "não há Redis",
+   não erro. A bancada local (`bancada.bat`) continua funcionando sem Redis, e
+   o comportamento nela é exatamente o de hoje.
+
+3. **Falha do Redis no meio não pode derrubar o turno.** `try/except` em volta
+   das duas operações: histórico vazio é uma resposta pior, não um 500. É o
+   mesmo tratamento que `MenuGeneration.current` já dá.
+
+### O custo, item a item
+
+| | |
+|---|---|
+| **Latência** | duas idas ao Redis por turno (um `GET`, um `SETEX`), no caminho de uma requisição que já espera **~44 ms só na busca vetorial** e centenas no modelo. Redis na mesma rede é sub-milissegundo; o `socket_timeout=1` de `cliente_redis()` é o teto do pior caso |
+| **Memória no Redis** | 20 mensagens × ~200 bytes = **~4 KB por sessão ativa**, e o TTL de 1 h limita o total às sessões da última hora. Duas casas de sessões simultâneas é uma casa de MB |
+| **Escrita** | uma por turno. O Redis já leva mais escrita que isso pelo rate limit |
+| **Código** | ~80 linhas no módulo novo, 3 linhas trocadas no `chat_service`, e `_cleanup_inactive_sessions` **apagada** |
+| **Teste** | a suíte rápida não tem Redis, e continua não tendo: o dublê é o caminho `None`. O que precisa de teste `db`... nada. O que precisa de teste é o **contrato**: mesma sequência de chamadas nos dois backends produz a mesma conversa |
+
+### O que isto NÃO resolve, e é importante dizer
+
+- **Não deduplica conversa entre abas.** O `session_id` continua vindo do
+  cliente; duas abas com ids diferentes continuam sendo duas conversas. Isso é
+  o desenho, não um efeito colateral.
+- **Não sobrevive ao Redis reiniciar.** E não deve: histórico de uma hora não
+  é dado durável, e persistir aumentaria a superfície de LGPD sem nenhum
+  ganho para o cliente.
+- **Não muda nada para a voz.** O atendente de voz não usa
+  `_SESSION_HISTORY` (grep em `src/ai/voice/` não devolve nada); o histórico
+  dele é do lado da OpenAI, na sessão do Realtime.
+
+### A parte de LGPD, que decide o formato
+
+`ai_feedback.user_message` já mostrou que **gente escreve endereço e telefone
+para o Rapi** — é o que `feedback_retention_cutoff` existe para apagar, e está
+escrito lá. O histórico do chat é exatamente o mesmo texto.
+
+Três consequências, e as três já estão no plano acima:
+
+1. **Chave hasheada**, pelo motivo do `ChatCache.embedding_key`.
+2. **TTL de 1 h no próprio Redis**, e não uma varredura que só roda quando
+   alguém conversa. Fica no lado do banco de dados, sobrevive a deploy, e não
+   depende de tráfego para acontecer.
+3. **Nada de persistência.** Se o Redis de produção tiver `RDB`/`AOF` ligado,
+   o texto do cliente passa a existir em disco além do TTL — e a exclusão de
+   conta (`CustomerAnonymizationService`) não alcança Redis, exatamente como
+   não alcançava `ai_feedback`. **Conferir antes de subir:**
+   `CONFIG GET save` e `CONFIG GET appendonly`. Se estiverem ligados, ou se
+   desliga para este uso, ou o plano precisa de outra conversa.
+
+### O que eu faria, e o que fica para você decidir
+
+Faria na ordem: módulo novo com o backend de memória primeiro (refatoração
+pura, comportamento idêntico, portão verde), e o backend Redis num segundo
+commit — assim o primeiro é revisável sem Redis na mesa.
+
+**O que não decido sozinho:** se o Redis de produção tem persistência ligada
+(item 3 acima) e se você quer o histórico sobrevivendo a deploy — que é o
+ganho principal e também o que aumenta a janela em que o texto do cliente
+existe fora do processo.
+
+---
+
+## 5.2 Índice ANN no pgvector — os dois números que faltavam
+
+**Este item não pedia um plano novo: ele já existe.**
+`docs/busca-vetorial-e-indice-ann.md` decidiu a questão **duas vezes**
+(17/08/2026 por latência, 26/08/2026 por correção) e a decisão é **não criar o
+índice**. Escrever um plano do zero seria fazer a pergunta voltar pela quarta
+vez.
+
+O que fiz foi outra coisa: o documento **nomeia dois números que ele mesmo não
+mediu**, e os dois rodam contra o Postgres de teste. Medi os dois. Nada foi
+aplicado a lugar nenhum.
+
+### Buraco 1 — "Custo de construir: **não medido**"
+
+Está escrito assim, com todas as letras, na seção "O que fica registrado".
+Agora está:
+
+| Cardápio | `ivfflat` | `hnsw m=16` |
+|---|---|---|
+| 161 produtos | **0,01 s** | **0,12 s** |
+| 5.000 produtos | **0,94 s** | **2,65 s** |
+| 5.000 produtos (segunda execução) | **0,46 s** | **6,30 s** |
+
+**A terceira linha é o achado, não ruído a ignorar.** A mesma construção, no
+mesmo tamanho, variou de 2,65 s a 6,30 s entre duas execuções da mesma tarde.
+Máquina de desenvolvimento tem outra carga; a leitura honesta é **ordem de
+grandeza de segundos**, não um número para planejar janela.
+
+E para a decisão que importa isso basta: **segundos de `CREATE INDEX` cabem
+dentro do `alembic upgrade` do entrypoint, com a API fora do ar** — não é o
+caso da armadilha 5, que é de índice que leva minutos. O item "Como criar, se
+um dia for criado" do documento pode passar a dizer isso.
+
+### Buraco 2 — "medido ANTES do filtro por filial, tabela não refeita"
+
+A revisão `20260820_0026` acrescentou `p.branch_id` à consulta, e o documento
+avisa que suas tabelas são anteriores a ela. Refeitas, **com** o filtro:
+
+**161 produtos (o cardápio do Júnior), 300 consultas:**
+
+| Cenário | Mediana | p95 | Servidor | O planejador leu | Mínimo de linhas |
+|---|---|---|---|---|---|
+| **sem índice** | **43,85 ms** | 49,85 ms | **1,32 ms** | `Seq Scan` | 5 |
+| ivfflat `lists=12` | 44,32 ms | 50,29 ms | 1,77 ms | `Seq Scan` | 5 |
+| hnsw `m=16` | 44,04 ms | 48,09 ms | 1,05 ms | `Seq Scan` | 5 |
+
+Conclusão **inalterada**: o planejador ignora o índice, e o ganho é −1,1% e
+−0,4% — ruído. O filtro por filial não mudou o sentido de nada.
+
+**5.000 produtos num restaurante só, 300 consultas:**
+
+| Cenário | Mediana | p95 | Servidor | O planejador leu | Mínimo de linhas |
+|---|---|---|---|---|---|
+| **sem índice** | 66,89 ms | **88,42 ms** | **26,19 ms** | `Seq Scan` | 5 |
+| ivfflat `lists=50` | **44,00 ms** | 48,22 ms | **0,48 ms** | `Index Scan` | 5 |
+| hnsw `m=16` | 44,13 ms | **45,33 ms** | 0,68 ms | `Index Scan` | 5 |
+
+### Uma correção de método, e ela vale mais que os números
+
+**As tabelas do documento não podem ser lidas umas contra as outras, e as
+minhas também não.** A mesma consulta, no mesmo tamanho de 161 produtos, deu
+**52,04 ms** em 17/08 e **43,85 ms** hoje. Nada no repositório mudou para
+justificar 8 ms; o que mudou foi a máquina e a carga dela.
+
+O que é comparável é **dentro de uma execução**, que é onde os três cenários
+enfrentam as mesmas condições. Toda leitura acima é dentro da execução.
+
+### O que MUDOU de figura em 5.000 produtos
+
+O documento registra, para esse tamanho, ANN **mais lento** na mediana (51,84
+contra 46,42 ms) e melhor só na cauda. Hoje o ANN venceu **também na mediana**:
+66,89 → 44,00 ms, **+52%**.
+
+A parte que não mudou, e que é a que importa: **o trabalho do servidor
+desaba** — 26,19 ms → 0,48 ms. É a mesma história dos dois documentos: acima de
+alguns milhares de produtos num cardápio, a varredura sai de baixo do custo
+fixo de transportar o vetor e passa a aparecer.
+
+### O que NÃO reproduziu, e por que isso não absolve o ANN
+
+O documento decide pela **recall**, e a evidência é uma frase:
+
+> Uma consulta em 400 com `hnsw` devolveu **zero produtos** onde a busca exata
+> devolveu cinco.
+
+**Não reproduzi.** Duas execuções, uma com 300 consultas e outra com **2.000**
+e semente diferente: `mínimo 5` em todos os cenários, inclusive `hnsw`.
+
+E isto **não** é motivo para criar o índice — é motivo para tratá-lo pior:
+
+- 1 em 400 na medição original e 0 em 2.300 hoje descrevem a mesma coisa —
+  um evento **raro o bastante para não aparecer num benchmark e frequente o
+  bastante para ter aparecido**. É a pior faixa possível: não dá para
+  reproduzir sob demanda e não dá para descartar;
+- os vetores são **sintéticos**, agrupados em 12 temas. O próprio documento já
+  avisa que a recall do ANN depende do conteúdo, e o conteúdo aqui não é o de
+  um cardápio;
+- e o argumento de 26/08 **não é estatístico**. Ele é sobre o que a busca vazia
+  *significa* desde a armadilha 46: com ANN, "não temos" passa a querer dizer
+  "não temos **ou** o grafo não passou por lá", e as duas chegam ao cliente
+  como a mesma frase. Uma taxa de erro baixa não devolve o dono da negativa.
+
+### O que eu recomendo, e o que não recomendo
+
+**Não criar o índice.** A decisão do documento continua de pé, e as medições de
+hoje não a tocam — elas fecham dois buracos de documentação e confirmam o
+gatilho.
+
+**O gatilho segue o mesmo:** um único restaurante passando de ~3.000 produtos
+ativos indexados. O maior cardápio em produção tinha 136. A consulta que
+responde está no documento e é só leitura:
+
+```sql
+SELECT r.slug, count(*) AS produtos_indexados
+  FROM ai_product_embeddings ape
+  JOIN restaurants r ON r.id = ape.restaurant_id
+ GROUP BY r.slug
+ ORDER BY 2 DESC;
+```
+
+**O que eu faria antes de qualquer índice, se latência virasse prioridade** —
+e o documento já aponta para lá: atacar os ~43 ms de custo fixo, não os 1,3 ms
+de varredura. Das duas pistas que ele dá (parâmetro binário em vez de ~20 KB de
+texto, e mais acerto no cache de embedding), **a primeira nunca foi medida** e
+é a maior fatia isolada da latência do Rapi hoje. Fica anotado como o próximo
+item de desempenho — e ele **não** depende de decisão de produção nenhuma.

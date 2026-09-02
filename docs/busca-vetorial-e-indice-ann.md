@@ -2,9 +2,16 @@
 
 **Decisão: não criar índice `ivfflat` nem `hnsw` em
 `ai_product_embeddings.embedding`.** Medido em 17/08/2026, contra o schema
-real, no tamanho de cardápio real, e **reafirmado em 26/08/2026 por um motivo
-diferente e mais forte** — ver "A recusa de 26/08/2026" mais abaixo. Este
-documento existe para a pergunta não voltar do zero.
+real, no tamanho de cardápio real; **reafirmado em 26/08/2026 por um motivo
+diferente e mais forte** (ver "A recusa de 26/08/2026"); e **remedido em
+02/09/2026** com o filtro por filial e com o custo de construir, que faltavam
+(ver a última seção). Este documento existe para a pergunta não voltar do
+zero.
+
+**Ao ler as tabelas: elas não se comparam entre si.** Cada uma é de uma
+execução, e a bancada varia entre execuções — a mesma consulta em 161 produtos
+deu 52,04 ms em 17/08 e 43,85 ms em 02/09. O que vale é a comparação **dentro**
+de uma tabela, onde os três cenários enfrentam as mesmas condições.
 
 Em uma linha: o ganho é 4 ms de 52, e o preço é o assistente voltar a poder
 dizer "não temos" sobre um produto que existe.
@@ -182,10 +189,20 @@ Se aquele dia chegar, o que já está medido:
   `vector_cosine_ops`, porque a consulta ordena por `<=>`; com outro operador o
   planejador simplesmente não escolhe o índice, e ele fica ocupando disco e
   sendo mantido em toda escrita sem ser lido uma vez.
-- **Custo de construir**: **não medido.** O `bench` já cronometra e imprime
-  `(construcao: X.XX s)` por cenário, mas o número nunca foi transportado para
-  cá, e estimá-lo seria inventar. `python scripts/bench_busca_vetorial.py
-  --produtos 5000` responde.
+- **Custo de construir**: **medido em 02/09/2026**, e a resposta é *ordem de
+  grandeza de segundos*:
+
+  | Cardápio | `ivfflat` | `hnsw m=16` |
+  |---|---|---|
+  | 161 produtos | 0,01 s | 0,12 s |
+  | 5.000 produtos | 0,94 s | 2,65 s |
+  | 5.000 produtos (outra execução, mesma tarde) | 0,46 s | 6,30 s |
+
+  **A terceira linha é o aviso, não ruído a ignorar**: a mesma construção, no
+  mesmo tamanho, variou de 2,65 s a 6,30 s. Máquina de desenvolvimento tem
+  outra carga. Para a decisão isso basta — segundos cabem dentro do `alembic
+  upgrade` do entrypoint, com a API fora do ar, e este **não** é o caso da
+  armadilha 5, que é de índice que leva minutos.
 - **Custo de manter, esse sim conhecido**: o índice é mantido em **toda
   escrita**, e o container `reindex` reescreve todo vetor que ficou atrás do
   produto a cada minuto.
@@ -209,11 +226,63 @@ Se aquele dia chegar, o que já está medido:
 - **O `Execution Time` do `EXPLAIN ANALYZE` é medido fora do laço
   cronometrado.** A instrumentação cobra por nó e por linha, e numa varredura
   de milhares de linhas ela infla justamente o número em disputa.
-- **Os números acima foram medidos ANTES do filtro por filial** (revisão
-  `20260820_0026`). O script já inclui o filtro e continua executável, mas a
-  tabela não foi refeita. A conclusão não muda de sentido — `p.branch_id` é
-  mais uma condição sobre uma linha que a junção com `products` já visitava, e
-  o que dimensiona a conta continua sendo o tamanho de **um cardápio de uma
-  loja**, que ficou igual ou menor. Ainda assim, é medição não repetida: se
-  alguém precisar do número exato, rode `scripts/bench_busca_vetorial.py` de
-  novo.
+- **As tabelas acima foram medidas ANTES do filtro por filial** (revisão
+  `20260820_0026`). **Refeitas com o filtro em 02/09/2026** — a conclusão não
+  mudou de sentido, e os números estão na seção seguinte.
+
+## A remedição de 02/09/2026, com o filtro por filial
+
+O que ela fechou: as tabelas eram anteriores à revisão `20260820_0026`, e o
+custo de construir nunca tinha sido transportado para cá. Os dois estão
+resolvidos. **Nenhuma decisão mudou.**
+
+**161 produtos, 300 consultas** — conclusão idêntica, o planejador continua
+ignorando o índice:
+
+| Cenário | Mediana | p95 | Servidor | O planejador leu | Mínimo de linhas |
+|---|---|---|---|---|---|
+| sem índice | 43,85 ms | 49,85 ms | 1,32 ms | `Seq Scan` | 5 |
+| ivfflat `lists=12` | 44,32 ms | 50,29 ms | 1,77 ms | `Seq Scan` | 5 |
+| hnsw `m=16` | 44,04 ms | 48,09 ms | 1,05 ms | `Seq Scan` | 5 |
+
+**5.000 produtos num restaurante só, 300 consultas:**
+
+| Cenário | Mediana | p95 | Servidor | O planejador leu | Mínimo de linhas |
+|---|---|---|---|---|---|
+| sem índice | 66,89 ms | 88,42 ms | 26,19 ms | `Seq Scan` | 5 |
+| ivfflat `lists=50` | 44,00 ms | 48,22 ms | 0,48 ms | `Index Scan` | 5 |
+| hnsw `m=16` | 44,13 ms | 45,33 ms | 0,68 ms | `Index Scan` | 5 |
+
+### AS TABELAS DESTE DOCUMENTO NÃO SE COMPARAM ENTRE SI
+
+É a correção de método mais importante desta remedição. A **mesma** consulta,
+no **mesmo** tamanho de 161 produtos, deu **52,04 ms** em 17/08 e **43,85 ms**
+em 02/09. Nada no repositório mudou para justificar 8 ms — mudou a máquina e a
+carga dela.
+
+O que é comparável é **dentro de uma execução**, onde os três cenários
+enfrentam as mesmas condições. Ler a mediana de uma tabela contra a de outra
+produz um "ganho" que é só ruído de bancada.
+
+Com essa régua, em 5.000 produtos o ANN venceu **também na mediana** (66,89 →
+44,00 ms), e não só na cauda como a tabela de 17/08 registrava. A parte que não
+muda entre as duas medições é a que importa: **o trabalho do servidor desaba**,
+26,19 ms → 0,48 ms.
+
+### O `mínimo 0` NÃO reproduziu — e isso não absolve o ANN
+
+A coluna "Mínimo de linhas" acima diz **5** em todos os cenários, inclusive
+`hnsw`. Duas execuções, uma com 300 consultas e outra com **2.000** e semente
+diferente, e a falha de recall que decidiu a recusa de 26/08 não apareceu.
+
+Isso **não** é motivo para criar o índice. É motivo para tratá-lo pior:
+
+- 1 em 400 na medição original e 0 em 2.300 hoje descrevem a mesma coisa — um
+  evento **raro o bastante para não aparecer num benchmark e frequente o
+  bastante para ter aparecido**. É a pior faixa possível: não se reproduz sob
+  demanda e não se descarta;
+- os vetores são sintéticos, e a ressalva desta página já diz que a recall do
+  ANN depende do conteúdo;
+- e o argumento de 26/08 **não é estatístico**. Ele é sobre o que a busca vazia
+  *significa* desde a armadilha 46. Uma taxa de erro baixa não devolve o dono
+  da negativa.

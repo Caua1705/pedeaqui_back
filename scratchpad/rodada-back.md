@@ -898,3 +898,104 @@ errado e completei o que faltava. O que mudou, e por quê:
    existir.
 
 Nenhum valor de segredo aparece no README, como pedido — só nomes.
+
+---
+
+## 4.3 Diagrama ER
+
+O `docs/modelo-de-dados.md` já tinha os seis diagramas. O que faltava não era
+desenho: era **conferi-los contra o schema de verdade**. Foi o que esta parte
+fez — e o que ela achou virou uma seção nova.
+
+### 4.3.1 As quatro setas que estavam faltando, e a que estava errada
+
+Conferidas uma a uma contra as FKs reais do banco (`inspect().get_foreign_keys`,
+no schema montado do baseline + Alembic):
+
+Em lista e não em tabela porque a notação do Mermaid é feita de barras
+verticais, e barra vertical dentro de célula quebra a tabela mesmo entre
+crases.
+
+- **`restaurants` → `categories`** e **`restaurants` → `products`**
+  (obrigatório dos dois lados): **as FKs existem**. Omiti-las fazia o diagrama
+  sugerir que a consulta errada — cardápio por restaurante, que devolve as
+  lojas misturadas — nem seria possível. O texto ao lado já avisava; o desenho
+  contradizia.
+- **`restaurants` → `ai_product_embeddings`**: o recorte da busca vetorial é o
+  restaurante, e a FK está lá.
+- **`restaurants` → `customer_payment_profiles`**: a tabela é o par (cliente,
+  restaurante); só metade estava desenhada.
+- **`products` → `ai_product_embeddings`** passou de obrigatório para
+  **opcional** do lado do produto: `product_id` **aceita nulo no banco**, ainda
+  que o model diga `nullable=False`.
+
+A última é a que puxou o resto: se o desenho ia respeitar o banco e não o
+model, então valia perguntar **quantas vezes mais os dois discordam**.
+
+### 4.3.2 A resposta: 42 colunas, e nada as confere
+
+`Base.metadata.create_all()` não é usado em lugar nenhum — nem na suíte `db`,
+cujo schema sai do `schema_baseline.sql` mais as revisões (armadilha 24). Então
+o `nullable=` do model **nunca vira DDL**: ele orienta o type checker e o
+INSERT do SQLAlchemy, e nada mais. Ninguém compara os dois lados, e por isso a
+divergência não aparece em teste nenhum.
+
+Três classes, com custos diferentes:
+
+- **16 — ORM diz NOT NULL, banco aceita NULL.** Risco de leitura: a anotação
+  promete valor e o banco pode dar `None`. Inclui `customers.email`,
+  `customers.password_hash`, as quatro de `ai_feedback` e as duas de
+  `order_item_options`.
+- **20 — banco diz NOT NULL, ORM diz nullable.** 18 são benignas: têm
+  `DEFAULT` (`now()`, `0`, `true`, `'{}'::jsonb`), então omitir no INSERT é
+  seguro e a anotação só engana quem lê. **Duas não têm default** —
+  `ai_product_embeddings.content` e `coupon_templates.image_path` — e nelas um
+  `Modelo(...)` incompleto passa no type checker e estoura `IntegrityError`.
+  Hoje não estoura porque **nenhum dos dois models é instanciado** em `src/` ou
+  `scripts/` (o índice vetorial é `INSERT` cru; `coupon_templates` não tem rota
+  de escrita). É armadilha armada, não defeito ativo.
+- **6 — coluna que o ORM não mapeia.** `created_at`/`updated_at` de
+  `product_options` e `product_option_groups`, `created_at` de
+  `order_item_options` e de `ai_product_embeddings`. `Modelo.created_at` é
+  `AttributeError` em tabela que **tem** a coluna.
+
+**O "36" que ficou escrito no diff da sessão anterior era essa conta sem as 6
+não mapeadas.** O número certo é 42, e a decomposição está no documento.
+
+### 4.3.3 Por que um script e não só um parágrafo
+
+Número em documento envelhece calado. `scripts/divergencias_orm_schema.py` é
+só leitura, compara `Base.metadata` com o `inspect()` de qualquer banco, e
+imprime as três classes — com o `DEFAULT` de cada coluna da segunda, porque é
+ele quem separa o benigno do que morde.
+
+```bash
+python scripts/divergencias_orm_schema.py \
+  --url postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
+docker exec pedeaqui-api python scripts/divergencias_orm_schema.py
+```
+
+É o mesmo papel do `audit_indexes.py` na §5 do documento: a seção conta o que
+se sabe hoje, e o script diz se ainda é verdade.
+
+### 4.3.4 O que eu NÃO fiz, e por quê
+
+**Não alinhei nenhuma das 42.** Alinhar começa em `ALTER TABLE ... SET NOT
+NULL`, que varre a tabela inteira e falha se houver uma linha nula — e é
+justamente onde não se sabe se há. É a dança de duas etapas da `0016`/`0017`
+para um defeito que ainda não deu sintoma; e a rodada é de documentação.
+
+**Não consultei produção.** O schema conferido é o que o repositório constrói
+(baseline + Alembic). Ele é o de produção por construção — o baseline é uma
+foto dela —, mas o que estiver aplicado à mão em produção depois da `0012` e
+fora do Alembic não apareceria aqui. O script roda lá com um `docker exec` e
+responde.
+
+### 4.3.5 Arquivos
+
+`docs/modelo-de-dados.md` (as quatro setas + §6, nova) ·
+`scripts/divergencias_orm_schema.py` (novo).
+
+**Portão: 2785 testes verdes** (2176 rápidos + 609 `db`), `ruff` limpo,
+`export_openapi.py --check` em dia — não há mudança de rota, então o
+`openapi.json` não mudou.

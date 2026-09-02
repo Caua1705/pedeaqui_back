@@ -304,11 +304,17 @@ dão a configuração declarada, que é útil ter junto.
 
 ```bash
 # 2. QUANTO existe agora, sem imprimir nenhuma coordenada
+#
+# CORRIGIDO em 04/09/2026: os prefixos `LIMITER*` e `ai:menu-generation:*` que
+# estavam aqui NAO EXISTEM. O certo e `LIMITS:` (prefixo da biblioteca `limits`,
+# ver limits/storage/redis.py) e `ai:menu_generation:` com UNDERSCORE
+# (chat_cache.py:138). Rodado com os errados, o comando devolvia zero por
+# construcao. Ver a secao 1 da rodada 6.
 docker exec pedeaqui-api python -c "
 import redis
 from src.core.config import settings
 r = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
-for prefixo in ('delivery-estimate:*', 'emb:*', 'LIMITER*', 'ai:menu-generation:*'):
+for prefixo in ('delivery-estimate:*', 'emb:*', 'LIMITS:*', 'ai:menu_generation:*'):
     print(f'{prefixo:28} {sum(1 for _ in r.scan_iter(match=prefixo, count=500))}')
 print('total no banco       ', r.dbsize())
 "

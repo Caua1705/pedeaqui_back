@@ -850,3 +850,51 @@ de segundos e não de minutos.
 
 **Estado: parado.** Preciso de duas decisões suas — qual endereço é o certo (se
 divergirem) e se a quebra em satélites vale mesmo o deploy.
+
+---
+
+## 4.2 README
+
+O README **já existia e já era bom**: o que é, rodar local, rodar teste, deploy
+e as variáveis obrigatórias estavam lá. Não reescrevi — consertei o que estava
+errado e completei o que faltava. O que mudou, e por quê:
+
+1. **`pip install -r requirements.lock.txt` não instalava o `pytest`.** Ele mora
+   em `requirements-dev.txt`, que o `Dockerfile` de propósito não instala. Quem
+   seguisse o README à risca chegava na seção seguinte — "Rodar os testes" — sem
+   ter o pytest. É o buraco que a armadilha 42 registra pelo outro lado: *não
+   havia venv*, o `python -m pytest` caía no Python global, e o verde local não
+   valia. A linha agora instala os dois arquivos, e há um parágrafo dizendo por
+   que o venv não é formalidade.
+
+2. **Os quatro portões do CI não estavam escritos em lugar nenhum do README.**
+   Estavam em `docs/ci-e-protecao-da-main.md`, que é sobre configurar o GitHub —
+   não sobre o que rodar antes de commitar. Entraram como bloco próprio, com o
+   `export_openapi.py --check` explicado (o painel consome o `/openapi.json`; o
+   arquivo versionado é o que denuncia renome de campo).
+
+3. **Números errados:** "40 tabelas" (são **42**, contadas do
+   `Base.metadata`) e "90 testes do agente de impressão" (são **126**). Os dois
+   também estavam em `docs/modelo-de-dados.md`.
+
+4. **Faltava a terceira categoria de variável.** Havia "obrigatórias" (boot
+   falha) e "condicionalmente obrigatórias" (boot falha no cenário delas).
+   Faltava a que mais custa: **opcional que desliga alguma coisa em silêncio** —
+   `REDIS_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`,
+   `PAYMENT_WEBHOOK_SECRET`, `PLATFORM_METRICS_KEY`, `VOICE_ENABLED`. Só o
+   nome e o que para de funcionar, nunca valor.
+
+   E `MERCADOPAGO_ENVIRONMENT` entrou nas condicionais: valor fora de
+   `test`/`production` **derruba o boot**, e isso não estava escrito.
+
+5. **`RESEND_API_KEY` ganhou linha própria porque é a pior das seis.** É a única
+   sem aviso de boot, e a recuperação de senha falha **em silêncio**:
+   `forgot_password` engole a exceção de propósito (a resposta não pode
+   denunciar quais e-mails existem, armadilha 18), então o cliente vê "enviamos
+   um código" e nada chega. Só o log `[Auth] forgot_password_failed` sabe.
+
+6. **`INTERNAL_API_KEY` ganhou a frase que faltava**: ela precisa **sair** do
+   ambiente — nenhuma rota a usa desde a Fase 1, e o boot avisa enquanto ela
+   existir.
+
+Nenhum valor de segredo aparece no README, como pedido — só nomes.

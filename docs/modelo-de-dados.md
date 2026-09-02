@@ -1,6 +1,6 @@
 # Modelo de dados
 
-40 tabelas mapeadas pelo ORM. Este documento cobre o que cada uma guarda, como
+42 tabelas mapeadas pelo ORM. Este documento cobre o que cada uma guarda, como
 se ligam e por que o isolamento entre restaurantes funciona do jeito que
 funciona.
 
@@ -12,7 +12,7 @@ congelado, **não rode nada de lá**.
 
 ## 1. O desenho geral
 
-Seis diagramas e não um, e a razão é prática: 40 tabelas num `erDiagram` só
+Seis diagramas e não um, e a razão é prática: 42 tabelas num `erDiagram` só
 renderizam como um novelo em que nada se acha. O corte é por **assunto**, que é
 como as perguntas chegam — "onde mora a taxa de entrega?", "o que o pedido
 congela?" —, e cada tabela aparece no diagrama do dono dela.

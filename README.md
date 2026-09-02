@@ -16,7 +16,7 @@ FastAPI + SQLAlchemy sobre PostgreSQL (Supabase).
 ```powershell
 py -m venv venv
 venv\Scripts\activate
-pip install -r requirements.lock.txt
+pip install -r requirements.lock.txt -r requirements-dev.txt
 copy .env.example .env     # e preencha os segredos
 uvicorn main:app --reload
 ```
@@ -24,12 +24,24 @@ uvicorn main:app --reload
 Linux/macOS: `python3 -m venv venv && source venv/bin/activate` no lugar das duas
 primeiras linhas.
 
+**O venv não é formalidade.** Sem ele, `python -m pytest` cai no Python global
+da máquina — que tem o que sobrou de outros trabalhos — e a suíte fica verde
+contra versões que não são as de produção. Já aconteceu, e quase virou decisão
+de arquitetura: `tests/test_ambiente_bate_com_o_lock.py` existe por causa disso
+e fica **vermelho** quando o ambiente não bate com o lock. Se ele falhar, pare
+e refaça o venv — nenhuma medição feita ali vale.
+
 **O lock, e não o `requirements.txt`** — é o mesmo arquivo que o `Dockerfile` e
 o CI instalam, congelado do que a produção tem de pé, e é o que faz "passa aqui"
 e "passa lá" serem a mesma frase. `requirements.txt` é a lista do que o projeto
 usa, com o motivo de cada escolha; instalá-lo deixaria o pip resolver versão
 sozinho. Para atualizar dependência:
 [`docs/operacao.md`](docs/operacao.md#5-dependências).
+
+**`requirements-dev.txt` é separado e não vai para a imagem** — é `pytest`,
+`ruff` e `coverage`, que produção não executa. Mas *você* executa: sem essa
+segunda metade da linha, o passo seguinte deste README (rodar os testes) não
+funciona.
 
 Sanidade: `curl http://localhost:8000/health`
 Docs interativas: `http://localhost:8000/docs` — desligadas quando
@@ -42,8 +54,22 @@ São **duas suítes**, separadas pelo marcador `db`:
 ```powershell
 py -m pytest -q -m "not db"         # rápida, sem Docker — o laço de desenvolvimento
 py -m pytest -q                     # tudo, antes de commitar
-cd print-agent && py -m pytest -q   # 90 testes do agente de impressão
+cd print-agent && py -m pytest -q   # 126 testes do agente de impressão
 ```
+
+Os quatro portões que o CI cobra, e que valem antes de qualquer commit:
+
+```powershell
+py -m ruff check .
+py -m pytest -q -m "not db"
+py scripts/export_openapi.py --check   # o openapi.json versionado bate com o código
+cd print-agent && py -m pytest -q
+```
+
+`export_openapi.py --check` está aí porque **o painel consome o
+`/openapi.json`**: renomear campo, schema ou rota é mudança de contrato, e o
+arquivo versionado é o que denuncia. Quando ele reclamar, o conserto é rodar o
+script **sem** `--check` e commitar o arquivo junto.
 
 A rápida usa fakes em memória e não abre conexão nenhuma, mas precisa de um
 `.env` válido: `src.core.config` é importado na cadeia.
@@ -137,9 +163,24 @@ Condicionalmente obrigatórias — o boot **derruba** se faltarem no cenário de
 |---|---|
 | `GOOGLE_MAPS_ROUTES_API_KEY` | se `DELIVERY_ESTIMATE_PROVIDER=google_routes` (o padrão) |
 | `PAYMENT_CREDENTIALS_ENCRYPTION_KEY` | se `PAYMENT_PROVIDER=mercadopago` |
+| `MERCADOPAGO_ENVIRONMENT` | sempre lida; valor fora de `test`/`production` derruba o boot |
 
-O `.env.example` está anotado por categoria e cobre o resto (Redis, rate limit,
-limites de corpo, TTLs).
+Opcionais, mas **cada uma desliga alguma coisa em silêncio** — o boot só avisa:
+
+| Variável | O que para de funcionar sem ela |
+|---|---|
+| `REDIS_URL` | rate limit vira N × o configurado (um balde por worker) e o cache de embedding morre a cada deploy, em chamadas pagas |
+| `SUPABASE_SERVICE_ROLE_KEY` | o upload de imagem do painel responde 503 |
+| `RESEND_API_KEY` | o cadastro responde **500** e a recuperação de senha falha **em silêncio** — `forgot_password` engole a exceção de propósito (a resposta não pode denunciar quais e-mails existem), então o cliente vê "enviamos um código" e nada chega. Esta é a única da tabela **sem aviso de boot**: descobre-se pelo log `[Auth] forgot_password_failed`, ou pelo chamado |
+| `PAYMENT_WEBHOOK_SECRET` | o webhook do sandbox responde 503 e nenhum pedido sai de "aguardando pagamento" (no Mercado Pago o segredo é por restaurante e mora no banco) |
+| `PLATFORM_METRICS_KEY` | `GET /internal/ai-usage` responde 503 — o custo de IA por restaurante ([docs/custo-de-ia.md](docs/custo-de-ia.md)) |
+| `VOICE_ENABLED` | com ela falsa o router de voz não é registrado |
+
+E uma que **precisa sair** do ambiente: `INTERNAL_API_KEY`, depreciada desde a
+Fase 1 — nenhuma rota a usa, e o boot avisa enquanto ela existir.
+
+O `.env.example` está anotado por categoria e cobre o resto (limites de corpo,
+TTLs, cotas de voz, RFV, tempos do Google).
 
 ---
 
@@ -148,7 +189,7 @@ limites de corpo, TTLs).
 | Arquivo | Assunto |
 |---|---|
 | [docs/arquitetura.md](docs/arquitetura.md) | **o mapa** — pastas, caminho de um pedido, onde mora o dinheiro, máquina de estados |
-| [docs/modelo-de-dados.md](docs/modelo-de-dados.md) | **o diagrama ER** (Mermaid, seis por assunto), as 40 tabelas e o isolamento entre restaurantes |
+| [docs/modelo-de-dados.md](docs/modelo-de-dados.md) | **o diagrama ER** (Mermaid, seis por assunto), as 42 tabelas e o isolamento entre restaurantes |
 | [docs/cardapio-por-filial.md](docs/cardapio-por-filial.md) | por que o cardápio pende de filial e nada nele herda |
 | [docs/cashback.md](docs/cashback.md) | crédito, resgate, validade e por que ligar a chave mexe em faturamento |
 | [docs/busca-vetorial-e-indice-ann.md](docs/busca-vetorial-e-indice-ann.md) | **por que NÃO existe índice ANN** no pgvector — a medição, e o gatilho que sozinho não autoriza criá-lo |

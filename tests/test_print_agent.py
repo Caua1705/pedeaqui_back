@@ -37,6 +37,7 @@ from src.schemas.admin_printing_schema import (
     PrintTestRequest,
 )
 from src.services.print_agent_service import ONLINE_WINDOW_SECONDS, PrintAgentService
+from tests import fabricas
 
 
 RESTAURANT_ID = uuid.uuid4()
@@ -127,7 +128,7 @@ def _now():
 
 def make_scope(branch_id=BRANCH_ID):
     return AdminScope(
-        admin_user=SimpleNamespace(id=uuid.uuid4(), email="agente@loja.com", role="attendant"),
+        admin_user=fabricas.usuario_do_painel(email="agente@loja.com", role="attendant"),
         restaurant_id=RESTAURANT_ID,
         branch_id=branch_id,
     )

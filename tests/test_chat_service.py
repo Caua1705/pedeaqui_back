@@ -39,6 +39,7 @@ from src.services.chat_service import (
     _store_session_turn,
 )
 from src.services.menu_service import MenuService
+from tests import fabricas
 
 
 AGORA = datetime(2026, 8, 11, 20, 41, tzinfo=timezone.utc)
@@ -120,7 +121,7 @@ def make_restaurant(name="Restaurante de Teste", assistant_notes=None):
     desde a revisao 20260823_0034 o prompt nao a le mais, e um fake que a
     trouxesse de graca deixaria passar um fallback acidental para ela.
     """
-    return SimpleNamespace(id=uuid.uuid4(), name=name, assistant_notes=assistant_notes)
+    return fabricas.restaurante(name=name, assistant_notes=assistant_notes)
 
 
 # Sentinela para distinguir "o teste nao falou de filial" (usa a padrao) de

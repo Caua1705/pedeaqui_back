@@ -22,6 +22,7 @@ from src.schemas.admin_order_schema import UpdateOrderStatusRequest
 from src.api.dependencies.admin_scope import AdminScope, build_admin_scope
 from src.services.admin_order_service import AdminOrderService
 from src.services.order_service import OrderService
+from tests import fabricas
 
 
 class FakeDb:
@@ -287,7 +288,7 @@ class ScopeRuleTests(unittest.TestCase):
 
     def test_owner_ignores_its_branch_and_sees_the_whole_restaurant(self):
         restaurant_id = uuid.uuid4()
-        admin_user = SimpleNamespace(
+        admin_user = fabricas.usuario_do_painel(
             role="owner", restaurant_id=restaurant_id, branch_id=uuid.uuid4()
         )
 

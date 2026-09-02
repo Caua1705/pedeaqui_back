@@ -22,6 +22,8 @@ from src.services.delivery_estimate_service import (
     DeliveryEstimateService,
 )
 
+from tests import fabricas
+
 
 def open_period(prep_time_min, prep_time_max, opens_at=time(0, 0), closes_at=time(23, 59)):
     """Faixa de funcionamento que cobre o dia inteiro.
@@ -67,7 +69,7 @@ class FakeCache:
 
 class DeliveryEstimateTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.restaurant = SimpleNamespace(id=uuid.uuid4(), slug="restaurante")
+        self.restaurant = fabricas.restaurante(slug="restaurante")
         self.branch = SimpleNamespace(
             id=uuid.uuid4(),
             latitude=Decimal("-3.7300000"),

@@ -15,7 +15,6 @@ depois sem adivinhar se a ordem mudou.
 
 import uuid
 from decimal import Decimal
-from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -23,6 +22,7 @@ from fastapi import HTTPException
 from src.models.product_model import Product
 from src.models.product_option_model import ProductOption, ProductOptionGroup
 from src.services.menu_service import MenuService
+from tests import fabricas
 
 
 RESTAURANT_ID = uuid.uuid4()
@@ -89,14 +89,10 @@ def make_branch(is_open=True, **sobrescritas):
         "free_delivery_min_order_value": None,
     }
     campos.update(sobrescritas)
-    return SimpleNamespace(
+    return fabricas.filial(
         id=BRANCH_ID,
         restaurant_id=RESTAURANT_ID,
         is_open=is_open,
-        accepts_delivery=True,
-        accepts_pickup=True,
-        delivery_paused_until=None,
-        delivery_pause_reason=None,
         **campos,
     )
 
@@ -173,7 +169,7 @@ class FakeRestaurantService:
 
 
 def make_restaurant():
-    return SimpleNamespace(id=RESTAURANT_ID, name="Pizzaria do Ze", slug="pizzaria-do-ze")
+    return fabricas.restaurante(id=RESTAURANT_ID, name="Pizzaria do Ze", slug="pizzaria-do-ze")
 
 
 # OS TRES FIXTURES ABAIXO USAM O MODEL DE VERDADE, e nao `SimpleNamespace`.
@@ -590,21 +586,12 @@ class TestGetRestaurantMenu:
         assert menu_repository.banner_types_asked == ["hero", "highlight"]
 
     def test_each_banner_type_lands_in_its_own_field(self):
-        hero = SimpleNamespace(
-            id=uuid.uuid4(),
-            restaurant_id=RESTAURANT_ID,
-            banner_type="hero",
-            image_path="banners/hero.jpg",
-            sort_order=0,
-            is_active=True,
-        )
-        highlight = SimpleNamespace(
-            id=uuid.uuid4(),
+        hero = fabricas.banner(restaurant_id=RESTAURANT_ID)
+        highlight = fabricas.banner(
             restaurant_id=RESTAURANT_ID,
             banner_type="highlight",
             image_path="banners/destaque.jpg",
             sort_order=1,
-            is_active=True,
         )
         service = make_service(
             menu_repository=FakeMenuRepository(banners={"hero": [hero], "highlight": [highlight]})
@@ -647,13 +634,11 @@ class TestGetRestaurantMenu:
         assert response.min_order_value == 0.0
 
     def test_the_settings_row_is_converted(self):
-        settings = SimpleNamespace(
+        settings = fabricas.configuracoes(
             min_order_value=Decimal("20.00"),
             estimated_delivery_time_min=30,
             estimated_delivery_time_max=50,
             default_delivery_fee=Decimal("7.00"),
-            free_delivery_enabled=None,
-            free_delivery_min_order_value=None,
             service_fee_enabled=False,
             service_fee_amount=Decimal("0.00"),
         )
@@ -679,16 +664,18 @@ class TestGetRestaurantMenu:
         servico; o resto continua vindo do restaurante, e mudar o padrao
         continua chegando nela.
         """
-        settings = SimpleNamespace(
+        # `payment_methods` NAO entra aqui: a coluna saiu de
+        # `restaurant_settings` na revisao 20260820_0027, e quem manda em forma
+        # de pagamento e `branch_payment_methods`. O dublê antigo ainda a
+        # passava — descrevia uma linha que nao existe desde aquela migracao, e
+        # `RestaurantSetting(payment_methods=...)` e TypeError.
+        settings = fabricas.configuracoes(
             min_order_value=Decimal("20.00"),
             estimated_delivery_time_min=30,
             estimated_delivery_time_max=50,
             default_delivery_fee=Decimal("7.00"),
-            free_delivery_enabled=None,
-            free_delivery_min_order_value=None,
             service_fee_enabled=True,
             service_fee_amount=Decimal("0.99"),
-            payment_methods=["pix"],
         )
         filial = make_branch(
             min_order_value=Decimal("40.00"),
@@ -722,16 +709,9 @@ class TestGetRestaurantMenu:
         """O cupom nao tem imagem propria: ela vem de `coupon.template`. Um
         cupom sem template gravado estoura aqui — registrado no teste
         seguinte."""
-        coupon = SimpleNamespace(
-            id=uuid.uuid4(),
-            code="BEMVINDO",
-            title="Bem-vindo",
-            template=SimpleNamespace(image_path="cupons/bemvindo.png"),
-            discount_type="percent",
-            discount_value=Decimal("10.00"),
+        coupon = fabricas.cupom(
             min_order_value=Decimal("30.00"),
             sort_order=None,
-            is_active=True,
         )
         service = make_service(menu_repository=FakeMenuRepository(coupons=[coupon]))
 
@@ -756,27 +736,15 @@ class TestGetRestaurantMenu:
         de pe. A ausencia do template e registrada no log, porque e defeito
         de dado e alguem precisa ter onde procurar.
         """
-        orfao = SimpleNamespace(
-            id=uuid.uuid4(),
+        orfao = fabricas.cupom(
             code="ORFAO",
             title="Orfao",
             template=None,
-            discount_type="percent",
-            discount_value=Decimal("10.00"),
             min_order_value=Decimal("30.00"),
-            sort_order=0,
-            is_active=True,
         )
-        bom = SimpleNamespace(
-            id=uuid.uuid4(),
-            code="BEMVINDO",
-            title="Bem-vindo",
-            template=SimpleNamespace(image_path="cupons/bemvindo.png"),
-            discount_type="percent",
-            discount_value=Decimal("10.00"),
+        bom = fabricas.cupom(
             min_order_value=Decimal("30.00"),
             sort_order=0,
-            is_active=True,
         )
         service = make_service(menu_repository=FakeMenuRepository(coupons=[orfao, bom]))
 
@@ -789,16 +757,11 @@ class TestGetRestaurantMenu:
     def test_a_menu_whose_only_coupon_is_broken_is_still_served(self):
         """O caso extremo do teste acima: sem cupom nenhum sobrando, a vitrine
         continua respondendo — com a lista de cupons vazia."""
-        orfao = SimpleNamespace(
-            id=uuid.uuid4(),
+        orfao = fabricas.cupom(
             code="ORFAO",
             title="Orfao",
             template=None,
-            discount_type="percent",
-            discount_value=Decimal("10.00"),
             min_order_value=Decimal("30.00"),
-            sort_order=0,
-            is_active=True,
         )
         service = make_service(menu_repository=FakeMenuRepository(coupons=[orfao]))
 

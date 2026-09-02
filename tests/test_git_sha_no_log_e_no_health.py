@@ -25,7 +25,6 @@ recusa.
 """
 
 import logging
-import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -34,6 +33,7 @@ import main as main_module
 from src.core.config import GIT_SHA_NAO_CARIMBADO, Settings, settings
 from src.services import chat_service as chat_module
 from src.services.chat_service import _SESSION_HISTORY, ChatService
+from tests import fabricas
 
 
 SHA_FALSO = "a1b2c3d"
@@ -98,10 +98,8 @@ class TestOTurnoDoChat:
     def test_a_versao_sai_em_toda_requisicao(self, monkeypatch, caplog):
         """O carimbo que sobrevive a um recorte do log por janela de tempo."""
         monkeypatch.setattr(settings, "GIT_SHA", SHA_FALSO)
-        restaurante = SimpleNamespace(
-            id=uuid.uuid4(), name="Junior da Picanha", assistant_notes=None
-        )
-        filial = SimpleNamespace(id=uuid.uuid4())
+        restaurante = fabricas.restaurante(name="Junior da Picanha")
+        filial = fabricas.filial()
 
         service = ChatService(db=SimpleNamespace())
         service.restaurant_repository = SimpleNamespace(
@@ -131,10 +129,8 @@ class TestOTurnoDoChat:
         A linha ganhou um campo; ela nao pode ter ganhado o texto da pessoa.
         """
         monkeypatch.setattr(settings, "GIT_SHA", SHA_FALSO)
-        restaurante = SimpleNamespace(
-            id=uuid.uuid4(), name="Junior da Picanha", assistant_notes=None
-        )
-        filial = SimpleNamespace(id=uuid.uuid4())
+        restaurante = fabricas.restaurante(name="Junior da Picanha")
+        filial = fabricas.filial()
 
         service = ChatService(db=SimpleNamespace())
         service.restaurant_repository = SimpleNamespace(

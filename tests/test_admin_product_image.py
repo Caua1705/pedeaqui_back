@@ -25,6 +25,7 @@ from src.integrations.supabase_storage_client import (
 )
 from src.services.admin_menu_service import AdminMenuService
 from src.utils.images import detect_image_extension
+from tests import fabricas
 
 
 RESTAURANT_ID = uuid.uuid4()
@@ -60,7 +61,7 @@ class FakeMenuRepository:
 
 class FakeRestaurantRepository:
     def __init__(self, slug="pizzaria-do-ze"):
-        self.restaurant = SimpleNamespace(id=RESTAURANT_ID, slug=slug)
+        self.restaurant = fabricas.restaurante(id=RESTAURANT_ID, slug=slug)
 
     def get_by_id(self, restaurant_id):
         return self.restaurant if self.restaurant.id == restaurant_id else None

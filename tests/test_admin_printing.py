@@ -48,6 +48,7 @@ from src.schemas.admin_printing_schema import (
 )
 from src.services.admin_printing_service import UNASSIGNED_SECTOR_NAME, AdminPrintingService
 from src.services.order_service import OrderService
+from tests import fabricas
 
 
 RESTAURANT_ID = uuid.uuid4()
@@ -229,7 +230,7 @@ def make_branch(branch_id=BRANCH_ID, **overrides):
 
 def make_scope(branch_id=None):
     return AdminScope(
-        admin_user=SimpleNamespace(id=uuid.uuid4(), email="dono@loja.com", role="owner"),
+        admin_user=fabricas.usuario_do_painel(email="dono@loja.com", role="owner"),
         restaurant_id=RESTAURANT_ID,
         branch_id=branch_id,
     )

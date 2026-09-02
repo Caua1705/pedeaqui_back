@@ -7,12 +7,12 @@ nao tinha como expulsa-lo.
 """
 
 import unittest
-import uuid
 from datetime import timedelta
 from types import SimpleNamespace
 
 from src.services.auth_service import AuthService
 from src.utils.security import create_signed_token, utcnow
+from tests import fabricas
 
 
 def build_service(customer):
@@ -22,11 +22,7 @@ def build_service(customer):
 
 
 def make_customer(password_changed_at=None):
-    return SimpleNamespace(
-        id=uuid.uuid4(),
-        is_active=True,
-        password_changed_at=password_changed_at,
-    )
+    return fabricas.cliente(password_changed_at=password_changed_at)
 
 
 def issue_token(customer, issued_at=None):
@@ -90,11 +86,7 @@ class PasswordChangeMarksTheClockTests(unittest.TestCase):
         from src.services.customer_service import CustomerService
         from src.utils.security import hash_password
 
-        customer = SimpleNamespace(
-            id=uuid.uuid4(),
-            password_hash=hash_password("senha-antiga"),
-            password_changed_at=None,
-        )
+        customer = fabricas.cliente(password_hash=hash_password("senha-antiga"))
         service = CustomerService.__new__(CustomerService)
         service.db = SimpleNamespace(commit=lambda: None, rollback=lambda: None)
 

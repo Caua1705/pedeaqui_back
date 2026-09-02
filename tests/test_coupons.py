@@ -25,6 +25,7 @@ from src.schemas.order_schema import CreateOrderRequest
 from src.services.admin_order_service import AdminOrderService
 from src.services.coupon_service import CouponService, CustomerAudience
 from src.services.order_service import OrderService
+from tests import fabricas
 
 
 NOW = datetime(2026, 7, 22, 12, tzinfo=timezone.utc)
@@ -621,25 +622,7 @@ class OrderCouponIntegrationTests(unittest.TestCase):
     def test_order_recalculates_total_saves_snapshot_and_redemption(self):
         db = FakeDb()
         restaurant = SimpleNamespace(id=uuid.uuid4())
-        branch = SimpleNamespace(
-        id=uuid.uuid4(),
-        # As tres chaves da operacao sao da FILIAL desde a revisao
-        # 20260818_0025; os seis campos nulos sao "herda o padrao do
-        # restaurante", que e como toda filial nasce.
-        is_open=True,
-        accepts_delivery=True,
-        accepts_pickup=True,
-        delivery_paused_until=None,
-        delivery_pause_reason=None,
-        min_order_value=None,
-        service_fee_enabled=None,
-        service_fee_amount=None,
-        estimated_delivery_time_min=None,
-        estimated_delivery_time_max=None,
-        default_delivery_fee=None,
-        free_delivery_enabled=None,
-        free_delivery_min_order_value=None,
-    )
+        branch = fabricas.filial(is_open=True, accepts_delivery=True, accepts_pickup=True)
         product_id = uuid.uuid4()
         product = SimpleNamespace(
             id=product_id,
@@ -651,7 +634,7 @@ class OrderCouponIntegrationTests(unittest.TestCase):
             option_groups=[],
         )
         coupon = make_coupon(restaurant_id=restaurant.id, code="SAVE10")
-        customer = SimpleNamespace(id=uuid.uuid4(), name="Ana", phone="8599999999")
+        customer = fabricas.cliente(name="Ana", phone="8599999999")
         payload = CreateOrderRequest.model_validate({
             "branch_id": str(branch.id),
             "order_type": "pickup",
@@ -668,24 +651,18 @@ class OrderCouponIntegrationTests(unittest.TestCase):
         service.branch_repository = SimpleNamespace(
             get_active_by_id_and_restaurant=lambda branch_id, restaurant_id: branch,
             list_enabled_payment_methods=lambda branch_id: [
-                SimpleNamespace(method_type="cash", payment_flow="delivery"),
+                fabricas.forma_de_pagamento(method_type="cash", payment_flow="delivery"),
             ],
         )
         service.branch_hours_service = SimpleNamespace(
             ensure_branch_is_open=lambda branch_id: None
         )
         service.menu_repository = SimpleNamespace(
-            get_settings=lambda restaurant_id: SimpleNamespace(
-                min_order_value=Decimal("0"),
-                service_fee_enabled=True,
-                service_fee_amount=Decimal("3.00"),
-                estimated_delivery_time_min=None,
-                estimated_delivery_time_max=None,
-                default_delivery_fee=None,
-                free_delivery_enabled=None,
-                free_delivery_min_order_value=None,
-                platform_commission_percent=Decimal("10.00"),
-            )
+            get_settings=lambda restaurant_id: fabricas.configuracoes(
+            service_fee_enabled=True,
+            service_fee_amount=Decimal("3.00"),
+            platform_commission_percent=Decimal("10.00"),
+        )
         )
         service.product_repository = SimpleNamespace(list_active_by_ids=lambda restaurant_id, ids: [product])
         service.order_repository = FakeOrderRepository(db)

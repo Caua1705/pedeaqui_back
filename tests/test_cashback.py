@@ -15,13 +15,14 @@ from types import SimpleNamespace
 
 from src.schemas.cashback_schema import CashbackBalanceResponse
 from src.services.cashback_service import CashbackService
+from tests import fabricas
 
 
 SEGUNDA = datetime(2026, 8, 24, 12, 0, tzinfo=timezone.utc)
 
 
 def restaurante(nome="Júnior da Picanha", slug="junior-da-picanha"):
-    return SimpleNamespace(id=uuid.uuid4(), name=nome, slug=slug)
+    return fabricas.restaurante(name=nome, slug=slug)
 
 
 def regra(expiry_days=60, enabled=True):

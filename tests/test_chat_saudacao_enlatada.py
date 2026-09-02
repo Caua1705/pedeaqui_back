@@ -21,7 +21,6 @@ O que este arquivo trava, em ordem de quanto custaria perder:
 """
 
 import re
-import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -29,6 +28,7 @@ import pytest
 from src.ai.services.greeting import GREETING_REPLIES, greeting_reply
 from src.services import chat_service as chat_module
 from src.services.chat_service import _SESSION_HISTORY, ChatService
+from tests import fabricas
 
 
 @pytest.fixture(autouse=True)
@@ -45,10 +45,8 @@ class NaoDeveriaSerChamado:
 
 def servico_de_saudacao(monkeypatch):
     """Um `ChatService` em que busca e modelo EXPLODEM se forem tocados."""
-    restaurante = SimpleNamespace(
-        id=uuid.uuid4(), name="Junior da Picanha", assistant_notes=None
-    )
-    filial = SimpleNamespace(id=uuid.uuid4())
+    restaurante = fabricas.restaurante(name="Junior da Picanha")
+    filial = fabricas.filial()
 
     service = ChatService(db=SimpleNamespace())
     service.restaurant_repository = SimpleNamespace(

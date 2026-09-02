@@ -28,6 +28,7 @@ from src.ai.services.greeting import GREETINGS, is_greeting
 from src.models.branch_model import Branch
 from src.services import chat_service as chat_module
 from src.services.chat_service import _SESSION_HISTORY, ChatService
+from tests import fabricas
 
 
 @pytest.fixture(autouse=True)
@@ -99,9 +100,7 @@ class TestPipeline:
     """A decisao chega ao `/chat`: saudacao nao toca no `RetrievalService`."""
 
     def _servico(self, monkeypatch, mensagem: str, buscas: list):
-        restaurante = SimpleNamespace(
-            id=uuid.uuid4(), name="Junior da Picanha", assistant_notes=None
-        )
+        restaurante = fabricas.restaurante(name="Junior da Picanha")
         filial = Branch(
             id=uuid.uuid4(),
             restaurant_id=restaurante.id,

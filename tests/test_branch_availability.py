@@ -37,6 +37,7 @@ from src.services.branch_hours_service import BranchHoursService
 from src.services.delivery_estimate_service import DeliveryEstimateService
 from src.services.restaurant_service import RestaurantService
 from src.utils.geo import haversine_km
+from tests import fabricas
 
 
 DIA_INTEIRO = (time(0, 0), time(23, 59))
@@ -134,7 +135,7 @@ def filial(
 
 class BranchAvailabilityTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.restaurant = SimpleNamespace(id=uuid.uuid4(), slug="junior-da-picanha")
+        self.restaurant = fabricas.restaurante()
 
         # O cliente esta em (-3,75; -38,55). A Matriz fica perto. A Centro
         # fica 0,10 grau de latitude ao sul (~11,1 km) mais 0,03 de longitude

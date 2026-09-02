@@ -19,6 +19,7 @@ from src.schemas.order_schema import CreateOrderRequest
 from src.services.admin_order_service import AdminOrderService
 from src.models.order_model import Order
 from src.services.order_service import OrderService
+from tests import fabricas
 
 
 class FakeDb:
@@ -70,54 +71,25 @@ class FakeCashbackService:
 
 
 def build_service(*, saldo=Decimal("0"), coupon_discount=None, ordem=None):
-    branch = SimpleNamespace(
-        id=uuid.uuid4(),
-        is_open=True,
-        accepts_delivery=True,
-        accepts_pickup=True,
-        delivery_paused_until=None,
-        delivery_pause_reason=None,
-        min_order_value=None,
-        service_fee_enabled=None,
-        service_fee_amount=None,
-        estimated_delivery_time_min=None,
-        estimated_delivery_time_max=None,
-        default_delivery_fee=None,
-        free_delivery_enabled=None,
-        free_delivery_min_order_value=None,
-    )
+    branch = fabricas.filial(is_open=True, accepts_delivery=True, accepts_pickup=True)
     product_id = uuid.uuid4()
-    product = SimpleNamespace(
-        id=product_id,
-        code="P1",
-        catalog_key=None,
-        name="Picanha",
-        description=None,
-        price=Decimal("50.00"),
-        option_groups=[],
-    )
+    product = fabricas.produto(id=product_id, code="P1")
 
     service = OrderService(FakeDb())
     service.restaurant_service = SimpleNamespace(
-        get_active_restaurant=lambda slug: SimpleNamespace(id=uuid.uuid4())
+        get_active_restaurant=lambda slug: fabricas.restaurante()
     )
     service.branch_repository = SimpleNamespace(
         get_active_by_id_and_restaurant=lambda branch_id, restaurant_id: branch,
         list_enabled_payment_methods=lambda branch_id: [
-            SimpleNamespace(method_type="cash", payment_flow="delivery"),
+            fabricas.forma_de_pagamento(method_type="cash", payment_flow="delivery"),
         ],
     )
     service.branch_hours_service = SimpleNamespace(ensure_branch_is_open=lambda branch_id: None)
     service.menu_repository = SimpleNamespace(
-        get_settings=lambda restaurant_id: SimpleNamespace(
-            min_order_value=Decimal("0"),
+        get_settings=lambda restaurant_id: fabricas.configuracoes(
             service_fee_enabled=False,
             service_fee_amount=Decimal("0"),
-            estimated_delivery_time_min=None,
-            estimated_delivery_time_max=None,
-            default_delivery_fee=None,
-            free_delivery_enabled=None,
-            free_delivery_min_order_value=None,
             platform_commission_percent=Decimal("10.00"),
         )
     )
@@ -161,7 +133,7 @@ def build_service(*, saldo=Decimal("0"), coupon_discount=None, ordem=None):
 
 
 def cliente():
-    return SimpleNamespace(id=uuid.uuid4(), name="Ana", phone="85999999999")
+    return fabricas.cliente(name="Ana", phone="85999999999")
 
 
 class ResgateNoPedidoTests(unittest.TestCase):

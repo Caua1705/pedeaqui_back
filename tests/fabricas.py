@@ -36,15 +36,18 @@ filial passa a filial.
 """
 
 import uuid
-from datetime import date, time
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 
 from src.models.admin_user_model import AdminUser
 from src.models.branch_business_hour_model import BranchBusinessHour
 from src.models.branch_model import Branch
 from src.models.branch_payment_method_model import BranchPaymentMethod
+from src.models.coupon_model import CouponTemplate, RestaurantCoupon
 from src.models.customer_model import Customer, CustomerAddress
+from src.models.order_model import Order
 from src.models.product_model import Product
+from src.models.restaurant_banner_model import RestaurantBanner
 from src.models.restaurant_model import Restaurant
 from src.models.restaurant_setting_model import RestaurantSetting
 from src.services.delivery_estimate_service import DeliveryEstimateResult
@@ -260,3 +263,108 @@ def estimativa_de_entrega(**sobrescritas) -> DeliveryEstimateResult:
     }
     campos.update(sobrescritas)
     return DeliveryEstimateResult(**campos)
+
+
+def banner(**sobrescritas) -> RestaurantBanner:
+    campos = {
+        "id": uuid.uuid4(),
+        "restaurant_id": uuid.uuid4(),
+        "banner_type": "hero",
+        "image_path": "banners/hero.jpg",
+        "sort_order": 0,
+        "is_active": True,
+    }
+    campos.update(sobrescritas)
+    return RestaurantBanner(**campos)
+
+
+def arte_de_cupom(**sobrescritas) -> CouponTemplate:
+    """A arte da vitrine (`coupon_templates`).
+
+    `image_path` vai escrito porque a coluna e NOT NULL no banco e o model a
+    declara opcional — a armadilha que `tests/test_models_nunca_instanciados.py`
+    vigia em `src/` e `scripts/`. Aqui, onde instanciar e permitido, o jeito
+    certo e este: passar a coluna.
+    """
+    campos = {
+        "id": uuid.uuid4(),
+        "name": "Bem-vindo",
+        "image_path": "cupons/bemvindo.png",
+        "discount_type": "percent",
+        "discount_value": Decimal("10.00"),
+        "sort_order": 0,
+        "is_active": True,
+    }
+    campos.update(sobrescritas)
+    return CouponTemplate(**campos)
+
+
+def cupom(**sobrescritas) -> RestaurantCoupon:
+    """Uma campanha publica, ativa e dentro da janela.
+
+    `template` e relacionamento: passar `template=None` descreve o cupom cuja
+    arte foi apagada, que e um caso REAL e testado (o cardapio deixa ele de
+    fora em vez de cair).
+    """
+    campos = {
+        "id": uuid.uuid4(),
+        "restaurant_id": uuid.uuid4(),
+        "coupon_template_id": uuid.uuid4(),
+        "code": "BEMVINDO",
+        "title": "Bem-vindo",
+        "discount_type": "percent",
+        "discount_value": Decimal("10.00"),
+        "min_order_value": Decimal("0.00"),
+        "valid_from": datetime(2026, 1, 1, tzinfo=timezone.utc),
+        "valid_until": datetime(2026, 12, 31, tzinfo=timezone.utc),
+        "first_order_only": False,
+        "visibility": "public",
+        "sort_order": 0,
+        "is_active": True,
+    }
+    if "template" not in sobrescritas:
+        campos["template"] = arte_de_cupom()
+    campos.update(sobrescritas)
+    return RestaurantCoupon(**campos)
+
+
+def pedido(**sobrescritas) -> Order:
+    """Um pedido pago, de retirada, ja com a comissao calculada.
+
+    `tracking_token_hash` vai escrito e `tracking_token` NAO EXISTE: a coluna
+    em texto puro saiu do model, e um dublê que a escrevesse descreveria um
+    pedido que a aplicacao nao produz mais. Quem precisa do token em claro
+    guarda a string do lado, como o service faz.
+
+    Os `Decimal` sao os do banco, e nao `float`: `Numeric` volta como
+    `Decimal`, e teste que compare com `float` compara outro tipo.
+    """
+    campos = {
+        "id": uuid.uuid4(),
+        "order_number": 1,
+        "tracking_token_hash": "hash-do-token",
+        "restaurant_id": uuid.uuid4(),
+        "branch_id": uuid.uuid4(),
+        "customer_id": None,
+        "customer_name_snapshot": "Fulano de Tal",
+        "customer_phone_snapshot": "85999990000",
+        "order_type": "pickup",
+        "status": "pending",
+        "payment_method": "pix",
+        "payment_status": "paid",
+        "refunded_amount": Decimal("0.00"),
+        "subtotal": Decimal("100.00"),
+        "delivery_fee": Decimal("0.00"),
+        "service_fee": Decimal("0.00"),
+        "coupon_discount_amount": Decimal("0.00"),
+        "cashback_redeemed_amount": Decimal("0.00"),
+        "discount_total": Decimal("0.00"),
+        "total": Decimal("100.00"),
+        "commission_percent": Decimal("10.00"),
+        "commission_base_amount": Decimal("100.00"),
+        "commission_amount": Decimal("10.00"),
+        "delivery_fee_waived": Decimal("0.00"),
+        "created_at": datetime(2026, 7, 15, 12, tzinfo=timezone.utc),
+    }
+    campos.update(sobrescritas)
+    return Order(**campos)

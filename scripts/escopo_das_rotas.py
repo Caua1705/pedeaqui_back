@@ -36,6 +36,20 @@ nao estaria la.
 
 Por isso o script exige as duas, e as reporta separadas.
 
+**4. Toda rota `/courier` e do ENTREGADOR autenticado, e so dele?**
+
+O entregador nao e lojista: nao tem Bearer, nao tem `AdminScope`, e alcanca
+so o que foi atribuido a ele. Tres coisas, e as tres se conferem aqui:
+
+- a rota recebe `Courier` por dependencia (`get_current_courier`) — e a
+  identidade, resolvida pelo link e pelo codigo;
+- a rota NAO aceita `restaurant_id`, `branch_id` nem `courier_id` do cliente.
+  Nao ha o que conferir porque nao ha o que passar;
+- a cadeia de chamadas passa `courier.id` a alguma consulta. E o `WHERE
+  courier_id = :c` visto de fora — sem ele, a rota lista pedidos de todo
+  mundo. As excecoes (a rota que so devolve o proprio cadastro) estao em
+  `SEM_CONSULTA_DO_ENTREGADOR_ESPERADA`, com o motivo.
+
 ## Como ele segue a cadeia
 
 Monta um grafo de chamadas a partir do AST, resolvendo:
@@ -107,6 +121,28 @@ MARCADORES_DE_FILIAL = ("ensure_branch_allowed", "resolve_branch_filter")
 # caminho que o AST nao mostra na mesma linha.
 EXPRESSAO_DE_RESTAURANTE = "scope.restaurant_id"
 SUFIXOS_DE_RESTAURANTE = ("_and_restaurant", "_by_restaurant")
+
+# --- A dimensao do ENTREGADOR ---------------------------------------------
+
+PREFIXO_DO_ENTREGADOR = "/courier"
+
+# O que conta como conferencia do ENTREGADOR: o id do cadastro autenticado
+# entrando numa chamada, posicional ou nomeado — a mesma regra forte de
+# `scope.restaurant_id`, pelo mesmo motivo: nao depende de convencao de nome.
+EXPRESSAO_DO_ENTREGADOR = "courier.id"
+
+# Rota do entregador nao recebe identificador nenhum de fora. O escopo dele e
+# a atribuicao, e a atribuicao sai do banco pelo `courier.id`.
+PARAMETROS_PROIBIDOS_AO_ENTREGADOR = ("restaurant_id", "branch_id", "courier_id")
+
+# Rotas `/courier` que legitimamente NAO consultam nada pelo `courier.id`, com
+# o motivo. Curta de proposito; rota nova fora dela e achado.
+SEM_CONSULTA_DO_ENTREGADOR_ESPERADA = {
+    "GET /courier/{link_token}/me": (
+        "so devolve o proprio cadastro, que a dependencia ja carregou; nao ha "
+        "consulta a recortar"
+    ),
+}
 
 
 class _Indice:
@@ -210,12 +246,12 @@ def _procurar(
     indice: _Indice,
     profundidade: int,
     visitados: set,
-) -> tuple[bool, bool, bool]:
-    """(conferiu filial, conferiu restaurante, seguiu tudo o que viu)."""
+) -> tuple[bool, bool, bool, bool]:
+    """(conferiu filial, conferiu restaurante, conferiu entregador, seguiu tudo)."""
     if profundidade > PROFUNDIDADE_MAXIMA:
-        return False, False, False
+        return False, False, False, False
 
-    filial = restaurante = False
+    filial = restaurante = entregador = False
     completo = True
 
     for no in ast.walk(corpo):
@@ -231,6 +267,8 @@ def _procurar(
         argumentos = list(no.args) + [palavra.value for palavra in no.keywords]
         if any(ast.unparse(arg) == EXPRESSAO_DE_RESTAURANTE for arg in argumentos):
             restaurante = True
+        if any(ast.unparse(arg) == EXPRESSAO_DO_ENTREGADOR for arg in argumentos):
+            entregador = True
 
         classe_alvo = _classe_do_receptor(no, classe, indice)
         proximo = None
@@ -246,12 +284,30 @@ def _procurar(
         if chave in visitados:
             continue
         visitados.add(chave)
-        f, r, c = _procurar(proximo, classe_alvo, indice, profundidade + 1, visitados)
+        f, r, e, c = _procurar(proximo, classe_alvo, indice, profundidade + 1, visitados)
         filial = filial or f
         restaurante = restaurante or r
+        entregador = entregador or e
         completo = completo and c
 
-    return filial, restaurante, completo
+    return filial, restaurante, entregador, completo
+
+
+def _classificar_assinatura_do_entregador(
+    anotacoes: dict, caminho: str, tipo_do_entregador: type
+) -> tuple[bool, bool]:
+    """(recebe o entregador autenticado, aceita identificador proibido).
+
+    Separada de `auditar` para ser testavel com uma assinatura plantada, sem
+    subir o app: a parte que le a cadeia de chamadas ja tem iscas, e esta
+    metade — que le so a assinatura — precisava das dela.
+    """
+    recebe = any(anotacao is tipo_do_entregador for anotacao in anotacoes.values())
+    aceita_proibido = any(
+        nome in anotacoes or "{" + nome + "}" in caminho
+        for nome in PARAMETROS_PROIBIDOS_AO_ENTREGADOR
+    )
+    return recebe, aceita_proibido
 
 
 def auditar() -> list[dict]:
@@ -259,11 +315,15 @@ def auditar() -> list[dict]:
     import inspect as pyinspect
 
     from src.api.dependencies.admin_scope import AdminScope
+    from src.models.courier_model import Courier
     from tests.rotas_do_app import rotas_com_caminho
 
     indice = _Indice()
     linhas = []
     for rota in rotas_com_caminho():
+        if rota.path.startswith(PREFIXO_DO_ENTREGADOR):
+            linhas.extend(_linhas_do_entregador(rota, indice, Courier))
+            continue
         if not rota.path.startswith("/admin"):
             continue
         metodos = sorted(rota.methods - {"HEAD", "OPTIONS"})
@@ -277,19 +337,18 @@ def auditar() -> list[dict]:
         filial = restaurante = False
         completo = True
         if aceita_filial:
-            corpo = indice.funcoes.get(
-                (rota.endpoint.__module__.rsplit(".", 1)[-1], rota.endpoint.__name__)
-            )
+            corpo = _corpo_da_rota(rota, indice)
             if corpo is None:
                 completo = False
             else:
-                filial, restaurante, completo = _procurar(corpo, None, indice, 0, set())
+                filial, restaurante, _, completo = _procurar(corpo, None, indice, 0, set())
 
         for metodo in metodos:
             linhas.append(
                 {
                     "rota": f"{metodo} {rota.path}",
                     "funcao": rota.endpoint.__name__,
+                    "publico": "admin",
                     "recebe_escopo": recebe_escopo,
                     "aceita_restaurante": aceita_restaurante,
                     "aceita_filial": aceita_filial,
@@ -301,25 +360,86 @@ def auditar() -> list[dict]:
     return linhas
 
 
+def _corpo_da_rota(rota, indice: _Indice) -> ast.FunctionDef | None:
+    return indice.funcoes.get(
+        (rota.endpoint.__module__.rsplit(".", 1)[-1], rota.endpoint.__name__)
+    )
+
+
+def _linhas_do_entregador(rota, indice: _Indice, tipo_do_entregador: type) -> list[dict]:
+    """Uma linha por metodo de uma rota `/courier`.
+
+    Toda rota do entregador e seguida — nao so as que aceitam parametro,
+    como no lado do painel —, porque aqui a pergunta nao e "o parametro foi
+    conferido?" e sim "a consulta foi recortada pelo entregador?". Sem
+    seguir, uma rota que listasse todos os pedidos da plataforma passaria.
+    """
+    import inspect as pyinspect
+
+    assinatura = pyinspect.signature(rota.endpoint)
+    anotacoes = {n: p.annotation for n, p in assinatura.parameters.items()}
+    recebe, aceita_proibido = _classificar_assinatura_do_entregador(
+        anotacoes, rota.path, tipo_do_entregador
+    )
+
+    entregador = False
+    completo = True
+    corpo = _corpo_da_rota(rota, indice)
+    if corpo is None:
+        completo = False
+    else:
+        _, _, entregador, completo = _procurar(corpo, None, indice, 0, set())
+
+    linhas = []
+    for metodo in sorted(rota.methods - {"HEAD", "OPTIONS"}):
+        linhas.append(
+            {
+                "rota": f"{metodo} {rota.path}",
+                "funcao": rota.endpoint.__name__,
+                "publico": "entregador",
+                "recebe_entregador": recebe,
+                "aceita_id_proibido": aceita_proibido,
+                "confere_entregador": entregador,
+                "seguiu_tudo": completo,
+            }
+        )
+    return linhas
+
+
 def achados(linhas: list[dict]) -> dict[str, list[dict]]:
+    admin = [linha for linha in linhas if linha["publico"] == "admin"]
+    entregador = [linha for linha in linhas if linha["publico"] == "entregador"]
     return {
-        "restaurante_do_cliente": [linha for linha in linhas if linha["aceita_restaurante"]],
+        "restaurante_do_cliente": [linha for linha in admin if linha["aceita_restaurante"]],
         "sem_escopo": [
             linha
-            for linha in linhas
+            for linha in admin
             if not linha["recebe_escopo"] and linha["rota"] not in SEM_ESCOPO_ESPERADO
         ],
         "filial_sem_conferencia_de_restaurante": [
             linha
-            for linha in linhas
+            for linha in admin
             if linha["aceita_filial"] and not linha["confere_restaurante"]
         ],
         "filial_sem_conferencia_de_filial": [
-            linha for linha in linhas if linha["aceita_filial"] and not linha["confere_filial"]
+            linha for linha in admin if linha["aceita_filial"] and not linha["confere_filial"]
+        ],
+        "entregador_sem_identidade": [
+            linha for linha in entregador if not linha["recebe_entregador"]
+        ],
+        "entregador_aceita_id_do_cliente": [
+            linha for linha in entregador if linha["aceita_id_proibido"]
+        ],
+        "entregador_sem_conferencia": [
+            linha
+            for linha in entregador
+            if not linha["confere_entregador"]
+            and linha["rota"] not in SEM_CONSULTA_DO_ENTREGADOR_ESPERADA
         ],
         "nao_consegui_seguir": [
-            linha for linha in linhas if linha["aceita_filial"] and not linha["seguiu_tudo"]
-        ],
+            linha for linha in admin if linha["aceita_filial"] and not linha["seguiu_tudo"]
+        ]
+        + [linha for linha in entregador if not linha["seguiu_tudo"]],
     }
 
 
@@ -333,6 +453,16 @@ TITULOS = {
     "filial_sem_conferencia_de_filial": (
         "Rota com `branch_id` do cliente SEM `ensure_branch_allowed` "
         "(o gerente preso a uma loja alcanca a vizinha)"
+    ),
+    "entregador_sem_identidade": (
+        "Rota /courier que NAO recebe o entregador autenticado (`Courier`)"
+    ),
+    "entregador_aceita_id_do_cliente": (
+        "Rota /courier que aceita `restaurant_id`, `branch_id` ou `courier_id` do CLIENTE"
+    ),
+    "entregador_sem_conferencia": (
+        "Rota /courier cuja consulta NAO e recortada por `courier.id` "
+        "(o motoboy le pedido que nao e dele)"
     ),
     "nao_consegui_seguir": "Rota cuja cadeia de chamadas eu NAO consegui seguir inteira",
 }
@@ -349,11 +479,13 @@ def main() -> int:
     encontrados = achados(linhas)
     total = sum(len(v) for v in encontrados.values())
 
-    com_filial = [linha for linha in linhas if linha["aceita_filial"]]
+    admin = [linha for linha in linhas if linha["publico"] == "admin"]
+    entregador = [linha for linha in linhas if linha["publico"] == "entregador"]
+    com_filial = [linha for linha in admin if linha["aceita_filial"]]
     print("=" * 78)
     print(
-        f"{len(linhas)} rota(s) /admin  |  {len(com_filial)} recebem `branch_id` do "
-        f"cliente  |  {total} achado(s)"
+        f"{len(admin)} rota(s) /admin  |  {len(com_filial)} recebem `branch_id` do "
+        f"cliente  |  {len(entregador)} rota(s) /courier  |  {total} achado(s)"
     )
     print("=" * 78)
 
@@ -372,7 +504,7 @@ def main() -> int:
         print()
         print("## Todas as rotas")
         print()
-        for linha in sorted(linhas, key=lambda item: item["rota"]):
+        for linha in sorted(admin, key=lambda item: item["rota"]):
             marcas = "".join(
                 (
                     "E" if linha["recebe_escopo"] else "-",
@@ -384,6 +516,17 @@ def main() -> int:
             print(f"  [{marcas}] {linha['rota']}")
         print()
         print("  E=recebe escopo  B=aceita branch_id  f=confere filial  r=confere restaurante")
+        for linha in sorted(entregador, key=lambda item: item["rota"]):
+            marcas = "".join(
+                (
+                    "C" if linha["recebe_entregador"] else "-",
+                    "X" if linha["aceita_id_proibido"] else "-",
+                    "c" if linha["confere_entregador"] else "-",
+                )
+            )
+            print(f"  [{marcas}]  {linha['rota']}")
+        print()
+        print("  C=recebe Courier  X=aceita id proibido  c=consulta recortada por courier.id")
 
     print()
     print("O julgamento continua sendo de quem le: o script segue chamadas por")

@@ -30,7 +30,13 @@ parou de achar".
 
 import unittest
 
-from scripts.escopo_das_rotas import _Indice, _procurar, achados, auditar
+from scripts.escopo_das_rotas import (
+    _Indice,
+    _classificar_assinatura_do_entregador,
+    _procurar,
+    achados,
+    auditar,
+)
 
 
 # A rota plantada e o service dela, no formato que o varredor le. Duas
@@ -46,6 +52,14 @@ def rota_so_com_ensure_branch(branch_id, scope, db):
 
 def rota_certa(branch_id, scope, db):
     return ServicoPlantado(db).do_jeito_certo(scope, branch_id)
+
+
+def rota_do_entregador_sem_recorte(courier, db):
+    return ServicoPlantado(db).entregador_sem_recorte(courier)
+
+
+def rota_do_entregador_certa(courier, db):
+    return ServicoPlantado(db).entregador_do_jeito_certo(courier)
 '''
 
 SERVICO_PLANTADO = '''
@@ -65,6 +79,12 @@ class ServicoPlantado:
         return self.branch_repository.get_active_by_id_and_restaurant(
             branch_id, scope.restaurant_id
         )
+
+    def entregador_sem_recorte(self, courier):
+        return self.branch_repository.list_open_orders(courier.branch_id)
+
+    def entregador_do_jeito_certo(self, courier):
+        return self.branch_repository.list_open_orders_by_courier(courier_id=courier.id)
 '''
 
 
@@ -75,9 +95,25 @@ def _indice_plantado(tmp_path):
 
 
 def _conferencias(tmp_path, funcao: str) -> tuple[bool, bool, bool]:
+    """(filial, restaurante, seguiu tudo) — a leitura do lado do PAINEL."""
+    filial, restaurante, _, completo = _procurar_plantada(tmp_path, funcao)
+    return filial, restaurante, completo
+
+
+def _conferencia_do_entregador(tmp_path, funcao: str) -> tuple[bool, bool]:
+    """(entregador, seguiu tudo) — a leitura do lado do ENTREGADOR."""
+    _, _, entregador, completo = _procurar_plantada(tmp_path, funcao)
+    return entregador, completo
+
+
+def _procurar_plantada(tmp_path, funcao: str) -> tuple[bool, bool, bool, bool]:
     indice = _indice_plantado(tmp_path)
     corpo = indice.funcoes[("endpoints_plantados", funcao)]
     return _procurar(corpo, None, indice, 0, set())
+
+
+class _EntregadorPlantado:
+    """Faz as vezes de `Courier` na classificacao de assinatura."""
 
 
 class AAuditoriaTests(unittest.TestCase):
@@ -130,6 +166,30 @@ class AAuditoriaTests(unittest.TestCase):
             "Rota com `branch_id` do cliente sem `ensure_branch_allowed` nem "
             "`resolve_branch_filter`:\n"
             + "\n".join(f"    {linha['rota']}  ({linha['funcao']})" for linha in grupo)
+        )
+
+    def test_toda_rota_do_entregador_recebe_o_entregador_autenticado(self):
+        """Sem `Courier` na assinatura a rota nao tem de quem recortar nada —
+        e o link com o codigo nem foi conferido."""
+        grupo = self.encontrados["entregador_sem_identidade"]
+        assert not grupo, [linha["rota"] for linha in grupo]
+
+    def test_nenhuma_rota_do_entregador_aceita_identificador_do_cliente(self):
+        """`restaurant_id`, `branch_id` e `courier_id` nao viajam em rota
+        `/courier`: o escopo dele e a atribuicao, que sai do banco."""
+        grupo = self.encontrados["entregador_aceita_id_do_cliente"]
+        assert not grupo, [linha["rota"] for linha in grupo]
+
+    def test_toda_consulta_do_entregador_e_recortada_por_ele(self):
+        """O `WHERE courier_id = :c` visto de fora. Sem ele, a rota lista o
+        pedido de todo motoboy da plataforma — sem erro e sem log."""
+        grupo = self.encontrados["entregador_sem_conferencia"]
+        assert not grupo, (
+            "Rota /courier cuja cadeia nao passa `courier.id` a consulta nenhuma:\n"
+            + "\n".join(f"    {linha['rota']}  ({linha['funcao']})" for linha in grupo)
+            + "\n\nSe a rota nao consulta nada mesmo, acrescente-a a "
+            "`SEM_CONSULTA_DO_ENTREGADOR_ESPERADA` em scripts/escopo_das_rotas.py "
+            "COM O MOTIVO."
         )
 
     def test_a_cadeia_de_toda_rota_foi_seguida_ate_o_fim(self):
@@ -211,6 +271,61 @@ def test_o_padrao_legitimo_nao_e_acusado(tmp_path):
     assert completo
     assert filial
     assert restaurante
+
+
+def test_isca_do_entregador_que_consulta_pela_filial_e_acusada(tmp_path):
+    """A isca que importa deste lado: a rota recorta pela FILIAL do motoboy,
+    e nao por ele. Parece escopo — e e o gerente da loja lendo a lista de
+    todos os motoboys, so que sem senha de gerente."""
+    entregador, completo = _conferencia_do_entregador(tmp_path, "rota_do_entregador_sem_recorte")
+
+    assert completo, "o varredor nao conseguiu seguir a cadeia plantada"
+    assert not entregador, (
+        "o varredor considerou o entregador conferido, e a rota plantada so "
+        "passa `courier.branch_id` — que e a loja inteira, nao o motoboy"
+    )
+
+
+def test_o_padrao_legitimo_do_entregador_nao_e_acusado(tmp_path):
+    entregador, completo = _conferencia_do_entregador(tmp_path, "rota_do_entregador_certa")
+
+    assert completo
+    assert entregador
+
+
+def test_a_assinatura_sem_o_entregador_e_acusada():
+    recebe, proibido = _classificar_assinatura_do_entregador(
+        {"link_token": str, "db": object}, "/courier/{link_token}/orders", _EntregadorPlantado
+    )
+
+    assert not recebe
+    assert not proibido
+
+
+def test_a_assinatura_com_identificador_proibido_e_acusada():
+    """Nos dois lugares em que ele poderia entrar: parametro e caminho."""
+    _, por_parametro = _classificar_assinatura_do_entregador(
+        {"courier": _EntregadorPlantado, "branch_id": str}, "/courier/{link_token}/x", _EntregadorPlantado
+    )
+    _, por_caminho = _classificar_assinatura_do_entregador(
+        {"courier": _EntregadorPlantado, "courier_id": str},
+        "/courier/{courier_id}/x",
+        _EntregadorPlantado,
+    )
+
+    assert por_parametro
+    assert por_caminho
+
+
+def test_a_assinatura_certa_do_entregador_nao_e_acusada():
+    recebe, proibido = _classificar_assinatura_do_entregador(
+        {"link_token": str, "courier": _EntregadorPlantado, "order_id": str},
+        "/courier/{link_token}/orders/{order_id}/delivered",
+        _EntregadorPlantado,
+    )
+
+    assert recebe
+    assert not proibido
 
 
 def test_o_indice_separa_funcoes_de_modulos_diferentes(tmp_path):

@@ -19,7 +19,7 @@ cadastrar rápido.**
 |---|---|---|
 | 0 | As três perguntas | **respondidas** — nenhuma muda o desenho |
 | 1 | Schema: `couriers`, `courier_assignments`, taxa do entregador em `branches` | **feito** — revisão `20260903_0045` |
-| 2 | Ferramenta: varredura de escopo cobre `/courier` (antes das rotas) | pendente |
+| 2 | Ferramenta: varredura de escopo cobre `/courier` (antes das rotas) | **feito** |
 | 3 | Admin: taxa do entregador da filial | pendente |
 | 4 | Admin: cadastro (listar, criar, editar, ativar/desativar, excluir) + código | pendente |
 | 5 | Admin: atribuir e desatribuir pedidos | pendente |
@@ -259,6 +259,26 @@ em `branches`. Decisões que não estão no docstring da revisão:
 Visto vermelho antes (`column "courier_fee_base" does not exist`), 11 verdes
 depois em `tests/test_migracao_entregadores_db.py`. Diagrama ER ganhou a
 seção "O entregador, que é da filial".
+
+## 2. A ferramenta, antes das rotas
+
+`scripts/escopo_das_rotas.py` ganhou a quarta pergunta: toda rota `/courier`
+recebe `Courier` por dependência, não aceita `restaurant_id`/`branch_id`/
+`courier_id`, e a cadeia passa `courier.id` a alguma consulta. Exceção com
+motivo em `SEM_CONSULTA_DO_ENTREGADOR_ESPERADA` (só o `/me`).
+
+**A isca que importa** é a rota que recorta por `courier.branch_id`: parece
+escopo e é a loja inteira. O varredor a acusa. Mutação (cegar a expressão)
+deixou `test_o_padrao_legitimo_do_entregador_nao_e_acusado` vermelho — a
+metade que prova que ele enxerga.
+
+O que ainda falta e entra no item 6: a anti-vacuidade sobre o app real
+(`len(rotas /courier) > 0`), que hoje seria vermelha porque a ferramenta veio
+antes das rotas.
+
+**Lição desta rodada:** `git checkout <arquivo>` para desfazer uma mutação
+reverte o patch inteiro não commitado. Mutação se desfaz com o `sed` inverso,
+ou se faz depois do commit.
 
 ## Portão
 

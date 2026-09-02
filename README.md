@@ -88,6 +88,20 @@ head`, **nunca** de `Base.metadata.create_all()` — o ORM não mapeia as
 sequences (inclusive a de `order_number`), os defaults nem os índices criados à
 mão. Detalhes em [`docs/testes.md`](docs/testes.md).
 
+E é justamente porque `create_all()` não é usado que o `nullable=` dos models
+**nunca vira DDL**: em 42 colunas, o que o model declara não é o que o banco faz
+cumprir. Com o banco de teste de pé:
+
+```powershell
+py scripts/divergencias_orm_schema.py --url postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
+```
+
+O CI roda o mesmo comando com `--limite 42` depois da suíte `db`, e ele é
+**aviso, não portão**: as 42 são dívida herdada e um vermelho contra dívida
+herdada é um vermelho que se aprende a ignorar. O que o aviso impede é o número
+crescer calado. O roteiro de alinhamento, já escrito e ainda não aplicado, está
+em [`docs/alinhamento-orm-schema.md`](docs/alinhamento-orm-schema.md).
+
 O `print-agent/` é um projeto separado e **não** roda no `pytest` da raiz, de
 propósito.
 

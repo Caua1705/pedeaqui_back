@@ -157,6 +157,15 @@ def main() -> int:
         default="public",
         help="Schema a inspecionar (padrao: public).",
     )
+    parser.add_argument(
+        "--limite",
+        type=int,
+        help=(
+            "Quantas divergencias sao esperadas hoje. Passar deste numero vira "
+            "AVISO (anotacao do GitHub Actions), nunca falha. Ficar abaixo vira "
+            "lembrete de baixar o limite."
+        ),
+    )
     args = parser.parse_args()
 
     engine = create_engine(args.url) if args.url else get_engine()
@@ -234,7 +243,48 @@ def main() -> int:
     print()
     print("Nada aqui e erro por si so — o schema e mais velho que o ORM. O que")
     print("este script diz e ONDE a anotacao do model nao pode ser levada a serio.")
+
+    if args.limite is not None:
+        avisar_sobre_o_limite(divergencias.total, args.limite)
     return 0
+
+
+def avisar_sobre_o_limite(total: int, limite: int) -> None:
+    """Compara o total com o esperado e escreve UM aviso. Nunca falha.
+
+    POR QUE AVISO E NAO FALHA. As 42 divergencias de hoje sao herdadas: o
+    schema e mais velho que o ORM e nenhuma delas foi introduzida por um
+    commit. Um portao vermelho contra divida herdada e um portao que se
+    aprende a ignorar — e o dia em que ele acusar uma divergencia NOVA sera o
+    dia em que alguem o desligar para conseguir entregar.
+
+    O aviso resolve a coisa especifica que faltava: o numero nao cresce mais
+    calado. Passou de 42, aparece na aba de Summary do Actions e no diff da PR,
+    e quem escreveu a coluna ve na hora.
+
+    `::warning::` e `::notice::` sao as anotacoes do GitHub Actions. Fora do
+    Actions os prefixos sao ruido inofensivo, e o texto depois deles continua
+    legivel — nao ha ramo separado para "estou no CI".
+    """
+    if total > limite:
+        print()
+        print(
+            f"::warning title=Divergencias ORM x schema::"
+            f"{total} divergencia(s) de coluna, e o esperado era {limite}. "
+            f"{total - limite} nova(s). "
+            "Ver docs/alinhamento-orm-schema.md e a saida acima para saber qual. "
+            "Se a divergencia nova for deliberada, suba o --limite no ci.yml no "
+            "mesmo commit que a criou — o que este aviso nao aceita e ela entrar "
+            "sem ninguem ver."
+        )
+    elif total < limite:
+        print()
+        print(
+            f"::notice title=Divergencias ORM x schema::"
+            f"{total} divergencia(s), abaixo do limite de {limite}. "
+            "Baixe o --limite no ci.yml para travar o ganho — limite folgado "
+            "deixa a proxima divergencia entrar de graca."
+        )
 
 
 if __name__ == "__main__":

@@ -32,7 +32,7 @@ A rodada anterior está em `scratchpad/rodada-back.md` e continua válida.
 | 1.1 | As 16 colunas: caminho de leitura que quebra | **feito** — 8 com risco real, 4 silenciosas, 4 sem risco |
 | 1.2 | Teste que prova que os 2 models não são instanciados | **feito** |
 | 1.3 | Revisão de alinhamento escrita, sem aplicar | **feito** — e executada contra o Postgres de teste |
-| 1.4 | `divergencias_orm_schema.py` no portão como aviso | pendente |
+| 1.4 | `divergencias_orm_schema.py` no portão como aviso | **feito** |
 | 2 | Dublês falsos na suíte inteira | pendente |
 | 3 | Testes dependentes da hora | pendente |
 | 4 | Query do `tracking_token`, pronta para colar | pendente |
@@ -305,3 +305,42 @@ migração roda deixou de ser produção, de madrugada, com a API fora do ar.
 
 **Portão: 2812 testes verdes** (2200 rápidos + 612 `db`), ruff limpo, openapi e
 lock em dia.
+
+---
+
+## 1.4 O script no portão, como AVISO
+
+`scripts/divergencias_orm_schema.py` ganhou `--limite N`, e o CI o roda no job
+`banco`, depois de `pytest -m db`:
+
+```yaml
+- name: Divergencias entre o ORM e o schema (aviso)
+  if: always()
+  continue-on-error: true
+  run: python scripts/divergencias_orm_schema.py --url "$TEST_DATABASE_URL" --limite 42
+```
+
+- **acima do limite** → `::warning::` com quantas são novas e o que fazer;
+- **abaixo** → `::notice::` lembrando de baixar o limite (limite folgado deixa a
+  próxima entrar de graça);
+- **igual** → nada.
+
+**Aviso e não falha, e a razão não é comodidade.** As 42 são herdadas: o schema
+nasceu à mão no Supabase e o `Base.metadata` foi escrito depois. Nenhuma delas
+veio de um commit. Portão vermelho contra dívida herdada é portão que se aprende
+a ignorar — e o dia em que ele acusasse uma divergência **nova** seria o dia em
+que alguém o desligaria para conseguir entregar. `continue-on-error: true`
+garante o verde do job mesmo que o passo estoure por qualquer motivo.
+
+**O schema que ele inspeciona é o que o passo anterior deixou.** A fixture
+`engine_de_teste` apaga e remonta o schema no *setup* e não o derruba no fim,
+então depois de `pytest -m db` o banco está em head. Não há segunda montagem em
+YAML de propósito — seria uma segunda versão do procedimento para envelhecer
+sozinha, o mesmo motivo que o comentário do passo anterior já dá. Com
+`if: always()`, se a suíte `db` falhar o script diz "Nenhuma tabela no schema",
+que é um aviso honesto e não um número errado.
+
+**O limite mora no `ci.yml`**, não numa constante do script: mudar o número
+esperado vira um diff que alguém revisa.
+
+O README ganhou o comando local e a explicação de por que ele é aviso.

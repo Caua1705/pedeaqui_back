@@ -180,6 +180,38 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
 
+      # AVISO, NAO FALHA — e `continue-on-error` e o que garante isso: o job
+      # fica verde mesmo que este passo estoure, por qualquer motivo.
+      #
+      # As 42 divergencias entre o `nullable=` do model e o DDL do banco sao
+      # herdadas: o schema nasceu a mao no Supabase e o `Base.metadata` foi
+      # escrito depois, olhando para tabelas que ja existiam. Nenhuma delas foi
+      # introduzida por um commit, e um portao VERMELHO contra divida herdada e
+      # um portao que se aprende a ignorar — ate o dia em que ele acusar uma
+      # divergencia nova e alguem o desligar para conseguir entregar.
+      #
+      # O que faltava era so isto: o numero nao crescer calado. Passando de 42,
+      # o `::warning::` aparece no Summary do Actions e na PR, com o nome da
+      # coluna nova na saida logo acima.
+      #
+      # O SCHEMA AQUI E O QUE O PASSO ANTERIOR DEIXOU. A fixture
+      # `engine_de_teste` apaga e remonta o schema no SETUP e nao o derruba no
+      # fim, entao depois de `pytest -m db` o banco esta em head. Nao ha
+      # segunda montagem justamente para nao existir uma segunda versao do
+      # procedimento para envelhecer sozinha (o mesmo motivo do comentario do
+      # passo anterior). Se a suite `db` falhar, `if: always()` faz este passo
+      # rodar mesmo assim e o script diz "Nenhuma tabela no schema" — que e um
+      # aviso honesto, e nao um numero errado.
+      #
+      # O limite mora aqui, no YAML, de proposito: mudar o numero esperado vira
+      # um diff que alguem revisa.
+      - name: Divergencias entre o ORM e o schema (aviso)
+        if: always()
+        continue-on-error: true
+        run: python scripts/divergencias_orm_schema.py --url "$TEST_DATABASE_URL" --limite 42
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
+
   print-agent:
     name: Testes do agente de impressão
     runs-on: ubuntu-latest

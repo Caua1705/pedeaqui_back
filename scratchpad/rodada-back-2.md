@@ -38,7 +38,7 @@ A rodada anterior está em `scratchpad/rodada-back.md` e continua válida.
 | 4 | Query do `tracking_token`, pronta para colar | **feito** — testada nos tres estados possiveis |
 | 5.1 | Plano do histórico de chat em memória | **feito** — plano escrito, nada implementado |
 | 5.2 | Plano do índice ANN no pgvector | **feito** — os dois números que faltavam, medidos |
-| 8 | Relatório final + armadilhas novas na skill | pendente |
+| 8 | Relatório final + armadilhas novas na skill | **feito** — armadilhas 50 a 53 |
 
 ---
 
@@ -998,3 +998,178 @@ de varredura. Das duas pistas que ele dá (parâmetro binário em vez de ~20 KB 
 texto, e mais acerto no cache de embedding), **a primeira nunca foi medida** e
 é a maior fatia isolada da latência do Rapi hoje. Fica anotado como o próximo
 item de desempenho — e ele **não** depende de decisão de produção nenhuma.
+
+---
+
+# 8. RELATÓRIO FINAL
+
+Branch `rodada/backend-2`, 12 commits, todos com portão verde e push.
+**Nada foi executado contra produção.** Nenhum `docker exec`, nenhuma migração
+aplicada, nenhum comando contra o banco de produção. O comando das filiais da
+rodada 1 não foi rodado nem sugerido, e o commit `6fcaccc` continua esperando o
+resultado.
+
+## As 16 colunas de risco: quais têm caminho de leitura que quebra
+
+**Oito quebram.** A pior de longe é `restaurant_coupons.valid_until`: é a única
+que quebra em Python **antes** de qualquer schema de resposta
+(`CouponService._aware(None)` levanta `AttributeError`), e o lugar onde ela
+quebra é o **checkout**. A consulta que protege a vitrine não protege o
+checkout, porque `preview` e `lock_and_validate_for_order` chegam ao cupom por
+`_find_coupon` — id ou código, sem filtro de janela.
+
+As outras sete derrubam pelo schema de resposta, com 500: `customers.email` e
+`.birth_date`, `customer_addresses.number` e `.neighborhood`,
+`order_item_options.option_group_id` e `.option_id`, `admin_users.is_active`.
+Duas observações que mudam a leitura: as de `order_item_options` são as menos
+alcançáveis (as FKs são `NO ACTION`, então apagar o grupo é **recusado** em vez
+de anular a linha histórica), e `admin_users.is_active` no login não quebra —
+falha fechada, com o sintoma chegando como "usuário ou senha inválido".
+
+**Quatro não quebram e são piores de achar.** `ai_feedback.created_at` nulo faz
+o DELETE de retenção **nunca alcançar a linha** — é LGPD, não é 500.
+`coupon_redemptions.idempotency_key` perde a garantia do `UNIQUE` (no Postgres
+NULL é distinto de NULL). As duas de `ai_product_embeddings` fazem o produto
+sumir da busca em silêncio.
+
+**Quatro não têm risco.** `customers.password_hash` é a única com defesa **já
+escrita** (`verify_password` declara `str | None`); as três de `ai_feedback` não
+são lidas por rota nenhuma.
+
+Tudo isso está provado em `tests/test_colunas_em_desacordo.py` — 12 testes
+rápidos, cada um construindo o tipo real com a coluna nula.
+
+## Os dublês falsos achados e consertados
+
+**141 achados, 141 convertidos.** A varredura entrou no repositório
+(`scripts/dubles_de_dado.py`) e o zero virou teste
+(`tests/test_dubles_de_dado.py`, com três testes de anti-vacuidade).
+
+Cinco coisas que só apareceram porque o tipo real recusa:
+
+1. **`restaurant_settings.payment_methods`** — coluna removida na revisão
+   `20260820_0027`, ainda passada num dublê. Teste verde descrevendo uma linha
+   que não existe há oito revisões.
+2. **`orders.tracking_token`** — o model não mapeia. Dois dublês a escreviam, e
+   o mesmo arquivo afirmava `assertFalse(hasattr(...))` três funções acima.
+3. **`make_code_row`** servia `email_verification_codes` **e**
+   `password_reset_codes`, escrevendo `reset_token_hash` nas duas. Só a segunda
+   tem essa coluna.
+4. **`DeliveryEstimateResult` × `DeliveryEstimateResponse`** — o dataclass tem
+   `latitude`/`longitude`, o schema não, e `OrderService` lê
+   `delivery_estimate.latitude`.
+5. **`total=10`** (int) onde a coluna é `Numeric` e volta `Decimal`.
+
+Das outras duas classes do item: **dublê por dicionário** tem um caso só, e já
+estava certo. **Mock permissivo não existe** — não há `MagicMock`/`Mock` no
+repositório. O que existe é **asserção tautológica**: 24 `assertEqual(result,
+"detail")` sobre um `patch` de retorno fixo. Em 23 há asserção de verdade ao
+lado; **em uma não havia**, e era justamente a que promete isolamento de
+tenant. Essa foi reforçada.
+
+## Os testes dependentes de hora
+
+**Um achado real, e o método que o encontrou vale mais que ele.**
+
+`test_open_branch_returns_the_current_period` falhava **59 segundos por dia**.
+Declarava a loja "aberta o dia inteiro" como `00:00–23:59` e
+`_period_covers_same_day` compara `agora <= closes_at`. O comentário dele dizia,
+com todas as letras, existir "para não depender da hora em que o teste roda".
+
+Encontrado rodando a suíte rápida inteira com o relógio **congelado** em cinco
+instantes adversariais. Foi o único teste que falhou num instante e passou
+noutro; depois do conserto, **nenhuma falha nova em nenhum dos cinco**.
+
+Conserto: relógio injetável em `BranchHoursService`, `DeliveryEstimateService` e
+`BranchAvailabilityService` — o mesmo desenho que `CouponService` já usava e não
+tinha sido aplicado ali. Mais um instante fixo em `test_admin_order_filters`.
+
+**O que não deu, e está anotado:** a suíte `db` não pode ser varrida assim,
+porque lá o `created_at` sai do `server_default now()` — o relógio do Postgres.
+Esses foram lidos à mão; todos usam margens em **dias**.
+
+## A query do `tracking_token`, pronta para colar
+
+§4 do scratchpad. São **duas**, e a separação não é estética: a segunda lê
+`orders.tracking_token_hash`, e o Postgres resolve nomes de coluna **antes** de
+executar — numa base anterior à `0016` a consulta inteira morreria falhando
+exatamente no cenário que ela existe para detectar.
+
+Testadas contra o Postgres de teste **nos três estados possíveis**, forçados à
+mão dentro de transação revertida. Com a tabela do que cada resultado significa,
+os dois estados que nenhuma revisão produz, e a regra de leitura que importa:
+**se as colunas discordarem de `alembic_version`, acredite nas colunas** — um
+`stamp` errado reescreve aquela linha sem tocar em nada.
+
+## Os planos do item 5
+
+**5.1 — histórico do chat.** Plano escrito, nada implementado. Hoje é um `dict`
+de processo e o `Dockerfile` sobe **um** worker, então funciona; o que ele já
+custa é a conversa zerar a cada deploy. Vai para o Redis, que já é dependência.
+Postgres foi considerado e recusado. A parte de LGPD decide o formato: chave
+hasheada, TTL no próprio Redis, e **nada de persistência** — com `RDB`/`AOF`
+ligado o texto do cliente passa a existir em disco além do TTL, e a exclusão de
+conta não alcança Redis. `CONFIG GET save` antes de qualquer coisa.
+
+**5.2 — índice ANN.** A pergunta já estava decidida **duas vezes** e continua
+decidida: não criar. Em vez de um plano redundante, medi os dois números que o
+próprio documento diz não ter medido — o custo de construir (ordem de grandeza
+de **segundos**) e as tabelas refeitas **com** o filtro por filial. E uma
+correção de método que vale mais: **as tabelas do documento não se comparam
+entre si** — a mesma consulta deu 52,04 ms em 17/08 e 43,85 ms hoje, sem nada no
+repositório ter mudado.
+
+O `mínimo 0` que decidiu a recusa de 26/08 **não reproduziu** em 2.300
+consultas. Isso não absolve o ANN: descreve um evento raro demais para
+reproduzir e frequente demais para descartar, e o argumento de 26/08 não é
+estatístico — é sobre a busca vazia deixar de ter dono.
+
+## O que eu faria diferente
+
+**Teria escrito o varredor antes do primeiro conserto.** Comecei o item 2 pelo
+`grep SimpleNamespace`, converti dois arquivos à mão, e só então escrevi a
+varredura por AST. Quando ela ficou boa (com dataclasses, com
+`src/ai/schemas/`), achou **oito casos que eu já tinha passado por cima** —
+`ActivePaymentCredential` dublada sem `environment`, que é o campo que decide se
+o cartão é oferecido. Ferramenta primeiro, conserto depois: o inverso me fez
+revisitar arquivos que eu já considerava fechados.
+
+**Teria conferido a asserção negativa desde o primeiro teste.** O procedimento
+que fecha a porta — *"a mesma chamada com o dado certo NÃO pode levantar"* — só
+nasceu depois que um teste **meu**, do item 1.1, ficou verde pelo motivo errado.
+Ele custou dez minutos e teria evitado o constrangimento; passou a valer para
+todo `pytest.raises` da rodada.
+
+**Teria desconfiado do congelamento parcial mais cedo.** A primeira varredura de
+relógio acusou 24 falhas e eu quase as classifiquei como ruído de JWT sem
+investigar. Sete delas eram do próprio plugin, com os dois lados da conta em
+relógios diferentes — e um plugin que congela pela metade **produz falha que
+parece achado**. Se eu tivesse confiado na primeira leitura, teria "consertado"
+testes que não tinham nada de errado.
+
+**Teria lido `docs/busca-vetorial-e-indice-ann.md` antes de planejar o 5.2.** Eu
+estava pronto para escrever um plano de índice ANN quando o documento já
+recusava a ideia, com medição, duas vezes. O trabalho útil não era planejar: era
+fechar os dois buracos que ele mesmo nomeia. Antes de planejar, procurar se a
+pergunta já tem dono.
+
+**Onde eu erraria de novo, e por isso ficou escrito:** afirmei no teste do
+horário que `00:00–00:00` significaria 24 horas. Conferi contra a função e é
+falso. A diferença entre as duas versões do parágrafo é uma execução de dez
+segundos — e é a mesma disciplina do dublê: **construa o objeto de verdade e
+pergunte a ele.**
+
+## Estado dos portões
+
+**2819 testes verdes** (2207 rápidos + 612 `db`), `ruff` limpo,
+`export_openapi.py --check` em dia, `check_lockfile.py` em dia. O
+`openapi.json` não mudou: nenhuma rota, schema ou `response_model` foi tocado.
+
+O Postgres de teste foi derrubado com `down -v` ao fim de cada bloco.
+
+## O que continua fora, e por quê
+
+`float × Decimal` (depende do front) · entregadores · máquina de estados ·
+criar o `print_agent` (exige o banco) · aplicar qualquer migração · merge na
+`main`. E o commit `6fcaccc` da rodada 1, que espera o resultado do comando das
+filiais.

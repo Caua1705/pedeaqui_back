@@ -2027,3 +2027,244 @@ E uma pista que economiza a investigação inteira: **um 502 nosso sai com os
 cabeçalhos de CORS** (o `CORSMiddleware` é a camada mais externa, armadilha
 22) e com corpo JSON legível. 502 que o navegador reporta como falta de CORS
 não é nosso — é o Traefik, e a aplicação não respondeu.
+
+---
+
+## 50. O `nullable=` do model NUNCA vira DDL — e em 42 colunas ele mente
+
+O schema deste projeto **não nasceu do ORM**: foi criado à mão no Supabase e só
+depois virou `alembic/schema_baseline.sql`. O `Base.metadata` foi escrito
+**depois**, olhando para tabelas que já existiam. E como
+`Base.metadata.create_all()` não é usado em lugar nenhum — nem na suíte `db`,
+cujo schema sai do baseline mais as revisões (armadilha 24) —, **o
+`nullable=False` do model nunca é cobrado por ninguém**.
+
+Ele orienta o type checker e decide se o SQLAlchemy manda a coluna no INSERT.
+Nada mais. `scripts/divergencias_orm_schema.py` conta **42 colunas** em que os
+dois lados discordam, em três classes com custos diferentes:
+
+- **16 — o ORM diz NOT NULL e o banco aceita NULL.** Risco de **leitura**: a
+  anotação promete valor e o banco pode dar `None`.
+- **20 — o banco diz NOT NULL e o ORM diz nullable.** Risco de **escrita**, mas
+  só nas **duas sem `DEFAULT`** (`ai_product_embeddings.content`,
+  `coupon_templates.image_path`): ali um `Modelo(...)` incompleto passa no type
+  checker e estoura `IntegrityError` em runtime. Hoje não estoura porque nada
+  instancia os dois models — circunstância, não decisão, e
+  `tests/test_models_nunca_instanciados.py` avisa quando mudar.
+- **6 — coluna que o ORM não mapeia.** `Modelo.created_at` é `AttributeError`
+  numa tabela que **tem** `created_at`.
+
+**A que morde de verdade é `restaurant_coupons.valid_until`**, e o caminho
+merece ser sabido de cor: `CouponService._aware(None)` levanta `AttributeError`,
+e `evaluate` abre com ele. `preview` e `lock_and_validate_for_order` chegam ao
+cupom por `_find_coupon` — **id ou código, sem filtro de janela**. Ou seja: a
+consulta que protege a vitrine (`list_in_window`, com `valid_until >= now`)
+**não protege o checkout**. Uma linha com `valid_until` nulo é invisível na
+lista e derruba quem digitar o código.
+
+As outras sete de risco real derrubam pelo **schema de resposta**, com
+`ValidationError` (500): `customers.email` e `.birth_date` (`GET
+/customers/me`), `customer_addresses.number` e `.neighborhood` (a lista inteira
+de endereços, não só o quebrado), `order_item_options.option_group_id` e
+`.option_id` (o pedido inteiro, na comanda e no painel) e `admin_users.is_active`
+(`GET /admin/users`).
+
+E duas que **não** dão 500, e são piores de achar:
+`ai_feedback.created_at` nulo faz o DELETE de retenção (`created_at < cutoff`)
+**nunca alcançar a linha** — dado pessoal em claro que não sai;
+`coupon_redemptions.idempotency_key` nulo perde a garantia do `UNIQUE`, porque
+no Postgres NULL é distinto de qualquer outro NULL.
+
+**A única com defesa já escrita é `customers.password_hash`**:
+`verify_password` declara `str | None` e devolve `False`. Falha fechada.
+
+**Nenhum caminho de escrita do ORM produz esses nulos.** Eles entram por linha
+escrita **fora** do ORM: SQL manual no Supabase, script de importação, linha
+anterior à criação da coluna. É o outro lado da armadilha 33.
+
+**Onde isso está escrito e o que já está pronto:**
+`docs/alinhamento-orm-schema.md` tem o roteiro, `alembic/preparadas/` tem as
+duas revisões (ver armadilha 53), `tests/test_colunas_em_desacordo.py` prova
+cada caminho que quebra, e o CI roda o script como **aviso** — passar de 42 vira
+`::warning::`, nunca vermelho: portão vermelho contra dívida herdada é portão
+que se aprende a ignorar.
+
+---
+
+## 51. A faixa "00:00–23:59" NÃO é o dia inteiro — e o relógio precisa ser injetado
+
+`_period_covers_same_day` compara `opens_at <= agora <= closes_at`. Uma faixa
+`00:00–23:59` cobre tudo **menos os 59 segundos entre 23:59:01 e 23:59:59** — e
+nesse minuto a filial fica **fechada**.
+
+Isso não é defeito: o lojista disse "até 23:59". O defeito era o teste que
+declarava a loja "aberta o dia inteiro" com essa faixa, e cujo comentário dizia,
+com todas as letras, existir *"para não depender da hora em que o teste roda"*.
+**Ele falhava um minuto por dia**, com um vermelho que não aponta para a hora em
+lugar nenhum.
+
+**Não há, hoje, jeito limpo de cadastrar 24 horas.** `00:00–00:00` não serve:
+`opens_at <= closes_at` é verdadeiro, então cai no ramo do mesmo dia e cobre
+exatamente a meia-noite — conferido, e é o contrário do que a intuição diz. O
+que cobriria é `closes_at` com **segundos** (`23:59:59`), e nem o painel nem
+`BusinessHourInput` pedem segundos.
+
+**A convenção que saiu disso: `self.clock` injetável**, o mesmo desenho que
+`CouponService` já usava e que agora `BranchHoursService`,
+`DeliveryEstimateService` e `BranchAvailabilityService` também têm.
+`ensure_branch_is_open` passou a aceitar `now` — antes só `find_current_period`
+aceitava, e por isso era ele quem lia o relógio da máquina.
+
+Como os testes constroem esses serviços por `__new__`, **esquecer de injetar é
+`AttributeError` alto** em vez de voltar calado ao relógio da máquina. Foi o que
+aconteceu: 65 testes ficaram vermelhos até declararem o instante.
+
+### Como se acha essa classe inteira, e não um caso
+
+Grep de `datetime.now()` não resolve — são mais de cem ocorrências e a maioria é
+legítima. O que resolve é **empírico**: um plugin de pytest descartável troca
+`datetime`/`date` por subclasses congeladas em todo módulo sob a raiz do
+projeto, e a suíte roda em instantes adversariais (12:00, 23:59:30, 00:00:30,
+domingo 03:00, 31/12 23:00). O que falhar num instante e passar noutro é a
+classe procurada.
+
+**Dois detalhes decidem se a varredura vale:**
+
+1. **Congelar em `pytest_configure` não alcança os testes** — eles só existem em
+   `sys.modules` depois da coleta. Congele de novo em
+   `pytest_collection_modifyitems`.
+2. **Filtrar por nome de módulo não alcança os testes** — `pythonpath = .` faz o
+   pytest importá-los como `test_x`, sem prefixo `tests.`. Filtre pelo
+   `__file__`.
+
+Antes de acertar os dois, a varredura acusava 24 falhas; depois, 17 — e as 7 que
+sumiram eram do próprio plugin, com os dois lados da conta em relógios
+diferentes. **Congelamento parcial produz falha que parece achado.**
+
+O que sobra é ruído conhecido: PyJWT valida `exp` com `time.time()`, que é C e
+não passa pelo `datetime` trocado. Elas são **idênticas em todos os instantes**,
+e é assim que se sabe que são ruído.
+
+**A suíte `db` não pode ser varrida assim**: lá o `created_at` sai do
+`server_default now()`, que é o relógio do *Postgres*. Congelar o Python
+produziria falha falsa. Aqueles se leem à mão — e os deste repositório usam
+margens em **dias**, que é o cuidado certo.
+
+---
+
+## 52. Dublê de dado: 141 na suíte, e o que eles escondiam
+
+O CLAUDE.md proíbe dublar schema ou model com `SimpleNamespace`. A regra estava
+escrita e a suíte tinha **141 violações** — nenhuma maliciosa, cada uma o
+caminho curto de alguém com pressa.
+
+`scripts/dubles_de_dado.py` as acha por **AST**: para cada `SimpleNamespace(...)`,
+compara as chaves com as colunas do `Base.metadata` (**mais os
+`relationship`** — `option_groups` é atributo legítimo de `Product` e não é
+coluna), com os campos de todo `BaseModel` de `src/` (**inclusive
+`src/ai/schemas/`**) e com os de toda **dataclass** de `src/`. Casando 60% ou
+mais das chaves, é dublê de dado.
+
+`tests/test_dubles_de_dado.py` trava o zero — e tem **três testes além do
+principal**, porque o modo de falha real é o varredor parar de enxergar e o
+teste principal ficar verde por vacuidade: um confere que ele enxerga os três
+tipos de origem, outro planta um dublê e exige que seja acusado, outro planta um
+dublê de **colaborador** e exige que seja deixado passar.
+
+### O que a conversão achou, e é o motivo de ela valer a noite
+
+- **`restaurant_settings.payment_methods`**: a coluna **saiu da tabela** na
+  revisão `20260820_0027` — quem manda em forma de pagamento é
+  `branch_payment_methods`. O dublê ainda a passava. Teste verde descrevendo uma
+  linha que não existe há oito revisões.
+- **`orders.tracking_token`**: o model **não mapeia** essa coluna, só
+  `tracking_token_hash`. Dois dublês a escreviam — e o **mesmo arquivo**, três
+  funções acima, afirmava `assertFalse(hasattr(stored, "tracking_token"))`.
+- **`make_code_row` servia duas tabelas diferentes**: escrevia
+  `reset_token_hash`/`reset_token_expires_at` **sempre**, mas
+  `email_verification_codes` não tem essas colunas — só `password_reset_codes`.
+- **`DeliveryEstimateResult` × `DeliveryEstimateResponse`**: o dataclass tem
+  `latitude`/`longitude` e o schema **não** (`to_response()` as remove). E
+  `OrderService` lê `delivery_estimate.latitude` ao gravar o pedido. Dublar o
+  resultado com a forma da resposta descreve um objeto sem as coordenadas.
+- **`total=10`** em dublê de pedido: a coluna é `Numeric` e volta `Decimal`.
+
+Os tipos de verdade vivem em `tests/fabricas.py` (transiente, sem banco) e
+`tests/fabricas_db.py` (com banco). **`SimpleNamespace` continua certo para
+dublar colaborador** — repositório, serviço, cliente HTTP, `db`. Não há contrato
+nosso a respeitar nesses.
+
+### As duas classes irmãs, e o que a varredura delas achou
+
+**Dublê por dicionário:** um só na suíte, e já estava certo — um `dict` de
+kwargs que alimenta `Customer(**values)`.
+
+**Mock permissivo:** **não há `MagicMock` nem `Mock` em lugar nenhum** deste
+repositório; a suíte usa só `patch`, e os fakes são classes escritas à mão. O
+que existe é outra coisa, e vale saber o nome: **asserção tautológica**. Há 24
+usos de `patch.object(OrderService, "to_order_detail_response",
+return_value="detail")` seguidos de `assertEqual(result, "detail")` — que só diz
+que o dublê devolveu o que mandaram devolver. Em 23 há asserção de verdade ao
+lado. Em **uma** não havia: um teste cujo nome promete isolamento de tenant e
+que passaria com o repositório ignorando `restaurant_id` inteiro.
+
+### O procedimento barato que fecha a porta
+
+**Todo `pytest.raises` novo confere que a MESMA chamada com o dado CERTO não
+levanta.** Foi assim que apareceu que um teste novo desta própria rodada estava
+verde pelo motivo errado: o `ValidationError` vinha do `Literal` de
+`discount_type` (`"percentage"` em vez de `"percent"`) e não da coluna nula que
+o teste dizia exercitar.
+
+---
+
+## 53. Migração escrita e não aplicada precisa de trava, e de duas
+
+Migração pronta esperando decisão é útil — tira a escolha do meio da madrugada,
+o roteiro fica revisado e o dono só escolhe o dia. E é perigosa por dois motivos
+independentes.
+
+**Perigo 1: ela aplicar sozinha.** Basta o arquivo cair em `alembic/versions/`
+— um `git mv` distraído, um merge — e o próximo `alembic upgrade head` do
+entrypoint a executa **em produção**, sem ninguém ter decidido nada.
+
+**Perigo 2: ela envelhecer calada.** A lista de colunas foi escrita contra o
+schema de hoje; uma revisão futura que alinhe uma delas deixa a preparada
+descrevendo um banco que não existe mais, e o defeito só aparece na noite da
+aplicação.
+
+Por isso `alembic/preparadas/` — diretório que o Alembic **não lê**
+(`script_location = alembic` faz ele enxergar só `versions/`) — e
+`tests/test_revisoes_preparadas.py`, que cobra as duas coisas: que o
+`ScriptDirectory` **não conhece** aquelas revisões (pergunta feita a ele, não ao
+caminho do arquivo — é ele que o `upgrade` consulta), e que a lista de colunas
+ainda descreve o schema real.
+
+**E um terceiro teste que muda a natureza da entrega: as revisões RODAM.** Contra
+o Postgres 17 de teste, dentro de uma transação que volta (o Postgres tem DDL
+transacional), conferindo pelo `inspect()` que as colunas ficam `NOT NULL` e que
+o downgrade devolve. Sem isso, "pronta" quer dizer "nunca executada", e o
+primeiro lugar onde ela roda de verdade acaba sendo produção, de madrugada, com
+a API fora do ar.
+
+### O `SET NOT NULL` de verdade é em duas etapas, e elas não podem ir juntas
+
+`ALTER COLUMN ... SET NOT NULL` toma **`ACCESS EXCLUSIVE`** — que bloqueia
+`SELECT` também — **e varre a tabela**. O caminho que não trava:
+
+| | lock | varre? |
+|---|---|---|
+| `ADD CONSTRAINT ... CHECK (c IS NOT NULL) NOT VALID` | `ACCESS EXCLUSIVE`, ms | não |
+| `VALIDATE CONSTRAINT` | `SHARE UPDATE EXCLUSIVE` — não bloqueia leitura nem escrita | sim |
+| `SET NOT NULL` com a CHECK válida | `ACCESS EXCLUSIVE`, instantâneo | **não** (PG ≥ 12 aceita a CHECK como prova) |
+| `DROP CONSTRAINT` | instantâneo | não |
+
+**As duas etapas não podem ir no mesmo `alembic upgrade`**, e o motivo é o mesmo
+de sempre neste repositório: `alembic/env.py` abre **uma transação para o upgrade
+inteiro**. O `VALIDATE` rodaria dentro da transação que ainda segura o `ACCESS
+EXCLUSIVE` do `ADD CONSTRAINT`, e o ganho evapora. São duas execuções, com
+`ALEMBIC_TARGET` na primeira.
+
+Ganho que não é de lock: **a etapa 1 já recusa nulo novo**. Do commit dela em
+diante o buraco para de crescer, mesmo que a etapa 2 demore semanas — e quando o
+`VALIDATE` rodar, não há corrida com escrita concorrente.

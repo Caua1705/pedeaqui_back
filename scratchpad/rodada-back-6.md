@@ -19,7 +19,7 @@ depois do escopo de tenant.
 | # | Item | Estado |
 |---|---|---|
 | 1 | Redis: o que é a única chave, e por que os contadores deram zero | **feito** |
-| 2 | A varredura do escopo de tenant | pendente |
+| 2 | A varredura do escopo de tenant | **feito** — 82 rotas, zero achados |
 
 ---
 
@@ -150,3 +150,144 @@ ser um `LIMITS:` (o rate limit escreve por outra biblioteca, com outro cliente),
 e o `cliente_redis()` do cache estar quebrado. É improvável — o
 `redis_initialization_failed` apareceria no log —, mas é exatamente o que o
 comando 3 fecha.
+
+---
+
+## 2. A varredura do escopo de tenant
+
+`scripts/escopo_das_rotas.py` + `tests/test_escopo_das_rotas.py`. Irmão de
+`test_papeis_das_rotas.py`: aquele audita **o que** o lojista pode fazer, este
+audita **onde** ele pode mexer. As duas dimensões moram no mesmo arquivo
+(`admin_scope.py`) e só uma tinha varredura.
+
+### O resultado: **82 rotas `/admin`, zero achados**
+
+| Pergunta | Resposta |
+|---|---|
+| alguma rota aceita `restaurant_id` do cliente? | **nenhuma** |
+| toda rota recebe `AdminScope`? | **sim** — 6 exceções, todas legítimas e listadas com o motivo |
+| todo `branch_id` do cliente é conferido contra o **restaurante**? | **sim**, nas 36 |
+| … e contra a **filial**? | **sim**, nas 36 |
+| alguma cadeia de chamadas não pôde ser seguida? | **nenhuma** |
+
+A disciplina de escopo está de pé. Como eu tinha dito que esperava — e o valor
+é a lista mecânica, não o número.
+
+### A conferência que quase ninguém faria, e é a que decide
+
+`ensure_branch_allowed` **não basta sozinho**, e o motivo é sutil:
+
+```python
+if self.branch_id is not None and self.branch_id != branch_id:
+    raise 404
+```
+
+Para o **dono**, `scope.branch_id` é **sempre nulo** (por desenho: dono não se
+prende a filial). O método **retorna na primeira linha sem conferir nada.**
+
+Numa rota que só o chamasse, o dono do restaurante A alcançaria a filial do
+restaurante B — e a única coisa entre os dois seria a segunda conferência, a do
+repositório com `scope.restaurant_id`.
+
+O repositório já sabia disso: `AdminSettingsService._get_branch` diz *"as duas
+conferências são necessárias e diferentes"*. **A varredura exige as duas, e as
+reporta separadas.**
+
+### Como ela segue a cadeia
+
+Grafo de chamadas por AST, resolvendo `AlgumService(db).metodo(...)`,
+`self.metodo(...)` e `self.atributo.metodo(...)` (o tipo do atributo sai das
+atribuições do `__init__`). Até 5 saltos.
+
+**Quando não consegue seguir, ela diz que não conseguiu** — é uma categoria de
+achado própria, nunca "ok". Um varredor que responde "conferido" para o que não
+leu transforma ignorância em garantia.
+
+### Os três erros do varredor, e por que eles são o assunto
+
+Ele foi corrigido **três vezes** antes de chegar a zero, e **as três correções
+foram no mesmo sentido: acusar menos.**
+
+1. **o índice era por nome puro de função.** `list_orders` existe em
+   `admin_orders.py` e em `customers.py` (o `/me/orders` do cliente), e o
+   último arquivo lido vencia — a varredura auditava o corpo da rota do
+   **cliente** e acusava a do admin;
+2. **só contava `restaurant_id=` nomeado**, e `list_categories` passa
+   `scope.restaurant_id` posicional;
+3. **só reconhecia o sufixo `_and_restaurant`**, e existe `_by_restaurant`
+   (`list_active_by_restaurant`).
+
+As três eram falso positivo, e consertar era certo. **Mas o efeito acumulado é
+um varredor mais permissivo — e permissivo demais nunca acusa nada.** "Nenhuma"
+sai igual no relatório, e some como se fosse boa notícia.
+
+A regra do restaurante virou a forte e a que não depende de convenção nenhuma:
+**`scope.restaurant_id` aparecendo como argumento de uma chamada, posicional ou
+nomeado.** Se o id do token entra na consulta, a consulta está recortada. Os
+sufixos ficaram como sinal adicional.
+
+### As iscas, e a prova de que elas mordem
+
+Por isso as iscas não são decoração aqui — elas são o que separa *"não há
+achado"* de *"o varredor parou de achar"*. São três plantadas num `tmp_path`,
+com o índice montado sobre elas:
+
+| Isca | Tem que ser |
+|---|---|
+| `branch_id` indo direto ao repositório | **acusada** nas duas dimensões |
+| **só** `ensure_branch_allowed` (o no-op do dono) | **acusada** no restaurante, e reconhecida na filial |
+| o padrão canônico (as duas conferências) | **não acusada** |
+
+Mais duas de estrutura: uma regressão da colisão de nomes de módulo, e uma que
+recusa duas classes com o mesmo nome em `src/` — a colisão de classe quebraria a
+resolução do mesmo jeito, e hoje não há nenhuma.
+
+E a **anti-vacuidade**, com a lição que veio de `tests/rotas_do_app.py`: os
+cinco testes principais afirmam a **ausência** de algo numa lista. Com a lista
+vazia, os cinco passam e a auditoria some sem um vermelho — foi o que aconteceu
+quando o starlette parou de copiar as rotas para `app.routes`. O teste irmão
+exige mais de 50 rotas e mais de 20 com `branch_id`.
+
+**Visto vermelho, com dois enfraquecimentos deliberados:**
+
+- dando o restaurante por conferido sempre → as **duas iscas** falharam;
+- fazendo a varredura não enxergar rota nenhuma → a **anti-vacuidade** falhou.
+
+### No portão: vermelho
+
+`tests/test_escopo_das_rotas.py` roda na suíte rápida. No CI há um passo
+`if: failure()` que imprime a tabela `[EBfr]` de cada rota, para quem for ler o
+log achar a que mudou sem rodar nada.
+
+**Vermelho e não aviso**, pelo mesmo critério do Redis e dos dublês: aqui não há
+dívida herdada — o número certo é zero, e zero que cresce é regressão.
+
+### Arquivos
+
+`scripts/escopo_das_rotas.py` (novo) · `tests/test_escopo_das_rotas.py` (novo) ·
+`.github/workflows/ci.yml`.
+
+**Portão: 2871 testes verdes** (2252 rápidos + 619 `db`), ruff limpo,
+`openapi.json` em dia.
+
+---
+
+## Fechamento da rodada 6
+
+### O que continua esperando você
+
+- **os três comandos do Redis** da §1 desta rodada — o primeiro nomeia a chave
+  única e responde "falta de movimento × cache que não grava" em dez segundos;
+- **o comando das filiais** e o `6fcaccc`;
+- a **etapa 0** do alinhamento (`nulos_nas_colunas_em_desacordo.py`);
+- os **três textos coláveis**: `valid_until` (rodada 4 §3), a rota de
+  cancelamento (rodada 5 §3), e — quando o histórico de chat existir — o do
+  Redis.
+
+### O próximo item, agora desbloqueado
+
+**O histórico de chat**, que a resposta do `RDB`/`AOF` liberou. Ele fica para a
+rodada seguinte, como você pediu. O plano está na rodada 2, §5.1, e a única
+coisa que mudou desde então é que agora ele é o **único** texto em claro que
+voltaria para o Redis — o que torna o TTL de 1 h e a chave hasheada mais
+importantes, não menos.

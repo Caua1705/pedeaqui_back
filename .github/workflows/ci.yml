@@ -235,6 +235,17 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
 
+      # Escopo de tenant: VERMELHO, e nao aviso.
+      #
+      # Mesma regra dos dubles e do Redis: o numero certo e ZERO. Quem cobra e
+      # `tests/test_escopo_das_rotas.py`, na suite rapida; este passo so
+      # imprime a tabela legivel quando algo ja falhou — inclusive a coluna
+      # `[EBfr]` de cada rota, que e o que se le para achar a que mudou.
+      - name: Escopo de tenant das rotas /admin (so a saida legivel)
+        if: failure()
+        continue-on-error: true
+        run: python scripts/escopo_das_rotas.py --tudo
+
       # Dado pessoal em chave de Redis: VERMELHO, e nao aviso.
       #
       # Mesma regra dos dubles de dado: aqui o numero certo e ZERO, e zero que

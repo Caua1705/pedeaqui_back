@@ -764,34 +764,117 @@ novo (ele lê `branch.address`) e o cliente vê o velho. É a família da armadi
 pergunta.
 
 **Eu não sei se isso está acontecendo hoje**, porque não consulto produção nesta
-sessão. O comando que responde é só leitura:
+sessão. O comando abaixo responde, é só leitura, e cabe numa colagem só.
+
+> **Uma versão anterior deste bloco tinha dois furos, e ficam registrados
+> porque são fáceis de repetir.** Ela olhava só três das cinco colunas que
+> sobrescreviam (`address_street`, `address_neighborhood`, `address_city`) e
+> perdia `address_state` e `address_zipcode`. E perguntava *"a coluna morta
+> está preenchida?"*, que **não é a pergunta**: filial com `address_street =
+> address` tem o conjunto morto vencendo e não muda nada no deploy. A pergunta
+> é **se o valor difere** — e é ela que decide se alguém precisa olhar.
+
+O que ele faz: monta o endereço pelas **duas** regras — a antiga (conjunto
+morto vencendo) e a nova (só o conjunto vivo) — e compara. Calcula as duas a
+partir das colunas cruas, e não chamando `_build_address`, de propósito: assim
+a resposta é a mesma antes e depois do deploy.
 
 ```bash
-docker exec pedeaqui-api python -c "
+docker exec -i pedeaqui-api python - <<'PY'
 from sqlalchemy import text
 from src.db.session import SessionLocal
+
+
+def monta(rua, numero, bairro, cidade, uf, cep):
+    rua_e_numero = ", ".join(v for v in (rua, numero) if v)
+    cidade_e_uf = " - ".join(v for v in (cidade, uf) if v)
+    return " - ".join(v for v in (rua_e_numero, bairro, cidade_e_uf, cep) if v)
+
+
+CONSULTA = """
+    SELECT b.name,
+           b.address, b.neighborhood, b.city, b.state, b.zipcode,
+           b.address_street, b.address_neighborhood, b.address_city,
+           b.address_state, b.address_zipcode, b.address_number
+      FROM branches b
+     ORDER BY b.name
+"""
+
+mudam = 0
 with SessionLocal() as db:
-    for linha in db.execute(text('''
-        SELECT name,
-               address        AS painel_rua,
-               address_street AS morta_rua,
-               neighborhood   AS painel_bairro,
-               address_neighborhood AS morta_bairro,
-               (address_street IS NOT NULL
-                 OR address_neighborhood IS NOT NULL
-                 OR address_city IS NOT NULL) AS o_conjunto_morto_vence
-          FROM branches ORDER BY name
-    ''')):
-        print(linha)
-"
+    filiais = db.execute(text(CONSULTA)).mappings().all()
+
+for f in filiais:
+    antes = monta(
+        f["address_street"] or f["address"],
+        f["address_number"],
+        f["address_neighborhood"] or f["neighborhood"],
+        f["address_city"] or f["city"],
+        f["address_state"] or f["state"],
+        f["address_zipcode"] or f["zipcode"],
+    )
+    depois = monta(
+        f["address"],
+        f["address_number"],
+        f["neighborhood"],
+        f["city"],
+        f["state"],
+        f["zipcode"],
+    )
+    muda = antes != depois
+    mudam += muda
+    print(f"\n{'!! MUDA' if muda else 'ok    '}  {f['name']}")
+    print(f"   o cliente ve hoje : {antes}")
+    if muda:
+        print(f"   passara a ver     : {depois}")
+        print("   preenchidas e sobrescrevendo:")
+        for morta, viva in (
+            ("address_street", "address"),
+            ("address_neighborhood", "neighborhood"),
+            ("address_city", "city"),
+            ("address_state", "state"),
+            ("address_zipcode", "zipcode"),
+        ):
+            if f[morta] is not None and f[morta] != f[viva]:
+                print(f"     {morta} = {f[morta]!r}   (painel: {f[viva]!r})")
+
+print(f"\n{'=' * 60}")
+if not filiais:
+    print("Nenhuma filial lida. A conexao aponta para o banco certo?")
+elif mudam == 0:
+    print(f"NENHUMA das {len(filiais)} filiais muda. Pode subir: e limpeza pura.")
+else:
+    print(f"{mudam} de {len(filiais)} filial(is) MUDAM o endereco que o cliente ve.")
+    print("Confira, para cada uma, se o valor do painel e o endereco real da loja.")
+    print("Se nao for, corrija no painel ANTES de subir.")
+PY
 ```
 
-- Se **`o_conjunto_morto_vence` for falso em todas as filiais**: o defeito é
-  latente, e o conserto é limpeza pura.
-- Se for **verdadeiro em alguma**: aquela filial está mostrando ao cliente um
-  endereço que o painel não consegue corrigir. **Isso é um chamado esperando
-  acontecer**, e vale conferir de olho se o texto bate com o endereço real da
-  loja.
+**Como ler a saída.** A última linha é o veredito; as de cima são o detalhe.
+
+| Saída | O que significa | O que fazer |
+|---|---|---|
+| `NENHUMA das N filiais muda` | ou as colunas mortas estão vazias, ou repetem o painel | **suba.** O deploy não muda nada que o cliente veja — é limpeza pura |
+| `k de N filial(is) MUDAM` | naquelas filiais o app mostra hoje um endereço que o painel **não consegue corrigir** | leia o bloco `!! MUDA` de cada uma |
+
+No bloco de uma filial que muda, as duas linhas que importam:
+
+- **`o cliente ve hoje`** — o que está no app agora.
+- **`passara a ver`** — o que o painel gravou, e que o deploy passa a mostrar.
+
+**Compare `passara a ver` com o endereço real da loja**, não com o de hoje. Se
+bater, suba: o deploy conserta um endereço que estava errado no app. Se não
+bater, o painel está desatualizado — **corrija no painel antes de subir**, e aí
+as duas linhas passam a concordar. As linhas `address_* = ... (painel: ...)`
+dizem exatamente qual campo diverge, para você não ter que caçar.
+
+O `-i` do `docker exec` não é decorativo: sem ele o heredoc não chega ao
+processo e o Python abre sem script nenhum.
+
+Testado contra o schema do repositório com três filiais semeadas — uma limpa,
+uma com as colunas mortas preenchidas e **iguais** ao painel, e uma divergente.
+Só a terceira sai como `!! MUDA`; é a segunda que o comando antigo acusaria à
+toa.
 
 #### As duas saídas, e a que eu recomendo
 
@@ -886,11 +969,12 @@ número passa a ser escrito — é a única das seis que ainda não dá para lar
 
 A outra decisão que estava parada — **qual endereço é o certo, se divergirem** —
 não some com o conserto: ela muda de "decidir antes de codar" para **"conferir
-antes de deployar"**. O comando é o da 4.1.2, só leitura. Se
-`o_conjunto_morto_vence` for falso em todas as filiais, este deploy não muda
-nada que o cliente veja e é limpeza pura. Se for verdadeiro em alguma, **aquela
-filial vai passar a mostrar o endereço do painel**, e vale olhar se ele bate
-com o endereço real da loja antes de subir.
+antes de deployar"**. O comando é o da 4.1.2, só leitura, e a última linha dele
+é o veredito. Se disser `NENHUMA das N filiais muda`, este deploy não muda nada
+que o cliente veja e é limpeza pura. Se disser `k de N filial(is) MUDAM`,
+**aquelas filiais vão passar a mostrar o endereço do painel**, e o que se
+compara é o `passara a ver` com o endereço real da loja — não com o de hoje,
+que é justamente o que pode estar errado.
 
 Não é bloqueio para o commit — o painel é a fonte que o lojista controla, e um
 endereço que ele não consegue corrigir é o defeito. É bloqueio para subir sem

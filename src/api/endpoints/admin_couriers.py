@@ -22,12 +22,16 @@ from src.api.dependencies.admin_scope import (
 )
 from src.api.dependencies.database import get_db
 from src.schemas.courier_schema import (
+    AdminAssignmentBatchResponse,
+    AdminAssignmentResponse,
+    AdminAssignOrdersRequest,
     AdminBranchCourierFeeResponse,
     AdminBranchCourierFeeUpdate,
     AdminCourierAccessResponse,
     AdminCourierCreate,
     AdminCourierResponse,
     AdminCourierUpdate,
+    AdminOrderCourierResponse,
 )
 from src.services.admin_courier_service import AdminCourierService
 
@@ -205,3 +209,88 @@ def generate_courier_access(
     Entregador inativo responde 409.
     """
     return AdminCourierService(db).generate_access(scope, courier_id)
+
+
+# --- A atribuicao ---------------------------------------------------------------
+
+
+@router.post(
+    "/couriers/{courier_id}/assignments",
+    response_model=AdminAssignmentBatchResponse,
+    # PESSOAS: por pedido nas maos de um motoboy e trabalho do balcao, como
+    # aceitar e mover o pedido.
+    dependencies=[Depends(exigir_papel(PESSOAS))],
+)
+def assign_orders(
+    courier_id: UUID,
+    payload: AdminAssignOrdersRequest,
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> AdminAssignmentBatchResponse:
+    """Atribui um ou mais pedidos a este entregador.
+
+    **A resposta e por item, na ordem do corpo.** Cada pedido diz `ok` ou o
+    `error`: `not_found` (nao alcancado por este lojista), `not_delivery`
+    (retirada), `order_closed` (ja terminou) ou `other_branch` (o motoboy e
+    de outra filial). Os `ok` sao gravados juntos; os outros nao sao
+    gravados. A rota so responde erro HTTP para o entregador em si (404 fora
+    do escopo, 409 inativo) ou para o corpo (422).
+
+    **Reatribuir e chamar esta rota com outro entregador**: a atribuicao
+    anterior e fechada e a nova aberta, com a taxa de agora. Atribuir ao
+    mesmo de novo nao muda nada.
+
+    A taxa do entregador e congelada aqui (`courier_fee_snapshot`), da
+    configuracao da filial sobre a distancia que o pedido ja tinha. Nulo
+    quando a filial nao tem taxa configurada.
+    """
+    return AdminCourierService(db).assign_orders(scope, courier_id, payload)
+
+
+@router.get(
+    "/couriers/{courier_id}/assignments",
+    response_model=list[AdminAssignmentResponse],
+    dependencies=[Depends(exigir_papel(PESSOAS))],
+)
+def list_open_assignments(
+    courier_id: UUID,
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> list[AdminAssignmentResponse]:
+    """Os pedidos que estao nas maos deste entregador agora (atribuicoes
+    abertas), do mais antigo ao mais novo. Historico e o do proprio
+    entregador, pelo link dele."""
+    return AdminCourierService(db).list_open_assignments(scope, courier_id)
+
+
+@router.get(
+    "/orders/{order_id}/courier",
+    response_model=AdminOrderCourierResponse,
+    dependencies=[Depends(exigir_papel(PESSOAS))],
+)
+def get_order_courier(
+    order_id: UUID,
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> AdminOrderCourierResponse:
+    """Quem esta com este pedido. Os dois campos nulos = ninguem ainda —
+    estado normal do pedido, e nao 404. 404 e o pedido que este lojista nao
+    alcanca."""
+    return AdminCourierService(db).get_order_courier(scope, order_id)
+
+
+@router.delete(
+    "/orders/{order_id}/courier",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(exigir_papel(PESSOAS))],
+)
+def unassign_order(
+    order_id: UUID,
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Tira o pedido das maos de quem estiver com ele. 409 se ninguem
+    estiver. A linha da atribuicao nao e apagada: fica fechada, com quem e
+    quando, no historico."""
+    AdminCourierService(db).unassign_order(scope, order_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

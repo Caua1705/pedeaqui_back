@@ -16,17 +16,27 @@ from sqlalchemy.orm import Session
 
 from src.api.dependencies.admin_scope import AdminScope
 from src.models.branch_model import Branch
-from src.models.courier_model import Courier
+from src.models.courier_model import Courier, CourierAssignment
+from src.models.order_model import Order
 from src.repositories.branch_repository import BranchRepository
 from src.repositories.courier_repository import CourierRepository
+from src.repositories.order_repository import OrderRepository
 from src.schemas.courier_schema import (
+    AdminAssignmentBatchResponse,
+    AdminAssignmentResponse,
+    AdminAssignmentResultItem,
+    AdminAssignOrdersRequest,
     AdminBranchCourierFeeResponse,
     AdminBranchCourierFeeUpdate,
     AdminCourierAccessResponse,
     AdminCourierCreate,
     AdminCourierResponse,
     AdminCourierUpdate,
+    AdminOrderCourierResponse,
+    AssignmentErrorCode,
 )
+from src.services.courier_fee import calculate_courier_fee
+from src.services.order_state_machine import TERMINAL_ORDER_STATUSES
 from src.utils.money import money_to_float, quantize_money
 from src.utils.security import (
     generate_courier_access_code,
@@ -46,6 +56,7 @@ class AdminCourierService:
         self.db = db
         self.branch_repository = BranchRepository(db)
         self.courier_repository = CourierRepository(db)
+        self.order_repository = OrderRepository(db)
 
     # --- A taxa da filial ---------------------------------------------------
 
@@ -172,7 +183,132 @@ class AdminCourierService:
             access_generated_at=now,
         )
 
+    # --- A atribuicao -------------------------------------------------------
+
+    def assign_orders(
+        self,
+        scope: AdminScope,
+        courier_id: uuid.UUID,
+        payload: AdminAssignOrdersRequest,
+    ) -> AdminAssignmentBatchResponse:
+        """Poe um ou mais pedidos nas maos deste entregador.
+
+        Resposta POR ITEM e escrita UMA SO: cada pedido do lote diz `ok` ou
+        o motivo, nada levanta no meio, e o commit no fim grava os bons
+        juntos. Um pedido de retirada selecionado por engano nao pode
+        derrubar os outros quatro.
+
+        A taxa e congelada AQUI, da configuracao da filial sobre a distancia
+        que o pedido ja tinha. Reatribuir fecha a linha anterior e abre
+        outra com a taxa de agora; atribuir ao mesmo motoboy de novo e no-op.
+        """
+        courier = self._get_courier(scope, courier_id)
+        if not courier.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Entregador inativo não recebe pedido.",
+            )
+        branch = self._get_branch(scope, courier.branch_id)
+        now = utcnow()
+
+        items = []
+        for order_id in payload.order_ids:
+            items.append(self._assign_one(scope, courier, branch, order_id, now))
+        self._commit()
+        return AdminAssignmentBatchResponse(items=items)
+
+    def _assign_one(
+        self,
+        scope: AdminScope,
+        courier: Courier,
+        branch: Branch,
+        order_id: uuid.UUID,
+        now,
+    ) -> AdminAssignmentResultItem:
+        order = self._find_order_in_scope(scope, order_id)
+        if order is None:
+            return self._rejected(order_id, AssignmentErrorCode.NOT_FOUND)
+        if order.order_type != "delivery":
+            return self._rejected(order_id, AssignmentErrorCode.NOT_DELIVERY)
+        if order.status in TERMINAL_ORDER_STATUSES:
+            return self._rejected(order_id, AssignmentErrorCode.ORDER_CLOSED)
+        if order.branch_id != courier.branch_id:
+            return self._rejected(order_id, AssignmentErrorCode.OTHER_BRANCH)
+
+        current = self.courier_repository.get_open_assignment_of_order(order.id)
+        if current is not None and current.courier_id == courier.id:
+            return self._accepted(order, current)
+        if current is not None:
+            self.courier_repository.mark_assignment_unassigned(current, scope.admin_user.id, now)
+
+        assignment = self.courier_repository.create_assignment(
+            CourierAssignment(
+                order_id=order.id,
+                courier_id=courier.id,
+                assigned_by_admin_user_id=scope.admin_user.id,
+                assigned_at=now,
+                courier_fee_snapshot=calculate_courier_fee(
+                    branch.courier_fee_base,
+                    branch.courier_fee_per_km,
+                    order.delivery_distance_km,
+                ),
+                distance_km_snapshot=order.delivery_distance_km,
+            )
+        )
+        return self._accepted(order, assignment)
+
+    def list_open_assignments(
+        self, scope: AdminScope, courier_id: uuid.UUID
+    ) -> list[AdminAssignmentResponse]:
+        courier = self._get_courier(scope, courier_id)
+        rows = self.courier_repository.list_open_orders_by_courier(courier.id)
+        return [self._assignment_response(assignment, order) for assignment, order in rows]
+
+    def get_order_courier(self, scope: AdminScope, order_id: uuid.UUID) -> AdminOrderCourierResponse:
+        order = self._get_order_in_scope(scope, order_id)
+        assignment = self.courier_repository.get_open_assignment_of_order(order.id)
+        if assignment is None:
+            return AdminOrderCourierResponse()
+        courier = self.courier_repository.get_by_id_and_restaurant(
+            assignment.courier_id, scope.restaurant_id
+        )
+        return AdminOrderCourierResponse(
+            assignment=self._assignment_response(assignment, order),
+            courier=None if courier is None else self._courier_response(courier),
+        )
+
+    def unassign_order(self, scope: AdminScope, order_id: uuid.UUID) -> None:
+        """Tira o pedido das maos de quem estiver com ele. 409 se ninguem
+        estiver: desatribuir o que nao esta atribuido e um clique repetido
+        ou uma tela desatualizada, e as duas merecem saber."""
+        order = self._get_order_in_scope(scope, order_id)
+        assignment = self.courier_repository.get_open_assignment_of_order(order.id)
+        if assignment is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Este pedido não está atribuído a nenhum entregador.",
+            )
+        self.courier_repository.mark_assignment_unassigned(assignment, scope.admin_user.id, utcnow())
+        self._commit()
+
     # --- Escopo -------------------------------------------------------------
+
+    def _find_order_in_scope(self, scope: AdminScope, order_id: uuid.UUID) -> Order | None:
+        """O pedido, se este lojista o alcanca — restaurante E filial. `None`
+        para os tres casos (nao existe, e de outro restaurante, e da filial
+        que ele nao enxerga), porque o lote nao levanta: responde por item."""
+        order = self.order_repository.get_order_detail(order_id, scope.restaurant_id)
+        if order is None:
+            return None
+        if not scope.sees_all_branches and order.branch_id != scope.branch_id:
+            return None
+        return order
+
+    def _get_order_in_scope(self, scope: AdminScope, order_id: uuid.UUID) -> Order:
+        order = self._find_order_in_scope(scope, order_id)
+        if order is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido não encontrado")
+        return order
 
     def _get_branch(self, scope: AdminScope, branch_id: uuid.UUID) -> Branch:
         """Filial dentro do escopo do token.
@@ -219,6 +355,36 @@ class AdminCourierService:
         except Exception:
             self.db.rollback()
             raise
+
+    @staticmethod
+    def _rejected(order_id: uuid.UUID, error: AssignmentErrorCode) -> AdminAssignmentResultItem:
+        return AdminAssignmentResultItem(order_id=order_id, ok=False, error=error)
+
+    def _accepted(self, order: Order, assignment: CourierAssignment) -> AdminAssignmentResultItem:
+        return AdminAssignmentResultItem(
+            order_id=order.id, ok=True, assignment=self._assignment_response(assignment, order)
+        )
+
+    @staticmethod
+    def _assignment_response(assignment: CourierAssignment, order: Order) -> AdminAssignmentResponse:
+        return AdminAssignmentResponse(
+            id=assignment.id,
+            order_id=order.id,
+            order_number=order.order_number,
+            order_status=order.status,
+            courier_id=assignment.courier_id,
+            assigned_at=assignment.assigned_at,
+            courier_fee_snapshot=(
+                None
+                if assignment.courier_fee_snapshot is None
+                else money_to_float(assignment.courier_fee_snapshot)
+            ),
+            distance_km_snapshot=(
+                None
+                if assignment.distance_km_snapshot is None
+                else float(assignment.distance_km_snapshot)
+            ),
+        )
 
     @staticmethod
     def _courier_response(courier: Courier) -> AdminCourierResponse:

@@ -8,6 +8,7 @@ pedido).
 
 from datetime import datetime
 from decimal import Decimal
+from enum import Enum
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -142,3 +143,72 @@ class AdminCourierAccessResponse(BaseModel):
     link_token: str
     access_code: str
     access_generated_at: datetime
+
+
+# --- A atribuicao -----------------------------------------------------------
+
+# Teto do lote. E o que cabe numa tela de "selecionar e atribuir"; acima
+# disso e importacao, nao operacao de balcao.
+MAX_ORDERS_PER_ASSIGNMENT = 50
+
+
+class AdminAssignOrdersRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    order_ids: list[UUID] = Field(min_length=1, max_length=MAX_ORDERS_PER_ASSIGNMENT)
+
+
+class AssignmentErrorCode(str, Enum):
+    """Por que um pedido do lote NAO foi atribuido. Enum para a lista sair
+    no /openapi.json (armadilha 16): o painel escreve a mensagem por codigo,
+    nao pelo texto."""
+
+    # Nao existe, e de outro restaurante, ou de filial que este lojista nao
+    # enxerga — os tres sao o mesmo codigo, para nao virar oraculo de UUID.
+    NOT_FOUND = "not_found"
+    # Retirada nao tem entregador.
+    NOT_DELIVERY = "not_delivery"
+    # `completed`, `cancelled` ou `rejected`: nao ha mais o que entregar.
+    ORDER_CLOSED = "order_closed"
+    # O pedido e de outra filial que o lojista enxerga: o motoboy do Centro
+    # nao sai com o pedido da Aldeota.
+    OTHER_BRANCH = "other_branch"
+
+
+class AdminAssignmentResponse(BaseResponse):
+    id: UUID
+    order_id: UUID
+    order_number: int
+    order_status: str
+    courier_id: UUID
+    assigned_at: datetime | None = None
+    # Nulo = a filial nao tinha taxa configurada quando atribuiu. Nao e zero.
+    courier_fee_snapshot: float | None = None
+    distance_km_snapshot: float | None = None
+
+
+class AdminAssignmentResultItem(BaseModel):
+    order_id: UUID
+    ok: bool
+    error: AssignmentErrorCode | None = None
+    assignment: AdminAssignmentResponse | None = None
+
+
+class AdminAssignmentBatchResponse(BaseModel):
+    """Um item por `order_id` do corpo, NA MESMA ORDEM.
+
+    Por item e nao tudo-ou-nada: um pedido de retirada no meio do lote nao
+    pode derrubar os outros quatro que o atendente selecionou. A escrita
+    continua sendo uma so — os itens `ok` sao gravados juntos, e os outros
+    nao sao gravados.
+    """
+
+    items: list[AdminAssignmentResultItem]
+
+
+class AdminOrderCourierResponse(BaseModel):
+    """Quem esta com o pedido. Os dois nulos = ninguem ainda, que e estado
+    normal do pedido e nao um 404."""
+
+    assignment: AdminAssignmentResponse | None = None
+    courier: AdminCourierResponse | None = None

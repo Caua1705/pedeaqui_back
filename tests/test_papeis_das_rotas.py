@@ -132,6 +132,11 @@ PAPEL_ESPERADO = {
     ("PATCH", "/admin/couriers/{courier_id}"): GERENCIA,
     ("DELETE", "/admin/couriers/{courier_id}"): GERENCIA,
     ("POST", "/admin/couriers/{courier_id}/access"): GERENCIA,
+    # Atribuir e desatribuir e trabalho do balcao, como mover o pedido.
+    ("POST", "/admin/couriers/{courier_id}/assignments"): PESSOAS,
+    ("GET", "/admin/couriers/{courier_id}/assignments"): PESSOAS,
+    ("GET", "/admin/orders/{order_id}/courier"): PESSOAS,
+    ("DELETE", "/admin/orders/{order_id}/courier"): PESSOAS,
     # --- clientes e relatorios: o que uma senha vazada nao pode alcancar
     ("GET", "/admin/customers"): GERENCIA,
     ("GET", "/admin/reports/commission"): SOMENTE_DONO,

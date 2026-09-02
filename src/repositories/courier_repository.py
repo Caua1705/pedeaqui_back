@@ -98,6 +98,18 @@ class CourierRepository:
         self.db.flush()
         return assignment
 
+    def mark_assignment_unassigned(
+        self,
+        assignment: CourierAssignment,
+        admin_user_id: uuid.UUID | None,
+        now: datetime,
+    ) -> CourierAssignment:
+        assignment.unassigned_at = now
+        assignment.unassigned_by_admin_user_id = admin_user_id
+        self.db.add(assignment)
+        self.db.flush()
+        return assignment
+
     def mark_open_assignments_unassigned(
         self,
         courier_id: uuid.UUID,

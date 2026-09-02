@@ -22,7 +22,7 @@ cadastrar rápido.**
 | 2 | Ferramenta: varredura de escopo cobre `/courier` (antes das rotas) | **feito** |
 | 3 | Admin: taxa do entregador da filial | **feito** — `GET`/`PATCH /admin/branches/{id}/courier-fee` |
 | 4 | Admin: cadastro (listar, criar, editar, ativar/desativar, excluir) + código | **feito** — `/admin/couriers`, `/admin/couriers/{id}`, `/admin/couriers/{id}/access` |
-| 5 | Admin: atribuir e desatribuir pedidos | pendente |
+| 5 | Admin: atribuir e desatribuir pedidos | **feito** — `POST`/`GET /admin/couriers/{id}/assignments`, `GET`/`DELETE /admin/orders/{id}/courier` |
 | 6 | Entregador: autenticação (link + código), lista, saiu/entregue, histórico | pendente |
 | 7 | Docs, contrato para o painel e para o app, fase 2 | pendente |
 
@@ -319,6 +319,35 @@ Decisões que só aparecem no código:
 Vermelho visto: `ImportError` na coleta (o vermelho de "não existe") e, com o
 módulo de pé, as rotas não registradas. 37 verdes rápidos + 9 de banco
 (`test_entregadores_repository_db.py`, o WHERE de verdade).
+
+## 5. Atribuir e desatribuir
+
+Quatro rotas, todas PESSOAS (é trabalho do balcão, como mover o pedido):
+
+- `POST /admin/couriers/{id}/assignments` `{order_ids: [...]}` — **resposta
+  por item, escrita uma só**. Códigos: `not_found` (fora do escopo, os três
+  casos no mesmo código), `not_delivery`, `order_closed` (terminal),
+  `other_branch` (o motoboy do Centro não sai com o pedido da Aldeota — o
+  dono enxerga os dois, por isso não é 404). Reatribuir = fecha a anterior e
+  abre outra com a taxa de agora; ao mesmo motoboy = no-op; `out_for_delivery`
+  ainda troca de motoboy (a moto quebrou);
+- `GET /admin/couriers/{id}/assignments` — as abertas dele;
+- `GET /admin/orders/{id}/courier` — quem está com o pedido; os dois campos
+  nulos = ninguém ainda (estado normal, não 404);
+- `DELETE /admin/orders/{id}/courier` — 204; 409 se ninguém está com ele.
+
+O snapshot da taxa nasce aqui: `calculate_courier_fee(base, per_km,
+orders.delivery_distance_km)`. Teste de banco prova que a taxa alterada
+depois não muda a corrida, e que o índice parcial convive com a
+reatribuição (fecha antes de abrir, na mesma transação).
+
+**O que ficou para o painel decidir:** o motoboy NÃO aparece em
+`AdminOrderListItem` (seria uma junção na lista e no evento SSE). Por pedido
+há o `GET .../courier`; por motoboy há a lista de abertas. Se a tela precisar
+do nome na listagem, é fase 2 (junção em `list_orders_by_restaurant`).
+
+Vermelho visto: `ImportError` e rotas não registradas. 22 rápidos + 2 de
+banco verdes.
 
 ## Portão
 

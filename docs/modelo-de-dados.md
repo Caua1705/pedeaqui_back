@@ -103,6 +103,30 @@ navegável — **o valor exibido nunca sai delas.** Nome, preço unitário e pre
 adicional estão congelados em `order_items` e `order_item_options`, e
 `unit_price_snapshot` **já vem com os adicionais somados** (§2 da skill).
 
+### O entregador, que é da filial
+
+```mermaid
+erDiagram
+    branches ||--o{ couriers : "o motoboy da loja"
+    restaurants ||--o{ couriers : "FK real, e é o WHERE"
+    couriers ||--o{ courier_assignments : "as corridas dele"
+    orders ||--o{ courier_assignments : "uma ATIVA por vez"
+    admin_users |o--o{ courier_assignments : "quem atribuiu"
+```
+
+`couriers` pende de **filial**, pelo critério do resto do sistema (setor de
+impressão, agente, formas de pagamento): o motoboy sai de uma cozinha, e o
+gerente preso a uma filial vê só os dela. Quem serve duas lojas tem dois
+cadastros. O entregador **não é `admin_user`**: as credenciais dele (link de
+256 bits e código de 6 dígitos) moram nesta tabela em hash.
+
+`courier_assignments` guarda a taxa do entregador **congelada** na atribuição
+(`courier_fee_snapshot`), calculada de `branches.courier_fee_base` e
+`courier_fee_per_km` sobre a distância que o pedido já tinha. "Uma ativa por
+vez" é um índice parcial único em `order_id WHERE unassigned_at IS NULL`;
+reatribuir fecha a antiga e abre outra. Excluir um entregador é `deleted_at`,
+porque o histórico daqui é o que o dono usa para pagar.
+
 ### O cliente, que é global
 
 ```mermaid

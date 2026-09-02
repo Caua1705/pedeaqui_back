@@ -53,6 +53,16 @@ class Branch(Base):
     delivery_min_fee: Mapped[Decimal | None] = mapped_column(Numeric)
     delivery_max_fee: Mapped[Decimal | None] = mapped_column(Numeric)
     delivery_max_distance_km: Mapped[Decimal | None] = mapped_column(Numeric)
+    # --- A taxa do ENTREGADOR. Mesmo regime das cinco de cima: so da filial,
+    # sem heranca, NULL = nao configurado. ---
+    #
+    # E o que a loja PAGA ao motoboy por corrida, e nao o que o cliente paga:
+    # nao entra em estimativa, em `orders.total` nem na comissao. E lida uma
+    # vez, na atribuicao do pedido, e congelada em
+    # `courier_assignments.courier_fee_snapshot` (ver `services/courier_fee.py`).
+    # Motoboy pago por corrida = `base` preenchida e `per_km = 0`.
+    courier_fee_base: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    courier_fee_per_km: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     # --- Estado do dia. NOT NULL, e NAO herda nada do restaurante. ---
     #
     # Sao o que alguem no balcao aperta durante o expediente. Estavam em

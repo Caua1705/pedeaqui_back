@@ -18,7 +18,7 @@ cadastrar rápido.**
 | # | Item | Estado |
 |---|---|---|
 | 0 | As três perguntas | **respondidas** — nenhuma muda o desenho |
-| 1 | Schema: `couriers`, `courier_assignments`, taxa do entregador em `branches` | pendente |
+| 1 | Schema: `couriers`, `courier_assignments`, taxa do entregador em `branches` | **feito** — revisão `20260903_0045` |
 | 2 | Ferramenta: varredura de escopo cobre `/courier` (antes das rotas) | pendente |
 | 3 | Admin: taxa do entregador da filial | pendente |
 | 4 | Admin: cadastro (listar, criar, editar, ativar/desativar, excluir) + código | pendente |
@@ -240,6 +240,25 @@ barrar a filial de outro restaurante sem junção.
 | Tentativas fora da área | estado "não entregue" com motivo (cliente não atendeu, endereço errado) — é aresta NOVA na máquina de estados (`out_for_delivery → delivery_failed → ?`) e é aí que a frente da máquina de estados abre de verdade |
 
 ---
+
+## 1. O schema
+
+Revisão `20260903_0045`: `couriers`, `courier_assignments` e as duas colunas
+em `branches`. Decisões que não estão no docstring da revisão:
+
+- **telefone só dígitos e único por filial entre os não excluídos** (índice
+  parcial). O motoboy que saiu e voltou é cadastro novo; o antigo fica com o
+  histórico;
+- **`ux_courier_assignments_order_ativa`** é o que faz "um pedido, um
+  motoboy": parcial em `unassigned_at IS NULL`, e há teste exigindo que a
+  reatribuição continue possível — sem essa metade, um UNIQUE sem `WHERE`
+  passaria no teste de recusa;
+- **41 divergências ORM×schema, como antes.** As tabelas novas nasceram com
+  o `nullable=` do model igual ao DDL, coluna a coluna.
+
+Visto vermelho antes (`column "courier_fee_base" does not exist`), 11 verdes
+depois em `tests/test_migracao_entregadores_db.py`. Diagrama ER ganhou a
+seção "O entregador, que é da filial".
 
 ## Portão
 

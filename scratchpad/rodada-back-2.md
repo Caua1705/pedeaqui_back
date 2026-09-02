@@ -29,7 +29,7 @@ A rodada anterior está em `scratchpad/rodada-back.md` e continua válida.
 | # | Item | Estado |
 |---|---|---|
 | 0 | Scratchpad da rodada | **feito** |
-| 1.1 | As 16 colunas: caminho de leitura que quebra | pendente |
+| 1.1 | As 16 colunas: caminho de leitura que quebra | **feito** — 8 com risco real, 4 silenciosas, 4 sem risco |
 | 1.2 | Teste que prova que os 2 models não são instanciados | pendente |
 | 1.3 | Revisão de alinhamento escrita, sem aplicar | pendente |
 | 1.4 | `divergencias_orm_schema.py` no portão como aviso | pendente |
@@ -70,3 +70,102 @@ order_item_options.option_group_id
 order_item_options.option_id
 restaurant_coupons.valid_until
 ```
+
+---
+
+## 1.1 As 16 colunas: quem tem caminho de leitura que quebra
+
+**Método.** Para cada uma das 16, grep do atributo em `src/`, e leitura de cada
+uso: schema de resposta que declara o campo sem `| None`, expressão Python que
+chama método no valor, comparação em WHERE. O que está escrito abaixo foi
+conferido no código, não inferido do nome da coluna.
+
+**Antes da lista, o que muda a probabilidade de cada uma.** Nenhum caminho de
+ESCRITA do ORM produz nulo hoje em nenhuma das 16 — o SQLAlchemy manda a
+coluna no INSERT porque o model a declara `nullable=False`. O nulo entra por
+**linha escrita fora do ORM**: SQL manual no Supabase, script de importação,
+linha anterior à criação da coluna. Três das 16 têm `DEFAULT` no banco
+(`admin_users.is_active` = `true`, `ai_feedback.created_at` = `now()`,
+`ai_feedback.selected_product_ids` = `'{}'`), e essas só ficam nulas por INSERT
+que escreva `NULL` **de propósito** — são as menos prováveis. As outras 13 não
+têm default: basta o INSERT manual esquecer a coluna.
+
+### As 8 com risco real (500 ou porta trancada)
+
+| Coluna | O que quebra | Onde |
+|---|---|---|
+| `restaurant_coupons.valid_until` | `AttributeError` em `CouponService._aware(None)` | **checkout e preview de cupom** |
+| `restaurant_coupons.valid_until` | `ValidationError` (`valid_until: datetime`) | lista de campanhas do painel |
+| `customers.email` | `ValidationError` (`CurrentCustomerResponse.email: str`) | `GET /customers/me` e exportação LGPD |
+| `customers.birth_date` | `ValidationError` (`birth_date: date`) | os mesmos dois |
+| `customer_addresses.number` | `ValidationError` (`CustomerAddressResponse.number: str`) | `GET /me/addresses` e exportação |
+| `customer_addresses.neighborhood` | idem | idem |
+| `order_item_options.option_group_id` | `ValidationError` (`OrderItemOptionGroupResponse.option_group_id: UUID`) | detalhe do pedido, comanda, painel |
+| `order_item_options.option_id` | `ValidationError` (`OrderItemOptionResponse.option_id: UUID`) | idem |
+| `admin_users.is_active` | `ValidationError` (`AdminUserDetailResponse.is_active: bool`) | `GET /admin/users` |
+
+**A pior é `valid_until`, e por um motivo específico.** É a única que quebra em
+Python **antes** de chegar a um schema de resposta, e o lugar onde quebra é o
+caminho do dinheiro. A consulta que protege a vitrine
+(`list_in_window`, com `valid_until >= now`) **não protege o checkout**: linha
+nula nunca casa naquele WHERE, mas `preview` e `lock_and_validate_for_order`
+chegam ao cupom por `_find_coupon` (id ou código), que não filtra janela
+nenhuma. Um cupom com `valid_until` nulo é invisível na lista e derruba quem
+digitar o código.
+
+**Duas notas que mudam a leitura da tabela.** As duas de
+`order_item_options` são as menos alcançáveis: as FKs para
+`product_option_groups` e `product_options` são `NO ACTION` (conferido em
+`pg_constraint`), então apagar um grupo de opções é **recusado** em vez de
+anular a linha histórica — não há `ON DELETE SET NULL` para produzir o nulo. E
+`admin_users.is_active` no login não quebra: `if not admin_user.is_active` com
+`None` é falsy, então é **falha fechada** — a pessoa não entra, e o sintoma que
+chega é "usuário ou senha inválido" para quem tem os dois certos.
+
+### As 4 sem crash, com consequência silenciosa
+
+- **`ai_feedback.created_at`** — o DELETE de retenção é
+  `WHERE created_at < cutoff`, e linha nula **nunca casa**. O texto em claro do
+  que o cliente digitou para o Rapi ficaria para sempre, e é exatamente o
+  resíduo que `feedback_retention_cutoff` existe para apagar (LGPD). Não é 500;
+  é dado pessoal que não sai.
+- **`coupon_redemptions.idempotency_key`** — a coluna tem `UNIQUE`, e no
+  Postgres **NULL é distinto de qualquer outro NULL**. A garantia de
+  idempotência some justamente nas linhas nulas: duas resgatariam o mesmo
+  cupom sem o índice reclamar. Nenhuma leitura em Python — a chave é escrita e
+  nunca consultada por este repositório.
+- **`ai_product_embeddings.product_id`** — a busca vetorial faz
+  `JOIN products p ON p.id = ape.product_id`, então a linha some do resultado;
+  e `list_stale_products` faz `LEFT JOIN ... ON ape.product_id = ...`, então a
+  linha órfã nunca é reaproveitada nem limpa. Produto sem indexação, sem erro
+  em lugar nenhum.
+- **`ai_product_embeddings.embedding`** — `1 - (NULL <=> vetor) >= :min` é
+  `NULL`, que não é verdadeiro: a linha é filtrada pelo WHERE. O produto
+  simplesmente não existe para a busca falada, em silêncio. É a mesma forma do
+  defeito que o CLAUDE.md registra na voz.
+
+### As 4 sem risco nenhum
+
+- **`customers.password_hash`** — `verify_password` declara
+  `password_hash: str | None` e devolve `False` sem hash. É o **único** dos 16
+  em que a defesa já está escrita, e ela é falha fechada.
+- **`ai_feedback.user_message`**, **`.assistant_message`**,
+  **`.selected_product_ids`** — nenhuma rota lê a tabela (está escrito em
+  `feedback_retention_cutoff` e conferido por grep). `assistant_message`
+  aparece só num `WHERE ... = :valor`, onde nulo nunca casa: o voto viraria
+  linha nova em vez de UPDATE. Consequência mínima.
+
+### O que ficou executável
+
+`tests/test_colunas_em_desacordo.py` — 12 testes rápidos, um por caminho de
+leitura, construindo o **tipo real** transiente com a coluna nula
+(`RestaurantCoupon(...)`, `Customer(...)`, `OrderItem(...)` sem sessão e sem
+banco), como o CLAUDE.md manda.
+
+**E foi ele que já pagou por si.** Escrito com `discount_type="percentage"`, o
+teste do cupom passava **pelo motivo errado**: o `ValidationError` vinha do
+`Literal` de `discount_type` e não do `valid_until` nulo. Um teste verde
+descrevendo um defeito que ele não estava exercitando — a classe exata do item
+2 desta rodada, encontrada dentro do item 1. O que a pegou foi conferir que a
+**mesma chamada com o dado certo NÃO levanta**; passou a ser o procedimento
+para todo teste de `pytest.raises` daqui em diante. Valor certo: `"percent"`.

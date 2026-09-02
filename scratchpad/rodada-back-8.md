@@ -19,6 +19,7 @@ Os três itens vieram dos outros dois repositórios (painel e app).
 | 1 | `sort_order` dos grupos de opção e das opções não chega na vitrine | **feito** |
 | 2 | Cliente logado não cancela o próprio pedido de outro aparelho | **feito** — rota autenticada, token não publicado |
 | 3 | Vitrine ordena cupom por `sort_order` e o painel não define esse valor | **feito** |
+| 4 | Varredura de teste que não roda (veio do erro do item 3) | **feito** |
 
 ---
 
@@ -384,3 +385,111 @@ aviso novo.
 > estável. Antes desta mudança essa ordem podia mudar sozinha entre duas
 > requisições, e as telas do cliente e do cardápio discordavam — as duas agora
 > usam exatamente a mesma.
+
+---
+
+## 4. A varredura de teste mudo
+
+### O item saiu do erro do item 3
+
+`class OPainelEscreveTests:` — sem prefixo `Test` e sem herdar
+`unittest.TestCase` — foi coletada **zero** vezes. Nove testes escritos,
+revisados e commitados que nunca rodaram. Não falhou, não avisou, não apareceu.
+
+É a família do dublê de dado e da descoberta vazia de `tests/rotas_do_app.py`:
+**o portão fica verde porque nada rodou**, e verde por ausência é
+indistinguível de verde por acerto.
+
+### A primeira versão estava errada, e o erro define a ferramenta
+
+Comecei por AST: "classe com método `test_*` que não começa com `Test` e não
+herda `TestCase`". Ela acusou **sete** classes — e as sete estavam sendo
+coletadas o tempo todo:
+
+```
+tests/test_delivery_estimate.py :: DefaultDeliveryFeeFallbackTests (9 métodos)
+tests/test_delivery_estimate.py :: FaixaDePrazoTests               (7)
+tests/test_delivery_estimate.py :: PausaDaEntregaTests             (3)
+tests/test_escrita_e_transacao.py :: quatro classes                (18)
+```
+
+`DefaultDeliveryFeeFallbackTests(DeliveryEstimateTests)` herda `TestCase` de
+**avô**. Nenhum AST razoável resolve isso sem virar um interpretador de
+herança — e as regras reais (`python_files`, `python_classes`,
+`python_functions`, `norecursedirs`, `__init__` numa classe `Test*`) são do
+pytest, mudam com a versão e com o `.ini`. Reimplementá-las seria manter uma
+segunda cópia de regra de terceiro, errada exatamente nos casos raros — que são
+os que passam despercebidos.
+
+**Então a divisão é:**
+
+| Pergunta | Quem responde |
+|---|---|
+| o que **é** coletado | o próprio pytest, via `--collect-only` |
+| o que **parece** teste | o AST, por um critério grosso: alguém escreveu `def test*` |
+
+O achado é a diferença. **Nenhuma regra de coleta foi reimplementada.**
+
+### O segundo erro: a ferramenta chamada errada
+
+Rodando no `print-agent`, ela acusou **9 arquivos mudos** — os 9 arquivos de
+teste do agente, 126 testes. Não era achado: o agente tem `pytest.ini`
+próprio, e o `norecursedirs = print-agent` da API faz a coleta devolver zero
+quando ela roda da raiz errada. Rodando de dentro, 126 coletados.
+
+Daí a `--raiz`: **cada suíte é auditada a partir da raiz dela**, porque é de lá
+que o pytest resolve o `.ini` que define as regras.
+
+### Achado que nomeia, e não que avisa
+
+A primeira execução do teste plantado mostrou os dois arquivos-isca caindo em
+"arquivo mudo" em vez de "teste não coletado" — tecnicamente certo (o arquivo
+coleta zero) e menos útil. Passou a ser: **se há teste escrito no arquivo, o
+achado nomeia quais não rodam**, com arquivo e linha. "Arquivo mudo" ficou
+reservado para o caso genuinamente diferente — nome de teste e **nada** que
+pareça teste dentro.
+
+### O resultado
+
+**Zero nas duas suítes.** API: 2340 casos, tudo que parece teste é coletado.
+`print-agent`: 126 casos, idem.
+
+### A anti-vacuidade
+
+`tests/test_testes_mudos.py`, 15 testes sobre **uma** árvore plantada com iscas
+e legítimos convivendo — um `auditar()` por teste custaria um subprocesso de
+pytest por caso, e juntos eles provam que os legítimos não apagam as iscas nem
+o contrário.
+
+Aqui a anti-vacuidade vale em dobro: o varredor procura **exatamente a falha
+que ele próprio poderia ter**. Se as classes deste arquivo não fossem
+coletadas, o varredor de teste mudo seria ele mesmo um teste mudo.
+
+**As iscas:** classe sem prefixo; classe `Test*` **com `__init__`** (prefixo
+certo e coleta zero mesmo assim — a prova de que ele não está olhando o nome);
+arquivo com nome de teste e nada dentro; arquivo com teste dentro e nome fora
+do padrão.
+
+**Os legítimos** são os padrões da suíte real, e o terceiro é o que matou a
+primeira versão: `class FilhoTests(_Base)` com `_Base(unittest.TestCase)` —
+herança **indireta**. Mais: classe de apoio (`FakeRepositorio`, sem método
+`test_*`) não pode ser acusada, senão a saída enche de todo dublê da suíte.
+
+Duas mutações fecham: **AST cego** → 5 vermelhos; **pytest cego** → 7. As duas
+metades carregam peso.
+
+### No portão: falha, e não aviso
+
+Nunca houve dívida herdada — o único caso nasceu e morreu no mesmo dia. Quem
+cobra é a suíte rápida, e ela audita **as duas** suítes do repositório. O passo
+do CI é `if: failure()` e só imprime, no job `api` (que é onde a suíte rápida
+roda).
+
+### Arquivos
+
+`scripts/testes_mudos.py` (novo) · `tests/test_testes_mudos.py` (novo) ·
+`.github/workflows/ci.yml`.
+
+**Portão: 2967 verdes** (2340 rápidos + 627 `db`), ruff limpo. Nada de
+produção: o script lê código e roda a COLETA do pytest, que não executa teste
+nenhum e não abre banco.

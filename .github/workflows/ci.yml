@@ -106,6 +106,29 @@ jobs:
       - name: Conferir se o lock cobre o requirements.txt
         run: python scripts/check_lockfile.py
 
+      # Teste escrito que NAO RODA: VERMELHO, e nao aviso.
+      #
+      # Em 02/09/2026 um arquivo nasceu com `class OPainelEscreveTests:` — sem
+      # prefixo `Test` e sem herdar `TestCase`. O pytest coletou zero casos
+      # dela, sem erro e sem aviso: nove testes escritos, revisados e
+      # commitados que nunca rodaram. E a familia do dublê de dado e da
+      # descoberta vazia — o portao fica verde porque NADA RODOU, e verde por
+      # ausencia e indistinguivel de verde por acerto.
+      #
+      # Nunca houve divida herdada aqui: o unico caso nasceu e morreu no mesmo
+      # dia. Zero que cresce e regressao.
+      #
+      # Quem cobra e `tests/test_testes_mudos.py`, na suite rapida, e ele
+      # audita as DUAS suites do repositorio (a da API e a do agente de
+      # impressao, cada uma a partir da raiz dela). Este passo so imprime a
+      # saida legivel quando algo ja falhou.
+      - name: Teste escrito que nao roda (so a saida legivel)
+        if: failure()
+        continue-on-error: true
+        run: |
+          python scripts/testes_mudos.py
+          python scripts/testes_mudos.py --raiz print-agent
+
   banco:
     name: Testes contra o Postgres
     runs-on: ubuntu-latest

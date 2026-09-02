@@ -369,3 +369,212 @@ docker exec pedeaqui-api python scripts/estado_da_producao.py
 
 Plano incompleto é melhor que plano confiante e errado: os cinco acima são
 buracos conhecidos, e cada um tem o comando que o fecha.
+
+---
+
+## 2. `print_agent` — a conta que destrava o cliente
+
+**A conta NÃO foi criada.** Criar exige escrever no banco de produção, e o
+comando é seu. Está tudo escrito abaixo, na ordem de digitar.
+
+### 2.1 Uma conta por filial. Duas, portanto.
+
+O Júnior tem Matriz e Varjota, e cada uma tem sua máquina de balcão. São
+**duas contas**, e o motivo não é organização — é que uma conta só **não
+funciona**:
+
+- **`--branch-id` é obrigatório** para `--role print_agent`, e o script recusa
+  sem ele. Não existe a conta "de todas as filiais": com `branch_id` nulo o
+  `AdminScope` significa "todas", e `PrintAgentService._branch_of_agent`
+  responde **400** com `SEM_FILIAL`.
+- **A filial vem do TOKEN, nunca do corpo.** Um agente que pudesse escolher a
+  filial se anunciaria como a loja do lado.
+- **`print_agents` é uma linha por filial**, upsert pelo `branch_id`. Duas
+  máquinas com a mesma conta escreveriam na mesma linha: o `last_seen_at` e o
+  `agent_version` do painel passariam a ser "o da última máquina que bateu", e
+  a tela de "agente online" viraria loteria.
+- **`print_agent_printers` é substituída inteira a cada `report_printers`**,
+  também por `branch_id`. Com conta compartilhada, a lista de impressoras da
+  Varjota apagaria a da Matriz a cada 30 s, e o botão de teste do painel
+  mandaria a via para a impressora da outra loja.
+- **O stream é recortado pelo escopo.** Conta presa à Matriz recebe pedido da
+  Matriz. Com uma conta só, **a Varjota nunca imprimiria os pedidos dela** — e
+  imprimiria os da Matriz, o dia inteiro, sem erro nenhum no log.
+- E o de sempre: a senha fica em texto puro no `config.ini` de cada balcão.
+  Uma conta para as duas lojas faz um `config.ini` lido comprar as duas.
+
+### 2.2 Passo 1 — descobrir o `branch_id` de cada filial (só leitura)
+
+```bash
+docker exec pedeaqui-api python -c "
+from sqlalchemy import text
+from src.db.session import SessionLocal
+with SessionLocal() as db:
+    for linha in db.execute(text('''
+        SELECT b.id, b.name, b.slug
+          FROM branches b JOIN restaurants r ON r.id = b.restaurant_id
+         WHERE r.slug = 'junior-da-picanha'
+         ORDER BY b.name
+    ''')):
+        print(linha)
+"
+```
+
+Anote os dois uuids: o da Matriz e o da Varjota.
+
+### 2.3 Passo 2 — criar as duas contas
+
+Uma por vez. **O `-it` é obrigatório**: a senha é pedida em prompt oculto, de
+propósito — argumento de linha de comando pararia no histórico do shell e no
+`ps` de quem estiver na máquina.
+
+```bash
+# MATRIZ
+docker exec -it pedeaqui-api python scripts/create_admin_user.py \
+  --restaurant-slug junior-da-picanha \
+  --name "Impressora Matriz" \
+  --email impressora.matriz@juniordapicanha.com.br \
+  --role print_agent \
+  --branch-id <uuid-da-matriz>
+
+# VARJOTA
+docker exec -it pedeaqui-api python scripts/create_admin_user.py \
+  --restaurant-slug junior-da-picanha \
+  --name "Impressora Varjota" \
+  --email impressora.varjota@juniordapicanha.com.br \
+  --role print_agent \
+  --branch-id <uuid-da-varjota>
+```
+
+Ele pede `Senha:` e `Confirme a senha:`. **Senhas diferentes nas duas contas** —
+senão vazar um balcão vaza os dois. O mínimo de caracteres é
+`MIN_ADMIN_PASSWORD_LENGTH`; o script recusa e diz o número.
+
+**O e-mail é só identificador de login.** Nenhuma mensagem é enviada para
+`admin_users` em lugar nenhum do sistema — `EmailService` só fala com cliente.
+O domínio não precisa existir. O que ele precisa é ser **único**: o script
+recusa e-mail repetido.
+
+### 2.4 O que o comando gera
+
+Ele imprime, para cada conta:
+
+```
+Lojista criado.
+  id:         <uuid do admin_user>
+  restaurant: Júnior da Picanha (<uuid>)
+  email:      impressora.matriz@juniordapicanha.com.br
+  role:       print_agent
+```
+
+E grava uma linha em `admin_users` com `role='print_agent'`,
+`branch_id=<a filial>`, `is_active=true` e `must_change_password=false` — o
+script não marca troca obrigatória, e ainda bem: se marcasse, a máquina bateria
+403 em tudo e nunca imprimiria.
+
+**Ele NÃO gera token.** O agente faz o login sozinho, com e-mail e senha, e
+refaz quando o token de 12 h vence. É por isso que a instalação com senha é a
+recomendada: a com `token =` fixo para de imprimir em silêncio depois de 12 h.
+
+### 2.5 Onde colar no computador do restaurante
+
+Na **máquina daquela filial** — a conta da Matriz no balcão da Matriz, a da
+Varjota no da Varjota. Trocar as duas imprime o pedido da loja errada, o dia
+inteiro, sem nenhum sintoma.
+
+1. Tecla **Windows + R**, digitar e dar Enter:
+
+   ```
+   %LOCALAPPDATA%\Rapidex Impressao
+   ```
+
+2. Dois cliques em `config.ini` (abre no Bloco de Notas).
+3. Preencher as duas linhas de credencial — `printer` já está preenchido desde
+   a instalação:
+
+   ```ini
+   [rapidex]
+   api_url  = https://api.pederapidex.com
+   email    = impressora.matriz@juniordapicanha.com.br
+   password = <a senha que você digitou no prompt>
+   printer  = EPSON TM-T20
+   ```
+
+   No formato completo — o que tem `[api]`, `[printers]`, `[printing]` — as
+   mesmas duas linhas ficam na seção `[api]`, e `token =` continua comentado.
+
+4. **Ctrl + S** e fechar.
+5. Fechar e reabrir `%LOCALAPPDATA%\Rapidex Impressao\RapidexImpressao.exe`.
+
+**Encoding (armadilha 29):** o Bloco de Notas salva em ANSI nas máquinas
+antigas, que são justamente as de balcão. O programa lê os dois (UTF-8
+primeiro, CP1252 depois), então salvar em ANSI é seguro — **mas não troque o
+Bloco de Notas por um editor que salve em UTF-16**, que nenhum dos dois lê.
+
+Confira no painel, em Configurações → Setores de impressão: o agente daquela
+filial tem que aparecer **online** em até 30 s (é o intervalo do heartbeat; o
+painel o dá por offline depois de 90 s sem sinal).
+
+### 2.6 Confirmado: a conta não abre o painel
+
+Não é opinião — está travado por teste. `tests/test_papeis_das_rotas.py` audita
+**toda** rota `/admin` contra uma tabela, e
+`test_o_agente_de_impressao_alcanca_exatamente_as_rotas_de_que_precisa` afirma
+que o conjunto de rotas que aceitam `print_agent` é **exatamente**:
+
+| Rota | Para quê |
+|---|---|
+| `POST /admin/orders/stream-ticket` | credencial de 30 s do stream |
+| `GET /admin/orders/{id}/print-jobs` | as vias já formatadas |
+| `POST /admin/print-agent/heartbeat` | sinal de vida |
+| `POST /admin/print-agent/printers` | a lista de impressoras da máquina |
+
+Mais quatro que não exigem papel nenhum, e por isso também são alcançadas:
+
+| Rota | Por que está aberta |
+|---|---|
+| `POST /admin/auth/login` | porta de entrada de todos os papéis, inclusive o da máquina |
+| `GET /admin/orders/stream` | confere o papel **dentro** da função (`ensure_role(PESSOAS_E_AGENTE)`), porque autentica por ticket na querystring |
+| `GET /admin/auth/me` | identidade — não devolve nada que quem tem o `config.ini` já não saiba |
+| `PATCH /admin/auth/password` | troca da própria senha |
+
+**Todo o resto do painel responde 403** — cardápio, preços, clientes,
+faturamento, comissão, cupons, cashback, usuários, configurações. Rota nova que
+nasça sem decisão de papel deixa esse teste **vermelho**, então isso não
+apodrece sozinho.
+
+Uma frase honesta sobre o que "não loga no painel" significa: a conta
+**autentica** (tem que autenticar, senão não imprime) e recebe um token de 12 h
+válido. O que ela não faz é **abrir tela nenhuma**: toda rota que desenha o
+painel a recusa com 403.
+
+### 2.7 O que ainda falta restringir (NÃO mexi, como combinado)
+
+1. **`PATCH /admin/auth/password` — a máquina pode trocar a própria senha.**
+   O `api_client.py` do agente nunca chama essa rota; ele só faz login. Quem
+   ler o `config.ini` do balcão pode trocar a senha e **parar a impressão da
+   loja em silêncio** — e o dono só destrava com
+   `create_admin_user.py --reset-password` no servidor. É negação de serviço,
+   não vazamento, mas é barato de fechar: `print_agent` sai da rota, e a senha
+   da máquina passa a ser girada só por quem tem o servidor. O custo é uma
+   linha saindo de `SEM_EXIGENCIA_DE_PAPEL` e entrando em `PAPEL_ESPERADO`
+   como `PESSOAS`.
+
+2. **`GET /admin/auth/me` — alcançável e não usada.** Não vaza nada novo (id,
+   restaurante, filial, e-mail, papel — tudo já está no `config.ini` ou é
+   derivável dele). Fecha junto com a de cima se você quiser a lista mínima de
+   verdade; sozinha não paga o commit.
+
+3. **O que NÃO dá para restringir, e você precisa saber.** Com o `config.ini`
+   na mão, um atacante tem o **fluxo de pedidos daquela filial em tempo real**
+   e as **vias formatadas** de cada um — nome, telefone e endereço residencial
+   de todo cliente que pedir naquela loja. Isso é o agente de impressão
+   funcionando, não um furo: a comanda **é** esse dado. O que limita o estrago
+   já foi feito — o papel próprio (com `attendant`, aquele arquivo comprava o
+   cardápio inteiro, a base de clientes e o faturamento do restaurante) e a
+   prisão à filial (a Varjota não alcança a Matriz). A defesa que sobra é
+   física: a pasta `%LOCALAPPDATA%\Rapidex Impressao` não deve estar em máquina
+   compartilhada com Wi-Fi de cliente nem em pasta sincronizada com nuvem.
+
+**Nada disso foi alterado nesta sessão** — item 5 do briefing e a instrução
+explícita de não mexer no painel.

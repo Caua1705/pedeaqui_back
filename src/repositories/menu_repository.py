@@ -7,7 +7,12 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from src.models.branch_model import Branch
 from src.models.category_model import Category
 from src.services.coupon_window import filtro_de_janela
-from src.models.coupon_model import COUPON_VISIBILITY_PUBLIC, CouponTemplate, RestaurantCoupon
+from src.models.coupon_model import (
+    COUPON_VISIBILITY_PUBLIC,
+    CouponTemplate,
+    RestaurantCoupon,
+    ordem_dos_cupons,
+)
 from src.models.product_model import Product
 from src.models.product_option_model import ProductOptionGroup
 from src.models.restaurant_banner_model import RestaurantBanner
@@ -115,6 +120,8 @@ class MenuRepository:
                 *filtro_de_janela(datetime.now(timezone.utc)),
                 CouponTemplate.is_active.is_(True),
             )
-            .order_by(RestaurantCoupon.sort_order.asc())
+            # A MESMA expressao de `list_public_coupons` — a funcao, e nao
+            # uma copia. Aqui nao havia desempate nenhum.
+            .order_by(*ordem_dos_cupons())
         )
         return list(self.db.scalars(stmt).all())

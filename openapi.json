@@ -5766,6 +5766,10 @@
             "title": "Restaurant Id",
             "type": "string"
           },
+          "sort_order": {
+            "title": "Sort Order",
+            "type": "integer"
+          },
           "target_segment": {
             "anyOf": [
               {
@@ -5857,7 +5861,8 @@
           "valid_from",
           "first_order_only",
           "visibility",
-          "is_active"
+          "is_active",
+          "sort_order"
         ],
         "title": "CouponAdminResponse",
         "type": "object"
@@ -5995,6 +6000,12 @@
             ],
             "default": "0.00",
             "title": "Min Order Value"
+          },
+          "sort_order": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Sort Order",
+            "type": "integer"
           },
           "target_segment": {
             "anyOf": [
@@ -6421,6 +6432,18 @@
               }
             ],
             "title": "Min Order Value"
+          },
+          "sort_order": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sort Order"
           },
           "target_segment": {
             "anyOf": [

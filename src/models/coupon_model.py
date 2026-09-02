@@ -131,3 +131,32 @@ class RestaurantCoupon(Base):
     restaurant = relationship("Restaurant")
     template = relationship("CouponTemplate", back_populates="restaurant_coupons")
     redemptions = relationship("CouponRedemption", back_populates="coupon")
+
+
+# A ORDEM DA VITRINE, definida uma vez so — mesmo motivo de
+# `product_option_model.ordem_dos_grupos`.
+#
+# As duas consultas publicas ja ordenavam por `sort_order` e ordenavam
+# DIFERENTE: `coupon_repository.list_public_coupons` desempatava por
+# `created_at desc` e a do cardapio (`menu_repository`) nao desempatava nada.
+# Como o painel nao tinha como gravar `sort_order`, TODO cupom estava no
+# `DEFAULT 0` da coluna e o desempate decidia a lista inteira — ou seja, as
+# duas superficies mostravam as mesmas campanhas em ordens diferentes, e uma
+# delas mudava de ordem entre requisicoes.
+def ordem_dos_cupons() -> list:
+    """`sort_order`, depois a campanha mais nova, depois o `id`.
+
+    O `id` no fim torna a ordem TOTAL. Sem ele, dois cupons com o mesmo
+    `sort_order` criados na mesma transacao (`created_at` e um `now()` so)
+    podem sair trocados entre duas requisicoes — a vitrine piscando sem nada
+    ter mudado.
+
+    As tres colunas sao `NOT NULL` no schema, entao nao ha `NULLS FIRST`
+    escondido aqui: `created_at DESC` com nulo poria a linha sem data no TOPO
+    da vitrine, que e o pior lugar para uma surpresa.
+    """
+    return [
+        RestaurantCoupon.sort_order.asc(),
+        RestaurantCoupon.created_at.desc(),
+        RestaurantCoupon.id.asc(),
+    ]

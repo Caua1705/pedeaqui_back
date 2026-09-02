@@ -157,6 +157,15 @@ class CouponCampaignFields(BaseModel):
     visibility: CouponVisibility = CouponVisibility.PUBLIC
     target_segment: CustomerSegment | None = None
     is_active: bool = True
+    # A posicao na vitrine. As duas consultas publicas ja ordenavam por ela
+    # desde sempre; o painel e que nao tinha como escrever o valor, entao todo
+    # cupom ficava no `DEFAULT 0` da coluna e a ordem saia do desempate.
+    #
+    # `ge=0` e nao positivo: zero e a posicao normal de quem nunca foi
+    # arrastado, e recusa-lo tornaria invalido o valor que TODO cupom de hoje
+    # ja tem gravado — um PATCH de `is_active` passaria a dar 422 por causa de
+    # um campo que o lojista nem tocou (o merge valida o cupom inteiro).
+    sort_order: int = Field(default=0, ge=0)
 
     @field_validator("code")
     @classmethod
@@ -237,6 +246,7 @@ class CouponUpdate(BaseModel):
     visibility: CouponVisibility | None = None
     target_segment: CustomerSegment | None = None
     is_active: bool | None = None
+    sort_order: int | None = Field(default=None, ge=0)
 
     @field_validator("code")
     @classmethod
@@ -293,6 +303,10 @@ class CouponAdminResponse(BaseResponse):
     visibility: CouponVisibility
     target_segment: CustomerSegment | None = None
     is_active: bool
+    # Sem devolver a posicao atual, o painel nao tem como desenhar a lista na
+    # ordem que ele acabou de gravar — teria que reordenar por conta e as duas
+    # telas voltariam a discordar.
+    sort_order: int
     total_usage_count: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

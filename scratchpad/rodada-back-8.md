@@ -18,7 +18,7 @@ Os três itens vieram dos outros dois repositórios (painel e app).
 |---|---|---|
 | 1 | `sort_order` dos grupos de opção e das opções não chega na vitrine | **feito** |
 | 2 | Cliente logado não cancela o próprio pedido de outro aparelho | **feito** — rota autenticada, token não publicado |
-| 3 | Vitrine ordena cupom por `sort_order` e o painel não define esse valor | pendente |
+| 3 | Vitrine ordena cupom por `sort_order` e o painel não define esse valor | **feito** |
 
 ---
 
@@ -270,3 +270,117 @@ regenerado, escopo de tenant e escrita/commit em 0.
 > `POST /restaurants/{slug}/orders/track/{token}/cancel` é a saída de quem pediu
 > **sem conta** — não removam. A regra simples: tem Bearer, usa a nova; é
 > convidado, usa a do token.
+
+---
+
+## 3. O `sort_order` do cupom
+
+### A lacuna era maior do que "o painel não define"
+
+As **duas** superfícies públicas já ordenavam por `sort_order`, e ordenavam
+**diferente**:
+
+| Consulta | Ordem | Alimenta |
+|---|---|---|
+| `CouponRepository.list_in_window` | `sort_order`, `created_at desc` | lista do cliente, auto-aplicação |
+| `MenuRepository.get_active_coupons` | `sort_order` — **e mais nada** | card da vitrine do cardápio |
+
+Como `CouponCreate`/`CouponUpdate` não tinham o campo, **todo cupom estava no
+`DEFAULT 0` da coluna** — então o desempate decidia a lista inteira, e as duas
+telas mostravam as mesmas campanhas em ordens diferentes. A do cardápio, sem
+desempate nenhum, podia trocar de ordem entre duas requisições.
+
+### O conserto, em três partes
+
+**1. O painel escreve.** `sort_order: int = Field(default=0, ge=0)` em
+`CouponCampaignFields` — de onde ele flui sozinho para `create_admin` (via
+`_campaign_columns`) e para o merge do PATCH — e
+`sort_order: int | None = Field(default=None, ge=0)` em `CouponUpdate`.
+
+`ge=0` e não "positivo": zero é a posição normal de quem nunca foi arrastado, e
+recusá-lo tornaria inválido o valor que **todo cupom de hoje** já tem gravado.
+Como `update_admin` valida o cupom inteiro depois do merge, um
+`{"is_active": false}` passaria a dar 422 por causa de um campo que o lojista
+nem tocou.
+
+**2. O painel lê de volta.** `sort_order: int` no `CouponAdminResponse` — sem
+isso o painel não tem como desenhar a lista na ordem que acabou de gravar.
+
+**3. A ordem vira uma só, e total.** `ordem_dos_cupons()` em
+`src/models/coupon_model.py`, mesma medicina do item 1: `sort_order`,
+`created_at desc`, `id`. As duas consultas chamam **a função**.
+
+O `id` no fim torna a ordem total — sem ele, dois cupons com o mesmo
+`sort_order` criados na mesma transação (`created_at` é um `now()` só) podem
+sair trocados. As três colunas são `NOT NULL` no schema, então não há
+`NULLS FIRST` escondido: `created_at DESC` com nulo poria a linha sem data no
+**topo** da vitrine.
+
+### O que a suíte me ensinou no caminho
+
+**Uma restrição de domínio que eu não conhecia:**
+`restaurant_coupons_restaurant_template_unique` — **uma campanha por arte, por
+loja**. O primeiro teste caiu com violação de unicidade por reusar o mesmo
+template; a fábrica passou a criar uma arte por cupom.
+
+**Classe de teste sem prefixo `Test` não é coletada.** Escrevi
+`class OPainelEscreveTests:` e o pytest coletou **zero** casos dela — sem erro
+e sem aviso. Os outros arquivos da suíte escapam disso porque herdam de
+`unittest.TestCase`, que é coletada por herança e não por nome. Só notei porque
+a saída dizia "4 failed" e eu esperava 13 testes. É a mesma família do que
+`tests/rotas_do_app.py` documenta: **descoberta vazia não falha, some.**
+
+### Os vermelhos
+
+Duas mutações, uma por metade:
+
+- **tirando os três campos dos schemas** → 5 vermelhos, os do painel;
+- **devolvendo as duas consultas às ordens antigas e diferentes** → 3
+  vermelhos, os de banco.
+
+E a dupla de anti-vacuidade se pagou aqui: com o campo removido,
+`test_negativo_e_recusado` **continua verde** (o `ValidationError` passa a vir
+do `extra="forbid"`, não do `ge=0`). Quem denuncia é o par
+`test_e_a_recusa_acima_e_do_campo_certo`, que exige que a mesma chamada com
+dado correto **não** levante. É o procedimento adotado na rodada 2, e foi a
+segunda vez que ele pegou algo.
+
+### Arquivos
+
+`src/schemas/coupon_schema.py` · `src/models/coupon_model.py` ·
+`src/repositories/coupon_repository.py` · `src/repositories/menu_repository.py` ·
+`openapi.json` · `tests/test_ordem_dos_cupons.py` (novo).
+
+**Portão: 2951 verdes** (2324 rápidos + 627 `db`), ruff limpo, `openapi.json`
+regenerado, lockfile em dia, escrita/commit em 0, divergências ORM×schema sem
+aviso novo.
+
+---
+
+### Pronto para colar no painel
+
+> **Ordenar os cupons da vitrine**
+>
+> `sort_order` passou a existir nos três lugares:
+>
+> - `POST /admin/coupons` — campo **opcional**, inteiro `>= 0`, default `0`.
+>   O corpo que vocês mandam hoje continua válido sem mudar nada.
+> - `PATCH /admin/coupons/{id}` — campo opcional. Mandem **só** ele para
+>   reordenar; o PATCH é parcial e não toca no resto.
+> - `GET /admin/coupons` e as respostas de `POST`/`PATCH` — `sort_order` agora
+>   vem no corpo, para vocês desenharem a lista na ordem gravada.
+>
+> **Menor primeiro.** `sort_order: 1` aparece acima de `sort_order: 2`. Para
+> arrastar-e-soltar, mandem um PATCH por linha que mudou de posição, ou
+> renumerem a lista inteira (0, 1, 2, …) — não há rota de reordenação em lote.
+>
+> **Cuidado com um detalhe do PATCH:** ele valida o cupom **inteiro** depois de
+> fundir o que veio. Isso já era assim, e é por isso que `sort_order` aceita
+> `0` — se ele exigisse `>= 1`, todo cupom antigo (que está em `0`) passaria a
+> recusar qualquer PATCH, inclusive um `{"is_active": false}`.
+>
+> **Hoje todos estão em `0`.** Enquanto ninguém arrastar, a ordem é
+> `sort_order`, depois **campanha mais nova primeiro**, depois um desempate
+> estável. Antes desta mudança essa ordem podia mudar sozinha entre duas
+> requisições, e as telas do cliente e do cardápio discordavam — as duas agora
+> usam exatamente a mesma.

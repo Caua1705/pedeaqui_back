@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from src.models.coupon_claim_model import CouponClaim
 from src.services.coupon_window import filtro_de_janela
-from src.models.coupon_model import CouponTemplate, RestaurantCoupon
+from src.models.coupon_model import CouponTemplate, RestaurantCoupon, ordem_dos_cupons
 from src.models.coupon_redemption_model import CouponRedemption
 from src.models.order_model import Order
 from src.services.customer_segment import segment_expression
@@ -111,7 +111,7 @@ class CouponRepository:
                 RestaurantCoupon.is_active.is_(True),
                 *filtro_de_janela(current),
             )
-            .order_by(RestaurantCoupon.sort_order.asc(), RestaurantCoupon.created_at.desc())
+            .order_by(*ordem_dos_cupons())
         )
         return list(self.db.scalars(stmt).unique().all())
 

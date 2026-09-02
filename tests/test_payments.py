@@ -362,7 +362,7 @@ class StartPaymentTests(unittest.TestCase):
         # BLOCO G: a cobranca tem que sair em nome da conta do restaurante
         # do pedido, nunca de uma credencial global.
         order = make_order()
-        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        credential = fabricas.credencial_de_pagamento(access_token="token-do-junior-da-picanha")
         service = build_service(order, credential=credential)
 
         with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
@@ -385,7 +385,7 @@ class StartPaymentTests(unittest.TestCase):
         customer_id = uuid.uuid4()
         order = make_order(customer_id=customer_id)
         customer = fabricas.cliente(id=customer_id, email="cliente@exemplo.com")
-        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        credential = fabricas.credencial_de_pagamento(access_token="token-do-junior-da-picanha")
         service = build_service(order, credential=credential, customer=customer)
 
         with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
@@ -405,7 +405,7 @@ class StartPaymentTests(unittest.TestCase):
         # customer_id=None (padrao de make_order): pedido de convidado, sem
         # e-mail cadastrado em lugar nenhum.
         order = make_order(order_number=4321)
-        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        credential = fabricas.credencial_de_pagamento(access_token="token-do-junior-da-picanha")
         service = build_service(order, credential=credential)
 
         with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
@@ -427,7 +427,7 @@ class StartPaymentTests(unittest.TestCase):
         # repetir para o gateway devolver o MESMO pix, em vez de abrir um
         # segundo QR code para o mesmo pedido.
         order = make_order(payment_status="pending", provider_payment_id="mp-1")
-        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        credential = fabricas.credencial_de_pagamento(access_token="token-do-junior-da-picanha")
         service = build_service(order, credential=credential)
 
         with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
@@ -453,7 +453,7 @@ class StartPaymentTests(unittest.TestCase):
             payment_provider="mercadopago",
             provider_payment_id="mp-recusada",
         )
-        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        credential = fabricas.credencial_de_pagamento(access_token="token-do-junior-da-picanha")
         service = build_service(order, credential=credential)
 
         with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
@@ -550,7 +550,7 @@ class CardPaymentTests(unittest.TestCase):
 
     def _service_with_card_order(self, customer=None, **order_overrides):
         order = make_order(payment_method="credit_card", **order_overrides)
-        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        credential = fabricas.credencial_de_pagamento(access_token="token-do-junior-da-picanha")
         return order, build_service(order, credential=credential, customer=customer)
 
     def _create_returning(self, status_gateway, payment_status, detail=None):
@@ -713,11 +713,7 @@ class PaymentConfigTests(unittest.TestCase):
 
     def test_public_key_of_the_restaurant_is_served(self):
         order = make_order()
-        credential = SimpleNamespace(
-            public_key="TEST-public-do-junior",
-            access_token="token-secretissimo",
-            webhook_secret="segredo-do-webhook",
-        )
+        credential = fabricas.credencial_de_pagamento()
         service = build_service(order, credential=credential)
 
         with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"):
@@ -728,11 +724,7 @@ class PaymentConfigTests(unittest.TestCase):
 
     def test_nothing_encrypted_ever_reaches_the_response(self):
         order = make_order()
-        credential = SimpleNamespace(
-            public_key="TEST-public-do-junior",
-            access_token="token-secretissimo",
-            webhook_secret="segredo-do-webhook",
-        )
+        credential = fabricas.credencial_de_pagamento()
         service = build_service(order, credential=credential)
 
         with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"):
@@ -753,7 +745,7 @@ class PaymentConfigTests(unittest.TestCase):
         self.assertFalse(config.card_enabled)
 
     def test_sandbox_never_offers_card(self):
-        credential = SimpleNamespace(public_key="nao-deveria-sair", access_token="x")
+        credential = fabricas.credencial_de_pagamento(public_key="nao-deveria-sair", access_token="x")
         service = build_service(make_order(), credential=credential)
 
         with patch.object(settings, "PAYMENT_PROVIDER", "sandbox"):
@@ -878,7 +870,7 @@ class StartPaymentErrorTests(unittest.TestCase):
 
     def _failing_service(self, exception):
         order = make_order()
-        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        credential = fabricas.credencial_de_pagamento(access_token="token-do-junior-da-picanha")
         service = build_service(order, credential=credential)
 
         with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
@@ -953,7 +945,7 @@ class StartPaymentErrorTests(unittest.TestCase):
     def test_the_reason_is_logged_even_though_it_is_not_answered(self):
         # Tirar o motivo tecnico da resposta so vale se ele nao se perder.
         order = make_order()
-        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        credential = fabricas.credencial_de_pagamento(access_token="token-do-junior-da-picanha")
         service = build_service(order, credential=credential)
 
         with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
@@ -977,7 +969,7 @@ class StartPaymentErrorTests(unittest.TestCase):
         `order_id` — e ate 28/08/2026 nenhuma das duas linhas da falha citava
         pedido nenhum."""
         order = make_order(order_number=10973)
-        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        credential = fabricas.credencial_de_pagamento(access_token="token-do-junior-da-picanha")
         service = build_service(order, credential=credential)
 
         with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
@@ -995,7 +987,7 @@ class StartPaymentErrorTests(unittest.TestCase):
 
     def test_the_failure_log_carries_the_order_number(self):
         order = make_order(order_number=10973)
-        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        credential = fabricas.credencial_de_pagamento(access_token="token-do-junior-da-picanha")
         service = build_service(order, credential=credential)
 
         with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
@@ -1024,7 +1016,7 @@ class CardMinimumAmountTests(unittest.TestCase):
         order = make_order(
             total=total, payment_method="credit_card", order_number=10973, customer_id=uuid.uuid4()
         )
-        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        credential = fabricas.credencial_de_pagamento(access_token="token-do-junior-da-picanha")
         customer = fabricas.cliente(id=order.customer_id, email="cliente@exemplo.com")
         service = build_service(order, credential=credential, customer=customer)
         return service, customer
@@ -1093,7 +1085,7 @@ class CardMinimumAmountTests(unittest.TestCase):
         """O piso e do CARTAO. Um piso inventado para o pix recusaria cobranca
         que o Mercado Pago aceita hoje."""
         order = make_order(total=Decimal("0.01"), payment_method="pix")
-        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        credential = fabricas.credencial_de_pagamento(access_token="token-do-junior-da-picanha")
         service = build_service(order, credential=credential)
 
         with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
@@ -1122,7 +1114,7 @@ class ProviderErrorCodeMessageTests(unittest.TestCase):
 
     def _message_for(self, provider_error_code):
         order = make_order()
-        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        credential = fabricas.credencial_de_pagamento(access_token="token-do-junior-da-picanha")
         service = build_service(order, credential=credential)
 
         with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
@@ -1161,7 +1153,7 @@ class ProviderErrorCodeMessageTests(unittest.TestCase):
 
     def test_a_charge_refused_without_any_code_still_answers(self):
         order = make_order()
-        credential = SimpleNamespace(access_token="token-do-junior-da-picanha")
+        credential = fabricas.credencial_de_pagamento(access_token="token-do-junior-da-picanha")
         service = build_service(order, credential=credential)
 
         with patch.object(settings, "PAYMENT_PROVIDER", "mercadopago"), patch(
@@ -1387,10 +1379,7 @@ class MercadopagoWebhookWiringTests(unittest.TestCase):
 
     def test_credential_of_the_order_restaurant_is_passed_to_parse_webhook_event(self):
         order = make_order(payment_provider="mercadopago", provider_payment_id="mp-1")
-        credential = SimpleNamespace(
-            access_token="token-do-junior-da-picanha",
-            webhook_secret="segredo-do-webhook-do-junior",
-        )
+        credential = fabricas.credencial_de_pagamento(access_token="token-do-junior-da-picanha", webhook_secret="segredo-do-webhook-do-junior",)
         service = build_service(order, credential=credential)
 
         with patch(
@@ -1444,10 +1433,7 @@ class MercadopagoWebhookSignatureOrderingTests(unittest.TestCase):
 
     def test_signature_is_checked_with_the_order_restaurant_own_secret(self):
         order = make_order(payment_provider="mercadopago", provider_payment_id="mp-1")
-        credential = SimpleNamespace(
-            access_token="token-do-junior-da-picanha",
-            webhook_secret="segredo-do-junior",
-        )
+        credential = fabricas.credencial_de_pagamento(access_token="token-do-junior-da-picanha", webhook_secret="segredo-do-junior",)
         service = build_service(order, credential=credential)
         raw_body = mercadopago_webhook_body("mp-1")
         headers = mercadopago_signed_headers("mp-1", "segredo-do-junior")
@@ -1465,10 +1451,7 @@ class MercadopagoWebhookSignatureOrderingTests(unittest.TestCase):
 
     def test_another_restaurants_secret_does_not_validate_this_one(self):
         order = make_order(payment_provider="mercadopago", provider_payment_id="mp-1")
-        credential = SimpleNamespace(
-            access_token="token-do-junior-da-picanha",
-            webhook_secret="segredo-do-junior",
-        )
+        credential = fabricas.credencial_de_pagamento(access_token="token-do-junior-da-picanha", webhook_secret="segredo-do-junior",)
         service = build_service(order, credential=credential)
         raw_body = mercadopago_webhook_body("mp-1")
         # Assinado com o segredo de OUTRO restaurante: bater com o webhook
@@ -1485,7 +1468,7 @@ class MercadopagoWebhookSignatureOrderingTests(unittest.TestCase):
         # deste campo existir) — sem segredo nao ha como verificar, e a
         # resposta e a mesma de qualquer credencial ausente.
         order = make_order(payment_provider="mercadopago", provider_payment_id="mp-1")
-        credential = SimpleNamespace(access_token="token-do-junior-da-picanha", webhook_secret=None)
+        credential = fabricas.credencial_de_pagamento(access_token="token-do-junior-da-picanha", webhook_secret=None)
         service = build_service(order, credential=credential)
         raw_body = mercadopago_webhook_body("mp-1")
         headers = mercadopago_signed_headers("mp-1", "qualquer-coisa")

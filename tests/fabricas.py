@@ -53,6 +53,7 @@ from src.models.restaurant_model import Restaurant
 from src.models.restaurant_setting_model import RestaurantSetting
 from src.schemas.product_schema import ProductResponse
 from src.services.delivery_estimate_service import DeliveryEstimateResult
+from src.services.payment_credential_service import ActivePaymentCredential
 
 
 def restaurante(**sobrescritas) -> Restaurant:
@@ -423,3 +424,25 @@ def opcao(**sobrescritas) -> ProductOption:
     }
     campos.update(sobrescritas)
     return ProductOption(**campos)
+
+
+def credencial_de_pagamento(**sobrescritas) -> ActivePaymentCredential:
+    """A credencial do restaurante no gateway, ja decifrada.
+
+    `environment` vai escrito porque a dataclass o exige — e o dublê solto o
+    omitia. O valor importa: `sandbox` NAO oferece cartao, e um teste que
+    dublasse a credencial sem ambiente descreveria uma que o service nunca
+    recebe.
+
+    NENHUM valor aqui e segredo de verdade. `access_token` e `webhook_secret`
+    sao decifrados na hora em producao e nunca logados; aqui sao textos que
+    denunciam vazamento se aparecerem numa resposta.
+    """
+    campos = {
+        "environment": "production",
+        "public_key": "TEST-public-do-junior",
+        "access_token": "token-secretissimo",
+        "webhook_secret": "segredo-do-webhook",
+    }
+    campos.update(sobrescritas)
+    return ActivePaymentCredential(**campos)

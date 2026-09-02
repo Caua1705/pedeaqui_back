@@ -458,3 +458,43 @@ Os tipos que entraram no lugar: `Branch`, `Product`, `RestaurantSetting`,
 Todo `pytest.raises` novo passa por uma conferência: **a mesma chamada com o
 dado certo NÃO pode levantar.** Foi o que pegou o §1.1, e é barato.
 
+
+### O zero virou trava
+
+`scripts/dubles_de_dado.py` (a varredura, agora no repositório) e
+`tests/test_dubles_de_dado.py` (quatro testes rápidos):
+
+1. **nenhum dublê de dado na suíte** — o assert nomeia arquivo:linha, o tipo
+   provável, e manda construí-lo;
+2. **o varredor enxerga os três lugares** (tabela, schema Pydantic,
+   dataclass) *e* os campos certos. Sem isto o teste 1 poderia estar verde
+   porque o varredor perdeu os tipos em silêncio — `walk_packages` engole
+   `ImportError` de propósito, para módulo quebrado não derrubar a varredura;
+3. **um dublê plantado num `tmp_path` é ACUSADO** — a prova de que o vermelho
+   existe;
+4. **um dublê de colaborador plantado é DEIXADO PASSAR** — se este virar
+   vermelho, a regra deixou de ser seguível.
+
+A varredura por dataclass, que a versão de garimpo não tinha, achou mais 8:
+`ActivePaymentCredential` dublada sem `environment` — e é `environment` que
+decide se o cartão é oferecido (`sandbox` não oferece).
+
+### As outras duas classes do item 2
+
+- **Dublê por dicionário:** um só (`test_coupons.py:79`), e já estava certo —
+  é um `dict` de kwargs que alimenta `Customer(**values)`. Não há dicionário
+  fazendo papel de model na suíte.
+- **Mock permissivo:** **não há `MagicMock`/`Mock` em lugar nenhum** — a suíte
+  usa só `patch`, e os fakes são classes escritas à mão com contrato explícito.
+  O que existe é outra coisa: 24 usos de
+  `patch.object(OrderService, "to_order_detail_response", return_value="detail")`
+  seguidos de `assertEqual(result, "detail")` — asserção **tautológica**, que
+  só diz que o dublê devolveu o que mandaram devolver.
+
+  Em 23 delas há assertions de verdade ao lado (`order.status`, `db.events`,
+  o histórico), então a linha é ruído. **Numa não havia**:
+  `test_owner_restaurant_reads_its_own_order`, cujo nome promete isolamento e
+  cuja única asserção era a tautologia — ele passaria com o repositório
+  ignorando `restaurant_id` inteiro. Ganhou as duas asserções que provam o
+  que o nome diz: o par `(order_id, restaurant_id)` que chegou ao repositório,
+  e que o objeto serializado é o pedido do B.

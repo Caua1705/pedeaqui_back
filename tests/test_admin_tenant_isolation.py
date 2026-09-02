@@ -146,10 +146,24 @@ class ReadIsolationTests(unittest.TestCase):
         self.assertEqual(unknown.exception.detail, foreign.exception.detail)
 
     def test_owner_restaurant_reads_its_own_order(self):
-        with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
+        """O lado positivo do isolamento: o dono do B enxerga o pedido do B.
+
+        A ASSERCAO QUE VALE E A SEGUNDA. `result == "detail"` sozinho nao
+        prova nada — `to_order_detail_response` esta dublado com retorno fixo,
+        entao aquilo so diz que o dublê devolveu o que mandaram ele devolver.
+        O teste passaria com o repositorio ignorando o `restaurant_id` inteiro,
+        que e exatamente o defeito que ele diz cobrir.
+
+        Quem prova e a chamada registrada: o `restaurant_id` do TOKEN chegou ao
+        repositorio junto do `order_id`. E o `WHERE restaurant_id = :r` do SQL
+        real, visto de fora.
+        """
+        with patch.object(OrderService, "to_order_detail_response", return_value="detail") as serializar:
             result = self.service.get_order_detail(self.order_of_b.id, owner_scope(self.restaurant_b))
 
         self.assertEqual(result, "detail")
+        self.assertEqual(self.repository.calls, [(self.order_of_b.id, self.restaurant_b)])
+        self.assertIs(serializar.call_args.args[0], self.order_of_b)
 
     def test_restaurant_id_is_always_forwarded_to_the_repository(self):
         with self.assertRaises(HTTPException):

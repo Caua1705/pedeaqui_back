@@ -2391,8 +2391,33 @@ dump."* A regra estava escrita; a estimativa de entrega não a seguiu — e o qu
 ela põe na chave é mais preciso que o texto.
 
 **A chave não carrega `customer_id`, então não há como apagar por pessoa.** Não
-é um `DELETE` faltando: é uma chave com a forma errada. O conserto é o digest,
-como no cache de embedding.
+é um `DELETE` faltando: é uma chave com a forma errada.
+
+**Consertado em 03/09/2026**, e o conserto teve três metades — a terceira é a
+que costuma faltar:
+
+1. **a chave** virou `delivery-estimate:v2:{branch_id}:{digest}:{bucket}`. O
+   `branch_id` fica legível de propósito: identificador não diz nada sobre a
+   pessoa, e sem ele não há como varrer as chaves de uma filial para depurar;
+2. **o valor**, que carregava as mesmas coordenadas. `SETEX chave valor` expõe
+   o valor no `MONITOR` tanto quanto a chave. Elas deixaram de ser gravadas e
+   são recolocadas na volta a partir do destino que `estimate` já resolveu — e
+   recolocar é **mais correto**, porque a chave agrupa por 4 casas decimais e o
+   acerto pode vir de uma coordenada vizinha;
+3. **a varredura**, `scripts/dados_pessoais_em_chave.py`, porque a regra já
+   estava escrita e mesmo assim foi quebrada. Ela achou um SEGUNDO caso que
+   ninguém conhecia: `ChatCache.retrieval_key` punha a **mensagem do cliente**
+   em claro na chave. Aquele cache vive só em memória — mas o de embedding
+   também vivia, e subir para o Redis foi uma mudança de poucas linhas.
+
+**A regra que sai disso:** cache em memória com dado pessoal na chave é a mesma
+armadilha, adiada. A promoção para Redis é barata demais para se contar com ela
+não acontecer.
+
+**E o `v2` não é enfeite.** Mudar o formato da chave sem versionar deixa as
+entradas antigas sendo lidas pelo código novo — e, num rollback, as novas sendo
+lidas pelo antigo. Versionar torna os dois conjuntos inalcançáveis um pelo
+outro, que é o que uma mudança de formato pede.
 
 **O que segura hoje é o TTL — e só enquanto não houver persistência.** Com
 `RDB`/`AOF` ligado, um snapshot grava a chave em disco e o arquivo não expira

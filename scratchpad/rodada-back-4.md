@@ -19,7 +19,7 @@ Rodadas anteriores: `rodada-back.md`, `rodada-back-2.md`, `rodada-back-3.md`.
 |---|---|---|
 | 1 | O 404 do cupom vencido: voltar atrás preservando a defesa | **feito** |
 | 2 | Redis: varrer a classe, consertar a chave, e o plano da exclusão | **feito** — 2 achados, 2 consertados, zero agora |
-| 3 | A quebra de contrato para o painel e o app | pendente |
+| 3 | A quebra de contrato para o painel e o app | **feito** — texto colável na §3 |
 
 ---
 
@@ -279,3 +279,172 @@ raciocínio do item 1 muda de figura — dado pseudonimizado com TTL de 10 minut
 e `.get`, e o `replace` no acerto) · `src/ai/services/chat_cache.py`
 (`retrieval_key`) · `tests/test_dado_pessoal_no_redis.py` (novo) ·
 `.github/workflows/ci.yml`.
+
+---
+
+## 3. A quebra de contrato — pronto para colar nos outros dois repositórios
+
+O que está abaixo é para copiar inteiro. Está escrito para quem não
+acompanhou a rodada.
+
+---
+
+### PARA COLAR NO REPOSITÓRIO DO PAINEL E NO DO APP
+
+> **Assunto: `valid_until` do cupom passa a poder vir `null`, e `null` quer
+> dizer "campanha sem prazo"**
+>
+> O backend passou a aceitar cupom **sem data de fim**. É uma campanha
+> permanente — "10% no canal próprio, sem prazo" —, e o `null` é uma **escolha
+> do lojista**, não um campo em branco nem dado faltando.
+>
+> É a mesma mecânica que `code` já tem desde 28/08/2026, onde `null` significa
+> "o cupom aplica sozinho no checkout".
+>
+> **O `openapi.json` versionado já está atualizado.** Regerar o cliente é o
+> primeiro passo, e para quem usa TypeScript o tipo passa de `string` para
+> `string | null` — o compilador aponta a maioria dos lugares sozinho.
+>
+> #### O que mudou, campo a campo
+>
+> | Schema | Campo | Antes | Depois |
+> |---|---|---|---|
+> | `CouponAdminResponse` | `valid_until` | `string(date-time)`, obrigatório | `string(date-time) \| null` |
+> | `CustomerCouponResponse` | `valid_until` | `string(date-time)`, obrigatório | `string(date-time) \| null` |
+> | `CouponCreate` | `valid_until` | obrigatório | **opcional**, e aceita `null` |
+> | `CouponUpdate` | `valid_until` | já era opcional | sem mudança |
+>
+> #### Onde isso chega, rota por rota
+>
+> **Painel:**
+>
+> - `GET /admin/coupons` — a lista de campanhas. **Um cupom sem prazo faz a
+>   lista inteira quebrar** se o cliente exigir a data;
+> - `POST /admin/coupons` — a criação;
+> - `PATCH /admin/coupons/{coupon_id}` — a edição.
+>
+> **App do cliente:**
+>
+> - `GET /restaurants/{slug}/coupons` — devolve `CustomerCouponsResponse`, que
+>   é uma **lista** de `CustomerCouponResponse`. Mesmo risco: um cupom sem
+>   prazo derruba a lista toda, não só o card dele.
+>
+> **Não mudou nada em** `POST /restaurants/{slug}/coupons/preview`
+> (`CouponPreviewResponse` não tem `valid_until`) nem na vitrine do cardápio
+> (`PublicCouponResponse` também não tem).
+>
+> #### O que fazer — PAINEL
+>
+> **1. A lista e o card da campanha.** Onde hoje se formata a data, tratar o
+> nulo:
+>
+> ```ts
+> const prazo = cupom.valid_until
+>   ? `Válido até ${formatarData(cupom.valid_until)}`
+>   : "Sem prazo";
+> ```
+>
+> **Escreva "Sem prazo", não um traço nem um campo vazio.** Campo vazio na tela
+> lê como "o lojista esqueceu de preencher", que é o oposto do que o `null`
+> significa aqui — e é o erro que faria alguém "consertar" a campanha pondo uma
+> data.
+>
+> **2. O formulário de criação e de edição.** O campo de data de fim deixa de
+> ser obrigatório. Sugestão de forma, e ela importa mais que o código: um
+> **checkbox "sem prazo"** que desabilita o campo de data, em vez de deixar o
+> campo simplesmente vazio. Campo vazio é ambíguo entre "não preenchi ainda" e
+> "não quero prazo"; o checkbox não é.
+>
+> **3. O PATCH que TIRA o prazo de uma campanha que já tem.** Isto é o que a
+> maioria vai errar:
+>
+> - `{"valid_until": null}` → **tira** o prazo (a campanha vira permanente);
+> - **omitir o campo** → **preserva** o que está gravado.
+>
+> São coisas diferentes, e o backend usa `exclude_unset` para distinguir. Se o
+> seu cliente HTTP remove chaves nulas do corpo antes de enviar — muitos fazem
+> —, **nunca vai dar para tirar o prazo pela tela**. Confira isso antes de
+> testar.
+>
+> É a mesma mecânica do `code`, e vale reusar o que já foi feito lá.
+>
+> **4. A validação do formulário.** A regra "fim depois do início" só vale
+> quando há fim. Com o campo vazio, não valide.
+>
+> #### O que fazer — APP DO CLIENTE
+>
+> **1. O card do cupom** (`GET /restaurants/{slug}/coupons`): mesma coisa que o
+> painel — "Sem prazo" em vez de data vazia. Um cupom permanente é uma **boa**
+> notícia para o cliente, e a tela deve dizer isso, não esconder.
+>
+> **2. Ordenação e "vence em breve", se existirem.** Qualquer lógica que ordene
+> ou destaque por proximidade do vencimento precisa decidir onde o `null` cai.
+> **Sugestão: por último**, e sem selo de urgência — campanha sem prazo nunca
+> está "vencendo".
+>
+> **3. Se houver contagem regressiva**, ela simplesmente não aparece.
+>
+> #### Como testar
+>
+> Não precisa esperar o lojista criar uma. Crie pelo painel ou pela API:
+>
+> ```http
+> POST /admin/coupons
+> { "coupon_template_id": "...", "title": "Permanente",
+>   "discount_type": "percent", "discount_value": 10,
+>   "valid_from": "2026-01-01T00:00:00Z" }
+> ```
+>
+> Sem `valid_until`. A campanha nasce sem prazo, aparece na vitrine, aparece na
+> lista do cliente e aplica no checkout.
+>
+> E o caso que mais interessa testar é o **segundo**: com um cupom permanente e
+> um com data na mesma lista, a tela precisa mostrar os dois.
+>
+> #### O que NÃO mudou, para poupar procura
+>
+> - `valid_from` continua **obrigatório**. Campanha sem início não tem
+>   significado útil — "vale desde sempre" é o mesmo que a data de criação;
+> - a mensagem de cupom vencido continua sendo `expired` em
+>   `ineligibility_reason`, e a de campanha que não começou, `not_started`;
+> - a vitrine do cardápio e o preview não têm o campo.
+
+---
+
+### O que fica do lado do backend
+
+O `openapi.json` versionado já está com a mudança, e é dele que os dois
+clientes geram os tipos — não da API em produção. **Não há deploy pendente
+para os dois repositórios começarem**: o arquivo está no commit.
+
+O que **ainda não existe em produção** é um cupom sem prazo — nenhum foi
+criado. Ou seja: a mudança pode ser feita nos dois clientes **antes** de a
+primeira campanha permanente existir, sem janela de incompatibilidade. É a
+ordem barata, e vale dizer ao lojista para não criar uma até as telas estarem
+prontas.
+
+---
+
+## Fechamento da rodada 4
+
+**Portão: 2856 testes verdes** (2240 rápidos + 616 `db`), 126 do agente de
+impressão, ruff limpo, `openapi.json` em dia, lock em dia.
+
+### A skill
+
+A armadilha 54 foi corrigida (ela ainda descrevia o 404) e a 56 ganhou o
+achado novo — a mensagem do cliente na chave do cache de busca, e o varredor
+que fecha a classe.
+
+### O que continua fora, e esperando você
+
+- **o comando das filiais** — não rodei, não sugeri rodar. O `6fcaccc`
+  continua esperando;
+- **os três comandos do Redis** (§3 da rodada 3) — só leitura, e a resposta
+  deles é a única coisa que muda a conclusão do plano de exclusão de conta;
+- **declarar o Redis no `docs/lgpd-proposta.md`** — o inventário continua
+  incompleto sem ele, e agora há o quê declarar: o IP do rate limit, com base
+  legal e prazo;
+- **a revisão de alinhamento** (`alembic/preparadas/`) e as 13 colunas que
+  dependem dela;
+- **o texto da §3 acima**, para colar nos outros dois repositórios.

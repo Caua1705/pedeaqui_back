@@ -30,7 +30,7 @@ A rodada anterior está em `scratchpad/rodada-back.md` e continua válida.
 |---|---|---|
 | 0 | Scratchpad da rodada | **feito** |
 | 1.1 | As 16 colunas: caminho de leitura que quebra | **feito** — 8 com risco real, 4 silenciosas, 4 sem risco |
-| 1.2 | Teste que prova que os 2 models não são instanciados | pendente |
+| 1.2 | Teste que prova que os 2 models não são instanciados | **feito** |
 | 1.3 | Revisão de alinhamento escrita, sem aplicar | pendente |
 | 1.4 | `divergencias_orm_schema.py` no portão como aviso | pendente |
 | 2 | Dublês falsos na suíte inteira | pendente |
@@ -169,3 +169,44 @@ descrevendo um defeito que ele não estava exercitando — a classe exata do ite
 2 desta rodada, encontrada dentro do item 1. O que a pegou foi conferir que a
 **mesma chamada com o dado certo NÃO levanta**; passou a ser o procedimento
 para todo teste de `pytest.raises` daqui em diante. Valor certo: `"percent"`.
+
+---
+
+## 1.2 As 2 que mordem: a trava para quando alguém instanciar
+
+`ai_product_embeddings.content` e `coupon_templates.image_path` são a
+interseção mais perigosa do levantamento:
+
+    banco diz NOT NULL  +  coluna SEM DEFAULT  +  model diz nullable
+
+Nessa combinação, `Modelo(...)` **sem** aquela coluna passa no type checker e
+passa no `flush()` — o SQLAlchemy nem manda a coluna, porque a anotação diz que
+ela é opcional — e estoura `IntegrityError` no INSERT, em runtime. Nenhum teste
+existente veria isso antes de acontecer em produção.
+
+**Por que não acontece hoje, e por que o motivo é frágil.** Nada instancia os
+dois: o índice vetorial é `INSERT` cru em `AIRepository` (o tipo `vector` não
+passa pelo ORM) e `coupon_templates` não tem rota de escrita — o painel escolhe
+uma arte que já existe, nunca cria. As duas ausências são **circunstância, não
+decisão**. Um seeder de arte nova seria exatamente
+`CouponTemplate(name=..., discount_type=...)`.
+
+`tests/test_models_nunca_instanciados.py` — três testes:
+
+1. e 2. varredura **AST** (não grep) de `src/` e `scripts/` atrás de
+   `ast.Call` cujo alvo seja um dos dois models. AST importa: para o grep,
+   `AIProductEmbedding.content_hash` — que é uso legítimo, e existe em
+   `AIRepository` — e `AIProductEmbedding(...)` são a mesma string e coisas
+   opostas. O `assert` não proíbe instanciar: ele **explica** e manda passar a
+   coluna, corrigir o model, e só então apagar a trava.
+3. um teste `db` que mostra uma vez o que a trava evita: `AIProductEmbedding`
+   sem `content` → `IntegrityError` do Postgres de verdade. Contra o banco e
+   não com dublê de propósito — a regra mora no DDL, e um dublê responderia o
+   que o ORM acha, que é o lado errado.
+
+**Visto vermelho.** Acrescentei `CouponTemplate(...)` e `AIProductEmbedding()`
+a um script, rodei, e os dois testes falharam nomeando `arquivo:linha`. Depois
+restaurei o script.
+
+`tests/` fica de fora da varredura de propósito: é lá que os models **podem**
+ser construídos, inclusive no terceiro teste deste mesmo arquivo.

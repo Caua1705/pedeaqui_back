@@ -34,7 +34,7 @@ A rodada anterior está em `scratchpad/rodada-back.md` e continua válida.
 | 1.3 | Revisão de alinhamento escrita, sem aplicar | **feito** — e executada contra o Postgres de teste |
 | 1.4 | `divergencias_orm_schema.py` no portão como aviso | **feito** |
 | 2 | Dublês falsos na suíte inteira | **feito** — 141 achados, 141 convertidos |
-| 3 | Testes dependentes da hora | pendente |
+| 3 | Testes dependentes da hora | **feito** — 1 achado real, 3 serviços com relógio injetável |
 | 4 | Query do `tracking_token`, pronta para colar | pendente |
 | 5.1 | Plano do histórico de chat em memória | pendente |
 | 5.2 | Plano do índice ANN no pgvector | pendente |
@@ -498,3 +498,96 @@ decide se o cartão é oferecido (`sandbox` não oferece).
   ignorando `restaurant_id` inteiro. Ganhou as duas asserções que provam o
   que o nome diz: o par `(order_id, restaurant_id)` que chegou ao repositório,
   e que o objeto serializado é o pedido do B.
+
+
+---
+
+## 3. Testes que dependem da hora
+
+### O método: rodar a suíte inteira com o relógio congelado
+
+Não bastava grepar `datetime.now()` — 102 ocorrências, e a maioria é legítima.
+O que decide é **empírico**: um plugin de pytest descartável (não entra no
+repositório) troca `datetime`/`date` por subclasses congeladas em **todo módulo
+cujo arquivo está sob a raiz** do projeto, e a suíte rápida roda em instantes
+adversariais. O que falhar num instante e passar noutro é a classe procurada.
+
+**Dois detalhes do plugin custaram a acertar, e os dois valem registro:**
+
+1. **Congelar em `pytest_configure` não alcança os testes.** Os módulos de
+   teste só existem em `sys.modules` depois da coleta. Congelando só o `src/`,
+   os dois lados da conta ficam em relógios diferentes — e isso produz falha
+   que *parece* achado. O plugin congela duas vezes: em `pytest_configure` e
+   em `pytest_collection_modifyitems`.
+2. **Filtrar por nome de módulo não alcança os testes.** `pythonpath = .` faz o
+   pytest importá-los como `test_x`, sem prefixo `tests.`. O filtro certo é
+   pelo caminho do `__file__`.
+
+Antes de acertar os dois, a varredura acusava 24 falhas; depois, 17 — e as 7
+que sumiram eram do próprio plugin.
+
+Instantes rodados: **12:00**, **23:59:30**, **00:00:30 do dia seguinte**,
+**domingo 03:00** e **31/12 23:00**, todos no fuso da loja.
+
+### O achado
+
+**`tests/test_branch_hours.py::EnsureOpenTests::test_open_branch_returns_the_current_period`
+falhava 59 segundos por dia** — o único teste que falhou às 23:59:30 e passou
+às 12:00.
+
+O comentário dele dizia, com todas as letras: *"Dia inteiro aberto para não
+depender da hora em que o teste roda."* A faixa era `00:00–23:59`, e
+`_period_covers_same_day` compara `current_time <= closes_at`: às **23:59:30**
+a faixa não cobre nada, a filial fica fechada e `ensure_branch_is_open` levanta
+400. O vermelho não apontaria para a hora em lugar nenhum.
+
+**Por que só esse método:** `find_current_period` sempre aceitou um `now`;
+`ensure_branch_is_open` não tinha como passar um — lia o relógio da máquina.
+
+### O conserto: relógio injetável em três serviços
+
+Mesmo desenho que `CouponService.clock` já usava — a convenção existia e não
+tinha sido aplicada aqui:
+
+| Serviço | O que lia o relógio |
+|---|---|
+| `BranchHoursService` | `ensure_branch_is_open` (agora aceita `now`) e `find_current_period` |
+| `DeliveryEstimateService` | `_resolve_prep_time` |
+| `BranchAvailabilityService` | `list_availability` |
+
+Como os testes constroem esses serviços por `__new__`, **esquecer de injetar é
+`AttributeError` alto** em vez de silenciosamente voltar ao relógio da máquina.
+Foi o que aconteceu: 65 testes de `test_delivery_estimate` e
+`test_branch_availability` ficaram vermelhos até declararem o instante — e os
+dois arquivos carregavam o mesmo buraco de 23:59 sem saber.
+
+Também virou instante fixo o `created_at=datetime.now()` de
+`test_admin_order_filters` (a lista não lê a hora para nada).
+
+### O buraco de 23:59 NÃO foi consertado, e está afirmado
+
+`test_a_faixa_ate_23_59_nao_cobre_23_59_30` afirma o comportamento. Ele está
+**correto**: o lojista disse "até 23:59", e 23:59:30 é depois disso.
+
+**Uma correção ao que eu tinha escrito antes:** cheguei a documentar que
+`00:00–00:00` significaria 24 horas. Conferi contra a função e **é falso** —
+`opens_at <= closes_at` é verdadeiro, então cai no ramo do mesmo dia e cobre
+exatamente a meia-noite. Hoje não há forma limpa de cadastrar 24 horas:
+precisaria de `closes_at` com segundos, e nem o painel nem `BusinessHourInput`
+pedem segundos. Custo de mexer no formato do cadastro > custo de um minuto por
+dia; fica anotado, não mexido.
+
+### O resultado, e o limite honesto do método
+
+Depois do conserto: **nenhuma falha nova em nenhum dos cinco instantes.** As 17
+que sobram são artefato do plugin — PyJWT valida `exp` com `time.time()`, que é
+C e não passa pelo `datetime` que o plugin troca. Elas são **idênticas nos cinco
+instantes** (nem uma a mais, nem uma a menos), que é como se sabe que são ruído.
+
+**O que este método NÃO cobre: a suíte `db`.** Lá o `created_at` sai do
+`server_default now()`, que é o relógio do *Postgres* — congelar o Python
+produziria falha falsa. Esses foram lidos à mão, um a um: `periodo_de_relatorio`
+(que já tem o cuidado documentado, com `hoje + 1` por causa do fuso),
+`test_admin_avaliacoes_db` e `test_cardapio_por_filial_e2e_db` (janela de ±1
+dia), e as quatro suítes de retenção (margens em DIAS). Nenhum com margem de
+borda.

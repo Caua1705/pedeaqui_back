@@ -20,7 +20,7 @@ banco sao dublados e a regra de negocio (horario, taxa) roda de verdade.
 
 import unittest
 import uuid
-from datetime import time
+from datetime import datetime, time
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -37,7 +37,12 @@ from src.services.branch_hours_service import BranchHoursService
 from src.services.delivery_estimate_service import DeliveryEstimateService
 from src.services.restaurant_service import RestaurantService
 from src.utils.geo import haversine_km
+from src.services.branch_availability_service import BRANCH_TIMEZONE
 from tests import fabricas
+
+
+# Segunda-feira, 12:00, no fuso da loja. Ver o comentario do `clock` no setUp.
+AGORA = datetime(2026, 7, 27, 12, 0, tzinfo=BRANCH_TIMEZONE)
 
 
 DIA_INTEIRO = (time(0, 0), time(23, 59))
@@ -152,6 +157,11 @@ class BranchAvailabilityTests(unittest.TestCase):
         delivery.menu_repository = menu_repository
         delivery.maps_client = self.maps
         delivery.cache = FakeCache()
+        # O relogio injetado nos DOIS servicos, e o MESMO instante nos dois:
+        # a lista compara filiais entre si, e dois relogios diferentes
+        # compararia coisas medidas em momentos diferentes. Ver o comentario
+        # em `tests/test_delivery_estimate.py`.
+        delivery.clock = lambda: AGORA
 
         self.service = BranchAvailabilityService.__new__(BranchAvailabilityService)
         self.service.restaurant_service = SimpleNamespace(
@@ -161,6 +171,7 @@ class BranchAvailabilityTests(unittest.TestCase):
         self.service.menu_repository = menu_repository
         self.service.branch_hours_service = hours_service
         self.service.delivery_service = delivery
+        self.service.clock = lambda: AGORA
 
     # -----------------------------------------------------------------
 

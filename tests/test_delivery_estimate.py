@@ -1,6 +1,6 @@
 import unittest
 import uuid
-from datetime import time, timedelta
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -24,6 +24,11 @@ from src.services.delivery_estimate_service import (
 )
 
 from tests import fabricas
+
+
+# Segunda-feira, 12:00, no fuso da loja. Instante FIXO: ver o comentario de
+# `self.service.clock` no setUp.
+AGORA = datetime(2026, 7, 27, 12, 0, tzinfo=DELIVERY_TIMEZONE)
 
 
 def open_period(prep_time_min, prep_time_max, opens_at=time(0, 0), closes_at=time(23, 59)):
@@ -96,6 +101,14 @@ class DeliveryEstimateTests(unittest.TestCase):
         self.business_hours = []
         self.delivery_time_bands = []
         self.service = DeliveryEstimateService.__new__(DeliveryEstimateService)
+        # O RELOGIO INJETADO, e nao o da maquina.
+        #
+        # `open_period` cobre 00:00-23:59, e `_period_covers_same_day` compara
+        # `current_time <= closes_at`: rodando entre 23:59:01 e 23:59:59 a
+        # filial estaria FECHADA e as dezenas de testes que dependem dela
+        # falhariam — um minuto por dia, e nada no vermelho apontaria para a
+        # hora. Uma SEGUNDA de meio-dia nao tem borda nenhuma perto.
+        self.service.clock = lambda: AGORA
         self.service.restaurant_service = SimpleNamespace(
             get_active_restaurant=lambda slug: self.restaurant
         )

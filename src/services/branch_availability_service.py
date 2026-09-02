@@ -138,6 +138,11 @@ class BranchAvailabilityService:
         self.branch_hours_service = BranchHoursService(db)
         # Injetavel para o teste substituir o Google sem tocar em rede.
         self.delivery_service = delivery_service or DeliveryEstimateService(db)
+        # O relogio, injetavel — ver o comentario em `DeliveryEstimateService`.
+        # Aqui ele vale duas vezes: a lista compara filiais entre si, e um
+        # teste que dependesse do minuto compararia duas coisas medidas em
+        # momentos diferentes.
+        self.clock = lambda: datetime.now(BRANCH_TIMEZONE)
 
     def list_availability(
         self,
@@ -160,7 +165,7 @@ class BranchAvailabilityService:
         # duas filiais da mesma resposta poderiam cair em lados diferentes da
         # virada de horario — a lista sairia contando uma historia que nunca
         # foi verdade num unico momento.
-        now = datetime.now(BRANCH_TIMEZONE)
+        now = self.clock()
 
         itens = [
             self._branch_item(

@@ -214,6 +214,19 @@ class DeliveryEstimateService:
             routing_preference=settings.GOOGLE_MAPS_ROUTING_PREFERENCE,
         )
         self.cache = cache or DeliveryEstimateCache()
+        # O RELOGIO, INJETAVEL — mesmo desenho de `CouponService.clock`.
+        #
+        # Sem ele, `_resolve_prep_time` lia `datetime.now()` direto e todo
+        # teste de estimativa passava a depender do minuto em que rodasse. Nao
+        # e hipotese: a faixa "dia inteiro" que os testes usam vai de 00:00 a
+        # 23:59, e `_period_covers_same_day` compara `current_time <=
+        # closes_at` — entre 23:59:01 e 23:59:59 a filial estava FECHADA e as
+        # dezenas de testes que dependem dela falhavam. Um minuto por dia.
+        #
+        # Fuso do BRASIL e nao UTC: quem decide se a loja esta aberta e o
+        # relogio da rua, e `weekday()` de um instante UTC vira o dia errado
+        # nas tres primeiras horas da madrugada.
+        self.clock = lambda: datetime.now(DELIVERY_TIMEZONE)
 
     def estimate_and_store(
         self,
@@ -806,7 +819,7 @@ class DeliveryEstimateService:
         return hashlib.sha256("|".join(partes).encode("utf-8")).hexdigest()[:12]
 
     def _resolve_prep_time(self, branch_id) -> tuple[int | None, int | None, str, int]:
-        now = datetime.now(DELIVERY_TIMEZONE)
+        now = self.clock()
         weekday = now.weekday()
         # A escolha da faixa mudou de lugar: agora e BranchHoursService quem
         # decide, e ela devolve None quando o momento atual nao cai em faixa

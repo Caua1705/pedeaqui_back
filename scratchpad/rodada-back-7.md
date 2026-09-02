@@ -16,7 +16,7 @@ Rodadas anteriores: `rodada-back.md` a `rodada-back-6.md`.
 |---|---|---|
 | 1 | Rodar os três comandos do Redis | **não rodei** — são de produção, e não tenho a máquina |
 | 2 | Histórico de chat: módulo + backend de Redis | **feito**, dois commits |
-| 3 | O próximo item, escolhido pelo critério da regra sem ferramenta | pendente |
+| 3 | O próximo item, escolhido pelo critério da regra sem ferramenta | **feito** — varredura de escrita, commit e camadas |
 
 ---
 
@@ -166,3 +166,137 @@ lixo até o TTL.
 **Nada de código.** `REDIS_URL` já existe no `.env` de produção (é o mesmo que
 o rate limit e os dois caches usam), então o backend de Redis entra sozinho no
 próximo deploy — e o `[AI historico] backend=redis` no boot é como se confere.
+
+---
+
+## 3. O item que eu escolhi: escrita, commit e camadas
+
+### Por que este, e não outro
+
+O critério era seu: **"o método que mais rendeu foi varredura sobre regra
+escrita sem ferramenta. Se sobrar alguma regra nessa classe, ela vem antes de
+qualquer coisa nova."** Então a primeira coisa foi *conferir*, e não lembrar,
+quais regras escritas ainda não têm varredor. Sobraram três candidatas:
+
+| Regra escrita | Tem ferramenta? |
+|---|---|
+| "log não leva dado pessoal" | **tem** — `tests/test_log_sem_dado_pessoal.py`, que proíbe por *origem* (`address`, `customer`, `payer`…) e não por nome de campo |
+| "nada é apagado no cardápio" | não tem |
+| **`endpoint -> service -> repository`, e quem commita é o service** | **não tinha** |
+
+Escolhi a terceira, e o desempate foi o custo do defeito. "Nada é apagado no
+cardápio" erra alto: some um produto e o lojista vê. A regra da transação erra
+**calada** — escrita sem commit não levanta e não loga, e o sintoma chega dias
+depois como "o pedido não registrou o cashback".
+
+### O que o `grep` já respondia, e o que ele não responde
+
+Antes de escrever qualquer coisa eu conferi as três metades fáceis, e **as três
+já estavam de pé**: nenhum repositório chama `db.commit()`, nenhum levanta
+`HTTPException`, nenhum endpoint importa repositório. O varredor confere as três
+assim mesmo — custa nada, e o dia em que uma cair tem que ser vermelho e não
+descoberta.
+
+A metade que o grep **não** responde é a que vale, e são duas perguntas que
+precisam de **ordem** e de **cadeia de chamadas**:
+
+1. **escrita sem commit em lugar nenhum da cadeia** — a linha nunca chega ao
+   banco;
+2. **commit ENTRE duas escritas do mesmo método** — as duas deixam de ser
+   atômicas; uma falha no meio grava a primeira e perde a segunda. No caminho do
+   pedido isso é cupom consumido sem pedido.
+
+### Como ele classifica, e a porta que isso fecha
+
+Por **vocabulário de prefixo, explícito nos dois lados** (`create`, `mark`,
+`delete`… escrevem; `get`, `list`, `count`… leem). O que não casa com nenhuma
+das duas listas vira **"não classifiquei"** e sai como achado — **nunca como
+leitura**.
+
+Essa escolha é o coração do script. Deduzir leitura por exclusão faria um método
+de repositório com nome novo virar leitura por acidente, e uma escrita sem commit
+ficaria invisível para sempre — exatamente o buraco que ele existe para fechar.
+
+### O resultado, e as três vezes que ele estava errado antes de chegar nele
+
+**Zero achados.** Mas as três execuções anteriores diziam outra coisa, e as três
+eram defeito **meu**, sempre na direção de acusar código correto:
+
+1. **15 achados** — cobrava commit de **helper privado**. `_delete_addresses`
+   escreve e não commita, e está certo: quem commita é o `anonymize` que o chama,
+   uma vez, no fim. Cobrar commit dele seria pedir o **contrário** da regra, que
+   manda as várias escritas caírem na mesma transação. Corrigido para auditar só
+   **ponto de entrada** — quem não é chamado por ninguém.
+2. **1 achado** — `CashbackService.expire_balance`. Quem commita é
+   `scripts/expire_cashback.py`, no laço, uma vez por pessoa (de propósito: o
+   `FOR UPDATE` da conferência só é liberado no fim da transação, e segurar o
+   lock de quem não venceu travaria o checkout dessa pessoa). O índice só olhava
+   `src/`. Passou a incluir `scripts/` e `src/ai`.
+3. **ainda 1 achado** — `_chamados_por_alguem` varria só `_Indice.metodos`, e
+   `_expirar` é **função de módulo**, não método. Faltava `.funcoes`.
+
+É a quarta varredura seguida cujo primeiro número estava errado, e sempre para o
+mesmo lado. É por isso que o teste de anti-vacuidade não é acessório.
+
+### A anti-vacuidade, e a mutação que provou que ela vale
+
+`tests/test_escrita_e_transacao.py`, 19 testes sobre uma **árvore plantada em
+disco** (`auditar(raiz)` existe para isso, como o `diretorios` do
+`escopo_das_rotas`). Em disco, e não com `ast.Module` injetado, porque ler
+arquivo é parte do que se testa — índice, diretórios, casamento por prefixo.
+
+Cada grupo tem os **dois lados**: a isca que ele tem que acusar, e o padrão
+legítimo que ele **não pode** acusar. O segundo lado é o que impede o conserto
+preguiçoso — um varredor que acusa tudo passa em toda isca e é inútil na mesma
+medida. Os legítimos incluem os dois falsos positivos de cima, virados em teste:
+o helper privado e o commit que mora num script de manutenção.
+
+**19 verdes de primeira não provam nada**, então eu quebrei o varredor de nove
+maneiras e conferi quem morre:
+
+| Mutação | Vermelhos |
+|---|---|
+| tudo vira leitura | as 2 iscas + a de vocabulário |
+| nada é repositório | as 2 iscas + a de vocabulário |
+| commit sempre visto | as 2 iscas + a de vocabulário |
+| grep dos repositórios cego | as 2 iscas de camada |
+| grep dos endpoints cego | a isca de endpoint |
+| **tudo vira escrita** | os legítimos: só-leitura, vocabulário, `src/` |
+| **ninguém é chamado** | helper privado, script de manutenção, `src/` |
+| **commit nunca visto** | commit em cadeia, commit no fim, `src/` |
+| `_eventos` sem o `sorted` | o teste de ordem, e `src/` |
+
+A última achou um teste **vacuoso meu**: o caso que eu tinha escrito para a
+ordem era simétrico, e sobrevivia a qualquer embaralhamento. Troquei por um em
+que `ast.walk` mente de verdade — escrita no topo, escrita **dentro de um
+`if`**, commit no topo. A largura entrega os nós de profundidade 1 primeiro, e
+o método legítimo é lido como escrita/commit/escrita. Sem o `sorted` por
+`lineno`, esse teste fica vermelho; é assim que ele foi conferido.
+
+### No portão: falha, e não aviso
+
+Igual aos dublês e ao Redis, e pelo mesmo argumento da rodada 6. Aqui **nunca
+houve dívida herdada** — as quatro metades da regra já estavam de pé quando o
+varredor nasceu. Zero que cresce é **regressão**.
+
+Quem cobra é `OEstadoDeHojeTests.test_o_repositorio_esta_limpo`, na suíte
+rápida. O passo do CI é `if: failure()` e só imprime a saída legível, como os
+outros três.
+
+### O que ele NÃO faz, e está escrito no docstring
+
+- **não enxerga `flush`.** Vários repositórios usam `db.flush()` para obter o id
+  antes do commit do service, e isso é **correto** — há teste exigindo que
+  `flush` não seja acusado. O script fala de COMMIT;
+- **não segue chamada que não resolve.** Reusa o índice do `escopo_das_rotas`,
+  que resolve `self.metodo`, `self.atributo.metodo` e `Classe(db).metodo`. O
+  resto para — e a parada é reportada, nunca engolida.
+
+### Arquivos
+
+`scripts/escrita_e_transacao.py` (novo) · `tests/test_escrita_e_transacao.py`
+(novo) · `.github/workflows/ci.yml`.
+
+**Portão: 2912 testes verdes** (2293 rápidos + 619 `db`), ruff limpo,
+`openapi.json` em dia, lockfile em dia. Nada de produção: o script só lê código,
+não abre banco.

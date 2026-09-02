@@ -235,6 +235,17 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
 
+      # Dado pessoal em chave de Redis: VERMELHO, e nao aviso.
+      #
+      # Mesma regra dos dubles de dado: aqui o numero certo e ZERO, e zero que
+      # cresce nao e divida herdada — e regressao. Quem cobra e
+      # `tests/test_dado_pessoal_no_redis.py`, que roda na suite rapida; este
+      # passo so imprime a saida legivel quando algo ja falhou.
+      - name: Dado pessoal em chave de Redis (so a saida legivel)
+        if: failure()
+        continue-on-error: true
+        run: python scripts/dados_pessoais_em_chave.py --tudo
+
       # A terceira, e a unica das tres que e VERMELHO e nao aviso.
       #
       # `dubles_de_dado` ja roda como teste (`tests/test_dubles_de_dado.py`) e

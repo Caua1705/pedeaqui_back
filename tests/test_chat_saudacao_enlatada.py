@@ -27,15 +27,18 @@ import pytest
 
 from src.ai.services.greeting import GREETING_REPLIES, greeting_reply
 from src.services import chat_service as chat_module
-from src.services.chat_service import _SESSION_HISTORY, ChatService
+from datetime import datetime, timezone
+
+from src.ai.services.chat_history import historico
+from src.services.chat_service import ChatService
 from tests import fabricas
 
 
 @pytest.fixture(autouse=True)
 def sessao_limpa():
-    _SESSION_HISTORY.clear()
+    historico.esquecer_tudo()
     yield
-    _SESSION_HISTORY.clear()
+    historico.esquecer_tudo()
 
 
 class NaoDeveriaSerChamado:
@@ -102,7 +105,10 @@ class TestHistorico:
             message="oi",
         )
 
-        mensagens = _SESSION_HISTORY["sessao-1"]["messages"]
+        # Pelo CONTRATO (`ler`), e nao pelo dicionario por dentro: a saudacao
+        # enlatada nao chama o modelo, mas o turno tem que entrar no historico
+        # do mesmo jeito — senao a proxima mensagem chega sem contexto nenhum.
+        mensagens = historico.ler("sessao-1", datetime.now(timezone.utc))
         assert mensagens == [
             {"role": "user", "content": "oi"},
             {"role": "assistant", "content": resposta.message},

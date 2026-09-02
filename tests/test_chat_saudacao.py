@@ -27,16 +27,17 @@ import pytest
 from src.ai.services.greeting import GREETINGS, is_greeting
 from src.models.branch_model import Branch
 from src.services import chat_service as chat_module
-from src.services.chat_service import _SESSION_HISTORY, ChatService
+from src.ai.services.chat_history import historico
+from src.services.chat_service import ChatService
 from src.ai.schemas.chat_response_schema import ChatLLMResponse
 from tests import fabricas
 
 
 @pytest.fixture(autouse=True)
 def sessao_limpa():
-    _SESSION_HISTORY.clear()
+    historico.esquecer_tudo()
     yield
-    _SESSION_HISTORY.clear()
+    historico.esquecer_tudo()
 
 
 class TestReconheceSaudacao:

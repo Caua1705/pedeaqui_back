@@ -215,7 +215,13 @@ class AAuditoriaTests(unittest.TestCase):
         crescimento do painel, so recusam o zero e o quase-zero.
         """
         assert len(self.linhas) > 50, f"so {len(self.linhas)} rotas /admin encontradas"
-        com_filial = [linha for linha in self.linhas if linha["aceita_filial"]]
+        do_entregador = [linha for linha in self.linhas if linha["publico"] == "entregador"]
+        assert len(do_entregador) >= 5, (
+            f"so {len(do_entregador)} rotas /courier encontradas. Os tres testes do "
+            "entregador afirmam a ausencia de achado numa lista — com a lista vazia "
+            "eles passam sem auditar nada."
+        )
+        com_filial = [linha for linha in self.linhas if linha.get("aceita_filial")]
         assert len(com_filial) > 20, (
             f"so {len(com_filial)} rotas com `branch_id` do cliente. Se o painel "
             "mudou tanto assim, o numero desce; se o varredor parou de enxergar "

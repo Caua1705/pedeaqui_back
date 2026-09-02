@@ -389,6 +389,13 @@ def _linhas_do_entregador(rota, indice: _Indice, tipo_do_entregador: type) -> li
         completo = False
     else:
         _, _, entregador, completo = _procurar(corpo, None, indice, 0, set())
+        # A pergunta desta dimensao termina na consulta recortada por
+        # `courier.id`. O que vem depois dela — o writer de status, o cupom,
+        # o cashback — e a cadeia que as tres portas do painel ja percorrem,
+        # e ela passa da PROFUNDIDADE_MAXIMA. Uma rota que chegou ao recorte
+        # e que o varredor nao seguiu ate o ultimo salto do writer nao e
+        # cadeia nao seguida: e cadeia respondida.
+        completo = completo or entregador
 
     linhas = []
     for metodo in sorted(rota.methods - {"HEAD", "OPTIONS"}):

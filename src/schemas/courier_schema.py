@@ -6,7 +6,7 @@ Dinheiro sai como `float` via `money_to_float`, como o resto do painel
 pedido).
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from uuid import UUID
@@ -212,3 +212,112 @@ class AdminOrderCourierResponse(BaseModel):
 
     assignment: AdminAssignmentResponse | None = None
     courier: AdminCourierResponse | None = None
+
+
+# --- O lado do ENTREGADOR ---------------------------------------------------
+
+
+class CourierMeResponse(BaseModel):
+    name: str
+    branch_name: str
+
+
+class CourierOrderResponse(BaseModel):
+    """Um pedido nas maos do entregador — o que ele precisa para entregar.
+
+    NAO e o `OrderDetailResponse`: aquele traz itens, valores de desconto e
+    o historico inteiro, e o motoboy nao precisa de nada disso. O que ele
+    precisa e endereco, telefone, e quanto receber na porta.
+
+    `amount_to_collect` e o total SO quando o pedido e pago na entrega. Pago
+    online (ou pix ainda pendente) e zero: nao ha o que receber.
+    """
+
+    order_id: UUID
+    order_number: int
+    status: str
+    # O que o botao pode fazer neste estado. Em preparo, nenhum dos dois.
+    can_leave: bool
+    can_deliver: bool
+    customer_name: str
+    customer_phone: str
+    address_street: str | None = None
+    address_number: str | None = None
+    address_neighborhood: str | None = None
+    address_complement: str | None = None
+    address_reference: str | None = None
+    address_city: str | None = None
+    delivery_latitude: float | None = None
+    delivery_longitude: float | None = None
+    notes: str | None = None
+    payment_method: str | None = None
+    is_paid: bool
+    amount_to_collect: float
+    total: float
+    # A taxa DELE nesta corrida, congelada na atribuicao. Nulo = a filial
+    # nao tinha taxa configurada.
+    courier_fee: float | None = None
+    assigned_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+# Teto do lote de "saiu para entrega". O motoboy leva meia duzia por
+# corrida; cinquenta e o mesmo teto da atribuicao pelo painel.
+MAX_ORDERS_PER_STATUS_BATCH = 50
+
+
+class CourierOrdersStatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    order_ids: list[UUID] = Field(min_length=1, max_length=MAX_ORDERS_PER_STATUS_BATCH)
+
+
+class CourierStatusErrorCode(str, Enum):
+    """Por que um pedido do lote NAO mudou. Enum para a lista sair no
+    /openapi.json (armadilha 16)."""
+
+    # Nao esta com ele — inclusive o que ja terminou.
+    NOT_FOUND = "not_found"
+    # Ainda nao esta pronto, ou ja saiu. `message` traz a frase.
+    WRONG_STATUS = "wrong_status"
+
+
+class CourierStatusResultItem(BaseModel):
+    order_id: UUID
+    ok: bool
+    error: CourierStatusErrorCode | None = None
+    message: str | None = None
+    order: CourierOrderResponse | None = None
+
+
+class CourierStatusBatchResponse(BaseModel):
+    """Um item por `order_id` do corpo, na mesma ordem. Os `ok` JA SAIRAM,
+    mesmo que outro do lote tenha falhado."""
+
+    items: list[CourierStatusResultItem]
+
+
+class CourierHistoryItem(BaseModel):
+    order_id: UUID
+    order_number: int
+    delivered_at: datetime
+    address_neighborhood: str | None = None
+    distance_km: float | None = None
+    courier_fee: float | None = None
+
+
+class CourierHistoryResponse(BaseModel):
+    """"Quanto fiz": as entregas concluidas no periodo e a soma das taxas.
+
+    `deliveries_without_fee` conta as corridas cujo snapshot e nulo (a
+    filial nao tinha taxa na atribuicao). Elas entram em
+    `deliveries_count` e NAO entram em `fee_total` — e o numero que o
+    motoboy leva ao dono para acertar a mao.
+    """
+
+    start_date: date
+    end_date: date
+    deliveries_count: int
+    deliveries_without_fee: int
+    fee_total: float
+    deliveries: list[CourierHistoryItem]

@@ -23,7 +23,7 @@ cadastrar rápido.**
 | 3 | Admin: taxa do entregador da filial | **feito** — `GET`/`PATCH /admin/branches/{id}/courier-fee` |
 | 4 | Admin: cadastro (listar, criar, editar, ativar/desativar, excluir) + código | **feito** — `/admin/couriers`, `/admin/couriers/{id}`, `/admin/couriers/{id}/access` |
 | 5 | Admin: atribuir e desatribuir pedidos | **feito** — `POST`/`GET /admin/couriers/{id}/assignments`, `GET`/`DELETE /admin/orders/{id}/courier` |
-| 6 | Entregador: autenticação (link + código), lista, saiu/entregue, histórico | pendente |
+| 6 | Entregador: autenticação (link + código), lista, saiu/entregue, histórico | **feito** — cinco rotas em `/courier/{link_token}/...` |
 | 7 | Docs, contrato para o painel e para o app, fase 2 | pendente |
 
 ---
@@ -348,6 +348,61 @@ do nome na listagem, é fase 2 (junção em `list_orders_by_restaurant`).
 
 Vermelho visto: `ImportError` e rotas não registradas. 22 rápidos + 2 de
 banco verdes.
+
+## 6. A porta do entregador
+
+Cinco rotas em `/courier/{link_token}/...`, todas com `X-Courier-Code` no
+cabeçalho e rate limit `30/minute;600/hour` por IP (a barreira contra força
+bruta dos seis dígitos: um milhão de combinações a 600/h são mais de dois
+meses por IP):
+
+| Rota | O quê |
+|---|---|
+| `GET .../me` | quem é, de que loja — a rota que o app usa para conferir o código antes de guardá-lo |
+| `GET .../orders` | os abertos dele (não terminais), com endereço, telefone, pagamento, `is_paid`, `amount_to_collect`, `can_leave`/`can_deliver` |
+| `POST .../orders/out-for-delivery` `{order_ids}` | por item: `not_found` / `wrong_status` (+`message`); os `ok` já saíram |
+| `POST .../orders/{id}/delivered` | 409 se não saiu; 404 se não é dele (inclusive já entregue) |
+| `GET .../history?start_date&end_date` | entregas concluídas e soma das taxas; sem datas = hoje no fuso da operação; até 92 dias; `deliveries_without_fee` separado |
+
+**A quarta porta do writer.** `CourierDeliveryService._apply` chama
+`OrderStatusChangeService.apply` com `changed_by="entregador:<nome>"`,
+`requester="entregador:<id>"` e rota própria. A regra da porta é
+`ensure_courier_can_set` em `order_state_machine.py`, sobre a tabela
+`COURIER_TRANSITIONS = {ready: out_for_delivery, out_for_delivery: completed}`
+— só diz quais arestas EXISTENTES a porta usa; o grafo não mudou. O
+cashback é creditado no `completed` de graça (há teste com o dublê do
+`cashback_service` registrando a chamada, e o e2e mostra os dois eventos
+assinados `entregador:Zé` no histórico que o painel lê).
+
+**Códigos da credencial:** 404 para link desconhecido, regenerado, inativo
+ou excluído (mesma frase — o link "morre" sem dizer por quê); 401 para
+código ausente ou errado (o app distingue "peça outro link" de "digite de
+novo"). Bearer de lojista não abre `/courier` e o par não abre `/admin`
+(teste e2e `test_as_duas_credenciais_nao_se_cruzam`).
+
+**Duas mudanças no repositório que a porta exigiu:**
+
+- `mark_open_assignments_unassigned` recebe `except_order_statuses`
+  (os terminais, passados pelo service — "quem sabe o que é terminal é a
+  máquina de estados"). Sem isso, desativar um motoboy fecharia as
+  atribuições dos pedidos JÁ ENTREGUES e apagaria as entregas do histórico
+  que o dono usa para pagar;
+- `list_deliveries_by_courier` lê o instante da linha `completed` em
+  `order_status_history` (não `orders.updated_at`, que muda por qualquer
+  escrita) e só conta a atribuição ABERTA — a de quem estava com o pedido
+  quando ele foi entregue.
+
+**O varredor de escopo precisou de um critério a mais:** a cadeia das duas
+rotas de escrita passa pelo writer e ultrapassa `PROFUNDIDADE_MAXIMA`. Para
+a dimensão do entregador a pergunta termina na consulta recortada por
+`courier.id`; o que vem depois é a cadeia que as três portas do painel já
+percorrem. `completo = completo or entregador`, com o motivo escrito no
+script. Anti-vacuidade sobre o app real: `>= 5` rotas `/courier`.
+
+Vermelho visto: `ImportError` na coleta, depois as rotas não registradas.
+Verdes: 40 rápidos + 5 e2e de banco. **Portão: 3126 verdes** (2475 rápidos
++ 651 `db`), ruff limpo, `openapi.json` regenerado, 41 divergências
+ORM×schema (inalterado), varreduras em 0.
 
 ## Portão
 

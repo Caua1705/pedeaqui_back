@@ -87,11 +87,13 @@ class FakeCourierRepository:
         assignment.unassigned_at = now
         assignment.unassigned_by_admin_user_id = admin_user_id
 
-    def list_open_orders_by_courier(self, courier_id):
+    def list_open_orders_by_courier(self, courier_id, exclude_statuses=()):
         return [
             (assignment, self.orders_by_id[assignment.order_id])
             for assignment in self.assignments
-            if assignment.courier_id == courier_id and assignment.unassigned_at is None
+            if assignment.courier_id == courier_id
+            and assignment.unassigned_at is None
+            and self.orders_by_id[assignment.order_id].status not in exclude_statuses
         ]
 
 

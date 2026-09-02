@@ -130,7 +130,7 @@ class AdminCourierService:
         # "atribuido". Reativar NAO reabre: o painel reatribui.
         if changes.get("is_active") is False:
             self.courier_repository.mark_open_assignments_unassigned(
-                courier.id, scope.admin_user.id
+                courier.id, scope.admin_user.id, except_order_statuses=TERMINAL_ORDER_STATUSES
             )
         self._commit()
         return self._courier_response(courier)
@@ -148,7 +148,9 @@ class AdminCourierService:
         courier.is_active = False
         courier.access_link_hash = None
         courier.access_code_hash = None
-        self.courier_repository.mark_open_assignments_unassigned(courier.id, scope.admin_user.id)
+        self.courier_repository.mark_open_assignments_unassigned(
+            courier.id, scope.admin_user.id, except_order_statuses=TERMINAL_ORDER_STATUSES
+        )
         self._commit()
 
     def generate_access(self, scope: AdminScope, courier_id: uuid.UUID) -> AdminCourierAccessResponse:
@@ -261,7 +263,9 @@ class AdminCourierService:
         self, scope: AdminScope, courier_id: uuid.UUID
     ) -> list[AdminAssignmentResponse]:
         courier = self._get_courier(scope, courier_id)
-        rows = self.courier_repository.list_open_orders_by_courier(courier.id)
+        rows = self.courier_repository.list_open_orders_by_courier(
+            courier.id, exclude_statuses=TERMINAL_ORDER_STATUSES
+        )
         return [self._assignment_response(assignment, order) for assignment, order in rows]
 
     def get_order_courier(self, scope: AdminScope, order_id: uuid.UUID) -> AdminOrderCourierResponse:

@@ -91,7 +91,7 @@ class FakeCourierRepository:
         self.couriers[courier.id] = courier
         return courier
 
-    def mark_open_assignments_unassigned(self, courier_id, admin_user_id):
+    def mark_open_assignments_unassigned(self, courier_id, admin_user_id, except_order_statuses=()):
         self.closed_for.append((courier_id, admin_user_id))
         return 0
 

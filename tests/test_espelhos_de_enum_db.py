@@ -17,6 +17,15 @@ provas: que ele **enxerga as quatro formas** em que uma lista fechada é
 escrita aqui, que ele **acusa a divergência nos dois sentidos**, e que ele
 está olhando para um banco que de fato tem colunas de enum — um regex quebrado
 daria zero colunas, e zero colunas daria zero divergências.
+
+O varredor também acusa **constraint duplicada** (duas CHECK com a definição
+idêntica, avaliadas as duas em toda escrita — a armadilha 4 na forma que o
+`audit_indexes.py` não vê). Aqui a prova tem duas metades e a segunda é a que
+importa: ele acusa o par idêntico **e deixa passar duas CHECK diferentes sobre
+a mesma coluna**. O achado pede um DROP, e um DROP na constraint errada não dá
+erro nenhum no dia em que roda — foi exatamente o falso positivo da primeira
+versão, que acusava a lista de tipos de desconto junto com a regra que amarra
+o valor ao tipo.
 """
 
 import textwrap
@@ -138,7 +147,7 @@ class TestEleAcusa:
         achados = self._auditar(
             monkeypatch,
             codigo_plantado,
-            {"ck_formas": {"tabela": "t", "coluna": "forma", "valores": {"pix", "cash", "voucher"}}},
+            {"ck_formas": {"tabela": "t", "coluna": "forma", "valores": {"pix", "cash", "voucher"}, "definicao": "d1"}},
             {"ck_formas": "src/core/constants.py:FORMAS"},
         )
 
@@ -149,7 +158,7 @@ class TestEleAcusa:
         achados = self._auditar(
             monkeypatch,
             codigo_plantado,
-            {"ck_formas": {"tabela": "t", "coluna": "forma", "valores": {"pix"}}},
+            {"ck_formas": {"tabela": "t", "coluna": "forma", "valores": {"pix"}, "definicao": "d2"}},
             {"ck_formas": "src/core/constants.py:FORMAS"},
         )
 
@@ -162,7 +171,7 @@ class TestEleAcusa:
         achados = self._auditar(
             monkeypatch,
             codigo_plantado,
-            {"ck_nova": {"tabela": "t", "coluna": "nova", "valores": {"a", "b"}}},
+            {"ck_nova": {"tabela": "t", "coluna": "nova", "valores": {"a", "b"}, "definicao": "d3"}},
             {},
         )
 
@@ -172,7 +181,7 @@ class TestEleAcusa:
         achados = self._auditar(
             monkeypatch,
             codigo_plantado,
-            {"ck_formas": {"tabela": "t", "coluna": "forma", "valores": {"pix", "cash"}}},
+            {"ck_formas": {"tabela": "t", "coluna": "forma", "valores": {"pix", "cash"}, "definicao": "d4"}},
             {"ck_formas": "src/core/constants.py:CONSTANTE_QUE_NAO_EXISTE"},
         )
 
@@ -189,13 +198,64 @@ class TestEleAcusa:
 
         assert [a.tipo for a in achados] == ["constraint sumiu"]
 
+    def test_duas_CHECK_com_a_MESMA_definicao(self, monkeypatch, codigo_plantado):
+        """`admin_users` tinha uma: `admin_users_role_check` e
+        `ck_admin_users_role`, idênticas, as duas avaliadas em toda escrita."""
+        identica = "CHECK ((papel = ANY (ARRAY['a'::text, 'b'::text])))"
+        achados = self._auditar(
+            monkeypatch,
+            codigo_plantado,
+            {
+                "t_papel_check": {"tabela": "t", "coluna": "papel", "valores": {"a", "b"}, "definicao": identica},
+                "ck_t_papel": {"tabela": "t", "coluna": "papel", "valores": {"a", "b"}, "definicao": identica},
+            },
+            {
+                "t_papel_check": (SEM_ESPELHO, "declarada"),
+                "ck_t_papel": (SEM_ESPELHO, "declarada"),
+            },
+        )
+
+        assert [a.tipo for a in achados] == ["duplicata"]
+
+    def test_duas_CHECK_DIFERENTES_sobre_a_mesma_coluna_nao_sao_duplicata(
+        self, monkeypatch, codigo_plantado
+    ):
+        """O falso positivo da primeira versão, e é o que custa caro: em
+        `restaurant_coupons`, a lista de tipos de desconto e a regra que amarra
+        o VALOR ao tipo falam da mesma coluna e citam os mesmos literais.
+        Derrubar a segunda abriria cupom percentual de valor zero."""
+        achados = self._auditar(
+            monkeypatch,
+            codigo_plantado,
+            {
+                "ck_tipo": {
+                    "tabela": "t",
+                    "coluna": "tipo",
+                    "valores": {"percent", "fixed"},
+                    "definicao": "CHECK ((tipo = ANY (ARRAY['percent'::text, 'fixed'::text])))",
+                },
+                "ck_valor": {
+                    "tabela": "t",
+                    "coluna": "tipo",
+                    "valores": {"percent", "fixed"},
+                    "definicao": (
+                        "CHECK (((tipo = ANY (ARRAY['percent'::text, 'fixed'::text])) "
+                        "AND (valor > (0)::numeric)))"
+                    ),
+                },
+            },
+            {"ck_tipo": (SEM_ESPELHO, "declarada"), "ck_valor": (SEM_ESPELHO, "declarada")},
+        )
+
+        assert achados == []
+
     def test_SEM_ESPELHO_declarado_nao_e_achado(self, monkeypatch, codigo_plantado):
         """`SEM_ESPELHO` é resposta válida e escrita: é a fronteira do que
         este portão alcança, anotada onde dá para ver."""
         achados = self._auditar(
             monkeypatch,
             codigo_plantado,
-            {"ck_solto": {"tabela": "t", "coluna": "solto", "valores": {"a", "b"}}},
+            {"ck_solto": {"tabela": "t", "coluna": "solto", "valores": {"a", "b"}, "definicao": "d5"}},
             {"ck_solto": (SEM_ESPELHO, "os dois valores vivem soltos no código")},
         )
 
@@ -220,3 +280,12 @@ class TestOBancoDeVerdade:
         assert len(colunas) >= 20
         assert colunas["orders_status_check"]["coluna"] == "status"
         assert "out_for_delivery" in colunas["orders_status_check"]["valores"]
+
+    def test_a_CHECK_duplicada_de_admin_users_foi_derrubada(self, db):
+        """A revisão `20260904_0048`. `ck_admin_users_role` fica; o nome que o
+        Postgres gerou sozinho sai. Duas idênticas eram avaliadas as duas em
+        todo INSERT e todo UPDATE de `admin_users`."""
+        colunas = _colunas_de_enum(url_do_banco_de_teste())
+
+        assert "ck_admin_users_role" in colunas
+        assert "admin_users_role_check" not in colunas

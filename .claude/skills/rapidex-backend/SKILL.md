@@ -643,11 +643,26 @@ motivo é o de sempre: casar por igualdade parece mais esperto e é inútil —
 quando as duas listas divergem, que é o único caso que importa, a busca não
 acha nada e o resultado fica indistinguível de "esta coluna não tem espelho".
 
-Achado de brinde da primeira execução: **`admin_users` tem DUAS CHECK
-idênticas** sobre `role` (`admin_users_role_check` e `ck_admin_users_role`),
-as duas validadas em toda escrita. É a armadilha 4 na forma de constraint, e
-`scripts/audit_indexes.py` não olha constraint. Está declarada como duplicata
-em `ESPELHOS`; derrubar a antiga é uma revisão, e ela ainda não foi escrita.
+**E ele acha constraint DUPLICADA**, que é a armadilha 4 na forma que o
+`audit_indexes.py` não vê — ele olha `pg_index`, não `pg_constraint`. Duas
+CHECK com a definição idêntica são avaliadas as duas em todo INSERT e todo
+UPDATE, e nenhuma recusa nada que a outra já não recusasse.
+
+A primeira execução achou uma: **`admin_users` tinha duas CHECK idênticas
+sobre `role`** (`admin_users_role_check`, o nome que o Postgres gerou no
+`CREATE TABLE`, e `ck_admin_users_role`, criada à mão pela revisão `0003`).
+A revisão `20260904_0048` derruba a primeira. O nome canônico é o `ck_`, e
+**revisão que mexer nos papéis daqui em diante usa só ele** — a `0020`
+continua recriando as duas de propósito (revisão aplicada não se reescreve),
+e a `0048`, que roda depois, derruba a sobra outra vez.
+
+**O critério da duplicata é a definição inteira, e não (tabela, coluna,
+valores).** A primeira versão usava a segunda forma e acusou um par que não é
+duplicata: em `restaurant_coupons`, a lista de tipos de desconto e a regra que
+amarra o VALOR ao tipo falam da mesma coluna e citam os mesmos três literais.
+Derrubar a segunda abriria cupom percentual de valor zero — e falso positivo
+aqui é caro de um jeito específico, porque o achado pede um `DROP`, e um
+`DROP` na constraint errada não dá erro nenhum no dia em que roda.
 
 ---
 

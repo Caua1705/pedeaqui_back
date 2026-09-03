@@ -37,6 +37,18 @@ espelho". O registro diz qual e o par; a comparacao diz se ele bate.
 so existem soltos no codigo. Ela nao e "tudo bem": e a fronteira do que este
 portao alcanca, anotada onde da para ver.
 
+## E de brinde: constraint DUPLICADA
+
+Duas CHECK com nomes diferentes sobre a MESMA coluna e a MESMA lista sao
+avaliadas as duas em toda escrita — custo por nada. E a armadilha 4 (indice
+duplicado) na forma de constraint, e `scripts/audit_indexes.py` nao a
+encontra porque ele olha `pg_index`, nao `pg_constraint`.
+
+`admin_users` tinha uma, achada aqui na primeira execucao e derrubada pela
+revisao `20260904_0048`. A checagem ficou porque a proxima entra do mesmo
+jeito: um CHECK inline no `CREATE TABLE` ganha o nome que o Postgres gera, e
+alguem escreve o `ck_` a mao depois.
+
 ## Onde ele nao chega
 
 Ele le o banco de TESTE (o mesmo `alembic upgrade head` do CI), nao o de
@@ -87,13 +99,6 @@ ESPELHOS: dict[str, str | tuple[None, str]] = {
     "restaurant_coupons_discount_type_valid": "src/schemas/coupon_schema.py:DiscountType",
     "ai_feedback_feedback_check": "src/schemas/ai_feedback_schema.py:AIFeedbackRequest.feedback",
     # --- as colunas cujos valores so existem soltos -------------------------
-    "admin_users_role_check": (
-        SEM_ESPELHO,
-        "DUPLICATA de `ck_admin_users_role`: mesma tabela, mesma coluna, "
-        "mesma lista, e as DUAS sao validadas em toda escrita. E a armadilha "
-        "4 (indice duplicado) na forma de constraint, e o audit de indices "
-        "nao olha constraint. So o nome canonico tem espelho declarado",
-    ),
     "ck_orders_payment_flow": (
         SEM_ESPELHO,
         "`online`/`delivery` vivem soltos como literal em `_resolve_payment_flow` "
@@ -182,6 +187,7 @@ def _colunas_de_enum(url: str) -> dict[str, dict]:
             "tabela": tabela,
             "coluna": coluna.group(1),
             "valores": valores,
+            "definicao": " ".join(definicao.split()),
         }
     return encontradas
 
@@ -333,6 +339,44 @@ def auditar(url: str, raiz: Path | None = None) -> list[Achado]:
                 )
             )
 
+    achados.extend(_duplicatas(colunas))
+    return achados
+
+
+def _duplicatas(colunas: dict[str, dict]) -> list[Achado]:
+    """Duas CHECK com a MESMA DEFINICAO na mesma tabela.
+
+    O Postgres avalia as duas em toda escrita, e nenhuma recusa nada que a
+    outra ja nao recusasse. E a armadilha 4 na forma de constraint — o
+    `audit_indexes.py` olha `pg_index` e nao ve isto.
+
+    **O criterio e a definicao inteira, e nao (tabela, coluna, valores).** A
+    primeira versao usava a segunda forma e acusou um par que nao e duplicata:
+    `restaurant_coupons_discount_type_valid` (a lista de tipos) e
+    `restaurant_coupons_discount_value_valid` (a regra que amarra VALOR ao
+    tipo) falam da mesma coluna e citam os mesmos tres literais, e sao regras
+    diferentes — derrubar uma delas abriria cupom percentual de valor zero.
+
+    Falso positivo aqui e caro de um jeito especifico: o achado pede um DROP,
+    e um DROP sobre a constraint errada nao da erro nenhum no dia em que roda.
+    """
+    por_definicao: dict[tuple[str, str], list[str]] = {}
+    for constraint, dados in sorted(colunas.items()):
+        por_definicao.setdefault((dados["tabela"], dados["definicao"]), []).append(constraint)
+
+    achados = []
+    for (tabela, _), nomes in sorted(por_definicao.items()):
+        if len(nomes) < 2:
+            continue
+        achados.append(
+            Achado(
+                "duplicata",
+                " + ".join(nomes),
+                f"{tabela} tem {len(nomes)} CHECK com a definicao IDENTICA, e o "
+                "Postgres avalia todas em toda escrita. Derrube as sobras numa "
+                "revisao, mantendo o nome no padrao `ck_<tabela>_<coluna>`.",
+            )
+        )
     return achados
 
 

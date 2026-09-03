@@ -18,8 +18,8 @@ listaram como bloqueadas pelo contrato.
 | a | `expires_at` do Pix em `StartPaymentResponse` | pequeno | **feito** |
 | b1 | `visibility` no card do cliente | trivial | **feito** |
 | b2 | `auto_apply` calculado pela mesma escolha do checkout | pequeno | **feito** |
-| b3 | restrição por forma de pagamento (campo + estado) | médio | pendente |
-| b4 | restrição por horário do dia (campo + estado) | médio | pendente |
+| b3 | restrição por forma de pagamento (campo + estado) | médio | **feito** — revisão `20260904_0046` |
+| b4 | restrição por horário do dia (campo + estado) | médio | **feito** — mesma revisão |
 | b5 | restrição por itens do cardápio | **grande** | **não feito — decisão do dono** |
 
 b5 é o mais caro dos três com folga (`docs/cupons.md` §7.3): tabela nova,
@@ -95,3 +95,67 @@ regenerado.
 > **Não escolham o automático do lado de lá**: `auto_apply: true` marca o
 > único cupom que o checkout vai aplicar sozinho para essa sacola. Sem
 > `subtotal` na chamada, e sem login, ele vem sempre `false`.
+
+---
+
+## b3 + b4) Forma de pagamento e horário do dia
+
+Um commit para os dois: são a mesma revisão (`20260904_0046`), os mesmos
+schemas e a mesma função. `docs/cupons.md` §7 tem o desenho inteiro; o que
+fica aqui é o que decidiu a forma:
+
+- **`payment_method=None` em `evaluate` significa "ainda não escolheu", e o
+  cupom cabe.** A forma é a última coisa que o cliente escolhe (§7.1 do doc
+  já avisava); o card traz `allowed_payment_methods` sempre, e quem barra é
+  o pedido, que sempre tem a forma. Passar a forma pela listagem
+  (`?payment_method=`) é opcional e dá o estado `payment_method_not_allowed`;
+- **os dois estados novos entram em `REASON_TO_STATE`** pelo critério do
+  doc: são consertos que o cliente faz (trocar a forma; esperar as 15h). O
+  card fora do horário aparece com a faixa escrita — invisível de manhã, o
+  lojista juraria que a campanha sumiu;
+- **hora da operação, não UTC**, `hora_da_operacao` em `coupon_window.py`,
+  ao lado das outras duas perguntas do arquivo. Só forma Python (não recorta
+  vitrine), com o motivo escrito;
+- **sem tolerância de minutos** no fim da faixa: seria uma segunda faixa que
+  ninguém configurou. O app mostra a faixa antes do clique;
+- **b5 (itens) continua fora**, esperando decisão.
+
+Vermelho visto (coleta interrompida em `dentro_do_horario`, depois os 30
+casos), 171 verdes nas suítes de cupom; portão inteiro verde; 41
+divergências ORM×schema (as colunas nasceram alinhadas). `openapi.json`
+regenerado.
+
+### Pronto para colar no painel
+
+> **Cupom: duas restrições novas em `POST`/`PATCH /admin/coupons` e nas
+> respostas**
+>
+> | Campo | Tipo | Significado |
+> |---|---|---|
+> | `allowed_payment_methods` | `string[] \| null` | as formas em que o cupom vale (`pix`, `credit_card`, `debit_card`, `cash`, `voucher`, `meal_voucher`, `other`). `null` = qualquer. Lista vazia é 422 |
+> | `valid_hours_from` / `valid_hours_until` | `"HH:MM:SS" \| null` | faixa do dia, em hora local do restaurante. Os dois ou nenhum; iguais é 422; `22:00:00`/`02:00:00` vira a noite e vale |
+>
+> No PATCH: `null` explícito tira a restrição; campo ausente preserva. O
+> par de horas é validado sobre a mescla com o que está gravado — mandar só
+> `valid_hours_from` num cupom sem faixa dá 422. Fim exclusivo: "até 18h"
+> acaba às 18:00:00.
+
+### Pronto para colar no app
+
+> **Cupom: dois estados e três campos novos no card de `GET /{slug}/coupons`**
+>
+> - `state` ganhou `payment_method_not_allowed` e `outside_hours`. Os dois são
+>   coisas que o cliente resolve (trocar a forma; voltar às 15h), então o
+>   card vem, com `discount_amount: 0`.
+> - `allowed_payment_methods` (`string[] | null`) e `valid_hours_from` /
+>   `valid_hours_until` (`"HH:MM:SS" | null`, hora de Fortaleza) vêm
+>   **sempre** que existem — inclusive com `state: applicable`. Escrevam "só
+>   no pix" e "das 15h às 18h" no card antes de o cliente escolher qualquer
+>   coisa; é isso que evita o desconto aparecer e sumir.
+> - A listagem aceita `?payment_method=` (os mesmos valores do pedido).
+>   Mandem quando o cliente já escolheu a forma; sem ele, cupom restrito vem
+>   `applicable` e o card avisa em qual forma vale. O preview
+>   (`POST .../coupons/preview`) aceita `payment_method` no corpo.
+> - O pedido recusa com 400 e `detail` igual ao motivo
+>   (`payment_method_not_allowed`, `outside_hours`) — sem tolerância no fim
+>   da faixa: às 18:00:00 o cupom das 15h às 18h já não vale.

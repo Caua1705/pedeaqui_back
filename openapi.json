@@ -6119,6 +6119,20 @@
       "CouponAdminResponse": {
         "description": "O cupom como o painel do lojista o le.\n\n`total_usage_count` e o par de `total_usage_limit`, e conta a mesma coisa\nque `evaluate` conta para decidir se o cupom ainda vale: redencoes em\n`applied`, so. Redencao estornada (o pedido foi cancelado) devolve a vaga e\nsai da conta — a tela mostra o numero que barra o proximo cliente, nao um\nhistorico de tentativas. Sem ele o painel exibia \"limite: 100\" e nao sabia\nquantos ja tinham usado.\n\nOPCIONAL com default, e nao obrigatorio: o numero e preenchido pelo\nservice, nao sai de coluna nenhuma, entao um `model_validate(coupon)` novo\nque esqueca de passa-lo devolve `null` em vez de estourar na serializacao.",
         "properties": {
+          "allowed_payment_methods": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Payment Methods"
+          },
           "code": {
             "anyOf": [
               {
@@ -6286,6 +6300,30 @@
             "title": "Valid From",
             "type": "string"
           },
+          "valid_hours_from": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Hours From"
+          },
+          "valid_hours_until": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Hours Until"
+          },
           "valid_until": {
             "anyOf": [
               {
@@ -6351,6 +6389,20 @@
       "CouponCreate": {
         "additionalProperties": false,
         "properties": {
+          "allowed_payment_methods": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Payment Methods"
+          },
           "code": {
             "anyOf": [
               {
@@ -6504,6 +6556,30 @@
             "title": "Valid From",
             "type": "string"
           },
+          "valid_hours_from": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Hours From"
+          },
+          "valid_hours_until": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Hours Until"
+          },
           "valid_until": {
             "anyOf": [
               {
@@ -6576,6 +6652,18 @@
           "order_type": {
             "title": "Order Type",
             "type": "string"
+          },
+          "payment_method": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Method"
           },
           "subtotal": {
             "anyOf": [
@@ -6752,6 +6840,20 @@
       "CouponUpdate": {
         "additionalProperties": false,
         "properties": {
+          "allowed_payment_methods": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Payment Methods"
+          },
           "code": {
             "anyOf": [
               {
@@ -6955,6 +7057,30 @@
               }
             ],
             "title": "Valid From"
+          },
+          "valid_hours_from": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Hours From"
+          },
+          "valid_hours_until": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Hours Until"
           },
           "valid_until": {
             "anyOf": [
@@ -8108,6 +8234,20 @@
       "CustomerCouponResponse": {
         "description": "Um cupom no app do cliente, com o estado JA DECIDIDO pelo backend.\n\nO front nao calcula nada aqui — nem o desconto, nem se cabe, nem quanto\nfalta. Ele pinta `label`, pinta `state` e mostra `discount_amount`.\n\n**Por que a conta nao pode ser do lado de la.** Ela depende de\n`max_discount_amount`, do teto por cliente, do cooldown, do\nprimeira-compra e de qual parte da sacola o desconto morde\n(`free_delivery` desconta a taxa, os outros dois descontam o subtotal).\nReproduzir isso no app seria a segunda implementacao da regra de cupom, e\na divergencia apareceria onde mais custa: o card promete R$ 15, o\ncheckout tira R$ 10, e o cliente ve o desconto encolher entre uma tela e\na outra.\n\n## O que NAO vem aqui, e nao e esquecimento\n\n`discount_value`, `max_discount_amount`, `total_usage_limit`,\n`usage_limit_per_customer` e `cooldown_days` sao PARAMETROS da conta e\nlimites internos da campanha. Quem precisa deles e quem calcula, e quem\ncalcula e o backend. Publicados, so serviriam para alguem refazer a\nconta errado — ou para mapear os limites da campanha de fora.\n\n`min_order_value` fica, porque ele nao e parametro: e a frase \"pedido\nminimo R$ 30\" que o card precisa escrever. E `valid_until` fica pelo\nmesmo motivo — \"valido ate\" e texto de card.",
         "properties": {
+          "allowed_payment_methods": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Payment Methods"
+          },
           "auto_apply": {
             "default": false,
             "title": "Auto Apply",
@@ -8192,6 +8332,30 @@
             "title": "Title",
             "type": "string"
           },
+          "valid_hours_from": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Hours From"
+          },
+          "valid_hours_until": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Hours Until"
+          },
           "valid_until": {
             "anyOf": [
               {
@@ -8226,7 +8390,9 @@
         "enum": [
           "applicable",
           "missing_amount",
-          "login_required"
+          "login_required",
+          "payment_method_not_allowed",
+          "outside_hours"
         ],
         "title": "CustomerCouponState",
         "type": "string"
@@ -20349,6 +20515,24 @@
                 }
               ],
               "title": "Order Type"
+            }
+          },
+          {
+            "description": "A forma de pagamento JA ESCOLHIDA, quando o cliente ja escolheu. Com ela, o cupom restrito a outra forma vem com `state = payment_method_not_allowed`; sem ela ele vem `applicable` e o card diz em que forma vale (`allowed_payment_methods`).",
+            "in": "query",
+            "name": "payment_method",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A forma de pagamento JA ESCOLHIDA, quando o cliente ja escolheu. Com ela, o cupom restrito a outra forma vem com `state = payment_method_not_allowed`; sem ela ele vem `applicable` e o card diz em que forma vale (`allowed_payment_methods`).",
+              "title": "Payment Method"
             }
           }
         ],

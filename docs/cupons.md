@@ -148,7 +148,13 @@ Cada card vem com o estado **já decidido**. O front não calcula nada:
   **mesma** função que `auto_apply_for_order` usa: a escolha entre dois
   automáticos é decisão de dinheiro e tem um dono só. Sem `subtotal` (o
   Clube) e para convidado é sempre `false`.
-- **`state`** — `applicable`, `missing_amount` ou `login_required`.
+- **`state`** — `applicable`, `missing_amount`, `login_required`,
+  `payment_method_not_allowed` ou `outside_hours`.
+- **`allowed_payment_methods`** e **`valid_hours_from`/`valid_hours_until`**
+  — as restrições do cupom, **sempre** presentes quando existem (nulas
+  quando não), e não só quando o estado as cita: a sacola antes da escolha
+  da forma precisa mostrar "só no pix" antes de o cliente escolher o cartão
+  e ver o desconto sumir. Ver §7.
 - **`discount_amount`** — o que aquele cupom tiraria **desta** sacola. Zero
   quando não cabe: o card não pode anunciar um valor que o checkout não vai
   dar.
@@ -226,57 +232,64 @@ responde é a coluna `visibility`, sempre, dentro de `evaluate`.
 
 ---
 
-## 7. Registrado e NÃO implementado
+## 7. As restrições: duas implementadas, uma registrada
 
-O Cardápio Web tem os três; nós não. Ficam aqui com o que cada um custaria,
-para a decisão de fazer ou não ser tomada com o preço na mão — e não para
-virar `TODO` que ninguém reencontra.
+O Cardápio Web tem as três. Duas entraram em 04/09/2026 (revisão
+`20260904_0046`); a terceira continua registrada com o preço na mão.
 
-### 7.1 Restrição por forma de pagamento
+### 7.1 Restrição por forma de pagamento — implementada
 
-*"Este cupom só vale no pix."*
+*"Este cupom só vale no pix."* O lojista paga ~0,89 no pix e ~3,58 no cartão
+(armadilha 25); um cupom que empurra para o pix se paga.
 
-Para que serve: o lojista paga ~0,89 no pix e ~3,58 no cartão (armadilha 25);
-um cupom que empurra para o pix se paga.
+`restaurant_coupons.allowed_payment_methods text[]`, nulo = qualquer forma.
+Os valores são os de `PAYMENT_METHODS`, e o CHECK do banco cobra a mesma
+lista — método novo entra nos três lugares juntos (armadilha 15). Lista
+vazia é recusada nos dois lados: vazia é "em nenhuma forma", não "em
+qualquer".
 
-O que custaria: uma coluna de lista (`allowed_payment_methods text[]`, ou
-tabela filha) e **um ponto novo em `evaluate` que hoje não existe** — ela não
-recebe forma de pagamento. Os quatro chamadores passariam a ter que informá-la,
-e dois deles não a têm com certeza: no Clube não há pedido, e na listagem o
-cliente ainda não escolheu como paga.
+**`evaluate` ganhou `payment_method`, e os quatro chamadores a passam.** A
+listagem recebe `?payment_method=` (opcional), o preview recebe no corpo, a
+auto-aplicação e a validação do pedido recebem a forma do próprio pedido
+(que `_resolve_payment_flow` já validou).
 
-A armadilha, e é ela que faz isto não ser trivial: **a forma de pagamento é a
-última coisa que o cliente escolhe.** Um cupom aplicado na tela de sacola que
-some ao escolher "dinheiro" é a pior ordem possível — o desconto aparece e é
-retirado. Ou a listagem passa a receber a forma de pagamento (e o app tem que
-perguntá-la antes), ou o card precisa dizer "só no pix" antes de ser escolhido.
-A decisão de produto vem antes da coluna.
+**A armadilha da ordem foi resolvida do lado do card, não da regra.** A forma
+é a última coisa que o cliente escolhe, então:
 
-Correlato: `PAYMENT_METHODS` e o CHECK de `branch_payment_methods` teriam que
-mudar juntos com isto (armadilha 15).
+- **sem forma** (o Clube, a sacola antes da escolha) o cupom restrito
+  **cabe**, e o card traz `allowed_payment_methods` sempre — o app escreve
+  "só no pix" antes de o cliente escolher o cartão;
+- **com forma errada** o card vem com `state = payment_method_not_allowed`,
+  que é conserto do cliente (trocar a forma), e por isso está em
+  `REASON_TO_STATE`;
+- **quem barra de verdade é o pedido**, que sempre tem a forma: 400
+  `payment_method_not_allowed`.
 
-### 7.2 Restrição por horário do dia
+### 7.2 Restrição por horário do dia — implementada
 
-*"Vale das 15h às 18h."*
+*"Vale das 15h às 18h."* Para encher o vazio da tarde sem dar desconto no
+pico do almoço.
 
-Para que serve: encher o vazio da tarde sem dar desconto no pico do almoço.
+`valid_hours_from` e `valid_hours_until`, `time` **sem fuso, em hora local da
+operação** (`PLATFORM_TIMEZONE`) — o regime de `branch_business_hours`. Quem
+lê é `coupon_window.dentro_do_horario`, sobre `hora_da_operacao(agora)`;
+comparar com a hora UTC do servidor poria a campanha das 15h valendo ao
+meio-dia. Início inclusivo, fim exclusivo ("até as 18h" acaba às 18:00:00);
+faixa que vira a noite (22h às 2h) vale todo dia, sem weekday. Os dois
+juntos ou nenhum, e nunca iguais — CHECK no banco e validador no schema.
 
-O que custaria: duas colunas de hora e um weekday, e o **fuso**. `valid_from`
-e `valid_until` são `timestamptz` e comparam instantes; "das 15h às 18h" é
-hora local do restaurante, e o backend inteiro roda em UTC. O mesmo problema
-de `branch_business_hours`, que já o resolveu — e a faixa que vira a noite
-(22h às 2h) pertence ao weekday em que **começa**, com a consulta olhando hoje
-e ontem (armadilha 10).
+**Só existe a forma em Python**, ao contrário da janela de datas: a faixa
+não recorta a vitrine. O card fora do horário **aparece**, com
+`state = outside_hours` e a faixa escrita, porque às 15h ele passa a valer —
+sem isso a campanha da tarde seria invisível de manhã e o lojista juraria
+que ela sumiu.
 
-A armadilha específica deste: **o cupom aplicado às 17h58 e o pedido criado às
-18h01.** `evaluate` roda duas vezes (listagem e criação do pedido), e a
-segunda recusaria um desconto que o cliente viu na tela. Ou há uma tolerância
-escrita, ou o app precisa avisar antes. Hoje isso não acontece porque a janela
-é de dias, não de minutos.
+**Sem tolerância, de propósito.** O cupom visto às 17h58 e o pedido criado às
+18h01 é recusado com 400 `outside_hours`. A regra sem tolerância é a que o
+lojista escreveu; o app mostra a faixa antes do clique, e é isso que evita a
+surpresa. Uma tolerância seria uma segunda faixa que ninguém configurou.
 
-E `weekday` 0 é segunda no backend e domingo no JavaScript (armadilha 1).
-
-### 7.3 Cupom valendo só em itens específicos do cardápio
+### 7.3 Cupom valendo só em itens específicos do cardápio — NÃO implementada
 
 *"R$ 5 off na picanha."*
 

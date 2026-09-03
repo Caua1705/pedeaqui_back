@@ -791,6 +791,9 @@ class OrderService:
         tinha — e o teto do resgate ja desconta o cupom (`subtotal -
         coupon_discount`), entao os dois juntos nunca passam do subtotal.
         """
+        # A forma de pagamento do pedido ja foi validada por
+        # `_resolve_payment_flow` antes daqui; e por ela que "so no pix"
+        # barra de verdade quem escolheu o cartao.
         if payload.coupon_id is not None or payload.coupon_code is not None:
             return self.coupon_service.lock_and_validate_for_order(
                 restaurant_id=restaurant_id,
@@ -799,12 +802,14 @@ class OrderService:
                 subtotal=subtotal,
                 delivery_fee=delivery_fee,
                 customer=current_customer,
+                payment_method=payload.payment_method,
             )
         automatico = self.coupon_service.auto_apply_for_order(
             restaurant_id=restaurant_id,
             subtotal=subtotal,
             delivery_fee=delivery_fee,
             customer=current_customer,
+            payment_method=payload.payment_method,
         )
         if automatico is None:
             return None, ZERO

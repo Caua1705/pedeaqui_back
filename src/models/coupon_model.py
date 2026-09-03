@@ -1,9 +1,9 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, time
 from decimal import Decimal
 
-from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, Text, TIMESTAMP, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, Text, Time, TIMESTAMP, UniqueConstraint
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -123,6 +123,19 @@ class RestaurantCoupon(Base):
     # sentidos. Os valores sao os de `CustomerSegment`, nao um vocabulario
     # proprio do cupom: ver o cabecalho de `src/services/customer_segment.py`.
     target_segment: Mapped[str | None] = mapped_column(Text)
+    # "So no pix." Nulo = qualquer forma; lista = so nestas (revisao 0046).
+    # Os valores sao os de `PAYMENT_METHODS`, e o CHECK do banco cobra a
+    # mesma lista. Quem le e `CouponService.evaluate`, com a forma que o
+    # chamador passou — sem forma (o Clube, a sacola antes da escolha) o
+    # cupom cabe, e o card diz em que forma vale.
+    allowed_payment_methods: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    # "Das 15h as 18h", em hora LOCAL da operacao, sem fuso — o regime de
+    # `branch_business_hours.opens_at`. Os dois nulos = o dia inteiro; os
+    # dois preenchidos = a faixa, que pode virar a noite (22h-2h). O CHECK
+    # recusa um sem o outro e inicio igual ao fim. Quem le e
+    # `coupon_window.dentro_do_horario`, nunca as colunas direto.
+    valid_hours_from: Mapped[time | None] = mapped_column(Time)
+    valid_hours_until: Mapped[time | None] = mapped_column(Time)
     sort_order: Mapped[int | None] = mapped_column(Integer, default=0)
     is_active: Mapped[bool | None] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())

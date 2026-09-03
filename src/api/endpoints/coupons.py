@@ -64,6 +64,15 @@ def list_customer_coupons(
     subtotal: Decimal | None = Query(default=None, ge=0),
     delivery_fee: Decimal | None = Query(default=None, ge=0),
     order_type: str | None = Query(default=None),
+    payment_method: str | None = Query(
+        default=None,
+        description=(
+            "A forma de pagamento JA ESCOLHIDA, quando o cliente ja escolheu. "
+            "Com ela, o cupom restrito a outra forma vem com "
+            "`state = payment_method_not_allowed`; sem ela ele vem `applicable` "
+            "e o card diz em que forma vale (`allowed_payment_methods`)."
+        ),
+    ),
     current_customer: Customer | None = Depends(get_optional_current_customer),
     db: Session = Depends(get_db),
 ) -> CustomerCouponsResponse:
@@ -92,6 +101,7 @@ def list_customer_coupons(
         delivery_fee=delivery_fee,
         order_type=order_type,
         customer=current_customer,
+        payment_method=payment_method,
     )
 
 

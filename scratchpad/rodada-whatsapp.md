@@ -17,7 +17,7 @@ qualquer coisa, e continue do que ele diz — nunca da lembrança.**
 | 1 | A estrutura: canal por filial, token cifrado | **feito** — 3 tabelas, revisao `0051`, `scripts/register_whatsapp_channel.py` |
 | 2 | O webhook: assinatura da Meta e roteamento pelo `phone_number_id` | **feito** — `GET`+`POST /webhooks/whatsapp` |
 | 3 | Mandar mensagem: janela de 24h × template aprovado | **feito** — `WhatsAppSender` |
-| 4 | Os avisos de status do pedido: aceito, saiu, entregue | pendente |
+| 4 | Os avisos de status do pedido: aceito, saiu, entregue | **feito** — em `OrderStatusChangeService.apply`, depois do commit |
 
 ---
 
@@ -354,6 +354,46 @@ Entrou no vocabulário de LEITURA, ao lado de `has` e `exists`.
 
 ---
 
+## Item 4 — feito. Os avisos
+
+| Onde | O que |
+|---|---|
+| `src/services/whatsapp_notification_service.py` | os três avisos e a linha de registro |
+| `src/services/order_status_change_service.py` | o gancho, depois do commit |
+| `tests/test_whatsapp_aviso_de_pedido_db.py` | os três, o que não avisa, e a ligação |
+
+**Onde o gancho ficou, e por quê.** Em `OrderStatusChangeService.apply`,
+depois do commit e fora do `try` — mesmo lugar e mesmo motivo do estorno. E é
+esse ponto único que faz o aviso valer para as **quatro** portas de escrita de
+status (painel, cancelamento, cliente, entregador) sem quatro cópias, que
+seriam três chances de o cliente deixar de ser avisado.
+
+**A coisa que só apareceu escrevendo:** o `UNIQUE (order_id, kind)` **não**
+impede o cliente de receber duas mensagens. Ele barra a LINHA, e nesse ponto a
+mensagem já saiu. Quem protege o cliente é a conferência ANTES do envio
+(`exists_for`); o UNIQUE protege a tabela. As duas são necessárias e não são a
+mesma coisa.
+
+**Duas decisões:**
+
+1. **Retirada concluída não recebe "foi entregue"** — o texto mentiria, e
+   `out_for_delivery` nem existe naquele fluxo. A lista é positiva
+   (`ORDER_TYPES_QUE_SAO_ENTREGUES`, armadilha 47): tipo de pedido novo nasce
+   **sem** o aviso.
+2. **`error_code` carrega dois vocabulários, separados por prefixo:** o código
+   da Meta (`132001`) e a recusa nossa (`refused:phone`). Misturados, um
+   pediria mexer na Meta e o outro no cadastro do cliente, sem dar para
+   distinguir.
+
+**Conferido por mutação:** estreitando o `except Exception` do gancho, o
+aceite passa a morrer junto com o aviso. O `except` largo é o que segura.
+
+**Portão, pela terceira vez:** `resolve` entrou no vocabulário de LEITURA de
+`escrita_e_transacao.py`. Nesta rodada ele não conhecia três verbos —
+`extend`, `is_` e `resolve`.
+
+---
+
 # Parte II — o que EU faço, na ordem
 
 Nada abaixo é código. É o que só eu consigo fazer, e o que o backend espera
@@ -498,6 +538,37 @@ restart, sem `UPDATE` de madrugada.
 
 ---
 
+
+---
+
+# Parte IV — como eu sei que funcionou, no dia do piloto
+
+Na ordem, e cada passo responde uma coisa que o anterior não responde:
+
+1. **O webhook chegou?** `docker logs pedeaqui-api | grep "\[WhatsApp\]"`.
+   Mandar uma mensagem qualquer do meu celular para o número da loja e
+   procurar a linha. **Se aparecer `numero desconhecido`**, o canal não está
+   cadastrado — a linha traz o `phone_number_id` e o número legível, que é
+   tudo que `scripts/register_whatsapp_channel.py` precisa.
+2. **A janela abriu?** `SELECT channel_id, window_expires_at FROM
+   whatsapp_contact_windows;` — uma linha, expirando em 24h. Ela prova o
+   caminho inteiro: assinatura conferida, número roteado, escrita feita.
+3. **O aviso saiu?** Aceitar um pedido de teste no painel e olhar
+   `SELECT kind, status, error_code, wamid FROM whatsapp_messages ORDER BY
+   created_at DESC LIMIT 5;`
+   - `sent` → a Meta aceitou. Segundos depois vira `delivered` e, se a pessoa
+     abrir, `read` — **e é isso que prova o webhook de status**;
+   - `failed` com `132001` → o template não está aprovado (ou o nome não
+     bate);
+   - `failed` com `131047` → texto livre fora da janela; não deveria
+     acontecer nesta rodada, porque os avisos são template;
+   - `failed` com `refused:phone` → o telefone do pedido não vira E.164;
+   - **nenhuma linha** → ou `WHATSAPP_NOTIFICATIONS_ENABLED` está falsa, ou
+     não há canal para aquela filial. As duas aparecem no log.
+
+**O que NÃO dá para conferir daqui:** se a mensagem ficou bonita. `read` diz
+que abriram, não que ficou boa — isso se vê no celular.
+
 # Parte III — o que ficou registrado e NÃO foi feito
 
 - **Aviso de "pronto para retirada"** (`ready`): o aviso que falta para o
@@ -507,6 +578,12 @@ restart, sem `UPDATE` de madrugada.
   guardar texto de cliente é dado pessoal com prazo, e não há quem leia.
 - **Onboarding automático (Tech Provider / Embedded Signup).** Muda só de
   onde o token chega; a coluna é a mesma.
+- **`docs/whatsapp.md` não existe.** O desenho está neste scratchpad, que é
+  registro de rodada e não documentação. Quando a frente virar rotina, ele
+  vira doc — como `docs/cupons.md` e `docs/entregadores.md`.
+- **O opt-in no checkout do app.** É do lado do app, e é meu: uma linha
+  dizendo que vamos avisar pelo WhatsApp. Sem ela o risco é a qualidade do
+  número cair por denúncia, que é o que derruba o canal do Júnior.
 - **Reenvio de aviso que falhou.** Hoje o `status=failed` fica gravado em
   `whatsapp_messages` e ninguém retenta. A varredura, se um dia existir, lê
   essa tabela.

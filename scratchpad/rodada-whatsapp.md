@@ -25,7 +25,7 @@ qualquer coisa, e continue do que ele diz — nunca da lembrança.**
 |---|---|---|
 | 5 | `account_update` / `PARTNER_REMOVED` — o canal desconectado | **feito** |
 | 6 | Aviso de "pronto para retirada" | **feito** — dispara em `ready`, só na retirada |
-| 7 | Reenvio de aviso que falhou | pendente |
+| 7 | Reenvio de aviso que falhou | **feito** — `next_attempt_at`, e o container de 2 min |
 | 8 | `docs/whatsapp.md` | pendente |
 
 ---
@@ -532,6 +532,85 @@ agora está conferido.
 
 ---
 
+## Item 7 — feito. O reenvio do aviso que falhou
+
+| Onde | O que |
+|---|---|
+| `alembic/versions/20260905_0054_*` | `attempts`, `next_attempt_at`, e o índice PARCIAL |
+| `src/services/whatsapp_notification_service.py` | `retry`, e as três desistências |
+| `src/repositories/whatsapp_repository.py` | `list_due_for_retry` |
+| `scripts/reenvia_avisos_de_whatsapp.py` | a varredura |
+| `docker-compose.yml` | `whatsapp-reenvio`, laço de 2 min |
+| `tests/test_whatsapp_reenvio_db.py` | 11 travas |
+
+**A coluna guarda a DECISÃO, e não o sintoma.** `next_attempt_at` é preenchido
+no `except`, onde o TIPO da exceção existe: `WhatsAppTransportError.retryable`
+é `True`, `WhatsAppRejectedError` é `False` (armadilha 49). A varredura lê a
+coluna e **não olha o `error_code`**.
+
+Uma lista de "códigos retentáveis" na varredura seria a mesma pergunta com
+duas respostas em dois arquivos — e a segunda ficaria para trás. O caso
+concreto que fecha isso é o `132001`: template não aprovado *parece*
+transitório, porque a aprovação chega em horas. Mas quem aprova é uma pessoa
+no painel da Meta, e retentar de dois em dois minutos gastaria a validade
+inteira do aviso sem uma chance sequer.
+
+**A validade é de 30 minutos, e desistir é o desfecho certo.** O aviso não é
+um dado, é um recado sobre um instante: *"seu pedido foi aceito"* chegando com
+o pedido já entregue não é um aviso atrasado, é um aviso **errado** — e o
+cliente age com base nele. Aqui o erro caro é o número GRANDE, ao contrário da
+carência do `cancela_pedidos_sem_pagamento.py`, onde o erro caro é o curto.
+
+**As três desistências, e nenhuma é cerimônia** — as três são sobre o que
+mudou entre a falha e agora:
+
+1. **validade vencida** — a frase fala de um instante que já passou;
+2. **pedido `cancelled` ou `rejected`** — mandar "foi aceito" para quem teve o
+   pedido cancelado deixa o cliente esperando comida que não vem. A lista é
+   escrita por extenso, e **não** importada de `REVERSING_STATUSES`: aquela
+   responde "que estados devolvem cupom e cashback", que é outra pergunta com
+   a mesma resposta hoje. Amarrar as duas faria um estorno novo mudar, de
+   graça, o que o cliente recebe;
+3. **canal sem número utilizável** — o canal é **resolvido de novo**, e não
+   lido do `channel_id` da linha. Entre a falha e o reenvio o lojista pode ter
+   desconectado a Cloud API (item 5), e insistir seria mandar contra um acesso
+   que não existe mais. A queda no número do restaurante **não** acontece: o
+   número da filial desligado significa que aquela loja para de mandar.
+
+**As três moram no service, e não na varredura.** São regra de domínio; a
+varredura é agendamento. Se morassem lá, um segundo chamador — um botão de
+"reenviar" no painel, um dia — teria que lembrar de repeti-las, que é a
+armadilha 46.
+
+**O reenvio ATUALIZA a linha.** O `UNIQUE (order_id, kind)` diz que um aviso
+tem uma linha; inserir outra seria o banco recusando o registro **depois** de
+a mensagem já ter saído — a pior combinação possível, mensagem entregue e
+nenhum rastro dela.
+
+**Container próprio, 2 min, pelo mesmo argumento que o `estorno` usa contra
+morar no `limpeza`.** Nos 15 min do `estorno` sobrariam uma ou duas
+tentativas dentro dos 30 minutos de validade: pegaria a queda longa e perderia
+a curta, que é justamente a comum. O caminho feliz não custa nada — a consulta
+lê um índice **parcial**, e as linhas com retentativa marcada são uma franja
+de uma tabela em que quase tudo é `sent`.
+
+**O que ficou de fora, e está escrito para não ser redescoberto:**
+
+- **não há reserva de linha (`FOR UPDATE`).** A suposição é UMA varredura, um
+  container, um laço sequencial — a mesma escolha das varreduras irmãs de
+  pedido. Duas simultâneas custariam o cliente recebendo o mesmo aviso duas
+  vezes (linha duplicada, não: disso o `UNIQUE` dá conta). Se um dia houver
+  duas, é `list_due_for_retry` que ganha a reserva;
+- **`attempts` não é um segundo teto.** O teto é o relógio, e dois limites que
+  podem discordar são piores que um. Ele responde à pergunta do dia do
+  piloto: o aviso saiu de primeira ou na sétima?
+- **quem desistiu não grava "desisti".** O `error_code` da falha original não
+  é sobrescrito — ele é a causa, e "desisti" é o desfecho; trocar um pelo
+  outro apagaria a única pista. O que separa "desistiu" de "nunca foi
+  retentável" é o `attempts`, que passa de 1 num caso e não no outro.
+
+---
+
 # Parte II — o que EU faço, na ordem
 
 Nada abaixo é código. É o que só eu consigo fazer, e o que o backend espera
@@ -860,8 +939,6 @@ que abriram, não que ficou boa — isso se vê no celular.
 
 # Parte III — o que ficou registrado e NÃO foi feito
 
-- **Aviso de "pronto para retirada"** (`ready`): o aviso que falta para o
-  pedido de retirada. Pede um quarto template.
 - **Chatbot / atendimento pelas mensagens que chegam.** Esta rodada guarda a
   janela de 24h e descarta o conteúdo da mensagem recebida de propósito:
   guardar texto de cliente é dado pessoal com prazo, e não há quem leia.
@@ -875,17 +952,18 @@ que abriram, não que ficou boa — isso se vê no celular.
   com trava (`tests/test_whatsapp_coexistencia.py`). Se um dia o eco do
   atendente precisar aparecer em algum lugar nosso, ele entra como dado
   pessoal com prazo, e não como mais uma coluna.
-- **`account_update` com `PARTNER_REMOVED`.** É o webhook que avisa quando o
-  lojista desconecta a Cloud API pelo aplicativo dele. Não assinamos o campo,
-  e sem ele o número para de funcionar **em silêncio** — o modo de falha que
-  esta rodada inteira tentou evitar. Entra junto com a coexistência, porque é
-  ela que dá ao lojista o botão de desconectar.
 - **`docs/whatsapp.md` não existe.** O desenho está neste scratchpad, que é
   registro de rodada e não documentação. Quando a frente virar rotina, ele
   vira doc — como `docs/cupons.md` e `docs/entregadores.md`.
 - **O opt-in no checkout do app.** É do lado do app, e é meu: uma linha
   dizendo que vamos avisar pelo WhatsApp. Sem ela o risco é a qualidade do
   número cair por denúncia, que é o que derruba o canal do Júnior.
-- **Reenvio de aviso que falhou.** Hoje o `status=failed` fica gravado em
-  `whatsapp_messages` e ninguém retenta. A varredura, se um dia existir, lê
-  essa tabela.
+- **Painel do lojista para o WhatsApp.** Não há tela nenhuma: nem para
+  cadastrar número, nem para ver aviso que não saiu, nem para reenviar à mão.
+  O cadastro é `scripts/register_whatsapp_channel.py` e a leitura é `SELECT`.
+  É de propósito nesta rodada — mas o dia em que o Júnior perguntar "o cliente
+  recebeu?" é o dia em que isto vira item.
+- **A retentativa não sobrevive a uma troca de template.** Se o `132001` for
+  culpa de um nome de template errado no nosso lado, corrigir o código não
+  ressuscita os avisos que já falharam: eles não ficaram marcados. É o preço
+  de não retentar recusa da Meta, e o remédio é manual.

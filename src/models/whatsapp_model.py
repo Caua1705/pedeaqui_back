@@ -45,6 +45,7 @@ from sqlalchemy import (
     CheckConstraint,
     ForeignKey,
     Index,
+    Integer,
     Text,
     text,
     TIMESTAMP,
@@ -222,6 +223,15 @@ class WhatsAppMessage(Base):
             "'failed'::text])",
             name="ck_whatsapp_messages_status",
         ),
+        # PARCIAL: a varredura de reenvio pergunta so pelas linhas com
+        # retentativa marcada, e elas sao uma franja — quase tudo aqui e
+        # `sent`, com `next_attempt_at` nulo. Um indice cheio guardaria a
+        # tabela inteira para responder por essa franja.
+        Index(
+            "ix_whatsapp_messages_next_attempt",
+            "next_attempt_at",
+            postgresql_where=text("next_attempt_at IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -253,6 +263,22 @@ class WhatsAppMessage(Base):
     # tipo de problema — e sao: um pede mexer na Meta, o outro no cadastro do
     # cliente. TEXTO e nao numero porque e o que se cita num chamado.
     error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Quantas vezes se tentou mandar ESTE aviso. Nao e um teto — o teto e o
+    # relogio (`VALIDADE_DO_AVISO`), e dois limites que podem discordar sao
+    # piores que um. Ele responde a pergunta do dia do piloto: o aviso saiu de
+    # primeira ou na setima?
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    # Quando a varredura deve tentar de novo. `NULL` e "nao ha retentativa",
+    # e e o estado de todo `sent` e de toda falha PERMANENTE.
+    #
+    # A decisao e gravada aqui, e nao deduzida do `error_code` depois: quem
+    # sabe se repetir tem chance e o TIPO da excecao
+    # (`WhatsAppSendError.retryable`, armadilha 49), e ele so existe no
+    # instante da falha. Deduzir pelo codigo da Meta seria dar duas respostas
+    # a mesma pergunta, em dois arquivos.
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )

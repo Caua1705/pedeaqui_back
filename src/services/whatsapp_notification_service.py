@@ -30,6 +30,19 @@ aqui vira uma LINHA `failed` — que e o registro de que o cliente nao foi
 avisado, e o unico lugar onde isso e visivel depois. Quem le essa tabela sabe
 o que aconteceu; quem le so o log precisa saber que ela existe.
 
+## E a falha que se conserta repetindo fica MARCADA, nao deduzida
+
+`next_attempt_at` e preenchido no `except`, onde o TIPO da excecao existe —
+`WhatsAppTransportError.retryable` e `True`, `WhatsAppRejectedError` e `False`
+(armadilha 49). A varredura (`scripts/reenvia_avisos_de_whatsapp.py`) le a
+coluna e nao olha o `error_code`: deduzir retentabilidade de um codigo da Meta
+seria dar duas respostas a mesma pergunta, em dois arquivos.
+
+O `132001` (template nao aprovado) fica de fora de proposito, e nao por
+descuido: quem o conserta e uma aprovacao na Meta, que leva horas e e
+operacao humana. Retenta-lo a cada dois minutos gastaria a validade inteira do
+aviso sem nenhuma chance.
+
 As recusas NOSSAS (telefone que nao vira E.164, janela fechada) entram com
 `refused:<motivo>` para nao se confundirem com o codigo numerico da Meta. Sao
 dois vocabularios, e misturá-los faria um `132001` e um "telefone torto"
@@ -42,12 +55,14 @@ estorno — o aceite ja aconteceu, e virar 500 diria ao lojista que nao.
 
 import logging
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
 from src.core.config import settings
 from src.integrations.whatsapp_client import WhatsAppSendError
 from src.models.whatsapp_model import WhatsAppChannel, WhatsAppMessage
+from src.repositories.order_repository import OrderRepository
 from src.repositories.restaurant_repository import RestaurantRepository
 from src.repositories.whatsapp_repository import (
     WhatsAppChannelRepository,
@@ -102,14 +117,51 @@ _TIPOS_DE_PEDIDO_POR_AVISO = {
     "order_delivered": ("delivery",),
 }
 
+# ATE QUANDO O AVISO AINDA VALE, contado da primeira tentativa.
+#
+# Ele nao e um dado, e um RECADO sobre um instante: "seu pedido foi aceito"
+# chegando com o pedido ja entregue nao e um aviso atrasado, e um aviso
+# errado — o cliente le e age. Passada a validade, a varredura DESISTE, e
+# desistir e o desfecho certo, nao uma falha da varredura.
+#
+# 30 minutos porque e a ordem de grandeza do ciclo do pedido. O erro caro
+# aqui e o numero GRANDE, ao contrario da carencia do
+# `cancela_pedidos_sem_pagamento.py`, onde o erro caro e o curto.
+VALIDADE_DO_AVISO = timedelta(minutes=30)
+
+# Quanto esperar antes de tentar de novo. Constante, e nao exponencial: com
+# 30 minutos de teto, um backoff gastaria a validade em tres tentativas: o
+# que se quer aqui e atravessar uma queda de rede curta, e para isso a
+# cadencia miuda e que serve. Quem limita e o relogio.
+ESPERA_ENTRE_TENTATIVAS = timedelta(minutes=2)
+
+# Estados em que a FRASE de qualquer aviso virou mentira, e reenviar e pior
+# que desistir: "seu pedido foi aceito" para quem teve o pedido cancelado
+# deixa o cliente esperando comida que nao vem.
+#
+# Escrito por extenso, e nao importado de `REVERSING_STATUSES`: aquela lista
+# responde "que estados devolvem cupom e cashback", que e outra pergunta com
+# a mesma resposta HOJE. Amarrar as duas faria um estorno novo mudar, de
+# graca, o que o cliente recebe.
+STATUS_QUE_MATAM_O_AVISO = ("cancelled", "rejected")
+
+# Os desfechos de uma retentativa, para a varredura contar e imprimir.
+REENVIO_ENVIADO = "enviado"
+REENVIO_FALHOU = "falhou"
+REENVIO_DESISTIU = "desistiu"
+
 
 class WhatsAppOrderNotifier:
     def __init__(self, db: Session):
         self.db = db
         self.channel_repository = WhatsAppChannelRepository(db)
         self.message_repository = WhatsAppMessageRepository(db)
+        self.order_repository = OrderRepository(db)
         self.restaurant_repository = RestaurantRepository(db)
         self.sender = WhatsAppSender(db)
+        # Injetavel, pela convencao da armadilha 51: o teste do reenvio
+        # declara o instante em vez de depender da hora em que roda.
+        self.clock = lambda: datetime.now(timezone.utc)
 
     def notify(self, *, order, restaurant_id: uuid.UUID) -> None:
         """Avisa o cliente da mudanca de status, se houver aviso para ela."""
@@ -141,6 +193,86 @@ class WhatsAppOrderNotifier:
 
         self._send_and_record(order=order, restaurant_id=restaurant_id, channel=channel, kind=kind)
 
+    def retry(self, message: WhatsAppMessage) -> str:
+        """Tenta de novo UM aviso que falhou. Devolve o desfecho.
+
+        Chamada pela varredura (`scripts/reenvia_avisos_de_whatsapp.py`), uma
+        linha por vez. Tudo que ela decide esta aqui, e nao la, porque as tres
+        desistencias sao regra de dominio e nao de agendamento.
+
+        As TRES perguntas antes de reenviar, e nenhuma e cerimonia — todas sao
+        sobre o que mudou entre a falha e agora:
+
+        1. **o aviso ainda vale?** Passada `VALIDADE_DO_AVISO`, a frase fala
+           de um instante que ja passou;
+        2. **o pedido ainda existe, e nao virou mentira?** Cancelado ou
+           recusado, "seu pedido foi aceito" deixa o cliente esperando;
+        3. **por qual numero se fala agora?** O canal e RESOLVIDO de novo, e
+           nao lido do `channel_id` da linha: entre a falha e o reenvio o
+           lojista pode ter desconectado a Cloud API (`disconnected_at`), e
+           insistir no canal antigo e mandar contra um acesso que nao existe
+           mais.
+        """
+        agora = self.clock()
+
+        if message.created_at + VALIDADE_DO_AVISO <= agora:
+            return self._desistir(message, motivo="validade vencida")
+
+        order = self._order_of(message)
+        if order is None:
+            return self._desistir(message, motivo="pedido nao existe mais")
+        if order.status in STATUS_QUE_MATAM_O_AVISO:
+            return self._desistir(message, motivo=f"pedido em {order.status}")
+
+        channel = self.channel_repository.resolve_for_branch(
+            order.restaurant_id, order.branch_id
+        )
+        if channel is None:
+            return self._desistir(message, motivo="sem canal utilizavel")
+
+        enviado = self._send_and_record(
+            order=order,
+            restaurant_id=order.restaurant_id,
+            channel=channel,
+            kind=message.kind,
+            existente=message,
+            now=agora,
+        )
+        return REENVIO_ENVIADO if enviado else REENVIO_FALHOU
+
+    def _order_of(self, message: WhatsAppMessage):
+        """O pedido da linha, chegando nele pelo CANAL.
+
+        A linha nao guarda `restaurant_id` — quem guarda e o canal por onde o
+        aviso saiu. E `get_order_detail` exige o restaurante de proposito (um
+        UUID de pedido em maos nao pode ler o pedido de outra loja), entao o
+        caminho e esse.
+        """
+        channel = self.db.get(WhatsAppChannel, message.channel_id)
+        if channel is None:
+            return None
+        return self.order_repository.get_order_detail(message.order_id, channel.restaurant_id)
+
+    def _desistir(self, message: WhatsAppMessage, *, motivo: str) -> str:
+        """Para de retentar, e deixa a linha dizendo que parou.
+
+        `next_attempt_at = NULL` e o unico registro, e o `error_code` da falha
+        original **nao e sobrescrito**: ele e a causa, e "desisti" e o
+        desfecho — trocar um pelo outro apagaria a unica pista de por que o
+        aviso nao saiu. Quem separa "desistiu" de "nunca foi retentavel" e o
+        `attempts`, que passa de 1 num caso e nao no outro.
+        """
+        logger.warning(
+            "[WhatsApp] desistindo do reenvio pedido_id=%s aviso=%s motivo=%s tentativas=%s",
+            message.order_id,
+            message.kind,
+            motivo,
+            message.attempts,
+        )
+        message.next_attempt_at = None
+        self.db.commit()
+        return REENVIO_DESISTIU
+
     def _send_and_record(
         self,
         *,
@@ -148,7 +280,17 @@ class WhatsAppOrderNotifier:
         restaurant_id: uuid.UUID,
         channel: WhatsAppChannel,
         kind: str,
-    ) -> None:
+        existente: WhatsAppMessage | None = None,
+        now: datetime | None = None,
+    ) -> bool:
+        """Manda e grava o desfecho. `True` se saiu.
+
+        `existente` e a linha do reenvio: o `UNIQUE (order_id, kind)` diz que
+        um aviso tem UMA linha, entao retentar ATUALIZA a que existe. Inserir
+        outra seria o banco recusando o reenvio depois de a mensagem ja ter
+        saido.
+        """
+        agora = now or self.clock()
         try:
             wamid = self.sender.send_template(
                 channel=channel,
@@ -164,17 +306,35 @@ class WhatsAppOrderNotifier:
                 kind,
                 recusa.reason,
             )
-            self._record(order, channel, kind, status="failed", error_code=f"refused:{recusa.reason}")
-            return
+            # Recusa NOSSA nunca e retentavel: o telefone do pedido nao muda
+            # sozinho, e a janela fechada pede um template, nao uma repeticao.
+            self._record(
+                order,
+                channel,
+                kind,
+                status="failed",
+                error_code=f"refused:{recusa.reason}",
+                existente=existente,
+            )
+            return False
         except WhatsAppSendError as erro:
             logger.warning(
-                "[WhatsApp] aviso recusado pela Meta pedido=#%s aviso=%s codigo=%s",
+                "[WhatsApp] aviso recusado pela Meta pedido=#%s aviso=%s codigo=%s retentavel=%s",
                 order.order_number,
                 kind,
                 erro.error_code,
+                erro.retryable,
             )
-            self._record(order, channel, kind, status="failed", error_code=erro.error_code)
-            return
+            self._record(
+                order,
+                channel,
+                kind,
+                status="failed",
+                error_code=erro.error_code,
+                next_attempt_at=agora + ESPERA_ENTRE_TENTATIVAS if erro.retryable else None,
+                existente=existente,
+            )
+            return False
 
         logger.info(
             "[WhatsApp] aviso enviado pedido=#%s aviso=%s wamid=%s",
@@ -182,7 +342,8 @@ class WhatsAppOrderNotifier:
             kind,
             wamid,
         )
-        self._record(order, channel, kind, status="sent", wamid=wamid)
+        self._record(order, channel, kind, status="sent", wamid=wamid, existente=existente)
+        return True
 
     def _parameters(self, order, restaurant_id: uuid.UUID) -> tuple[str, str, str]:
         """Os tres `{{n}}` do template, na ordem em que ele os declara.
@@ -206,17 +367,33 @@ class WhatsAppOrderNotifier:
         status: str,
         wamid: str | None = None,
         error_code: str | None = None,
+        next_attempt_at: datetime | None = None,
+        existente: WhatsAppMessage | None = None,
     ) -> None:
-        self.db.add(
-            WhatsAppMessage(
-                order_id=order.id,
-                channel_id=channel.id,
-                kind=kind,
-                status=status,
-                wamid=wamid,
-                error_code=error_code,
+        if existente is None:
+            self.db.add(
+                WhatsAppMessage(
+                    order_id=order.id,
+                    channel_id=channel.id,
+                    kind=kind,
+                    status=status,
+                    wamid=wamid,
+                    error_code=error_code,
+                    next_attempt_at=next_attempt_at,
+                )
             )
-        )
+            self.db.commit()
+            return
+
+        # O canal e reescrito porque o reenvio o resolveu de novo: se a loja
+        # passou a falar por outro numero, o registro tem que dizer por qual
+        # numero o aviso saiu de verdade.
+        existente.channel_id = channel.id
+        existente.status = status
+        existente.wamid = wamid
+        existente.error_code = error_code
+        existente.next_attempt_at = next_attempt_at
+        existente.attempts += 1
         self.db.commit()
 
 

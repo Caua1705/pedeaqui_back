@@ -267,3 +267,38 @@ class WhatsAppMessageRepository:
             WhatsAppMessage.kind == kind,
         )
         return self.db.scalar(stmt) is not None
+
+    def list_due_for_retry(self, *, now: datetime, limit: int) -> list[WhatsAppMessage]:
+        """As linhas cuja retentativa ja venceu. A pergunta da varredura.
+
+        **O filtro e `next_attempt_at`, e nao `status = 'failed'`.** Nem toda
+        falha se conserta repetindo, e quem sabe disso e o TIPO da excecao, no
+        instante em que ela aconteceu (armadilha 49). Perguntar pelo
+        `error_code` aqui seria responder de novo, com outro vocabulario, uma
+        pergunta que ja tem dono — e retentar um `132001` a cada dois minutos
+        contra um template que so eu consigo aprovar.
+
+        As mais antigas primeiro: elas sao as que estao mais perto de perder a
+        validade, e a fila e drenada em lotes.
+
+        **Sem `FOR UPDATE`, e a suposicao e que ha UMA varredura** — um
+        container, um laco sequencial (`whatsapp-reenvio` no compose). E a
+        mesma escolha das varreduras irmas de pedido, que reconferem o estado
+        em vez de travar linha: o desfecho de cada uma e uma chamada externa,
+        e o lock seria solto pelo primeiro `commit` do lote de qualquer jeito.
+
+        O que uma segunda varredura simultanea custaria: o cliente recebendo o
+        mesmo aviso duas vezes. Nao uma linha duplicada — disso o
+        `UNIQUE (order_id, kind)` continua dando conta. Se um dia houver duas,
+        e aqui que entra uma reserva de linha.
+        """
+        stmt = (
+            select(WhatsAppMessage)
+            .where(
+                WhatsAppMessage.next_attempt_at.is_not(None),
+                WhatsAppMessage.next_attempt_at <= now,
+            )
+            .order_by(WhatsAppMessage.created_at)
+            .limit(limit)
+        )
+        return list(self.db.scalars(stmt))

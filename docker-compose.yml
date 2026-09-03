@@ -1,7 +1,8 @@
-# O commit de que as imagens sao construidas, repetido nos QUATRO servicos que
-# constroem (`pedeaqui-api`, `limpeza`, `estorno`, `reindex`).
+# O commit de que as imagens sao construidas, repetido nos CINCO servicos que
+# constroem (`pedeaqui-api`, `limpeza`, `estorno`, `whatsapp-reenvio`,
+# `reindex`).
 #
-# Repetido, e nao so na API, por um motivo mecanico: os quatro tem `build: .`, e
+# Repetido, e nao so na API, por um motivo mecanico: os cinco tem `build: .`, e
 # `build args` diferentes produzem IMAGENS diferentes. Carimbar so a API faria
 # o compose construir a mesma arvore varias vezes, e o worker de reindex — que
 # tambem fala com a OpenAI e tambem aparece em investigacao de log — ficaria
@@ -159,6 +160,53 @@ services:
           else
             echo "[estorno] falhou; nova tentativa em 5 min"
             sleep 300
+          fi
+        done
+    networks:
+      - n8n_default
+
+  # Reenvia o aviso de WhatsApp que falhou por algo que passa — um timeout da
+  # Meta, a rede caindo por meio minuto.
+  #
+  # CONTAINER PRÓPRIO pela CADÊNCIA, o mesmo argumento que o `estorno` usa
+  # contra morar no `limpeza`. Aqui ele é ainda mais apertado: o aviso tem
+  # validade de 30 min (`VALIDADE_DO_AVISO`) porque "seu pedido foi aceito"
+  # chegando com o pedido já entregue é um aviso ERRADO, não um atrasado. Nos
+  # 15 min do `estorno` sobrariam uma ou duas tentativas dentro da validade —
+  # pegaria a queda longa e perderia a curta, que é justamente a comum.
+  #
+  # 2 min no caminho feliz, que é uma varredura que não acha nada e não gasta
+  # chamada nenhuma à Meta: ela lê um índice PARCIAL, e as linhas com
+  # retentativa marcada são uma franja da tabela.
+  #
+  # Sai com 0 mesmo deixando aviso pendente, de propósito — a Meta fora do ar
+  # é o cenário para o qual esta varredura existe, e ela não pode ser também
+  # o que derruba o laço. Um código diferente de 0 aqui significa banco fora
+  # do ar, e aí os 30 s de espera são o certo.
+  whatsapp-reenvio:
+    build:
+      context: .
+      args:
+        GIT_SHA: "${GIT_SHA:-}"
+    container_name: pedeaqui-whatsapp-reenvio
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      - pedeaqui-api
+    # ENTRYPOINT VAZIO pelo mesmo motivo do `limpeza`: o
+    # `docker-entrypoint.sh` roda `alembic upgrade head`, e só a API migra.
+    entrypoint: []
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          if python scripts/reenvia_avisos_de_whatsapp.py; then
+            sleep 120
+          else
+            echo "[whatsapp-reenvio] falhou; nova tentativa em 30 s"
+            sleep 30
           fi
         done
     networks:

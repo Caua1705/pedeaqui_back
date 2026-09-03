@@ -42,7 +42,7 @@ from sqlalchemy import Row, func, select
 from sqlalchemy.orm import Session
 
 from src.models.order_model import Order
-from src.repositories.order_repository import NON_BILLABLE_ORDER_STATUSES
+from src.repositories.order_repository import BILLABLE_ORDER_STATUSES
 from src.schemas.admin_customer_schema import CustomerSegment
 from src.services.customer_segment import (
     average_ticket_expression,
@@ -171,7 +171,12 @@ class AdminCustomerRepository:
         EXPLICA o rotulo quando o lojista perguntar por que o vizinho da
         lista, com o mesmo tempo sem pedir, tem outra etiqueta.
         """
-        faturaveis = Order.status.not_in(NON_BILLABLE_ORDER_STATUSES)
+        # A MESMA constante do extrato de comissao, e positiva pelo
+        # motivo dela (armadilha 47): esta e a TERCEIRA copia da regra
+        # 'isto virou venda?', e uma copia que negasse a lista de fora
+        # faria o ticket medio do cliente contar um status que o extrato
+        # nao conta.
+        faturaveis = Order.status.in_(BILLABLE_ORDER_STATUSES)
         orders_count = func.count(Order.id)
         # `count` nunca devolve NULL, entao aqui nao ha `coalesce` para
         # fazer — diferente do `sum` da linha de baixo.

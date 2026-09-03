@@ -1,6 +1,6 @@
 """A anti-vacuidade do varredor de filtro por exclusão (armadilha 47).
 
-`scripts/filtros_por_exclusao.py` responde **zero** contra `src/`, com 18
+`scripts/filtros_por_exclusao.py` responde **zero** contra `src/`, com 32
 sítios declarados em `ESPERADOS`. Zero só vale se estiver provado que ele sabe
 acusar — e aqui a prova importa mais que de costume, porque **a classe inteira
 é silenciosa**: `visibility != 'private'` publicava cupom de segmento na
@@ -8,20 +8,24 @@ vitrine anônima sem erro, sem log e sem tela onde conferir. Não há sintoma
 para denunciar um varredor cego; o teste é a única coisa entre o zero e a
 cegueira.
 
-Quatro provas, e a terceira é a que impede o varredor de virar ruído:
+Cinco provas, e a terceira é a que o varredor não tinha na primeira versão:
 
 1. **ele acusa a armadilha 47 literal** — o `!= COUPON_VISIBILITY_PRIVATE` que
    o conserto de 28/08/2026 tirou do `MenuRepository`;
 2. **ele enxerga as quatro fontes de conjunto fechado** — baseline, revisão,
    `CheckConstraint` do ORM e classe `str, Enum`. Uma fonte que pare de ser
    lida deixa uma família inteira invisível, sem nada falhar;
-3. **ele deixa passar o que não é enum** — `!=` sobre id, hash e senha são a
+3. **ele resolve o conjunto atrás de uma CONSTANTE** (`.notin_(NAO_FATURAVEIS)`),
+   e não só a tupla escrita ali. Esse era o ponto cego, e o que ele escondia era
+   a comissão da plataforma: `billable_order_conditions` tinha as duas metades
+   do mesmo defeito lado a lado, e só a que comparava com literal aparecia;
+4. **ele deixa passar o que não é enum** — `!=` sobre id, hash e senha são a
    esmagadora maioria dos 85 do repositório, e um varredor que os acusasse
    seria desligado na primeira semana;
-4. **ele deixa passar a forma POSITIVA** — `== <valor>` é justamente o
+5. **ele deixa passar a forma POSITIVA** — `== <valor>` é justamente o
    conserto que a armadilha 47 manda fazer.
 
-E um quinto, que não é sobre o varredor: **todo motivo de `ESPERADOS` diz para
+E um sexto, que não é sobre o varredor: **todo motivo de `ESPERADOS` diz para
 onde cai o valor NOVO.** Sem isso a lista vira carimbo, e um sítio entra nela
 por ter sido visto, não por ter sido decidido.
 """
@@ -34,10 +38,20 @@ from tempfile import TemporaryDirectory
 from scripts.filtros_por_exclusao import ESPERADOS, auditar
 
 
-# As três palavras que classificam um sítio. Estão no motivo de propósito: é
+# As quatro formas que classificam um sítio. Estão no motivo de propósito: é
 # a resposta de "para onde cai o valor novo" reduzida a uma palavra que dá
 # para conferir.
-FORMAS = ("GUARDA INVERTIDA", "NEGACAO COMPLETA", "FILTRO DE CONJUNTO")
+#
+# "NEGACAO DE PERMITIDOS" e "FILTRO DE CONJUNTO" se escrevem igual (`not in`)
+# e são opostas: negar a lista dos permitidos recusa o valor novo; negar a
+# lista dos excluídos o aceita. É a distinção que o varredor não consegue
+# fazer sozinha, e é por isso que ela tem que estar escrita.
+FORMAS = (
+    "GUARDA INVERTIDA",
+    "NEGACAO COMPLETA",
+    "NEGACAO DE PERMITIDOS",
+    "FILTRO DE CONJUNTO",
+)
 
 
 ARQUIVOS = {
@@ -67,6 +81,18 @@ ARQUIVOS = {
             return sessao.query(Pedido).filter(
                 Pedido.status.notin_(("cancelled", "rejected"))
             )
+    """,
+    "src/repositories/faturamento.py": """
+        # ISCA: o mesmo defeito com o conjunto atrás de uma CONSTANTE, e não
+        # de uma tupla literal. Foi o ponto cego da primeira versão do
+        # varredor, e o que ele escondia era a comissão da plataforma:
+        # `billable_order_conditions` tinha as duas metades do defeito lado a
+        # lado, e só a que comparava com literal aparecia.
+        NAO_FATURAVEIS = ("cancelled", "rejected")
+
+
+        def faturaveis(sessao, Pedido):
+            return sessao.query(Pedido).filter(Pedido.status.notin_(NAO_FATURAVEIS))
     """,
     "src/services/estado_do_cupom.py": """
         from enum import Enum
@@ -206,6 +232,11 @@ class TestEleSabeAcusar(unittest.TestCase):
 
     def test_acusa_a_comparacao_com_membro_de_enum(self):
         self.assertIn("estado != EstadoDoCupom.MISSING_AMOUNT", self.expressoes)
+
+    def test_acusa_o_notin_sobre_CONSTANTE_de_tupla(self):
+        """O ponto cego que escondia a comissão calculada por exclusão: o
+        conjunto atrás de um nome, e não de uma tupla escrita ali."""
+        self.assertIn("Pedido.status.notin_(NAO_FATURAVEIS)", self.expressoes)
 
     def test_acusa_usando_o_conjunto_do_CheckConstraint_do_ORM(self):
         """O `!=` está em `cobranca.py` e o conjunto em `pagamento_model.py`:

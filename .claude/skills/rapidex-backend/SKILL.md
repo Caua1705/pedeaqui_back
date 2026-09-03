@@ -1905,35 +1905,73 @@ id, hash ou tamanho.
 **O varredor NÃO classifica, e isso é desenho.** Classificar exige entender o
 fluxo, e um varredor que erra a classificação é pior que um que reporta tudo.
 Quem classifica é a pessoa, uma vez, e a resposta fica escrita em
-`ESPERADOS` — 18 sítios, cada um dizendo **para onde cai o valor novo**:
+`ESPERADOS` — 32 sítios, cada um dizendo **para onde cai o valor novo**:
 
 | Forma | Exemplo | O valor novo |
 |---|---|---|
 | **guarda invertida** | `if x != A: return` | cai fora da ação. Equivale a `if x == A: agir`. Fecha |
 | **negação completa** | `if x not in (todos)` | é recusado. Fecha |
-| **filtro de conjunto** | `WHERE x != A`, `.notin_()` | **cai do lado permissivo. É esta armadilha** |
+| **negação de permitidos** | `if x not in PERMITIDOS: recusar` | cai fora da lista, é recusado. Fecha |
+| **filtro de conjunto** | `WHERE x != A`, `.notin_(EXCLUÍDOS)` | **cai do lado permissivo. É esta armadilha** |
 
-A varredura achou **um** sítio da terceira forma que ninguém conhecia:
+**As duas do meio se escrevem igual e são opostas**, e essa é a distinção que
+não dá para automatizar: negar a lista dos PERMITIDOS recusa o valor novo;
+negar a lista dos EXCLUÍDOS o aceita. `payment_status not in PAYABLE_STATUSES`
+é falha fechada e `status.notin_(NON_BILLABLE_ORDER_STATUSES)` era a comissão
+calculada por exclusão — e as duas linhas têm a mesma cara.
+
+### O que a varredura achou, e o que foi consertado (03–04/09/2026)
+
+**Quatro sítios da última forma, e três deles em cima de dinheiro.** Os
+quatro viraram lista positiva; nenhum mudou de conjunto (as listas positivas
+de hoje são exatamente o que a negação produzia, e
+`tests/test_particao_dos_status.py` trava isso).
+
+- **`Order.status.notin_(NON_BILLABLE_ORDER_STATUSES)` e
+  `Order.payment_status != 'refunded'`**, as duas metades do WHERE de
+  `billable_order_conditions` — a comissão da plataforma calculada por
+  exclusão nos dois eixos. Estado novo nascia **cobrando**, e quem pagava a
+  conta era o lojista. Viraram `BILLABLE_ORDER_STATUSES` e
+  `BILLABLE_PAYMENT_STATUSES`;
+- **`Order.status.not_in(NON_BILLABLE_ORDER_STATUSES)` em
+  `admin_customer_repository`** — a TERCEIRA cópia da mesma regra ("isto virou
+  venda?"), no ticket médio e no RFV do cliente. Passou a ler a mesma
+  constante do extrato: duas cópias divergindo fariam o painel contar um
+  status que o extrato não conta;
+- **`Order.status.notin_(('cancelled', 'rejected'))`** no "já comprou aqui?"
+  do cupom de primeira compra. Aqui o estrago é o cliente **perder** o cupom,
+  e é o tipo de erro que ninguém reclama — só deixa de usar. Virou
+  `ORDER_STATUSES_THAT_COUNT_AS_PURCHASE`, constante própria e não a
+  negação da de faturamento: são duas perguntas diferentes que hoje coincidem.
+
+E um da forma de **negação de permitidos** que ninguém conhecia:
 `AdminUser.role != PAPEL_DE_MAQUINA`, na consulta que monta a tela da equipe.
-Hoje é equivalente à forma positiva porque há uma conta de máquina só; na
-revisão que criar a segunda, ela traria a nova **para a tela da equipe**,
-sozinha. Virou `role.in_(PAPEIS_DE_PESSOA)`.
+Equivalente hoje porque há uma conta de máquina só; na revisão que criar a
+segunda, ela traria a nova **para a tela da equipe**, sozinha. Virou
+`role.in_(PAPEIS_DE_PESSOA)`.
 
-E duas ficaram declaradas como **dívida aberta**, porque o conserto é decisão
-de produto e não refatoração:
+### A lista positiva sozinha não basta
 
-- **`Order.payment_status != 'refunded'`**, em `billable_order_conditions`. É
-  o WHERE do faturamento: `payment_status` novo nasce **faturável**, e a
-  plataforma cobra comissão sobre um estado que ninguém classificou. É a
-  armadilha 48 (*"`== "failed"`, nunca `!= "paid"`"*) pelo lado do extrato;
-- **`Order.status.notin_(('cancelled', 'rejected'))`**, no "já comprou aqui?"
-  do cupom de primeira compra. Status novo passa a contar como compra, e o
-  cliente perde o cupom.
+Trocar `notin_` por `in_` move o estado novo do lado permissivo para o
+restritivo — mas ele passa a nascer **fora de tudo**, e continua silencioso.
+O que transforma esse silêncio em vermelho é a **partição**, em
+`tests/test_particao_dos_status.py`: todo valor de `ORDER_STATUSES` e de
+`PAYMENT_STATUSES` tem que estar em exatamente uma das duas listas, e o teste
+cai no commit que criar o estado novo dizendo qual é.
 
-Duas coisas que o varredor não faz, e vale saber antes de confiar nele:
-**conjunto não declarado é invisível** (não há como saber que `"applied"` é um
-de dois valores se ninguém escreveu os dois — o conserto é declarar o
-conjunto, não adivinhar), e ele **lê `src/`, não os testes**.
+E a partição vale sobre a constante, que só significa alguma coisa se for a
+coluna: dois testes `db` conferem `ORDER_STATUSES` e `PAYMENT_STATUSES` contra
+o `CHECK` do Postgres depois de `alembic upgrade head`. É a armadilha 15
+aplicada aos dois enums que decidem comissão.
+
+### Os dois limites do varredor
+
+**Conjunto não declarado é invisível** — não há como saber que `"applied"` é
+um de dois valores se ninguém escreveu os dois; o conserto é declarar o
+conjunto, não adivinhar. E **conjunto que chega por PARÂMETRO** não é
+resolvido: `.notin_(exclude_statuses)`, com a lista vindo de quem chama. São
+dois sítios em `courier_repository`, e nos dois o service passa
+`TERMINAL_ORDER_STATUSES` de propósito. Ele também lê `src/`, não os testes.
 
 **Correlato, e é a outra metade do mesmo conserto: o parâmetro booleano
 `require_public` saiu de `evaluate` na mesma frente.** Ele fazia "de qual

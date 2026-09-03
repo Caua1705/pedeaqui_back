@@ -43,6 +43,20 @@ varredor**, e isso e limite conhecido, nao descuido: nao ha como saber que
 `"applied"` e um de dois valores possiveis se ninguem escreveu os dois. O
 conserto, quando aparecer, e declarar o conjunto — nao adivinhar aqui.
 
+O outro lado da comparacao e resolvido em tres formas: literal (`!= 'paid'`),
+constante de um valor (`!= PAPEL_DE_MAQUINA`) e **constante de TUPLA**
+(`.notin_(NON_BILLABLE_ORDER_STATUSES)`). A terceira entrou depois da
+primeira rodada, e ela era um ponto cego caro: `billable_order_conditions`
+tinha as duas metades do mesmo defeito lado a lado, e so a que comparava com
+um literal aparecia. A que ficava escondida era a do STATUS do pedido — a
+comissao da plataforma, calculada por exclusao.
+
+O que continua invisivel e o **parametro**: `.notin_(exclude_statuses)`, com o
+conjunto vindo de quem chama, nao da para resolver sem seguir a cadeia de
+chamadas. Sao dois sitios em `courier_repository`, e os dois recebem
+`TERMINAL_ORDER_STATUSES` do service de proposito (quem sabe o que e terminal
+e a maquina de estados).
+
 ## As TRES formas, e so uma delas e a armadilha
 
 O varredor nao tenta distinguir: distinguir exige entender o fluxo, e um
@@ -53,7 +67,17 @@ distingue e a pessoa, uma vez, e o resultado fica escrito em `ESPERADOS`:
 |---|---|---|
 | **guarda invertida** | `if x != A: return` | fora da acao — equivale a `if x == A: agir`. Fecha |
 | **negacao completa** | `if x not in (todos os valores)` | recusado. Fecha |
-| **filtro de conjunto** | `WHERE x != A`, `x.notin_(...)` | **do lado permissivo. E a armadilha 47** |
+| **negacao de permitidos** | `if x not in PERMITIDOS: recusar` | fora da lista, recusado. Fecha |
+| **filtro de conjunto** | `WHERE x != A`, `.notin_(EXCLUIDOS)` | **do lado permissivo. E a armadilha 47** |
+
+As duas do meio se parecem e nao sao a mesma: **o que decide e se a lista
+negada e a dos PERMITIDOS ou a dos EXCLUIDOS.** Negar a lista de permitidos e
+falha fechada — o valor novo cai fora dela e e recusado. Negar a lista de
+excluidos e a armadilha — o valor novo cai fora dela e e ACEITO. As duas se
+escrevem `not in`, e e por isso que ler `not in` e concluir alguma coisa nao
+funciona: `payment_status not in PAYABLE_STATUSES` e seguro e
+`status.notin_(NON_BILLABLE_ORDER_STATUSES)` era a comissao calculada por
+exclusao, e as duas linhas tem a mesma cara.
 
 `ESPERADOS` guarda a chave `arquivo:expressao` e o motivo — e o motivo tem
 que dizer **para onde cai o valor novo**, que e a pergunta que a armadilha
@@ -101,28 +125,10 @@ ESPERADOS = {
         "reconhecido derruba o boot com a lista dos que valem, que e o "
         "comportamento certo — a variavel escolhe qual credencial e usada"
     ),
-    "src/repositories/coupon_repository.py:Order.status.notin_(('cancelled', 'rejected'))": (
-        "FILTRO DE CONJUNTO, e e divida aberta. E o 'ja comprou aqui?' do "
-        "cupom de primeira compra: status NOVO passa a contar como compra "
-        "valida, e o cliente perde o cupom. Cai do lado restritivo para o "
-        "DINHEIRO (ninguem ganha desconto a mais), e por isso nao foi "
-        "trocado por lista positiva — a lista dos status que 'valem como "
-        "compra' nao existe hoje, e cria-la e decisao de produto. Status "
-        "novo em `ORDER_STATUSES` tem que passar por aqui"
-    ),
     "src/repositories/coupon_repository.py:redemption.status != 'applied'": (
         "GUARDA INVERTIDA: `!= 'applied': return` e `== 'applied': estornar` "
         "escrito ao contrario. Status novo de redencao nao e estornado, que e "
         "o lado que fecha"
-    ),
-    "src/repositories/order_repository.py:Order.payment_status != 'refunded'": (
-        "FILTRO DE CONJUNTO, e e a divida mais cara da lista. E o WHERE do "
-        "FATURAMENTO: `payment_status` novo nasce FATURAVEL, e a plataforma "
-        "cobra comissao sobre um estado que ninguem classificou. A forma "
-        "positiva existe (listar os que faturam), mas trocar por ela move a "
-        "base da comissao — decisao de produto, nao refatoracao. E a mesma "
-        "familia da armadilha 48 ('`== \"failed\"`, nunca `!= \"paid\"`'), "
-        "pelo lado do extrato"
     ),
     "src/schemas/coupon_schema.py:self.discount_type != 'percent'": (
         "GUARDA INVERTIDA: `max_discount_amount` so e aceito no percentual. "
@@ -191,6 +197,81 @@ ESPERADOS = {
         "GUARDA INVERTIDA na comanda: o que nao e entrega imprime 'RETIRADA "
         "NO BALCAO'. Tipo novo imprimiria isso — errado, mas VISIVEL na via, "
         "que e o unico lugar desta lista onde o erro aparece sozinho"
+    ),
+    "src/integrations/payment_gateway.py:payment_method not in MERCADOPAGO_SUPPORTED_PAYMENT_METHODS": (
+        "NEGACAO DE PERMITIDOS: forma de pagamento nova nao e suportada pelo "
+        "gateway ate alguem a acrescentar. Recusa antes da chamada, que e o "
+        "lado que fecha"
+    ),
+    "src/integrations/payment_gateway.py:payment_status not in PAYMENT_STATUSES": (
+        "NEGACAO COMPLETA: e a traducao do status do gateway para o nosso "
+        "conjunto. Estado que nao reconhecemos nao e gravado em `orders`, e o "
+        "CHECK da coluna recusaria de qualquer jeito"
+    ),
+    "src/schemas/coupon_schema.py:forma not in PAYMENT_METHODS": (
+        "NEGACAO COMPLETA: valida `allowed_payment_methods` do cupom contra a "
+        "lista inteira. Forma nova so e aceita depois de entrar em "
+        "`PAYMENT_METHODS` — que e a armadilha 15, e ela quer exatamente isso"
+    ),
+    "src/services/admin_order_service.py:order_status not in ORDER_STATUSES": (
+        "NEGACAO COMPLETA: valida o status contra o conjunto inteiro antes de "
+        "a maquina de estados decidir a transicao"
+    ),
+    "src/services/admin_order_service.py:payload.status not in ORDER_STATUSES": (
+        "NEGACAO COMPLETA, par da de cima: o status que o painel manda no "
+        "corpo tem que existir"
+    ),
+    "src/services/admin_printing_service.py:order.payment_status not in PAYMENT_STATUSES_THAT_RELEASE_ORDER": (
+        "NEGACAO DE PERMITIDOS: a via de PRODUCAO nao sai. Estado de "
+        "pagamento novo nao libera a cozinha ate entrar na lista — armadilha "
+        "13, e o lado que fecha e a praca nao preparar comida nao paga"
+    ),
+    "src/services/admin_user_service.py:admin_user.role not in PAPEIS_DE_PESSOA": (
+        "NEGACAO DE PERMITIDOS: 404 para quem nao e pessoa. Papel novo nao e "
+        "editavel pelas rotas de equipe ate alguem o declarar como cargo de "
+        "gente. E o par do `role.in_(PAPEIS_DE_PESSOA)` do repositorio: sem "
+        "ele, o que sumiu da lista voltaria pela edicao por id"
+    ),
+    "src/services/coupon_service.py:order_type not in ORDER_TYPES": (
+        "NEGACAO COMPLETA: valida o tipo de pedido contra o conjunto inteiro "
+        "na avaliacao do cupom"
+    ),
+    "src/services/coupon_service.py:payload.order_type not in ORDER_TYPES": (
+        "NEGACAO COMPLETA, par da de cima, no corpo da requisicao"
+    ),
+    "src/services/coupon_service.py:payment_method not in PAYMENT_METHODS": (
+        "NEGACAO COMPLETA: a forma de pagamento que o cliente manda para "
+        "avaliar o cupom tem que existir"
+    ),
+    "src/services/order_service.py:order_type not in ORDER_TYPES": (
+        "NEGACAO COMPLETA na criacao do pedido"
+    ),
+    "src/services/order_service.py:payment_method not in PAYMENT_METHODS": (
+        "NEGACAO COMPLETA na criacao do pedido. E a metade da armadilha 15 "
+        "que recusa `payment_method='banana'`"
+    ),
+    "src/services/order_state_machine.py:new_status not in KITCHEN_ORDER_STATUSES": (
+        "NEGACAO DE PERMITIDOS, e a UNICA da lista que merece aviso: status "
+        "novo escapa da regra de 'pagamento online libera o pedido'. Se o "
+        "status novo mandar o pedido para a COZINHA, ele tem que entrar em "
+        "`KITCHEN_ORDER_STATUSES` no mesmo commit — senao o pedido vai para a "
+        "praca com o pix em aberto"
+    ),
+    "src/services/payment_refund_service.py:order.payment_status not in PAYMENT_STATUSES_WITH_LIVE_CHARGE": (
+        "NEGACAO DE PERMITIDOS: sem cobranca viva no gateway nao ha o que "
+        "devolver. Estado novo nao dispara chamada ao gateway; se ele for um "
+        "estado com dinheiro retido, entra na lista junto"
+    ),
+    "src/services/payment_refund_service.py:order.status not in NON_BILLABLE_ORDER_STATUSES": (
+        "GUARDA INVERTIDA: a acao (estornar) so acontece PARA `cancelled` e "
+        "`rejected`. Status novo nao dispara estorno automatico — e "
+        "`completed` esta fora de proposito, porque e o unico terminal em que "
+        "HOUVE venda (armadilha 25)"
+    ),
+    "src/services/payment_service.py:order.payment_status not in PAYABLE_STATUSES": (
+        "NEGACAO DE PERMITIDOS: estado novo nao recebe cobranca ate alguem "
+        "decidir que recebe. `failed` esta dentro de proposito — e o 'tente "
+        "outro cartao' da armadilha 48"
     ),
 }
 
@@ -272,6 +353,7 @@ class ConjuntosFechados:
         self.raiz = raiz
         self.por_nome: dict[str, set[str]] = {}
         self.constantes: dict[str, str] = {}
+        self.tuplas: dict[str, set[str]] = {}
         self.membros_de_enum: dict[str, str] = {}
         self._ler_sql_da_baseline()
         self._ler_revisoes()
@@ -325,6 +407,10 @@ class ConjuntosFechados:
             valores = _tupla_de_literais(no.value, self.constantes)
             if valores is not None:
                 self.por_nome[f"{relativo}:{nome}"] = valores
+                # Pelo nome NU, para resolver `.notin_(NON_BILLABLE_...)` do
+                # outro lado da comparacao. Nome repetido entre modulos so
+                # amplia o que o varredor enxerga, nunca o contrario.
+                self.tuplas.setdefault(nome, set()).update(valores)
 
     def _ler_enums(self, relativo: str, arvore: ast.Module) -> None:
         for no in ast.walk(arvore):
@@ -346,15 +432,23 @@ class ConjuntosFechados:
             if len(valores) >= MINIMO_DE_VALORES:
                 self.por_nome[f"{relativo}:{no.name}"] = valores
 
-    def valor_de(self, no: ast.AST) -> str | None:
-        """O literal que este no representa, se der para saber."""
+    def valores_de(self, no: ast.AST) -> list[str]:
+        """Os literais que este no representa, se der para saber.
+
+        Lista e nao valor unico por causa da terceira forma: o nome de uma
+        tupla constante (`NON_BILLABLE_ORDER_STATUSES`) representa varios
+        valores de uma vez, e e a forma em que o defeito mais caro estava.
+        """
         if isinstance(no, ast.Constant) and isinstance(no.value, str):
-            return no.value
+            return [no.value]
         if isinstance(no, ast.Name):
-            return self.constantes.get(no.id)
+            if no.id in self.constantes:
+                return [self.constantes[no.id]]
+            return sorted(self.tuplas.get(no.id, ()))
         if isinstance(no, ast.Attribute):
-            return self.membros_de_enum.get(ast.unparse(no))
-        return None
+            membro = self.membros_de_enum.get(ast.unparse(no))
+            return [membro] if membro is not None else []
+        return []
 
     def conjuntos_com(self, valor: str) -> list[str]:
         return self.por_valor.get(valor, [])
@@ -394,10 +488,11 @@ def auditar(raiz: Path | None = None) -> dict:
         for no in ast.walk(arvore):
             for alvo in _comparados_por_exclusao(no):
                 for comparado in _valores_comparados(alvo):
-                    valor = fechados.valor_de(comparado)
-                    if valor is None:
-                        continue
-                    conjuntos = fechados.conjuntos_com(valor)
+                    conjuntos = [
+                        conjunto
+                        for valor in fechados.valores_de(comparado)
+                        for conjunto in fechados.conjuntos_com(valor)
+                    ]
                     if not conjuntos:
                         continue
                     expressao = ast.unparse(no)

@@ -14,7 +14,7 @@ qualquer coisa, e continue do que ele diz — nunca da lembrança.**
 | # | Item | Estado |
 |---|---|---|
 | 0 | O que EU faço no painel da Meta, e o que colo no `.env` | **escrito** (parte II deste arquivo) |
-| 1 | A estrutura: canal por filial, token cifrado | pendente |
+| 1 | A estrutura: canal por filial, token cifrado | **feito** — 3 tabelas, revisao `0051`, `scripts/register_whatsapp_channel.py` |
 | 2 | O webhook: assinatura da Meta e roteamento pelo `phone_number_id` | pendente |
 | 3 | Mandar mensagem: janela de 24h × template aprovado | pendente |
 | 4 | Os avisos de status do pedido: aceito, saiu, entregue | pendente |
@@ -243,6 +243,42 @@ a armadilha 27 registra o resíduo: `+55 85 9...` vira `5585...` e
 dígitos começando com `55` passam como estão; **qualquer outra coisa não é
 enviada e vira log**. Chutar um DDI é mandar a mensagem do cliente para o
 telefone de outra pessoa.
+
+---
+
+## Item 1 — feito. O que ficou, e o que a implementação ensinou
+
+| Onde | O que |
+|---|---|
+| `alembic/versions/20260904_0051_*` | as três tabelas |
+| `src/models/whatsapp_model.py` | os três models, com o porquê de cada trava |
+| `src/repositories/whatsapp_repository.py` | as duas perguntas inversas |
+| `scripts/register_whatsapp_channel.py` | o cadastro (token por prompt oculto) |
+| `src/utils/crypto.py` | a segunda chave Fernet, sem queda para a primeira |
+| `tests/test_migracao_whatsapp_db.py` | as travas do banco, por SQL cru |
+| `tests/test_whatsapp_canal_db.py` | a herança e o roteamento |
+| `tests/test_whatsapp_token_cifrado.py` | as duas chaves não se substituem |
+
+**Duas coisas apareceram fazendo, e não estavam previstas.**
+
+**1. O `UNIQUE (branch_id)` não trava a queda.** No Postgres `NULL` é distinto
+de `NULL`: duas linhas de restaurante do MESMO restaurante entram pelo UNIQUE
+sem reclamar, e a filial sem número herdaria uma das duas — a que o `ORDER BY`
+escolhesse. Quem fecha é um índice único **parcial**
+(`WHERE branch_id IS NULL`). Conferido por mutação contra o banco de teste:
+derrubado o índice dentro de uma transação revertida, as duas linhas entram. O
+teste não é vácuo.
+
+**2. O número da filial DESLIGADO não cai no do restaurante.** A regra não
+estava no enunciado e precisou ser decidida: `resolve_for_branch` só herda
+quando a filial **não tem linha nenhuma**. Cair seria a loja passando a falar
+por outro número sem ninguém ter pedido — e o que se espera de um número
+desligado é que a loja pare de mandar.
+
+**E um portão que eu não conhecia:** `tests/test_diagrama_er_cobre_o_schema.py`
+cobra que toda tabela do ORM apareça num `erDiagram` de
+`docs/modelo-de-dados.md`. Tabela nova sem desenho é vermelho — foi o único
+vermelho desta etapa que não veio de código meu.
 
 ---
 

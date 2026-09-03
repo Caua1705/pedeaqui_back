@@ -61,7 +61,7 @@ from scripts.escopo_das_rotas import _Indice, _classe_do_receptor
 PREFIXOS_DE_ESCRITA = (
     "add", "create", "delete", "update", "save", "insert", "replace",
     "attach", "assign", "mark", "unset", "clear", "invalidate", "reverse",
-    "complete", "reserve", "bump", "set_", "remove",
+    "complete", "reserve", "bump", "set_", "remove", "extend",
 )
 
 # Prefixos que LEEM. Listados, e nao deduzidos por exclusao: e a exclusao que

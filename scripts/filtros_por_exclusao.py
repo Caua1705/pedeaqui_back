@@ -150,6 +150,13 @@ ESPERADOS = {
         "dono?'). Papel novo conta como "
         "rebaixamento e ATIVA a protecao do ultimo dono — o lado que fecha"
     ),
+    "src/services/whatsapp_webhook_service.py:atualizacao.status not in WHATSAPP_MESSAGE_STATUSES": (
+        "NEGACAO DE PERMITIDOS: a lista e a dos status que NOS temos, e o "
+        "que cai fora dela e ignorado. O conjunto que cresce sozinho aqui e "
+        "o DELES — a Meta tem `deleted` e `warning`, que nao decidem nada "
+        "nosso. Status novo e recusado, que e o lado que fecha: grava-lo "
+        "morreria no CHECK e derrubaria o POST inteiro"
+    ),
     "src/services/order_review_service.py:order.status != REVIEWABLE_ORDER_STATUS": (
         "GUARDA INVERTIDA: so pedido `completed` e avaliavel. Status novo nao "
         "e avaliavel ate alguem decidir que e"

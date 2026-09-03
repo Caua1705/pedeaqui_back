@@ -12,7 +12,11 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from src.models.whatsapp_model import WhatsAppChannel, WhatsAppContactWindow
+from src.models.whatsapp_model import (
+    WhatsAppChannel,
+    WhatsAppContactWindow,
+    WhatsAppMessage,
+)
 
 
 class WhatsAppChannelRepository:
@@ -136,3 +140,39 @@ class WhatsAppContactWindowRepository:
             WhatsAppContactWindow.window_expires_at <= now
         )
         return self.db.execute(stmt).rowcount
+
+    def extend(
+        self, *, channel_id: uuid.UUID, phone_e164: str, expires_at: datetime
+    ) -> None:
+        """Abre a janela, ou empurra a que ja existe — nunca a encurta.
+
+        `GREATEST` e nao atribuicao, e e a diferenca inteira: a Meta REENVIA
+        webhook e entrega fora de ordem. Um reenvio de mensagem antiga
+        chegando depois da nova desfaria, com atribuicao, a janela que a nova
+        abriu — e o proximo envio livre seria recusado por uma janela que
+        estava aberta.
+        """
+        stmt = pg_insert(WhatsAppContactWindow).values(
+            channel_id=channel_id,
+            phone_e164=phone_e164,
+            window_expires_at=expires_at,
+        )
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_whatsapp_contact_windows_channel_phone",
+            set_={
+                "window_expires_at": func.greatest(
+                    stmt.excluded.window_expires_at,
+                    WhatsAppContactWindow.window_expires_at,
+                ),
+                "updated_at": func.now(),
+            },
+        )
+        self.db.execute(stmt)
+
+
+class WhatsAppMessageRepository:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def get_by_wamid(self, wamid: str) -> WhatsAppMessage | None:
+        return self.db.scalar(select(WhatsAppMessage).where(WhatsAppMessage.wamid == wamid))

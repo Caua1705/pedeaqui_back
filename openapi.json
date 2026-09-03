@@ -13468,6 +13468,31 @@
         "title": "VerifyResetCodeResponse",
         "type": "object"
       },
+      "WhatsAppWebhookResponse": {
+        "description": "O que a Meta recebe de volta.\n\nCurto e sem dado nenhum do restaurante: e resposta para maquina, e\nqualquer coisa a mais seria informacao entregue a quem so tem o endereco\ndo webhook — que e publico.\n\n`reason` existe para o LOG de quem opera, e nao para a Meta decidir nada:\nela trata 200 como sucesso, seja qual for o corpo.",
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "WhatsAppWebhookResponse",
+        "type": "object"
+      },
       "src__schemas__admin_report_schema__PaymentMethodsResponse": {
         "properties": {
           "branch_id": {
@@ -22291,6 +22316,93 @@
         "summary": "Get Product Detail",
         "tags": [
           "menu"
+        ]
+      }
+    },
+    "/webhooks/whatsapp": {
+      "get": {
+        "description": "A verificacao que a Meta faz ao salvar o webhook no painel.\n\n**Devolve o `hub.challenge` como texto puro, e nao como JSON.** A Meta\ncompara byte a byte com o que mandou; `\"1158201444\"` com aspas nao e\n`1158201444`, e o painel so diz que nao conseguiu validar — sem dizer o\nque estava errado.\n\nOs tres codigos sao distintos de proposito, porque respondem a coisas\ndiferentes quando esse painel nao ajuda:\n\n- **503**: a variavel nao esta no ambiente. O problema e nosso, e o\n  conserto e subir a API com ela ANTES de clicar em salvar;\n- **403**: o token nao bate. O que foi colado no painel e outro;\n- **200**: pronto, e nao se repete — a verificacao acontece uma vez.\n\n`compare_digest` e nao `!=`: e segredo, e a armadilha 18 vale aqui como\nem qualquer outro.",
+        "operationId": "verify_webhook_webhooks_whatsapp_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "hub.mode",
+            "required": true,
+            "schema": {
+              "title": "Hub.Mode",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "hub.verify_token",
+            "required": true,
+            "schema": {
+              "title": "Hub.Verify Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "hub.challenge",
+            "required": true,
+            "schema": {
+              "title": "Hub.Challenge",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "description": "Verify token diferente do configurado"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "WHATSAPP_WEBHOOK_VERIFY_TOKEN nao configurada"
+          }
+        },
+        "summary": "Verify Webhook",
+        "tags": [
+          "whatsapp"
+        ]
+      },
+      "post": {
+        "description": "Mensagem recebida e status de entrega, de qualquer numero.\n\n`async def` para conseguir o corpo CRU: a assinatura e calculada sobre os\nbytes exatos que a Meta enviou, e reserializar o JSON (espacos, ordem das\nchaves) quebraria a conferencia. Como o resto do projeto e sincrono, o\nservice roda em threadpool para nao segurar o event loop enquanto fala\ncom o banco.",
+        "operationId": "receive_webhook_webhooks_whatsapp_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WhatsAppWebhookResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Receive Webhook",
+        "tags": [
+          "whatsapp"
         ]
       }
     }

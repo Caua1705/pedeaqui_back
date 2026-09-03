@@ -122,6 +122,15 @@ item, na ordem do corpo**, e grava os `ok` juntos numa escrita só:
 `out_for_delivery` ainda aceita troca de motoboy (a moto quebrou). Só os
 terminais fecham a porta.
 
+**O motoboy aparece na listagem de pedidos do painel** (`AdminOrderListItem.courier_id`
+e `courier_name`, nulos quando ninguém está com o pedido) e no evento do
+stream, que monta o mesmo item. É `Order.courier_assignment`, uma relação
+`viewonly` para a atribuição aberta, carregada por `selectinload` nas três
+consultas que alimentam o item — a página e os dois polls do stream. O
+custo é fixo por página: uma consulta para as atribuições e uma para os
+entregadores, qualquer que seja o tamanho da página.
+`tests/test_entregador_na_listagem_db.py` conta as consultas.
+
 **A atribuição de um pedido entregue continua aberta.** Ela é o registro de
 quem entregou. Por isso desativar ou excluir um motoboy fecha as corridas
 abertas **exceto as de pedido terminal** (`except_order_statuses`, passado
@@ -197,6 +206,5 @@ prova pelo HTTP que Bearer não abre `/courier` e o par não abre `/admin`.
 | Mapa de calor | agregação de `orders.delivery_latitude/longitude` por período |
 | Métricas de tempo médio | `order_status_history` já tem os instantes; é consulta de relatório por entregador |
 | Tentativas fora da área | estado "não entregue" com motivo — aresta NOVA no grafo, e aí a frente da máquina de estados abre de verdade |
-| Motoboy na listagem de pedidos do painel | junção em `list_orders_by_restaurant` e campo em `AdminOrderListItem` (que o SSE também emite) |
 | Relatório de taxas por entregador para o dono | a mesma consulta do histórico do entregador, pelo lado do painel, com recorte de filial |
 | Trava por falhas de código | contador por entregador, no banco |

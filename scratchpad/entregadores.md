@@ -413,6 +413,29 @@ skill (quatro portas).
 
 ---
 
+## 8. O motoboy na listagem (pedido depois do relatório)
+
+`AdminOrderListItem.courier_id` e `courier_name`, nulos sem motoboy. Vem
+pela relação `Order.courier_assignment` (viewonly, só a atribuição aberta)
+com `selectinload` nas TRÊS consultas que montam o item: a página
+(`list_orders_by_restaurant`) e os dois polls do stream
+(`list_orders_created_since`, `list_status_changes_since`). Custo: duas
+consultas a mais por página, fixas — o teste de banco conta e recusa N+1.
+
+Duas coisas que a rodada ensinou:
+
+- **um loader solto no módulo é acusado pela varredura de estado entre
+  workers** (`selectinload(...)` não está na lista de tipos inertes). A
+  tupla, como `_ORDER_DETAIL_LOADERS`, é reconhecida como tabela constante.
+  Alternativa seria pôr `selectinload` na lista de inertes do script; a
+  tupla segue a convenção que já existia;
+- **o teste de contagem de consultas pegou um SELECT que não era da página**:
+  ler `cenario["restaurante"].id` depois do `expire_all()` da fixture custa
+  uma consulta. O id é lido antes de ligar o contador.
+
+Contrato: campos novos com default nulo — painel antigo continua lendo.
+`openapi.json` regenerado.
+
 ## RELATÓRIO
 
 ### O que ficou pronto
@@ -503,10 +526,10 @@ skill (quatro portas).
 > a nova abre com a taxa de agora. Mesmo entregador de novo: `ok`, sem
 > mudar nada. Pedido em `out_for_delivery` ainda troca de motoboy.
 >
-> **O que NÃO está na listagem de pedidos:** `AdminOrderListItem` não ganhou
-> o nome do motoboy (seria junção na lista e no evento SSE). Por pedido há o
-> `GET .../courier`; por motoboy há a lista de abertas. Se a tela precisar
-> do nome na listagem, é a primeira coisa da fase 2.
+> **O motoboy vem na listagem:** `AdminOrderListItem` ganhou `courier_id` e
+> `courier_name` (nulos = ninguém). O evento `order.created` /
+> `order.status_changed` do stream traz o mesmo item, então a linha se
+> atualiza sozinha quando o atendente atribui.
 >
 > **`openapi.json` está regenerado** com tudo isto, inclusive os enums de
 > erro.

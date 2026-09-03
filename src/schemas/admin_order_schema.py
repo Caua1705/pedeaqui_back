@@ -35,6 +35,12 @@ class AdminOrderListItem(BaseModel):
     payment_status: str
     total: float
     created_at: datetime | None = None
+    # Quem esta com o pedido: a atribuicao ABERTA em `courier_assignments`.
+    # Os dois nulos = ninguem ainda. Vem na lista (e no evento do stream, que
+    # e o mesmo objeto) porque e nesta tela que o dono olha o dia inteiro, e
+    # um GET por linha para saber o motoboy nao e tela, e espera.
+    courier_id: UUID | None = None
+    courier_name: str | None = None
 
 
 class AdminOrderListResponse(BaseModel):

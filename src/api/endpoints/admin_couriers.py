@@ -7,6 +7,7 @@ Nenhuma destas rotas aceita `print_agent`: a conta de maquina do agente de
 impressao continua alcancando as quatro rotas de sempre e mais nenhuma.
 """
 
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
@@ -17,6 +18,7 @@ from src.api.dependencies.admin_scope import (
     PESSOAS,
     SOMENTE_DONO,
     AdminScope,
+    ensure_pode_ler_dinheiro,
     exigir_papel,
     get_admin_scope,
 )
@@ -29,6 +31,7 @@ from src.schemas.courier_schema import (
     AdminBranchCourierFeeUpdate,
     AdminCourierAccessResponse,
     AdminCourierCreate,
+    AdminCourierFeeReportResponse,
     AdminCourierResponse,
     AdminCourierUpdate,
     AdminOrderCourierResponse,
@@ -294,3 +297,48 @@ def unassign_order(
     quando, no historico."""
     AdminCourierService(db).unassign_order(scope, order_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- O relatorio do dono ----------------------------------------------------------
+
+
+@router.get(
+    "/reports/couriers",
+    response_model=AdminCourierFeeReportResponse,
+    # GERENCIA com recorte, como os relatorios de dinheiro de Desempenho: o
+    # dono le o restaurante inteiro, o gerente le a propria filial
+    # (`ensure_pode_ler_dinheiro`). E o que a loja PAGA — nao e alavanca de
+    # balcao, e o atendente nao le.
+    dependencies=[Depends(exigir_papel(GERENCIA))],
+)
+def courier_fee_report(
+    start_date: date = Query(..., description="Primeiro dia do periodo (inclusive), no fuso da operacao"),
+    end_date: date = Query(..., description="Ultimo dia do periodo (inclusive)"),
+    branch_id: UUID | None = Query(
+        default=None,
+        description="Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+    ),
+    scope: AdminScope = Depends(get_admin_scope),
+    db: Session = Depends(get_db),
+) -> AdminCourierFeeReportResponse:
+    """Quanto o restaurante deve a cada entregador no periodo.
+
+    Uma linha por entregador com entregas concluidas no periodo: quantas,
+    quantas SEM taxa (a filial nao tinha taxa configurada na atribuicao —
+    entram na contagem e nao na soma, para acertar a mao), e a soma das
+    taxas congeladas. Entregador excluido entra, marcado: ele saiu, mas fez
+    corridas que sao pagas.
+
+    E a mesma conta do historico que o proprio entregador ve pelo link dele
+    (`GET /courier/{link}/history`), agrupada — os dois batem.
+
+    Ate 92 dias. Quem nao e dono precisa mandar `branch_id`.
+    """
+    branch_filter = scope.resolve_branch_filter(branch_id)
+    ensure_pode_ler_dinheiro(scope, branch_filter)
+    return AdminCourierService(db).fee_report(
+        restaurant_id=scope.restaurant_id,
+        start_date=start_date,
+        end_date=end_date,
+        branch_id=branch_filter,
+    )

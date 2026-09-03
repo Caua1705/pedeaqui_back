@@ -1656,6 +1656,112 @@
         "title": "AdminCourierCreate",
         "type": "object"
       },
+      "AdminCourierFeeReportItem": {
+        "properties": {
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
+          "courier_id": {
+            "format": "uuid",
+            "title": "Courier Id",
+            "type": "string"
+          },
+          "deliveries_count": {
+            "title": "Deliveries Count",
+            "type": "integer"
+          },
+          "deliveries_without_fee": {
+            "title": "Deliveries Without Fee",
+            "type": "integer"
+          },
+          "fee_total": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Fee Total",
+            "type": "string"
+          },
+          "is_deleted": {
+            "title": "Is Deleted",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "phone": {
+            "title": "Phone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "courier_id",
+          "name",
+          "phone",
+          "branch_id",
+          "is_deleted",
+          "deliveries_count",
+          "deliveries_without_fee",
+          "fee_total"
+        ],
+        "title": "AdminCourierFeeReportItem",
+        "type": "object"
+      },
+      "AdminCourierFeeReportResponse": {
+        "description": "Quanto o dono deve a cada motoboy no periodo.\n\n`Decimal` e nao `float`, como os outros relatorios de dinheiro do painel\n(`CommissionReportResponse`, `SalesSummaryResponse`): e o formato que o\npainel ja le nessa tela, e misturar os dois num mesmo menu e a armadilha\n34 por outra porta.",
+        "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "couriers": {
+            "items": {
+              "$ref": "#/components/schemas/AdminCourierFeeReportItem"
+            },
+            "title": "Couriers",
+            "type": "array"
+          },
+          "deliveries_count": {
+            "title": "Deliveries Count",
+            "type": "integer"
+          },
+          "deliveries_without_fee": {
+            "title": "Deliveries Without Fee",
+            "type": "integer"
+          },
+          "fee_total": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Fee Total",
+            "type": "string"
+          },
+          "period": {
+            "$ref": "#/components/schemas/ReportPeriod"
+          },
+          "restaurant_id": {
+            "format": "uuid",
+            "title": "Restaurant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "restaurant_id",
+          "period",
+          "deliveries_count",
+          "deliveries_without_fee",
+          "fee_total",
+          "couriers"
+        ],
+        "title": "AdminCourierFeeReportResponse",
+        "type": "object"
+      },
       "AdminCourierResponse": {
         "properties": {
           "access_generated_at": {
@@ -17750,6 +17856,88 @@
         "summary": "Commission Report",
         "tags": [
           "admin reports"
+        ]
+      }
+    },
+    "/admin/reports/couriers": {
+      "get": {
+        "description": "Quanto o restaurante deve a cada entregador no periodo.\n\nUma linha por entregador com entregas concluidas no periodo: quantas,\nquantas SEM taxa (a filial nao tinha taxa configurada na atribuicao —\nentram na contagem e nao na soma, para acertar a mao), e a soma das\ntaxas congeladas. Entregador excluido entra, marcado: ele saiu, mas fez\ncorridas que sao pagas.\n\nE a mesma conta do historico que o proprio entregador ve pelo link dele\n(`GET /courier/{link}/history`), agrupada — os dois batem.\n\nAte 92 dias. Quem nao e dono precisa mandar `branch_id`.",
+        "operationId": "courier_fee_report_admin_reports_couriers_get",
+        "parameters": [
+          {
+            "description": "Primeiro dia do periodo (inclusive), no fuso da operacao",
+            "in": "query",
+            "name": "start_date",
+            "required": true,
+            "schema": {
+              "description": "Primeiro dia do periodo (inclusive), no fuso da operacao",
+              "format": "date",
+              "title": "Start Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Ultimo dia do periodo (inclusive)",
+            "in": "query",
+            "name": "end_date",
+            "required": true,
+            "schema": {
+              "description": "Ultimo dia do periodo (inclusive)",
+              "format": "date",
+              "title": "End Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+              "title": "Branch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCourierFeeReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Courier Fee Report",
+        "tags": [
+          "admin couriers"
         ]
       }
     },

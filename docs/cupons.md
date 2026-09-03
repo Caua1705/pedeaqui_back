@@ -289,7 +289,17 @@ que ela sumiu.
 lojista escreveu; o app mostra a faixa antes do clique, e é isso que evita a
 surpresa. Uma tolerância seria uma segunda faixa que ninguém configurou.
 
-### 7.3 Cupom valendo só em itens específicos do cardápio — NÃO implementada
+### 7.3 Cupom valendo só em itens específicos do cardápio — RECUSADA por medida (04/09/2026)
+
+**Recusada, não adiada.** O custo medido foi o dobro de 7.1 e 7.2 somadas:
+tabela nova, reescrita de `calculate_discount` para receber os itens do
+pedido, um terceiro caso na base da comissão, vínculo por `catalog_key`
+porque o cupom é do restaurante e o produto é da filial, e um estado novo
+"falta o item". E mexe em dinheiro já congelado nos pedidos. **Nenhum
+restaurante pediu.** Se um dia pedir, o preço está abaixo, e a decisão é
+outra — com o pedido na mão.
+
+O texto original da medição:
 
 *"R$ 5 off na picanha."*
 

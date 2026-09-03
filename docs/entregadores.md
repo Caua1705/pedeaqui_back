@@ -131,6 +131,14 @@ custo é fixo por página: uma consulta para as atribuições e uma para os
 entregadores, qualquer que seja o tamanho da página.
 `tests/test_entregador_na_listagem_db.py` conta as consultas.
 
+**O dono vê quanto deve a cada motoboy** em `GET /admin/reports/couriers?start_date&end_date&branch_id`
+(GERENCIA com recorte, como os relatórios de dinheiro de Desempenho): uma
+linha por entregador com entregas concluídas no período, as sem taxa
+separadas, e a soma. É a mesma definição de entrega do histórico que o
+próprio motoboy vê (`CourierRepository.totals_by_courier` e
+`list_deliveries_by_courier` leem a mesma atribuição aberta e a mesma linha
+`completed`), então os dois números batem. Excluído entra, marcado.
+
 **A atribuição de um pedido entregue continua aberta.** Ela é o registro de
 quem entregou. Por isso desativar ou excluir um motoboy fecha as corridas
 abertas **exceto as de pedido terminal** (`except_order_statuses`, passado
@@ -206,5 +214,4 @@ prova pelo HTTP que Bearer não abre `/courier` e o par não abre `/admin`.
 | Mapa de calor | agregação de `orders.delivery_latitude/longitude` por período |
 | Métricas de tempo médio | `order_status_history` já tem os instantes; é consulta de relatório por entregador |
 | Tentativas fora da área | estado "não entregue" com motivo — aresta NOVA no grafo, e aí a frente da máquina de estados abre de verdade |
-| Relatório de taxas por entregador para o dono | a mesma consulta do histórico do entregador, pelo lado do painel, com recorte de filial |
 | Trava por falhas de código | contador por entregador, no banco |

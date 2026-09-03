@@ -20,7 +20,7 @@ listaram como bloqueadas pelo contrato.
 | b2 | `auto_apply` calculado pela mesma escolha do checkout | pequeno | **feito** |
 | b3 | restrição por forma de pagamento (campo + estado) | médio | **feito** — revisão `20260904_0046` |
 | b4 | restrição por horário do dia (campo + estado) | médio | **feito** — mesma revisão |
-| b5 | restrição por itens do cardápio | **grande** | **não feito — decisão do dono** |
+| b5 | restrição por itens do cardápio | **grande** | **recusado por medida** (04/09/2026) |
 
 b5 é o mais caro dos três com folga (`docs/cupons.md` §7.3): tabela nova,
 reescrita de `calculate_discount`, a base da comissão muda, o cardápio é por
@@ -159,3 +159,57 @@ regenerado.
 > - O pedido recusa com 400 e `detail` igual ao motivo
 >   (`payment_method_not_allowed`, `outside_hours`) — sem tolerância no fim
 >   da faixa: às 18:00:00 o cupom das 15h às 18h já não vale.
+
+---
+
+## b5) Recusado por medida
+
+Decisão do dono em 04/09/2026, pelo custo medido: o dobro de b3+b4, tabela
+nova, e mexe em dinheiro já congelado nos pedidos. Nenhum restaurante pediu
+essa restrição. Registrado em `docs/cupons.md` §7.3 com o preço, para a
+decisão ser refeita com um pedido na mão e não de memória.
+
+---
+
+## c) O relatório do dono: quanto devo a cada motoboy
+
+Escolha minha, pelo valor: o entregador vê o próprio histórico pelo link,
+mas quem paga é o dono, e até aqui ele teria que perguntar a cada um — ou
+abrir o banco.
+
+`GET /admin/reports/couriers?start_date&end_date&branch_id`, GERENCIA com
+`ensure_pode_ler_dinheiro` (dono lê tudo; gerente lê a própria filial),
+mesmo recorte e mesmo teto (92 dias) dos relatórios de Desempenho.
+
+- **uma consulta agrupada** (`totals_by_courier`) com a MESMA definição de
+  entrega de `list_deliveries_by_courier`: atribuição aberta, pedido
+  `completed`, instante da linha `completed`. Duas definições divergiriam
+  no dia em que o motoboy conferisse o histórico dele contra o pagamento;
+- **excluído entra, marcado** (`is_deleted`): saiu, mas fez corridas;
+- **`deliveries_without_fee` separado**: corrida sem taxa conta como entrega
+  e não como zero — somar zero a esconderia exatamente no relatório que
+  existe para pagar;
+- `Decimal` na resposta, como os outros relatórios de dinheiro do painel.
+
+Vermelho visto (8), 8 verdes (7 rápidos + 1 de banco com os quatro
+recortes: período, filial, restaurante e atribuição fechada). Papéis e
+escopo cobrados pelas varreduras. `openapi.json` regenerado.
+
+### Pronto para colar no painel
+
+> `GET /admin/reports/couriers?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&branch_id=`
+> (GERENCIA; gerente precisa de `branch_id`, senão 403; até 92 dias, senão 400).
+>
+> ```
+> { restaurant_id, branch_id|null,
+>   period: {start_date, end_date, days},
+>   deliveries_count, deliveries_without_fee, fee_total: "117.00",
+>   couriers: [{ courier_id, name, phone, branch_id, is_deleted,
+>                deliveries_count, deliveries_without_fee, fee_total: "96.00" }] }
+> ```
+>
+> `fee_total` vem como string com duas casas, igual aos relatórios de
+> Desempenho. `deliveries_without_fee` é o número a acertar à mão (a filial
+> não tinha taxa quando atribuiu); mostrem ao lado da soma, não dentro dela.
+> `is_deleted` marca o motoboy que já saiu do cadastro e ainda tem corrida
+> a receber no período.

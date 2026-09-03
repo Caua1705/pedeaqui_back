@@ -1764,6 +1764,18 @@
       },
       "AdminCourierResponse": {
         "properties": {
+          "access_blocked_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Blocked Until"
+          },
           "access_generated_at": {
             "anyOf": [
               {

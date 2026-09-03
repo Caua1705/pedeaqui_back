@@ -10,7 +10,7 @@ O que este arquivo NAO faz: escrever status de pedido. Quem escreve e
 """
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from fastapi import HTTPException, status
@@ -64,6 +64,10 @@ class AdminCourierService:
         self.branch_repository = BranchRepository(db)
         self.courier_repository = CourierRepository(db)
         self.order_repository = OrderRepository(db)
+        # Injetavel, pela convencao da armadilha 51: quem decide se a trava
+        # do entregador ainda vale e uma comparacao com o agora, e o teste
+        # precisa poder escolher o instante.
+        self.clock = utcnow
 
     # --- A taxa da filial ---------------------------------------------------
 
@@ -171,6 +175,12 @@ class AdminCourierService:
         Inativo nao ganha acesso (409): seria um par que a dependencia
         recusaria de qualquer jeito, e o dono veria "funcionou" numa tela e
         "nao entra" na outra.
+
+        **E a saida do motoboy TRAVADO por errar o codigo**, e por isso ela
+        zera o contador e a trava na mesma escrita. Ele nao tem como pedir
+        socorro pelo app — o que ele tem e o telefone da loja —, e destravar
+        sem trocar o par deixaria valendo um codigo que alguem esteve
+        chutando. Um par novo resolve as duas metades de uma vez.
         """
         courier = self._get_courier(scope, courier_id)
         if not courier.is_active:
@@ -184,6 +194,9 @@ class AdminCourierService:
         courier.access_link_hash = hash_courier_link_token(link_token)
         courier.access_code_hash = hash_courier_access_code(access_code, link_token)
         courier.access_generated_at = now
+        courier.access_failed_attempts = 0
+        courier.access_failed_at = None
+        courier.access_blocked_until = None
         self._commit()
         return AdminCourierAccessResponse(
             courier_id=courier.id,
@@ -451,8 +464,7 @@ class AdminCourierService:
             ),
         )
 
-    @staticmethod
-    def _courier_response(courier: Courier) -> AdminCourierResponse:
+    def _courier_response(self, courier: Courier) -> AdminCourierResponse:
         return AdminCourierResponse(
             id=courier.id,
             branch_id=courier.branch_id,
@@ -461,8 +473,22 @@ class AdminCourierService:
             is_active=bool(courier.is_active),
             has_access=courier.access_link_hash is not None and courier.access_code_hash is not None,
             access_generated_at=courier.access_generated_at,
+            access_blocked_until=self._trava_em_vigor(courier),
             created_at=courier.created_at,
         )
+
+    def _trava_em_vigor(self, courier: Courier) -> datetime | None:
+        """A trava so sai na resposta enquanto ela vale.
+
+        A coluna guarda o instante em que a ultima trava termina, e ele fica
+        gravado depois de passar — util no banco, mentira na tela. Publicar o
+        instante cru faria o painel escrever "travado ate 14h02" as 15h.
+        """
+        if courier.access_blocked_until is None:
+            return None
+        if courier.access_blocked_until <= self.clock():
+            return None
+        return courier.access_blocked_until
 
     @staticmethod
     def _courier_fee_response(branch: Branch) -> AdminBranchCourierFeeResponse:

@@ -125,6 +125,14 @@ class AdminCourierResponse(BaseResponse):
     # so em `POST /admin/couriers/{id}/access`, uma vez.
     has_access: bool
     access_generated_at: datetime | None = None
+    # Ate quando ele esta travado por errar o codigo. **Nulo e o estado
+    # normal**, e o campo so vem preenchido enquanto a trava esta valendo —
+    # um instante ja passado faria o painel escrever "travado ate 14h02" as
+    # 15h, que e pior que nao dizer nada.
+    #
+    # E o que o dono precisa ver para atender o telefone: o motoboy travado
+    # nao consegue pedir socorro pelo app, e a saida e regenerar o acesso.
+    access_blocked_until: datetime | None = None
     created_at: datetime | None = None
 
 

@@ -10,6 +10,7 @@ from src.api.rate_limit import (
     CANCEL_ORDER_RATE_LIMIT,
     DELETE_ACCOUNT_RATE_LIMIT,
     REQUEST_DELETE_CODE_RATE_LIMIT,
+    SOCIAL_ACCOUNT_RATE_LIMIT,
     limiter,
 )
 from src.models.customer_model import Customer
@@ -23,6 +24,9 @@ from src.schemas.customer_schema import (
     CustomerAddressResponse,
     CustomerOrderHistoryItem,
     DeleteCustomerAccountRequest,
+    LinkedSocialAccountResponse,
+    LinkGoogleAccountRequest,
+    UnlinkSocialAccountRequest,
     ImportCustomerAddressesRequest,
     ImportCustomerAddressesResponse,
     OrdersInFlightResponse,
@@ -33,6 +37,7 @@ from src.schemas.order_schema import CustomerCancelOrderRequest, OrderDetailResp
 from src.schemas.saved_card_schema import SaveCardRequest, SavedCardResponse
 from src.services.customer_anonymization_service import CustomerAnonymizationService
 from src.services.customer_order_cancel_service import CustomerOrderCancelService
+from src.services.customer_social_service import CustomerSocialAccountService
 from src.services.customer_service import CustomerService
 from src.services.cashback_service import CashbackService
 from src.services.order_service import OrderService
@@ -356,6 +361,134 @@ def cancel_order(
     return CustomerOrderCancelService(db).cancel_for_customer(
         current_customer, order_id, payload
     )
+
+
+@router.get(
+    "/me/social",
+    response_model=list[LinkedSocialAccountResponse],
+    responses={status.HTTP_401_UNAUTHORIZED: {"description": "Nao autenticado"}},
+)
+def list_social_accounts(
+    current_customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+) -> list[LinkedSocialAccountResponse]:
+    """As contas de provedor conectadas a esta conta. E a tela de "contas
+    conectadas", e o que as outras duas rotas desta secao pressupoem.
+
+    Lista vazia significa que a conta abre so por e-mail e senha.
+
+    **Nao vem o `provider_user_id`** (o `sub` do Google), de proposito: ele e
+    identificador da pessoa dentro do provedor e pertence a exportacao da
+    LGPD, que e um pedido explicito — nao a uma tela que abre sozinha.
+
+    Junto com `password_set` de `GET /customers/me`, esta lista diz tudo que a
+    tela precisa saber: uma conta com `password_set: false` e uma unica conta
+    conectada nao pode desconectar essa conta (`DELETE` responde 400), e a tela
+    deve mostrar isso desabilitado, com o motivo, antes do clique.
+    """
+    return CustomerSocialAccountService(db).list_for(current_customer)
+
+
+@router.post(
+    "/me/social/google",
+    response_model=list[LinkedSocialAccountResponse],
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "description": (
+                "Senha nao informada, `nonce_token` vencido, ou conta sem senha "
+                "utilizavel (defina uma antes)"
+            )
+        },
+        status.HTTP_401_UNAUTHORIZED: {
+            "description": "Nao autenticado, senha incorreta, ou `id_token`/`nonce` invalido"
+        },
+        status.HTTP_409_CONFLICT: {
+            "description": "Esta conta do Google ja esta conectada a outra conta"
+        },
+    },
+)
+@limiter.limit(SOCIAL_ACCOUNT_RATE_LIMIT)
+def link_google_account(
+    request: Request,
+    payload: LinkGoogleAccountRequest,
+    current_customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+) -> list[LinkedSocialAccountResponse]:
+    """Conecta o Google a esta conta SEM sair dela.
+
+    E o caminho de quem ja tem conta por e-mail e quer passar a entrar pelo
+    Google. Sem esta rota, a unica forma seria sair, entrar com Google, cair no
+    caso (b) e digitar um codigo — para alguem que ja esta autenticado.
+
+    Mande `id_token` e `nonce_token` (peca o par em `POST /auth/google/nonce`)
+    **e a senha atual**.
+
+    ## Por que a senha
+
+    Conectar acrescenta uma forma de entrar. Sem a senha, um token roubado
+    vira acesso permanente: o ladrao conecta o Google dele, voce troca a senha
+    — o que mata todos os tokens — e ele volta pelo botao do Google. A troca de
+    senha deixaria de ser o que expulsa quem entrou na sua conta.
+
+    Conta com `password_set: false` recebe **400**: ela nao tem senha para
+    provar. Defina uma por "Esqueci minha senha" e conecte depois.
+
+    ## O e-mail do Google NAO precisa ser o da conta
+
+    Conectar o Gmail do trabalho a uma conta pessoal e o caso comum, e ele
+    funciona: a sessao ja prova de quem e a conta e o `id_token` prova de quem
+    e o Google.
+
+    Conectar duas vezes o mesmo Google e a mesma coisa que conectar uma. Se
+    aquele Google ja pertence a OUTRA conta, a resposta e 409.
+    """
+    return CustomerSocialAccountService(db).link_google(current_customer, payload)
+
+
+@router.delete(
+    "/me/social/{provider}",
+    response_model=list[LinkedSocialAccountResponse],
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "description": (
+                "Seria a unica forma de entrar, ou a conta nao tem senha "
+                "utilizavel para confirmar"
+            )
+        },
+        status.HTTP_401_UNAUTHORIZED: {"description": "Nao autenticado, ou senha incorreta"},
+        status.HTTP_404_NOT_FOUND: {"description": "Esta conta nao esta conectada a esse provedor"},
+    },
+)
+@limiter.limit(SOCIAL_ACCOUNT_RATE_LIMIT)
+def unlink_social_account(
+    request: Request,
+    provider: str,
+    payload: UnlinkSocialAccountRequest,
+    current_customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+) -> list[LinkedSocialAccountResponse]:
+    """Desconecta um provedor. Devolve a lista que sobrou.
+
+    Mande a senha atual no corpo — desconectar mexe em forma de entrar, do
+    mesmo jeito que conectar.
+
+    ## A TRAVA: nunca deixa a conta sem porta
+
+    Conta com `password_set: false` e **uma unica** conta conectada recebe
+    **400**, com a frase dizendo que aquela e a unica forma de entrar. Sem
+    senha e sem provedor a pessoa nao entra mais — e ela nao descobriria isso
+    no clique, e sim na proxima vez que tentasse entrar, sem nenhuma pista.
+
+    **A tela deve mostrar isso antes.** `GET /customers/me/social` mais o
+    `password_set` de `GET /customers/me` dizem exatamente quando o botao de
+    desconectar tem que estar desabilitado, e com que explicacao.
+
+    Desconectar **nao apaga nada** da conta: pedidos, endereços, cashback e
+    cupons continuam iguais — eles pendem do cliente, nunca do provedor. O que
+    sai e o vinculo, e aquele Google fica livre para ser conectado a outra
+    conta depois.
+    """
+    return CustomerSocialAccountService(db).unlink(current_customer, provider, payload)
 
 
 @router.get("/me/addresses", response_model=list[CustomerAddressResponse])

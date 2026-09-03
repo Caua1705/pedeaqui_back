@@ -181,10 +181,23 @@ RESET_PASSWORD_RATE_LIMIT = "10/minute;60/hour"
 # e teto POR E-MAIL no `AuthService`; este fecha o que sobra, que e varrer
 # MUITOS e-mails a partir de um IP so.
 GOOGLE_SIGN_IN_RATE_LIMIT = "10/minute;60/hour"
+# O par `nonce`/`nonce_token`. Nao toca no banco, nao manda e-mail e nao diz
+# nada sobre ninguem — o custo de uma chamada e um sorteio e uma assinatura
+# HMAC. Mais folgado que o proprio login, de proposito: o par e pedido ANTES
+# do botao, e uma pessoa que abre e fecha a tela do Google algumas vezes nao
+# pode ficar sem conseguir entrar.
+GOOGLE_NONCE_RATE_LIMIT = "30/minute;200/hour"
 # Conclusao do cadastro por Google. E um cadastro, entao o limite e o do
 # cadastro: inflar a base a partir de um IP so custa o mesmo por qualquer uma
 # das duas portas.
 GOOGLE_COMPLETE_SIGNUP_RATE_LIMIT = "5/minute;20/hour"
+
+# Ligar e desconectar provedor numa conta ja logada. As duas exigem a senha
+# atual, entao o limite existe contra o mesmo alvo do `DELETE /customers/me`:
+# quem tem um token roubado martelando senha. Mesmos numeros, porque a
+# consequencia e da mesma familia — ligar cria acesso permanente, desconectar
+# tira o unico que a pessoa tem.
+SOCIAL_ACCOUNT_RATE_LIMIT = "5/minute;20/hour"
 
 # O codigo que confirma a exclusao, para a conta que nao tem senha. Cada
 # chamada e um e-mail na caixa de entrada de alguem, e o `AuthService` ja tem

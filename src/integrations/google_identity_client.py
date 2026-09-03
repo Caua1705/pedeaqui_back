@@ -104,6 +104,14 @@ class GoogleIdentity:
     subject: str
     email: str
     name: str
+    # A claim `nonce`, copiada pelo Google para dentro do token assinado. E
+    # ela que diz se este `id_token` foi emitido para ESTA sessao de login.
+    #
+    # Sai daqui como veio (podendo ser nulo) e NAO e conferida neste modulo:
+    # quem sabe qual nonce esperar e quem o sorteou, e isso e o
+    # `GoogleAuthService` com o `nonce_token` na mao. `ensure_nonce_matches`
+    # e quem recusa o nulo — aqui recusar seria decidir sem o outro lado.
+    nonce: str | None = None
 
 
 class _ChavesDoGoogle:
@@ -237,8 +245,10 @@ class GoogleIdentityClient:
         # `name` pode faltar quando a pessoa nao preencheu o perfil. O e-mail
         # e um nome ruim e e melhor que vazio — a coluna e NOT NULL, e a tela
         # de completar cadastro deixa trocar.
+        nonce = claims.get("nonce")
         return GoogleIdentity(
             subject=str(subject),
             email=str(email),
             name=str(claims.get("name") or email),
+            nonce=str(nonce) if nonce else None,
         )

@@ -18,6 +18,7 @@ O único dublê é o `EmailService` — colaborador externo, e sem
 precisa para seguir para a tela seguinte.
 """
 
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -37,6 +38,7 @@ from src.schemas.auth_schema import (
     GoogleSignInRequest,
     VerifyEmailCodeRequest,
 )
+from src.services import google_signin_tickets as tickets
 from src.services.auth_service import AuthService, password_is_set
 from src.services.customer_anonymization_service import CustomerAnonymizationService
 from src.services.google_auth_service import GoogleAuthService
@@ -78,8 +80,18 @@ def _identidade(sub: str = SUB, email: str = EMAIL) -> GoogleIdentity:
 
 
 def _servico(db: Session, identity: GoogleIdentity) -> GoogleAuthService:
-    servico = GoogleAuthService(db, identity_client=IdentityClientFalso(identity))
+    """O servico, com o par do nonce ja casado em `servico.pedido`.
+
+    O `nonce` nasce junto da identidade porque e assim que ele existe: o
+    navegador pede o par, leva um ao Google e devolve os dois. Montar so um
+    lado descreveria uma sessao que nao acontece.
+    """
+    nonce, nonce_token = tickets.create_nonce()
+    servico = GoogleAuthService(
+        db, identity_client=IdentityClientFalso(replace(identity, nonce=nonce))
+    )
     servico.auth_service.email_service = EmailServiceFalso()
+    servico.pedido = GoogleSignInRequest(id_token="qualquer", nonce_token=nonce_token)
     return servico
 
 
@@ -95,7 +107,7 @@ class TestOCasoCContraOBanco:
     def test_o_cliente_e_a_identidade_nascem_juntos(self, db: Session) -> None:
         servico = _servico(db, _identidade())
 
-        pedido_de_perfil = servico.sign_in(GoogleSignInRequest(id_token="qualquer"))
+        pedido_de_perfil = servico.sign_in(servico.pedido)
         assert pedido_de_perfil.status == GOOGLE_PROFILE_REQUIRED
         assert _quantos_clientes(db, EMAIL) == 0
 
@@ -130,7 +142,7 @@ class TestOCasoCContraOBanco:
 
     def test_entrar_de_novo_cai_no_caso_a(self, db: Session) -> None:
         servico = _servico(db, _identidade())
-        pedido = servico.sign_in(GoogleSignInRequest(id_token="qualquer"))
+        pedido = servico.sign_in(servico.pedido)
         servico.complete_signup(
             GoogleCompleteSignupRequest(
                 signup_ticket=pedido.signup_ticket,
@@ -140,9 +152,8 @@ class TestOCasoCContraOBanco:
             )
         )
 
-        de_volta = _servico(db, _identidade()).sign_in(
-            GoogleSignInRequest(id_token="qualquer")
-        )
+        de_volta_servico = _servico(db, _identidade())
+        de_volta = de_volta_servico.sign_in(de_volta_servico.pedido)
 
         assert de_volta.status == GOOGLE_AUTHENTICATED
         assert de_volta.access_token is not None
@@ -162,7 +173,7 @@ class TestOCasoBContraOBanco:
         existente = self._cliente_existente(db)
         servico = _servico(db, _identidade())
 
-        resposta = servico.sign_in(GoogleSignInRequest(id_token="qualquer"))
+        resposta = servico.sign_in(servico.pedido)
 
         assert resposta.status == GOOGLE_LINK_CONFIRMATION_REQUIRED
         assert resposta.access_token is None
@@ -177,7 +188,7 @@ class TestOCasoBContraOBanco:
     def test_o_codigo_certo_liga_ao_cliente_que_ja_existe(self, db: Session) -> None:
         existente = self._cliente_existente(db)
         servico = _servico(db, _identidade())
-        pedido = servico.sign_in(GoogleSignInRequest(id_token="qualquer"))
+        pedido = servico.sign_in(servico.pedido)
         _, codigo = servico.auth_service.email_service.codigos[-1]
 
         auth = AuthService(db)
@@ -203,7 +214,7 @@ class TestOCasoBContraOBanco:
     def test_o_codigo_errado_nao_liga_nada(self, db: Session) -> None:
         self._cliente_existente(db)
         servico = _servico(db, _identidade())
-        pedido = servico.sign_in(GoogleSignInRequest(id_token="qualquer"))
+        pedido = servico.sign_in(servico.pedido)
 
         auth = AuthService(db)
         auth.email_service = EmailServiceFalso()
@@ -234,7 +245,7 @@ class TestOCasoBContraOBanco:
         db.flush()
 
         servico = _servico(db, _identidade())
-        pedido = servico.sign_in(GoogleSignInRequest(id_token="qualquer"))
+        pedido = servico.sign_in(servico.pedido)
         _, codigo = servico.auth_service.email_service.codigos[-1]
         auth = AuthService(db)
         auth.email_service = EmailServiceFalso()
@@ -260,7 +271,7 @@ class TestOSubENoBancoUnico:
         db.flush()
 
         servico = _servico(db, _identidade())
-        pedido = servico.sign_in(GoogleSignInRequest(id_token="qualquer"))
+        pedido = servico.sign_in(servico.pedido)
         _, codigo = servico.auth_service.email_service.codigos[-1]
         auth = AuthService(db)
         auth.email_service = EmailServiceFalso()
@@ -272,7 +283,7 @@ class TestOSubENoBancoUnico:
 
         # O mesmo `sub` chegando com o e-mail do OUTRO cliente.
         segundo_servico = _servico(db, _identidade(email="outro@exemplo.com"))
-        resposta = segundo_servico.sign_in(GoogleSignInRequest(id_token="qualquer"))
+        resposta = segundo_servico.sign_in(segundo_servico.pedido)
 
         # `sub` conhecido ganha do e-mail: entra na conta a que ele ja pertence.
         assert resposta.status == GOOGLE_AUTHENTICATED

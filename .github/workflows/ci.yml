@@ -326,7 +326,14 @@ jobs:
         # e-mail) — a mesma classe que `auth_service.py` ja tem meia duzia de
         # vezes aqui. Se `customers.email` fosse nulo, `GET /customers/me`
         # quebraria muito antes destes cinco pontos.
-        run: python scripts/leituras_de_coluna_nulavel.py --url "$TEST_DATABASE_URL" --limite 206
+        #
+        # 206 -> 208 com as contas conectadas, e os dois sao falso positivo por
+        # NOME: `linked_at=identidade.created_at` le uma coluna que e NOT NULL
+        # nos dois lados em `customer_social_identities`, e o `password_hash`
+        # de `verify_password` e a UNICA das 16 divergencias com defesa ja
+        # escrita — a funcao declara `str | None` e devolve False (armadilha
+        # 50). O casamento e por atributo, e o script avisa disso na saida.
+        run: python scripts/leituras_de_coluna_nulavel.py --url "$TEST_DATABASE_URL" --limite 208
         env:
           TEST_DATABASE_URL: postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
 

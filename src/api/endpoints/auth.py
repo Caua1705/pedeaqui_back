@@ -5,6 +5,7 @@ from src.api.dependencies.database import get_db
 from src.api.rate_limit import (
     FORGOT_PASSWORD_RATE_LIMIT,
     GOOGLE_COMPLETE_SIGNUP_RATE_LIMIT,
+    GOOGLE_NONCE_RATE_LIMIT,
     GOOGLE_SIGN_IN_RATE_LIMIT,
     LOGIN_RATE_LIMIT,
     REGISTER_RATE_LIMIT,
@@ -17,6 +18,7 @@ from src.api.rate_limit import (
 from src.schemas.auth_schema import (
     ForgotPasswordRequest,
     GoogleCompleteSignupRequest,
+    GoogleNonceResponse,
     GoogleSignInRequest,
     GoogleSignInResponse,
     LoginRequest,
@@ -31,6 +33,8 @@ from src.schemas.auth_schema import (
     VerifyResetCodeRequest,
     VerifyResetCodeResponse,
 )
+from src.core.config import settings
+from src.services import google_signin_tickets as tickets
 from src.services.auth_service import AuthService
 from src.services.google_auth_service import GoogleAuthService
 
@@ -97,12 +101,48 @@ def verify_email_code(
     return AuthService(db).verify_email_code(payload)
 
 
+@router.post("/google/nonce", response_model=GoogleNonceResponse)
+@limiter.limit(GOOGLE_NONCE_RATE_LIMIT)
+def create_google_nonce(request: Request) -> GoogleNonceResponse:
+    """Abre um login pelo Google. Chame ANTES de mostrar o botao.
+
+    Devolve `nonce` e `nonce_token`. Passe o `nonce` para
+    `google.accounts.id.initialize({ nonce })` — o Google o copia para dentro
+    do `id_token` que assina — e guarde o `nonce_token` para mandar junto em
+    `POST /auth/google`.
+
+    **Um sem o outro nao serve para nada, e e essa a defesa.** No navegador, o
+    `id_token` e um valor que passa por varias maos; sem o nonce, um token
+    legitimo capturado em qualquer lugar seria aceito aqui como se fosse a
+    pessoa entrando agora. Com ele, o token so vale na sessao que pediu o par.
+
+    O par vale **10 minutos**. Vencido, `POST /auth/google` responde 400
+    pedindo para tocar no botao de novo — peca um par novo e recomece; nao ha
+    o que consertar do lado do app.
+
+    Nao autenticada, nao toca no banco e nao diz nada sobre ninguem: e um
+    sorteio e uma assinatura.
+    """
+    nonce, nonce_token = tickets.create_nonce()
+    return GoogleNonceResponse(
+        nonce=nonce,
+        nonce_token=nonce_token,
+        expires_in_seconds=settings.GOOGLE_OAUTH_NONCE_MINUTES * 60,
+    )
+
+
 @router.post(
     "/google",
     response_model=GoogleSignInResponse,
     responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "description": "`nonce_token` vencido ou invalido — peca outro par e recomece"
+        },
         status.HTTP_401_UNAUTHORIZED: {
-            "description": "`id_token` invalido, ou e-mail nao verificado no Google"
+            "description": (
+                "`id_token` invalido, `nonce` que nao bate com esta sessao, "
+                "ou e-mail nao verificado no Google"
+            )
         },
         status.HTTP_403_FORBIDDEN: {"description": "Conta inativa"},
         status.HTTP_502_BAD_GATEWAY: {"description": "Nao foi possivel falar com o Google"},
@@ -119,10 +159,16 @@ def sign_in_with_google(
 ) -> GoogleSignInResponse:
     """Entrar com Google. Mande o `id_token`; leia o `status` da resposta.
 
-    O app faz o login com o Google no aparelho e manda aqui o `id_token` (o
-    `idToken` do `GoogleSignIn`, nao o `accessToken`). O servidor confere a
-    assinatura contra as chaves publicas do Google, o `aud` contra os nossos
-    client ids e o `iss`; `email_verified` falso e recusado com 401.
+    **Antes:** chame `POST /auth/google/nonce`, passe o `nonce` ao Google
+    Identity Services e guarde o `nonce_token` — os dois campos do corpo aqui
+    sao obrigatorios.
+
+    O servidor confere a assinatura contra as chaves publicas do Google, o
+    `aud` contra os nossos client ids, o `iss`, e o `nonce` do token contra o
+    que ESTA sessao pediu; `email_verified` falso e recusado com 401.
+
+    Mande o `id_token` (o campo `credential` do Google Identity Services, ou o
+    `idToken` do SDK nativo), nunca o `accessToken`.
 
     ## Os tres desfechos, pelo campo `status`
 

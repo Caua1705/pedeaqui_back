@@ -154,10 +154,27 @@ GoogleSignInStatus = Literal[
 ]
 
 
+class GoogleNonceResponse(BaseModel):
+    """O par que abre um login pelo Google no navegador.
+
+    `nonce` vai para `google.accounts.id.initialize({ nonce })` e volta dentro
+    do `id_token`; `nonce_token` volta para nos junto dele. Um sem o outro nao
+    serve para nada.
+    """
+
+    nonce: str
+    nonce_token: str
+    expires_in_seconds: int
+
+
 class GoogleSignInRequest(BaseModel):
     # O teto existe para um `id_token` gigante nao chegar ao PyJWT: o corpo
     # ja tem limite geral, mas este e o campo que vira trabalho de crypto.
     id_token: str = Field(min_length=1, max_length=8192)
+    # OBRIGATORIO, e a obrigatoriedade e a defesa. Sem ele, um `id_token`
+    # legitimo capturado em qualquer lugar entra aqui como se fosse a pessoa.
+    # Peca o par em `POST /auth/google/nonce` ANTES de abrir o botao.
+    nonce_token: str = Field(min_length=1)
 
 
 class GoogleSignInResponse(BaseModel):

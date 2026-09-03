@@ -107,6 +107,11 @@ class Settings(BaseSettings):
     # uma sessao: 15 minutos e o mesmo teto do token de troca de senha, e cobre
     # digitar telefone e data de nascimento com folga.
     GOOGLE_OAUTH_TICKET_MINUTES: int = 15
+    # Quanto vale o `nonce` entre `POST /auth/google/nonce` e a volta do
+    # `id_token`. E o tempo de clicar no botao, escolher a conta e o Google
+    # responder — dez minutos cobrem isso com folga, e curto e o que faz o
+    # `nonce_token` vazado num log ter vida util pequena.
+    GOOGLE_OAUTH_NONCE_MINUTES: int = 10
 
     RESEND_API_KEY: str | None = None
     EMAIL_FROM: str = "Rapidex <no-reply@pederapidex.com>"

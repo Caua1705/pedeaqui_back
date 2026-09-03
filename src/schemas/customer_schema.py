@@ -179,6 +179,45 @@ class CustomerSocialIdentityItem(BaseResponse):
     last_login_at: datetime | None = None
 
 
+class LinkedSocialAccountResponse(BaseResponse):
+    """Uma conta de provedor conectada, para a TELA de contas conectadas.
+
+    **Nao leva `provider_user_id`, e a ausencia e a diferenca para
+    `CustomerSocialIdentityItem`.** O `sub` e o identificador da pessoa dentro
+    do Google: ele pertence a exportacao da LGPD, que e um pedido explicito e
+    baixado uma vez — nao a uma tela de configuracoes que abre sozinha e cujo
+    corpo passa por log de proxy, cache de app e captura de tela.
+    """
+
+    provider: str
+    linked_at: datetime
+    last_login_at: datetime | None = None
+
+
+class LinkGoogleAccountRequest(BaseModel):
+    """Ligar o Google a uma conta que JA ESTA logada.
+
+    `password` e obrigatoria no servico e opcional no schema pelo mesmo motivo
+    de `DeleteCustomerAccountRequest`: a conta sem senha utilizavel nao tem o
+    que preencher, e a resposta dela e um 400 que ensina o caminho — nao um
+    422 de campo faltando.
+
+    O par `id_token`/`nonce_token` e o mesmo de `POST /auth/google`: peca o
+    nonce em `POST /auth/google/nonce` antes de abrir o botao.
+    """
+
+    id_token: str = Field(min_length=1, max_length=8192)
+    nonce_token: str = Field(min_length=1)
+    password: str | None = None
+
+
+class UnlinkSocialAccountRequest(BaseModel):
+    """Desconectar um provedor. A senha atual, pelo motivo de sempre:
+    desconectar mexe em forma de entrar."""
+
+    password: str | None = None
+
+
 class UpdateCurrentCustomerRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

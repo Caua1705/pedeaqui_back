@@ -1,4 +1,4 @@
-"""Os dois tickets que atravessam as telas do "entrar com Google".
+"""Os tickets assinados que atravessam as telas do "entrar com Google".
 
 `POST /auth/google` tem tres desfechos, e so um deles e um JWT de sessao. Os
 outros dois pedem uma segunda tela — completar o cadastro, ou confirmar a
@@ -29,6 +29,9 @@ cadastro criaria conta nova para quem ja tem uma, que e precisamente o caso
 (b) sendo resolvido como o (c).
 """
 
+import hashlib
+import hmac
+import secrets
 from dataclasses import dataclass
 from datetime import timedelta
 from uuid import UUID
@@ -51,6 +54,13 @@ PURPOSE_SIGNUP = "google_signup"
 #: Ligacao a uma conta que ja existe, esperando o codigo do e-mail.
 PURPOSE_LINK = "google_link"
 
+#: O `nonce` que o navegador leva ao Google e devolve dentro do `id_token`.
+PURPOSE_NONCE = "google_nonce"
+
+#: 32 bytes url-safe. E um valor que o Google copia para dentro de um token
+#: assinado: precisa ser imprevisivel, e nao apenas unico.
+_NONCE_BYTES = 32
+
 
 @dataclass(frozen=True)
 class SignupTicket:
@@ -68,6 +78,67 @@ class LinkTicket:
 
 def _expires_delta() -> timedelta:
     return timedelta(minutes=settings.GOOGLE_OAUTH_TICKET_MINUTES)
+
+
+def hash_nonce(nonce: str) -> str:
+    """sha-256 sem chave, pelo motivo do `hash_tracking_token`.
+
+    A entrada tem 256 bits sorteados: nao ha dicionario nem rainbow table
+    contra ela, entao a chave nao compraria resistencia nenhuma — e em troca
+    nao existe variavel de ambiente cuja perda derrube todo login em curso.
+    """
+    return hashlib.sha256(nonce.encode("utf-8")).hexdigest()
+
+
+def create_nonce() -> tuple[str, str]:
+    """O par `(nonce, nonce_token)` que o navegador leva para o Google.
+
+    O NONCE vai para `google.accounts.id.initialize({ nonce })` e volta dentro
+    do `id_token`, assinado pelo Google. O NONCE_TOKEN volta para nos junto do
+    `id_token`, e e ele que diz qual nonce esperar.
+
+    **Quem sorteia e quem confere.** Um nonce escolhido pelo navegador nao
+    prova nada: o servidor nao saberia o que esperar, e conferir o valor
+    contra ele mesmo e nao conferir.
+
+    O token carrega o HASH do nonce, e nao o nonce: um `nonce_token` que vaze
+    num log de proxy nao entrega junto o valor que permitiria forjar o par.
+    """
+    nonce = secrets.token_urlsafe(_NONCE_BYTES)
+    nonce_token = create_signed_token(
+        subject=hash_nonce(nonce),
+        purpose=PURPOSE_NONCE,
+        expires_delta=timedelta(minutes=settings.GOOGLE_OAUTH_NONCE_MINUTES),
+    )
+    return nonce, nonce_token
+
+
+def ensure_nonce_matches(nonce_token: str, nonce_do_id_token: str | None) -> None:
+    """O `nonce` do `id_token` e o que ESTA sessao pediu. Falha FECHADA.
+
+    E o que separa "a pessoa esta entrando agora" de "alguem apresentou um
+    `id_token` que capturou em outro lugar". No fluxo do navegador (Google
+    Identity Services) essa e a defesa, e nao uma camada a mais: o token e
+    legitimo, assinado pelo Google e emitido para o NOSSO client id — o que
+    ele nao tem e o nonce desta sessao.
+
+    **`id_token` sem a claim `nonce` e recusado.** O Google so a inclui quando
+    o cliente passa um nonce, entao "confere so quando vem" seria pedir ao
+    atacante que nao passasse. Nao ha caminho aqui que aceite um token sem
+    nonce.
+
+    `compare_digest` porque e comparacao de segredo (armadilha 18).
+    """
+    esperado = _ler(nonce_token, PURPOSE_NONCE).get("sub")
+    if not nonce_do_id_token or not isinstance(esperado, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=NONCE_INVALIDO
+        )
+    if hmac.compare_digest(hash_nonce(nonce_do_id_token), esperado):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED, detail=NONCE_INVALIDO
+    )
 
 
 def create_signup_ticket(identity: GoogleIdentity) -> str:
@@ -100,6 +171,11 @@ def create_link_ticket(identity: GoogleIdentity, customer_id: UUID) -> str:
 #: nada do que a pessoa faz, e diria a quem esta tentando forjar um ticket se
 #: ele chegou a ser aceito.
 TICKET_INVALIDO = "Esta confirmação não vale mais. Entre com Google novamente."
+
+#: A frase do nonce e OUTRA, e a diferenca importa para quem le a tela: o
+#: ticket vencido pede para recomecar do meio do fluxo; o nonce que nao bate
+#: pede para recomecar do botao do Google.
+NONCE_INVALIDO = "Sessão de login inválida. Toque em entrar com Google de novo."
 
 
 def read_signup_ticket(ticket: str) -> SignupTicket:

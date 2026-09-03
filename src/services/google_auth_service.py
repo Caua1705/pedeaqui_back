@@ -114,7 +114,7 @@ class GoogleAuthService:
 
     def sign_in(self, payload: GoogleSignInRequest) -> GoogleSignInResponse:
         """Os tres casos, na ordem em que se decidem. Cada um sai por um return."""
-        identity = self._verified_identity(payload.id_token)
+        identity = self.verified_identity(payload.id_token, payload.nonce_token)
 
         vinculo = self.social_identity_repository.get_by_provider_user(
             SOCIAL_PROVIDER_GOOGLE, identity.subject
@@ -254,7 +254,19 @@ class GoogleAuthService:
 
     # ------------------------------------------------------------ comuns
 
-    def _verified_identity(self, id_token: str) -> GoogleIdentity:
+    def verified_identity(self, id_token: str, nonce_token: str) -> GoogleIdentity:
+        """A identidade, com o `nonce` desta sessao ja conferido.
+
+        A ordem importa e nao e livre: a assinatura ANTES do nonce. A claim
+        `nonce` so significa alguma coisa depois de o token ter sido provado
+        autentico — conferi-la primeiro seria comparar contra um valor que
+        qualquer um pode escrever.
+        """
+        identity = self._identity_from_google(id_token)
+        tickets.ensure_nonce_matches(nonce_token, identity.nonce)
+        return identity
+
+    def _identity_from_google(self, id_token: str) -> GoogleIdentity:
         """Traduz as falhas do Google para HTTP. Cada uma diz outra coisa."""
         try:
             return self.identity_client.verify_id_token(id_token)

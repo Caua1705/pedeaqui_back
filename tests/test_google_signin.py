@@ -22,6 +22,7 @@ contrato que a funcao sob teste recebe (CLAUDE.md). O `Customer` e o
 
 import unittest
 import uuid
+from dataclasses import replace
 from datetime import date, datetime, timezone
 
 from fastapi import HTTPException
@@ -71,6 +72,22 @@ def identidade_do_google(**sobrescritas) -> GoogleIdentity:
     return GoogleIdentity(**campos)
 
 
+def par_de_nonce(identity: GoogleIdentity) -> tuple[GoogleIdentity, str]:
+    """A identidade com o `nonce` desta sessao, e o `nonce_token` que o espera.
+
+    O par nasce junto porque e assim que ele existe no mundo: o navegador pede
+    os dois, leva um ao Google e devolve os dois. Um teste que montasse so um
+    lado descreveria uma sessao que nao acontece.
+    """
+    nonce, nonce_token = tickets.create_nonce()
+    return replace(identity, nonce=nonce), nonce_token
+
+
+def entrada(identity: GoogleIdentity | None = None) -> tuple[GoogleSignInRequest, GoogleIdentity]:
+    com_nonce, nonce_token = par_de_nonce(identity or identidade_do_google())
+    return GoogleSignInRequest(id_token="qualquer", nonce_token=nonce_token), com_nonce
+
+
 class FakeIdentityClient:
     """Colaborador: devolve a identidade, ou levanta o que o Google levantaria."""
 
@@ -118,13 +135,24 @@ def montar_servico(
     email_code=None,
     recent_codes=0,
 ) -> GoogleAuthService:
+    """O servico com os dublês ligados. Guarda em `pedido` a entrada casada.
+
+    `servico.pedido` e o `GoogleSignInRequest` cujo `nonce_token` bate com o
+    `nonce` da identidade que o cliente dublado vai devolver. Sem esse
+    casamento, todo teste daqui morreria na conferencia do nonce — que e o
+    que ela existe para fazer.
+    """
     servico = GoogleAuthService.__new__(GoogleAuthService)
     servico.db = FakeDb()
     servico.customer_repository = FakeCustomerRepository(
         customer=customer, email_code=email_code, recent_codes=recent_codes
     )
     servico.social_identity_repository = social or FakeSocialIdentityRepository()
-    servico.identity_client = identity_client or FakeIdentityClient()
+    cliente_de_identidade = identity_client or FakeIdentityClient()
+    pedido, com_nonce = entrada(getattr(cliente_de_identidade, "identity", None))
+    cliente_de_identidade.identity = com_nonce
+    servico.identity_client = cliente_de_identidade
+    servico.pedido = pedido
     servico.auth_service = montar_auth(
         customer=customer, email_code=email_code, recent_codes=recent_codes
     )
@@ -162,7 +190,7 @@ class TestOCasoA(unittest.TestCase):
         social = FakeSocialIdentityRepository(vinculo)
         servico = montar_servico(customer=cliente, social=social)
 
-        resposta = servico.sign_in(GoogleSignInRequest(id_token="qualquer"))
+        resposta = servico.sign_in(servico.pedido)
 
         self.assertEqual(resposta.status, GOOGLE_AUTHENTICATED)
         self.assertEqual(cliente_do_token(resposta.access_token), str(cliente.id))
@@ -181,7 +209,7 @@ class TestOCasoA(unittest.TestCase):
             customer=cliente, social=FakeSocialIdentityRepository(vinculo)
         )
 
-        resposta = servico.sign_in(GoogleSignInRequest(id_token="qualquer"))
+        resposta = servico.sign_in(servico.pedido)
 
         payload = decode_signed_token(resposta.access_token, "customer_access")
         self.assertEqual(payload["type"], "customer")
@@ -192,9 +220,8 @@ class TestOCasoA(unittest.TestCase):
             customer_id=cliente.id, provider_user_id=SUB
         )
         social = FakeSocialIdentityRepository(vinculo)
-        montar_servico(customer=cliente, social=social).sign_in(
-            GoogleSignInRequest(id_token="qualquer")
-        )
+        servico = montar_servico(customer=cliente, social=social)
+        servico.sign_in(servico.pedido)
 
         self.assertEqual(len(social.logins), 1)
         self.assertIsNotNone(vinculo.last_login_at)
@@ -205,9 +232,8 @@ class TestOCasoA(unittest.TestCase):
             customer_id=cliente.id, provider_user_id=SUB
         )
         social = FakeSocialIdentityRepository(vinculo)
-        montar_servico(customer=cliente, social=social).sign_in(
-            GoogleSignInRequest(id_token="qualquer")
-        )
+        servico = montar_servico(customer=cliente, social=social)
+        servico.sign_in(servico.pedido)
 
         self.assertEqual(social.created, [])
 
@@ -221,7 +247,7 @@ class TestOCasoA(unittest.TestCase):
         )
 
         with self.assertRaises(HTTPException) as erro:
-            servico.sign_in(GoogleSignInRequest(id_token="qualquer"))
+            servico.sign_in(servico.pedido)
         self.assertEqual(erro.exception.status_code, 403)
 
 
@@ -237,7 +263,7 @@ class TestOCasoB(unittest.TestCase):
         self.servico = montar_servico(customer=self.cliente, social=self.social)
 
     def _entrar(self):
-        return self.servico.sign_in(GoogleSignInRequest(id_token="qualquer"))
+        return self.servico.sign_in(self.servico.pedido)
 
     def test_nao_loga(self) -> None:
         """A metade que entrega a conta da vitima se for feita errado."""
@@ -274,7 +300,7 @@ class TestOCasoB(unittest.TestCase):
         laco. O cooldown e o teto POR E-MAIL do `AuthService` sao o que impede
         cada chamada de virar uma mensagem na caixa de entrada da pessoa."""
         servico = montar_servico(customer=self.cliente, recent_codes=3)
-        resposta = servico.sign_in(GoogleSignInRequest(id_token="qualquer"))
+        resposta = servico.sign_in(servico.pedido)
 
         self.assertEqual(resposta.status, GOOGLE_LINK_CONFIRMATION_REQUIRED)
         self.assertEqual(servico.auth_service.email_service.verification_codes, [])
@@ -284,9 +310,8 @@ class TestOCasoB(unittest.TestCase):
         app faca de diferente, e variar a resposta so contaria quantos codigos
         ja sairam para aquele e-mail."""
         com_folga = self._entrar()
-        no_teto = montar_servico(customer=self.cliente, recent_codes=3).sign_in(
-            GoogleSignInRequest(id_token="qualquer")
-        )
+        no_teto_servico = montar_servico(customer=self.cliente, recent_codes=3)
+        no_teto = no_teto_servico.sign_in(no_teto_servico.pedido)
         self.assertEqual(com_folga.status, no_teto.status)
         self.assertEqual(com_folga.message, no_teto.message)
 
@@ -437,7 +462,8 @@ class TestOCasoC(unittest.TestCase):
     """`sub` novo e e-mail sem conta: cadastro."""
 
     def test_pede_o_perfil_e_nao_loga(self) -> None:
-        resposta = montar_servico().sign_in(GoogleSignInRequest(id_token="qualquer"))
+        servico = montar_servico()
+        resposta = servico.sign_in(servico.pedido)
 
         self.assertEqual(resposta.status, GOOGLE_PROFILE_REQUIRED)
         self.assertIsNone(resposta.access_token)
@@ -446,13 +472,14 @@ class TestOCasoC(unittest.TestCase):
 
     def test_nao_cria_cliente_nem_identidade(self) -> None:
         servico = montar_servico()
-        servico.sign_in(GoogleSignInRequest(id_token="qualquer"))
+        servico.sign_in(servico.pedido)
 
         self.assertIsNone(servico.customer_repository.created)
         self.assertEqual(servico.social_identity_repository.created, [])
 
     def test_o_ticket_de_cadastro_carrega_o_que_o_google_deu(self) -> None:
-        resposta = montar_servico().sign_in(GoogleSignInRequest(id_token="qualquer"))
+        servico = montar_servico()
+        resposta = servico.sign_in(servico.pedido)
 
         ticket = tickets.read_signup_ticket(resposta.signup_ticket)
         self.assertEqual(ticket.subject, SUB)
@@ -603,7 +630,7 @@ class TestAsFalhasDoGoogle(unittest.TestCase):
     def _entrar(self, erro):
         servico = montar_servico(identity_client=FakeIdentityClient(erro=erro))
         with self.assertRaises(HTTPException) as capturado:
-            servico.sign_in(GoogleSignInRequest(id_token="qualquer"))
+            servico.sign_in(servico.pedido)
         return capturado.exception
 
     def test_token_invalido_e_401(self) -> None:
@@ -626,6 +653,61 @@ class TestAsFalhasDoGoogle(unittest.TestCase):
         credencial que esta certa."""
         erro = self._entrar(GoogleIdentityNotConfiguredError("x"))
         self.assertEqual(erro.status_code, 503)
+
+
+class TestONonceEhCobradoNoFluxo(unittest.TestCase):
+    """A conferencia existe DENTRO de `sign_in`, e nao so como funcao solta.
+
+    `test_google_nonce.py` prova que `ensure_nonce_matches` recusa o par
+    errado. Estes provam que `POST /auth/google` a CHAMA — sem isto, a defesa
+    poderia estar escrita e nunca ser executada, que e a familia do teste mudo.
+    """
+
+    def test_nonce_de_outra_sessao_e_401(self) -> None:
+        """O ataque inteiro: o `id_token` da vitima, com o nonce DELA, chega
+        junto do `nonce_token` do atacante."""
+        servico = montar_servico()
+        _, de_outra_sessao = tickets.create_nonce()
+
+        with self.assertRaises(HTTPException) as erro:
+            servico.sign_in(
+                GoogleSignInRequest(id_token="qualquer", nonce_token=de_outra_sessao)
+            )
+
+        self.assertEqual(erro.exception.status_code, 401)
+
+    def test_id_token_sem_nonce_e_401(self) -> None:
+        """Falha FECHADA: o Google so poe a claim quando o cliente a passa."""
+        sem_nonce = FakeIdentityClient(identidade_do_google())
+        servico = montar_servico(identity_client=sem_nonce)
+        # Desfaz o casamento que `montar_servico` monta: aqui o token nao tem
+        # nonce nenhum, que e o caso do atacante que simplesmente nao passou.
+        servico.identity_client.identity = identidade_do_google()
+
+        with self.assertRaises(HTTPException) as erro:
+            servico.sign_in(servico.pedido)
+
+        self.assertEqual(erro.exception.status_code, 401)
+
+    def test_a_assinatura_e_conferida_ANTES_do_nonce(self) -> None:
+        """A ordem nao e livre: a claim `nonce` so significa alguma coisa
+        depois de o token ter sido provado autentico. Conferi-la primeiro
+        seria comparar contra um valor que qualquer um escreve.
+
+        Com o token invalido, a resposta e a do TOKEN — nao a do nonce.
+        """
+        servico = montar_servico(
+            identity_client=FakeIdentityClient(
+                erro=GoogleIdentityInvalidTokenError("x")
+            )
+        )
+
+        with self.assertRaises(HTTPException) as erro:
+            servico.sign_in(
+                GoogleSignInRequest(id_token="qualquer", nonce_token="nem-e-um-jwt")
+            )
+
+        self.assertEqual(erro.exception.detail, "Credenciais inválidas")
 
 
 class TestOTicket(unittest.TestCase):

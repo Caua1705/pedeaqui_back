@@ -752,3 +752,138 @@ Depois, 7 mutações dirigidas:
     rápida  2710 passed
     db       697 passed  (a de exclusão: 42, com 7 novos)
     leituras_de_coluna_nulavel  206 (era 201; os 5 novos são todos `customer.email`)
+
+---
+
+## 10. Nonce, contas conectadas e o aviso de boot
+
+Ordem de implementação: o **nonce primeiro** (ele muda o contrato de
+`/auth/google`, e a rota nova já nasce com ele), depois ligar, desvincular,
+listar e o aviso.
+
+### O nonce (item 4) — no navegador ele É a defesa
+
+O front usa o Google Identity Services, não o fluxo nativo. Aí um `id_token`
+legítimo capturado em qualquer lugar — log, extensão, qualquer mão pela qual
+ele passe — seria aceito como se fosse a pessoa entrando agora.
+
+    POST /auth/google/nonce  ->  { nonce, nonce_token, expires_in_seconds }
+
+`nonce` vai para `google.accounts.id.initialize({ nonce })`; `nonce_token`
+volta para nós junto do `id_token`. **Os dois campos passaram a ser
+obrigatórios** em `POST /auth/google`.
+
+Três decisões que não são de gosto:
+
+- **quem sorteia é quem confere.** Nonce escolhido pelo navegador não prova
+  nada — o servidor não saberia o que esperar;
+- **não vive no Redis nem numa tabela.** `REDIS_URL` é opcional aqui, e sem ela
+  o backend cai num `dict` de processo: com dois workers, metade dos logins
+  falharia a conferência (armadilha 20). *Controle de segurança que quebra
+  quando se escala não é controle.* O `nonce_token` é assinado e guardado pelo
+  cliente, e carrega o **hash** do nonce — vazado num log, não entrega o valor;
+- **falha fechada.** `id_token` sem a claim `nonce` é recusado. "Confere só
+  quando vem" seria pedir ao atacante que não passasse.
+
+E a **ordem**: assinatura antes do nonce. A claim só significa alguma coisa
+depois de o token ter sido provado autêntico — a mutação que inverte isso
+derruba 23 testes.
+
+### Ligar já logado (item 2) — e por que exige a senha
+
+    POST /customers/me/social/google   { id_token, nonce_token, password }
+
+Era o buraco maior: quem tem conta por e-mail e quer adicionar o Google
+precisava sair, entrar com Google e digitar um código — estando autenticado.
+
+**A senha é obrigatória, e o motivo é persistência.** Ligar acrescenta uma
+forma de entrar: sem ela, um JWT roubado deixa de ser acesso temporário e vira
+permanente — o ladrão liga o Google dele, a vítima troca a senha (que mata
+todo token, `password_changed_at`) e ele volta pelo botão. A troca de senha é a
+única ferramenta que o cliente tem para expulsar quem entrou; uma rota que crie
+acesso sem pedi-la a desliga em silêncio.
+
+Conta com `password_set: false` recebe **400** com o caminho (defina uma senha
+por "Esqueci minha senha"). Inventar uma segunda prova aqui seria uma quarta
+tabela de código.
+
+**O e-mail do Google não precisa bater com o da conta**, e isso é teste: a
+sessão já prova de quem é a conta e o `id_token` prova de quem é o Google. O
+Gmail do trabalho na conta pessoal é o caso comum.
+
+### Desvincular (item 1) — a trava
+
+    DELETE /customers/me/social/{provider}   { password }
+
+**Recusa quando seria a única forma de entrar**, com a frase dizendo isso.
+Conta sem senha e sem provedor não entra mais — o `forgot-password` ainda
+resolveria, mas ninguém descobre na hora: a tela diz "desvinculado" e o
+problema aparece na tentativa seguinte, sem pista nenhuma. Errar para o lado de
+recusar custa um clique; errar para o outro custa a conta.
+
+Desvincular não apaga nada: pedidos, endereços, cashback e cupons pendem do
+cliente, nunca do provedor. O `sub` fica livre para outra conta (teste `db`).
+
+### Listar (item 3)
+
+    GET /customers/me/social  ->  [{ provider, linked_at, last_login_at }]
+
+**Não leva o `provider_user_id`**, e a ausência é a diferença para o item da
+exportação: o `sub` é o identificador da pessoa dentro do Google e pertence a
+um pedido explícito de LGPD, baixado uma vez — não a uma tela de configurações
+que abre sozinha e cujo corpo passa por log de proxy e captura de tela.
+
+### O aviso de boot (item 6)
+
+`GOOGLE_OAUTH_CLIENT_IDS` vazia agora grita no boot — **aviso, nunca erro**
+(mesmo critério do `PLATFORM_METRICS_KEY`). Ele existe porque o sintoma não
+aponta para cá: as rotas de Google respondem 503 e o resto da API fica
+perfeita, então quem investiga começa pelo app, pelo Google Cloud e pelo client
+id do front antes de suspeitar do `.env`.
+
+### Vermelho antes, e mutação depois
+
+`test_google_nonce.py` e `test_contas_conectadas.py` foram escritos primeiro:
+11 falhas por `AttributeError`, e um `ImportError` de
+`LinkGoogleAccountRequest`. Depois, 9 mutações dirigidas:
+
+| Mutação | Resultado |
+|---|---|
+| o nonce não é conferido no fluxo | 3 falhas |
+| `id_token` **sem** nonce é aceito | 2 falhas |
+| o nonce é conferido **antes** da assinatura | **23 falhas** |
+| ligar o Google não exige a senha | 3 falhas |
+| a trava some: desvincular deixa a conta sem porta | 1 falha |
+| a trava vira um "defina uma senha" genérico | 1 falha |
+| o `sub` de outra conta é religado em vez de recusado | 1 falha |
+| a lista da tela passa a levar o `sub` | 1 falha |
+| o boot fica calado sem `GOOGLE_OAUTH_CLIENT_IDS` | 2 falhas |
+
+9 de 9. Somando as rodadas: **25 de 25**.
+
+**E o `db` pegou um buraco que o rápido não pegava:** `unlink` chamava
+`social_identity_repository.delete(alvo)`, um método que **não existia** no
+repositório de verdade — o dublê respondia, o Postgres não responderia. É
+literalmente o caso do `serves_people` que o CLAUDE.md descreve.
+
+### O contrato novo, para colar
+
+    POST   /auth/google/nonce             -> { nonce, nonce_token, expires_in_seconds }
+    POST   /auth/google                   + nonce_token (OBRIGATÓRIO agora)
+    GET    /customers/me/social           -> [{ provider, linked_at, last_login_at }]
+    POST   /customers/me/social/google    { id_token, nonce_token, password } -> a lista
+    DELETE /customers/me/social/{provider} { password }                       -> a lista
+
+A tela de contas conectadas precisa de dois campos para decidir o que
+desabilitar: `password_set` (de `GET /customers/me`) e o tamanho desta lista.
+`password_set: false` com uma conta só = botão de desconectar desabilitado,
+com o motivo escrito antes do clique.
+
+### Suítes
+
+    rápida  2754 passed
+    db       704 passed
+    openapi  em dia
+    leituras_de_coluna_nulavel  208 (os 2 novos: um `created_at` NOT NULL nos
+                                dois lados, e o `password_hash` que já tem
+                                defesa escrita)

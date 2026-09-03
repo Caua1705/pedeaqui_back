@@ -48,6 +48,16 @@ class CustomerSocialIdentityRepository:
         self.db.flush()
         return identity
 
+    def delete(self, identity: CustomerSocialIdentity) -> None:
+        """Apaga UMA identidade — o "desconectar" da tela de contas conectadas.
+
+        Separado de `delete_of_customer`, que e o passo da exclusao de conta e
+        varre por cliente. Duas perguntas diferentes: aqui e "esta ligacao",
+        la e "tudo desta pessoa".
+        """
+        self.db.delete(identity)
+        self.db.flush()
+
     def delete_of_customer(self, customer_id: uuid.UUID) -> int:
         """Apaga as identidades sociais da pessoa. Devolve quantas sairam.
 

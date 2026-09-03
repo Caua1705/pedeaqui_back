@@ -19,6 +19,15 @@ qualquer coisa, e continue do que ele diz — nunca da lembrança.**
 | 3 | Mandar mensagem: janela de 24h × template aprovado | **feito** — `WhatsAppSender` |
 | 4 | Os avisos de status do pedido: aceito, saiu, entregue | **feito** — em `OrderStatusChangeService.apply`, depois do commit |
 
+### Segunda leva (05/09/2026)
+
+| # | Item | Estado |
+|---|---|---|
+| 5 | `account_update` / `PARTNER_REMOVED` — o canal desconectado | **feito** |
+| 6 | Aviso de "pronto para retirada" | pendente |
+| 7 | Reenvio de aviso que falhou | pendente |
+| 8 | `docs/whatsapp.md` | pendente |
+
 ---
 
 ## Decisões que vieram do enunciado — não redecidir
@@ -36,6 +45,30 @@ qualquer coisa, e continue do que ele diz — nunca da lembrança.**
 4. **Nada de chatbot nesta rodada.** Só os avisos de status.
 5. **Não tenho acesso à Business Manager do Júnior.** Conectar número,
    verificar e aprovar template é operação, e é minha.
+6. **Nada de resposta automática de "este número só envia avisos".** O
+   plano é ligar o Rapi a esse número depois, e uma resposta de "ninguém
+   atende aqui" seria construir para jogar fora. Quem escrever para o
+   número hoje não recebe nada — e a janela de 24h que a mensagem dele
+   abre **fica gravada**, pronta para quando o assistente entrar.
+
+### Decisão de 05/09/2026 — o número do piloto
+
+**Um número NOVO e dedicado** (virtual, da Salvy), conectado à BM do
+Júnior, **só para os avisos de saída**. Os dois números que ele usa para
+atender **não migram**: isso espera o Tech Provider e a coexistência, que
+exigem Embedded Signup (parte II, B-bis).
+
+**Ele vai na linha do RESTAURANTE** (`branch_id` nulo), e as duas filiais
+herdam. É o caso que o desenho já previa e que não custou nenhuma linha
+nova: `resolve_for_branch` procura a filial, não acha, e cai na queda do
+restaurante.
+
+O que isso significa na prática, e é melhor estar escrito antes de alguém
+estranhar: **o cliente do Centro e o da Aldeota recebem o aviso do MESMO
+número**, e esse número não é o que eles conhecem da loja. É o preço de
+não mexer no atendimento do Júnior agora, e ele se desfaz sozinho no dia
+do Tech Provider — trocando a linha de restaurante por duas linhas de
+filial, sem tocar em código.
 
 ---
 
@@ -394,6 +427,63 @@ aceite passa a morrer junto com o aviso. O `except` largo é o que segura.
 
 ---
 
+## Item 5 — feito. O canal desconectado
+
+| Onde | O que |
+|---|---|
+| `alembic/versions/20260905_0052_*` | `disconnected_at` e `disconnect_reason` |
+| `src/integrations/whatsapp_client.py` | `parse_account_updates` — a **segunda** chave |
+| `src/repositories/whatsapp_repository.py` | `_canal_utilizavel()` e o par em Python |
+| `src/services/whatsapp_webhook_service.py` | `_apply_account_updates` |
+| `tests/test_whatsapp_desconexao_db.py` | 13 casos |
+
+**O que a conferência na documentação mudou, e era o risco do item:**
+`account_update` **não tem `phone_number_id`**. Ele é da CONTA, e o que o
+identifica é o WABA (`value.waba_info.waba_id`, com `entry[].id` como a forma
+que sempre existe). Lido por `parse_webhook_changes`, que exige
+`metadata.phone_number_id`, ele seria **descartado sem uma linha de log** — o
+webhook que existe contra o silêncio morrendo em silêncio.
+
+Por isso são **duas funções de leitura sobre o mesmo corpo**, cada uma
+enxergando só o que é dela. A alternativa era uma função com um `if` no meio
+decidindo qual chave usar.
+
+**Duas colunas, e não `is_active = false`:**
+
+| | quem fez | como se desfaz |
+|---|---|---|
+| `is_active = false` | **eu** | no nosso painel |
+| `disconnected_at` | **o lojista** | só ele reconectando |
+
+Reaproveitar `is_active` responderia "parou" e perderia "por quê" — e as duas
+saídas são opostas. É o par de `branches.is_open` contra o horário de
+funcionamento (armadilha 35): duas checagens de "fechado" que não se
+substituem.
+
+**As duas são conferidas juntas, num lugar só:** `_canal_utilizavel()` (SQL) e
+`canal_utilizavel()` (Python) moram lado a lado no repositório, pelo motivo da
+armadilha 54. Conferido por mutação: tirando a metade `disconnected_at`, o
+canal desconectado volta a ser roteado e escolhido — três testes vermelhos.
+
+**Três decisões que não estavam no enunciado:**
+
+1. **Só `PARTNER_REMOVED` age.** Os outros quinze eventos de conta são
+   **logados e nada mais**: agir sobre um evento que ninguém estudou é
+   inventar comportamento, e o log é o que vai dizer se algum dia outro
+   importa.
+2. **O reenvio não move a hora.** A Meta reenvia; sobrescrever apagaria a hora
+   em que a desconexão de fato aconteceu, que é a única pista de quando os
+   avisos pararam.
+3. **Recadastrar limpa a desconexão.** É o caminho de volta, e ele se explica
+   sozinho: quem tem um token novo em mãos só o tem porque o lojista religou
+   o acesso.
+
+**O rastro para o painel de um dia** é a linha do banco (`disconnected_at`,
+`disconnect_reason`) mais um `WARNING` com os números que pararam. Não há
+tela, e é de propósito — o enunciado pediu o dado e o log.
+
+---
+
 # Parte II — o que EU faço, na ordem
 
 Nada abaixo é código. É o que só eu consigo fazer, e o que o backend espera
@@ -570,11 +660,27 @@ jeito que a credencial do Mercado Pago entra hoje.
 
 10. *WhatsApp → Configuração da API*: o seletor mostra, **por número**:
     - **ID do número de telefone** → `phone_number_id`
-    - **ID da conta do WhatsApp Business** → `waba_id` (igual nos dois)
+    - **ID da conta do WhatsApp Business** → `waba_id`
     - o número em si → `display_phone_number`
 
-    Anotar os **dois pares**, dizendo qual é de qual filial. É isto que eu
-    passo para o cadastro junto do token.
+    **Com a decisão do número dedicado é UM par só** — o do número novo da
+    Salvy. Os dois números de atendimento do Júnior não entram aqui.
+
+11. Cadastrar **SEM `--branch-slug`**, e é a ausência da opção que faz dele
+    o número do RESTAURANTE, herdado pelas duas filiais:
+
+    ```
+    docker exec -it pedeaqui-api python scripts/register_whatsapp_channel.py \
+        --restaurant-slug junior-da-picanha \
+        --waba-id <o do passo 10> \
+        --phone-number-id <o do passo 10> \
+        --display-phone-number "+55 85 XXXXX-XXXX"
+    ```
+
+    O `-it` é o que faz o prompt do token aparecer. O script imprime
+    `filial: (nenhuma) — este é o número do RESTAURANTE`. **Se ele
+    imprimir o nome de uma filial**, o `--branch-slug` entrou sem querer:
+    aí só aquela loja avisa, e a outra fica muda sem erro nenhum.
 
 ## E. O webhook
 
@@ -588,9 +694,19 @@ jeito que a credencial do Mercado Pago entra hoje.
     - URL de callback: `https://<domínio da API>/webhooks/whatsapp`
     - Token de verificação: o do passo 11
     - **Verificar e salvar**
-14. Ainda ali → **Gerenciar** → assinar o campo **`messages`**. É um campo
-    só, e ele traz as duas coisas: mensagem recebida e status de entrega.
-    **Sem ele o webhook nunca é chamado** — e nada no painel avisa.
+14. Ainda ali → **Gerenciar** → assinar **DOIS** campos:
+
+    - **`messages`** — mensagem recebida **e** status de entrega, os dois
+      no mesmo campo. Sem ele o webhook nunca é chamado, e nada no painel
+      avisa;
+    - **`account_update`** — o aviso de que o acesso caiu. Sem ele, o dia
+      em que o Júnior tirar o acesso da Cloud API é um dia em que **nada
+      muda do nosso lado**: o aviso continua sendo tentado, a Meta recusa
+      cada um, e ninguém descobre até um cliente reclamar.
+
+    Os dois chegam no MESMO endereço e são roteados por chaves diferentes
+    — `messages` pelo `phone_number_id`, `account_update` pelo WABA. Isso
+    é problema do backend; na tela é só marcar os dois.
 
 ## F. Os três templates
 

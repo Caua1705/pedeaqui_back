@@ -18,6 +18,7 @@ import pytest
 from src.integrations.whatsapp_client import (
     WhatsAppNotConfiguredError,
     WhatsAppWebhookPayloadError,
+    parse_account_updates,
     parse_webhook_changes,
     verify_webhook_signature,
 )
@@ -247,3 +248,85 @@ class TestALeituraDoCorpo:
         ).encode("utf-8")
 
         assert parse_webhook_changes(corpo) == []
+
+
+class TestOAvisoDeDesconexao:
+    """`account_update` NÃO tem `phone_number_id`. É a segunda chave de roteamento.
+
+    Ele é da CONTA (WABA), não de um número: quando o lojista desconecta a
+    Cloud API pelo aplicativo dele, a Meta avisa uma vez, para o WABA inteiro
+    — e todos os números daquele WABA param junto.
+
+    Por isso ele tem função própria. Lido pelo `parse_webhook_changes`, que
+    exige `metadata.phone_number_id`, ele seria **descartado em silêncio** — e
+    o silêncio é exatamente o que este webhook existe para acabar.
+    """
+
+    def _account_update(self, valor: dict, waba_id: str = "waba-do-junior") -> bytes:
+        envelope = {
+            "object": "whatsapp_business_account",
+            "entry": [
+                {"id": waba_id, "changes": [{"field": "account_update", "value": valor}]}
+            ],
+        }
+        return json.dumps(envelope).encode("utf-8")
+
+    def test_partner_removed_traz_o_waba_e_o_evento(self) -> None:
+        corpo = self._account_update(
+            {
+                "event": "PARTNER_REMOVED",
+                "waba_info": {"waba_id": "waba-do-junior", "owner_business_id": "bm-1"},
+                "disconnection_info": {
+                    "reason": "USER_INITIATED",
+                    "initiated_by": "BUSINESS",
+                },
+            }
+        )
+
+        eventos = parse_account_updates(corpo)
+
+        assert len(eventos) == 1
+        assert eventos[0].waba_id == "waba-do-junior"
+        assert eventos[0].event == "PARTNER_REMOVED"
+        assert eventos[0].reason == "USER_INITIATED"
+
+    def test_sem_disconnection_info_o_motivo_e_nulo(self) -> None:
+        """`disconnection_info` é condicional: só vem quando o lojista usava o
+        aplicativo E a Cloud API. A ausência dela não pode fazer o evento
+        inteiro ser descartado."""
+        corpo = self._account_update(
+            {"event": "PARTNER_REMOVED", "waba_info": {"waba_id": "waba-do-junior"}}
+        )
+
+        assert parse_account_updates(corpo)[0].reason is None
+
+    def test_sem_waba_info_o_waba_vem_do_entry(self) -> None:
+        """`entry[].id` É o WABA. O `waba_info` é a forma explícita; o `entry`
+        é a que sempre existe."""
+        corpo = self._account_update({"event": "PARTNER_REMOVED"})
+
+        assert parse_account_updates(corpo)[0].waba_id == "waba-do-junior"
+
+    def test_o_parser_de_numero_nao_enxerga_o_evento_de_conta(self) -> None:
+        """O par do teste acima, e o motivo de haver duas funções: sem
+        `metadata.phone_number_id`, `parse_webhook_changes` descarta."""
+        corpo = self._account_update({"event": "PARTNER_REMOVED"})
+
+        assert parse_webhook_changes(corpo) == []
+
+    def test_mensagem_de_cliente_nao_vira_evento_de_conta(self) -> None:
+        """A direção contrária: as duas funções leem o MESMO corpo, e cada uma
+        só enxerga o que é dela."""
+        valor = metadados() | {
+            "messages": [
+                {
+                    "from": "5585988887777",
+                    "id": "wamid.AAA",
+                    "timestamp": "1757000000",
+                    "type": "text",
+                    "text": {"body": "oi"},
+                }
+            ]
+        }
+
+        assert parse_account_updates(corpo_de(valor)) == []

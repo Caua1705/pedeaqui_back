@@ -39,7 +39,7 @@ status que nao decide nada.
 """
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException, status as http_status
@@ -48,10 +48,12 @@ from sqlalchemy.orm import Session
 from src.core.config import settings
 from src.core.constants import WHATSAPP_CUSTOMER_WINDOW_HOURS, WHATSAPP_MESSAGE_STATUSES
 from src.integrations.whatsapp_client import (
+    WhatsAppAccountUpdate,
     WhatsAppChange,
     WhatsAppNotConfiguredError,
     WhatsAppStatusUpdate,
     WhatsAppWebhookPayloadError,
+    parse_account_updates,
     parse_webhook_changes,
     verify_webhook_signature,
 )
@@ -69,6 +71,11 @@ logger = logging.getLogger("uvicorn.error")
 # mensagem que falhou nao passa a ser entregue depois, e um `sent` atrasado
 # chegando em cima dela nao pode apagar a falha.
 _ORDEM_DO_STATUS = {"sent": 1, "delivered": 2, "read": 3, "failed": 4}
+
+# O unico evento de conta em que agimos. Os outros sao LOGADOS e nada mais:
+# agir sobre um evento que ninguem estudou e inventar comportamento, e o
+# log e o que vai dizer se algum dia um deles importa.
+EVENTO_DE_DESCONEXAO = "PARTNER_REMOVED"
 
 
 class WhatsAppWebhookService:
@@ -89,10 +96,17 @@ class WhatsAppWebhookService:
             logger.warning("[WhatsApp] webhook ignorado motivo=%s", exc)
             return {"status": "ignored", "reason": "payload"}
 
-        if not changes:
+        # Os eventos de CONTA sao lidos do MESMO corpo, por outra funcao: a
+        # chave deles e o WABA, e nao o `phone_number_id` (ver
+        # `parse_account_updates`). Sem esta segunda leitura, o aviso de
+        # desconexao seria descartado em silencio pelo parser de numero — e
+        # silencio e o que ele existe para acabar.
+        eventos = parse_account_updates(raw_body)
+
+        if not changes and not eventos:
             return {"status": "ignored", "reason": "empty"}
 
-        roteadas = 0
+        roteadas = self._apply_account_updates(eventos)
         for change in changes:
             channel = self.channel_repository.get_by_phone_number_id(change.phone_number_id)
             if channel is None:
@@ -131,6 +145,54 @@ class WhatsAppWebhookService:
                 status_code=http_status.HTTP_401_UNAUTHORIZED,
                 detail="Assinatura do webhook inválida",
             )
+
+    def _apply_account_updates(self, eventos: list[WhatsAppAccountUpdate]) -> int:
+        """Desliga os canais do WABA que o lojista desconectou.
+
+        Devolve quantos eventos foram TRATADOS — inclusive os que nao
+        derrubaram canal nenhum. Um `PARTNER_REMOVED` de um WABA que nao e
+        nosso ainda e um webhook atendido, e responder `unknown_number` a ele
+        seria mentir sobre o que aconteceu.
+        """
+        tratados = 0
+        for evento in eventos:
+            tratados += 1
+            if evento.event != EVENTO_DE_DESCONEXAO:
+                # Nao agimos, mas o log fica: e ele que vai dizer se algum dia
+                # outro evento importa.
+                logger.info(
+                    "[WhatsApp] evento de conta sem acao evento=%s waba=%s",
+                    evento.event,
+                    evento.waba_id,
+                )
+                continue
+            self._disconnect(evento)
+        return tratados
+
+    def _disconnect(self, evento: WhatsAppAccountUpdate) -> None:
+        canais = self.channel_repository.mark_disconnected_by_waba(
+            waba_id=evento.waba_id,
+            reason=evento.reason,
+            now=datetime.now(timezone.utc),
+        )
+        if not canais:
+            logger.warning(
+                "[WhatsApp] desconexao de um WABA sem canal nosso waba=%s motivo=%s",
+                evento.waba_id,
+                evento.reason,
+            )
+            return
+
+        # WARNING e nao INFO: daqui em diante NENHUM aviso sai por estes
+        # numeros, e a unica forma de religar e o lojista reconectar. E a
+        # linha que faz a diferenca entre descobrir hoje e descobrir pela
+        # reclamacao do cliente.
+        logger.warning(
+            "[WhatsApp] canal DESCONECTADO pelo lojista waba=%s motivo=%s numeros=%s",
+            evento.waba_id,
+            evento.reason,
+            ", ".join(canal.display_phone_number for canal in canais),
+        )
 
     def _apply(self, change: WhatsAppChange, channel: WhatsAppChannel) -> None:
         for mensagem in change.inbound:

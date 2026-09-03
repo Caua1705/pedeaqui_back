@@ -8,7 +8,7 @@ service.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -17,6 +17,38 @@ from src.models.whatsapp_model import (
     WhatsAppContactWindow,
     WhatsAppMessage,
 )
+
+
+
+def _canal_utilizavel():
+    """A condicao SQL de "da para mandar por este canal".
+
+    Sao DUAS coisas, e elas nao se substituem:
+
+        is_active        EU nao desliguei
+        disconnected_at  a META nao tirou o acesso
+
+    A funcao existe para que a resposta seja UMA. Repetir `is_active.is_(True)`
+    em tres consultas foi o que quase aconteceu, e o dia em que a segunda
+    condicao entrasse em duas delas e esquecesse a terceira seria um canal
+    desconectado continuando a ser escolhido — sem erro nosso, com erro da
+    Meta a cada aviso.
+    """
+    return and_(
+        WhatsAppChannel.is_active.is_(True),
+        WhatsAppChannel.disconnected_at.is_(None),
+    )
+
+
+def canal_utilizavel(canal: WhatsAppChannel) -> bool:
+    """A MESMA regra em Python, e ela mora ao lado da de SQL de proposito.
+
+    `resolve_for_branch` precisa da resposta sobre uma linha que ja esta em
+    maos (a da filial), e nao de um `WHERE`. Duas formas da mesma pergunta em
+    arquivos diferentes divergem no dia em que alguem mexe numa — e a
+    armadilha 54 e exatamente esse caso, com a janela do cupom.
+    """
+    return canal.is_active and canal.disconnected_at is None
 
 
 class WhatsAppChannelRepository:
@@ -32,7 +64,7 @@ class WhatsAppChannelRepository:
         """
         stmt = select(WhatsAppChannel).where(
             WhatsAppChannel.phone_number_id == phone_number_id,
-            WhatsAppChannel.is_active.is_(True),
+            _canal_utilizavel(),
         )
         return self.db.scalar(stmt)
 
@@ -53,7 +85,7 @@ class WhatsAppChannelRepository:
         """
         da_filial = self._get_by_branch(restaurant_id, branch_id)
         if da_filial is not None:
-            return da_filial if da_filial.is_active else None
+            return da_filial if canal_utilizavel(da_filial) else None
         return self._get_restaurant_default(restaurant_id)
 
     def upsert(
@@ -93,12 +125,44 @@ class WhatsAppChannelRepository:
                     "display_phone_number": display_phone_number,
                     "access_token_encrypted": access_token_encrypted,
                     "is_active": True,
+                    # Recadastrar E reconectar: quem roda o script de
+                    # novo esta com um token novo em maos, e o token
+                    # novo so existe porque o lojista religou o acesso.
+                    "disconnected_at": None,
+                    "disconnect_reason": None,
                     "updated_at": func.now(),
                 },
             )
             .returning(WhatsAppChannel)
         )
         return self.db.execute(stmt).scalar_one()
+
+    def mark_disconnected_by_waba(
+        self, *, waba_id: str, reason: str | None, now: datetime
+    ) -> list[WhatsAppChannel]:
+        """Marca TODOS os canais daquele WABA como desconectados.
+
+        O evento e da CONTA e nao de um numero: quando o lojista tira o acesso
+        da Cloud API, todos os numeros daquele WABA param junto. Marcar so um
+        deixaria os outros tentando enviar contra um acesso que nao existe
+        mais.
+
+        Devolve o que mudou, para quem chama poder logar QUAIS numeros pararam
+        — a linha de log e, hoje, o unico lugar onde isso aparece.
+
+        Ja desconectado nao e reescrito: a Meta reenvia webhook, e sobrescrever
+        moveria o `disconnected_at` para a frente a cada reenvio, apagando a
+        hora em que a desconexao de fato aconteceu.
+        """
+        stmt = select(WhatsAppChannel).where(
+            WhatsAppChannel.waba_id == waba_id,
+            WhatsAppChannel.disconnected_at.is_(None),
+        )
+        canais = list(self.db.scalars(stmt))
+        for canal in canais:
+            canal.disconnected_at = now
+            canal.disconnect_reason = reason
+        return canais
 
     def _get_by_branch(
         self, restaurant_id: uuid.UUID, branch_id: uuid.UUID
@@ -113,7 +177,7 @@ class WhatsAppChannelRepository:
         stmt = select(WhatsAppChannel).where(
             WhatsAppChannel.restaurant_id == restaurant_id,
             WhatsAppChannel.branch_id.is_(None),
-            WhatsAppChannel.is_active.is_(True),
+            _canal_utilizavel(),
         )
         return self.db.scalar(stmt)
 

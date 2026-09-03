@@ -115,6 +115,25 @@ class WhatsAppChannel(Base):
     # ela herdar o do restaurante. Herdar seria a loja passando a falar por
     # outro numero sem ninguem ter pedido.
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    # --- Desconectado PELA META, que nao e a mesma coisa que desligado por nos.
+    #
+    #   is_active = False   EU desliguei este numero
+    #   disconnected_at     o LOJISTA tirou o acesso da Cloud API pelo
+    #                       aplicativo dele, e a Meta avisou com
+    #                       `account_update` / `PARTNER_REMOVED`
+    #
+    # As duas saidas sao opostas: a primeira se desfaz no nosso painel, a
+    # segunda so se desfaz com o lojista reconectando. Por isso sao duas
+    # colunas — e por isso as duas sao conferidas JUNTAS, em
+    # `whatsapp_repository._canal_utilizavel()`.
+    #
+    # `disconnect_reason` e nulavel porque `disconnection_info` e CONDICIONAL
+    # na Meta: nulo aqui e "desconectou e nao disseram por que", um estado
+    # legitimo e nao um dado faltando.
+    disconnected_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    disconnect_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )

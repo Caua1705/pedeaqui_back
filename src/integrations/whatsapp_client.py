@@ -59,6 +59,10 @@ SIGNATURE_PREFIX = "sha256="
 # chegando aqui e assinatura do nosso app com o produto errado no painel.
 WHATSAPP_WEBHOOK_OBJECT = "whatsapp_business_account"
 
+# O campo do webhook que carrega evento de CONTA. Roteado pelo WABA, e nao
+# pelo numero: ver `parse_account_updates`.
+ACCOUNT_UPDATE_FIELD = "account_update"
+
 
 class WhatsAppNotConfiguredError(Exception):
     """Falta configuracao nossa (App Secret, verify token, chave de cifra)."""
@@ -85,6 +89,21 @@ class WhatsAppStatusUpdate:
     # Texto e nao numero: e o que se cita num chamado da Meta, nao numero
     # para contas.
     error_code: str | None
+
+
+@dataclass(frozen=True)
+class WhatsAppAccountUpdate:
+    """Um evento da CONTA (WABA), nao de um numero.
+
+    `PARTNER_REMOVED` e o que importa: o lojista desconectou a Cloud API pelo
+    aplicativo dele, e todos os numeros daquele WABA pararam junto.
+    """
+
+    waba_id: str
+    event: str
+    # So vem quando o lojista usava o aplicativo E a Cloud API
+    # (`disconnection_info` e condicional na documentacao da Meta).
+    reason: str | None
 
 
 @dataclass(frozen=True)
@@ -134,11 +153,7 @@ def parse_webhook_changes(raw_body: bytes) -> list[WhatsAppChange]:
     mudanca torta perderia as outras, que estao boas.
     """
     envelope = _load_json_object(raw_body)
-    if envelope.get("object") != WHATSAPP_WEBHOOK_OBJECT:
-        raise WhatsAppWebhookPayloadError(
-            f"Webhook com object={envelope.get('object')!r}, esperado "
-            f"{WHATSAPP_WEBHOOK_OBJECT!r}."
-        )
+    _ensure_whatsapp_object(envelope)
 
     mudancas = []
     for entry in _as_list(envelope.get("entry")):
@@ -147,6 +162,63 @@ def parse_webhook_changes(raw_body: bytes) -> list[WhatsAppChange]:
             if mudanca is not None:
                 mudancas.append(mudanca)
     return mudancas
+
+
+def parse_account_updates(raw_body: bytes) -> list[WhatsAppAccountUpdate]:
+    """Le os eventos de CONTA do mesmo corpo. E a SEGUNDA chave de roteamento.
+
+    `account_update` **nao tem `metadata.phone_number_id`** — conferido na
+    documentacao da Meta. Ele e da conta inteira, e o que o identifica e o
+    WABA: `value.waba_info.waba_id` quando vem, e `entry[].id`, que e o WABA,
+    sempre.
+
+    Por isso ele tem funcao propria em vez de sair de `parse_webhook_changes`:
+    aquela exige `phone_number_id` e **descartaria o evento em silencio** — e
+    silencio e exatamente o que este webhook existe para acabar. Duas
+    perguntas diferentes, duas funcoes que se leem inteiras; a alternativa
+    seria uma funcao com um `if` no meio decidindo qual chave usar.
+
+    As duas leem o MESMO corpo e cada uma so enxerga o que e dela, entao um
+    POST com mensagem e evento de conta juntos e atendido pelas duas.
+    """
+    envelope = _load_json_object(raw_body)
+    _ensure_whatsapp_object(envelope)
+
+    eventos = []
+    for entry in _as_list(envelope.get("entry")):
+        for change in _as_list(entry.get("changes")):
+            evento = _parse_account_update(change, entry_id=entry.get("id"))
+            if evento is not None:
+                eventos.append(evento)
+    return eventos
+
+
+def _parse_account_update(change: Any, *, entry_id: Any) -> WhatsAppAccountUpdate | None:
+    if not isinstance(change, dict) or change.get("field") != ACCOUNT_UPDATE_FIELD:
+        return None
+    value = change.get("value")
+    if not isinstance(value, dict):
+        return None
+
+    event = value.get("event")
+    if not event:
+        return None
+
+    waba_info = value.get("waba_info")
+    waba_info = waba_info if isinstance(waba_info, dict) else {}
+    waba_id = waba_info.get("waba_id") or entry_id
+    if not waba_id:
+        return None
+
+    desconexao = value.get("disconnection_info")
+    desconexao = desconexao if isinstance(desconexao, dict) else {}
+    motivo = desconexao.get("reason")
+
+    return WhatsAppAccountUpdate(
+        waba_id=str(waba_id),
+        event=str(event),
+        reason=str(motivo) if motivo else None,
+    )
 
 
 def _parse_change(change: Any) -> WhatsAppChange | None:
@@ -222,6 +294,14 @@ def _instant_from_unix(timestamp: Any) -> datetime | None:
         return datetime.fromtimestamp(int(timestamp), tz=timezone.utc)
     except (TypeError, ValueError, OSError, OverflowError):
         return None
+
+
+def _ensure_whatsapp_object(envelope: dict) -> None:
+    if envelope.get("object") != WHATSAPP_WEBHOOK_OBJECT:
+        raise WhatsAppWebhookPayloadError(
+            f"Webhook com object={envelope.get('object')!r}, esperado "
+            f"{WHATSAPP_WEBHOOK_OBJECT!r}."
+        )
 
 
 def _load_json_object(raw_body: bytes) -> dict:

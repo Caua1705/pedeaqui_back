@@ -8108,6 +8108,11 @@
       "CustomerCouponResponse": {
         "description": "Um cupom no app do cliente, com o estado JA DECIDIDO pelo backend.\n\nO front nao calcula nada aqui — nem o desconto, nem se cabe, nem quanto\nfalta. Ele pinta `label`, pinta `state` e mostra `discount_amount`.\n\n**Por que a conta nao pode ser do lado de la.** Ela depende de\n`max_discount_amount`, do teto por cliente, do cooldown, do\nprimeira-compra e de qual parte da sacola o desconto morde\n(`free_delivery` desconta a taxa, os outros dois descontam o subtotal).\nReproduzir isso no app seria a segunda implementacao da regra de cupom, e\na divergencia apareceria onde mais custa: o card promete R$ 15, o\ncheckout tira R$ 10, e o cliente ve o desconto encolher entre uma tela e\na outra.\n\n## O que NAO vem aqui, e nao e esquecimento\n\n`discount_value`, `max_discount_amount`, `total_usage_limit`,\n`usage_limit_per_customer` e `cooldown_days` sao PARAMETROS da conta e\nlimites internos da campanha. Quem precisa deles e quem calcula, e quem\ncalcula e o backend. Publicados, so serviriam para alguem refazer a\nconta errado — ou para mapear os limites da campanha de fora.\n\n`min_order_value` fica, porque ele nao e parametro: e a frase \"pedido\nminimo R$ 30\" que o card precisa escrever. E `valid_until` fica pelo\nmesmo motivo — \"valido ate\" e texto de card.",
         "properties": {
+          "auto_apply": {
+            "default": false,
+            "title": "Auto Apply",
+            "type": "boolean"
+          },
           "code": {
             "anyOf": [
               {
@@ -8198,6 +8203,9 @@
               }
             ],
             "title": "Valid Until"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/CouponVisibility"
           }
         },
         "required": [
@@ -8205,6 +8213,7 @@
           "title",
           "discount_type",
           "min_order_value",
+          "visibility",
           "state",
           "discount_amount",
           "missing_amount"

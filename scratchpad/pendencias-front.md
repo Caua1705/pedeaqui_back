@@ -16,8 +16,8 @@ listaram como bloqueadas pelo contrato.
 | # | Item | Tamanho | Estado |
 |---|---|---|---|
 | a | `expires_at` do Pix em `StartPaymentResponse` | pequeno | **feito** |
-| b1 | `visibility` no card do cliente | trivial | pendente |
-| b2 | `auto_apply` calculado pela mesma escolha do checkout | pequeno | pendente |
+| b1 | `visibility` no card do cliente | trivial | **feito** |
+| b2 | `auto_apply` calculado pela mesma escolha do checkout | pequeno | **feito** |
 | b3 | restrição por forma de pagamento (campo + estado) | médio | pendente |
 | b4 | restrição por horário do dia (campo + estado) | médio | pendente |
 | b5 | restrição por itens do cardápio | **grande** | **não feito — decisão do dono** |
@@ -71,3 +71,27 @@ apareceu no teste, não no ruff.
 > mesmo `expires_at` — o contador não reinicia. Quando o prazo vence, o
 > webhook marca o pagamento como `failed` e um novo POST gera outro pix, com
 > outro prazo. O padrão é 30 minutos (`PIX_EXPIRATION_MINUTES`).
+
+---
+
+## b1 + b2) `visibility` e `auto_apply` no card
+
+`CustomerCouponResponse` ganhou os dois. `auto_apply` sai de
+`CouponService._pick_automatic`, extraída de `auto_apply_for_order` e
+chamada também por `list_for_customer`: entre os automáticos que cabem,
+maior desconto, desempate por `sort_order` e `id`. É `true` em exatamente
+um card, e o teste prova que é o mesmo cupom que o checkout escolhe. Sem
+`subtotal` (Clube) e para convidado, sempre `false` — marcar seria prometer
+o que o checkout não faz.
+
+Vermelho visto (7), 7 verdes; 2499 rápidos + 654 `db`. `openapi.json`
+regenerado.
+
+### Pronto para colar no app
+
+> Cada card de `GET /{slug}/coupons` traz agora `visibility`
+> (`public` | `segment` | `private`) e `auto_apply` (bool). "Para todos" é
+> `visibility == "public"`; `label` continua sendo só `selected_for_you`.
+> **Não escolham o automático do lado de lá**: `auto_apply: true` marca o
+> único cupom que o checkout vai aplicar sozinho para essa sacola. Sem
+> `subtotal` na chamada, e sem login, ele vem sempre `false`.

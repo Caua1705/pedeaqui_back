@@ -140,6 +140,14 @@ Cada card vem com o estado **já decidido**. O front não calcula nada:
   E a etiqueta **nunca fala de disponibilidade**: quem diz se dá para usar é o
   `state`. Sem essa separação as duas se contradizem na mesma tela —
   "selecionado para você" ao lado de "faltam R$ 12".
+- **`visibility`** — `public`, `segment` ou `private`. É o que o app usa para
+  a etiqueta "para todos"; `label` continua sendo só a de segmento, porque
+  uma diz o que o cupom **é** e a outra o que o card **destaca**.
+- **`auto_apply`** — `true` em exatamente o card que o checkout aplicaria
+  sozinho para esta sacola. Calculado por `CouponService._pick_automatic`, a
+  **mesma** função que `auto_apply_for_order` usa: a escolha entre dois
+  automáticos é decisão de dinheiro e tem um dono só. Sem `subtotal` (o
+  Clube) e para convidado é sempre `false`.
 - **`state`** — `applicable`, `missing_amount` ou `login_required`.
 - **`discount_amount`** — o que aquele cupom tiraria **desta** sacola. Zero
   quando não cabe: o card não pode anunciar um valor que o checkout não vai

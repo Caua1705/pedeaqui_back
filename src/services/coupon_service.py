@@ -349,7 +349,7 @@ class CouponService:
 
         current = self._aware(self.clock())
         audience = self.audience_of(customer, restaurant.id, now=current)
-        cards = []
+        avaliados = []
         for coupon in self.repository.list_in_window(restaurant.id, now=current):
             evaluation = self.evaluate(
                 coupon,
@@ -360,7 +360,24 @@ class CouponService:
                 audience=audience,
                 now=current,
             )
-            card = self._customer_card(coupon, evaluation)
+            avaliados.append((coupon, evaluation))
+
+        # O automatico que o checkout aplicaria a ESTA sacola, pela mesma
+        # escolha de `auto_apply_for_order`. Sem sacola nao ha o que comparar
+        # (a tela do Clube), e convidado nao recebe automatico no checkout —
+        # nos dois casos nenhum card e marcado, porque marcar seria prometer
+        # o que o checkout nao vai fazer.
+        escolhido = None
+        if subtotal is not None and customer is not None:
+            escolhido = self._pick_automatic(
+                [(evaluation.discount, coupon) for coupon, evaluation in avaliados if evaluation.valid]
+            )
+
+        cards = []
+        for coupon, evaluation in avaliados:
+            card = self._customer_card(
+                coupon, evaluation, auto_apply=escolhido is not None and coupon.id == escolhido.id
+            )
             if card is not None:
                 cards.append(card)
         return CustomerCouponsResponse(coupons=cards)
@@ -369,6 +386,7 @@ class CouponService:
     def _customer_card(
         coupon: RestaurantCoupon,
         evaluation: CouponEvaluation,
+        auto_apply: bool = False,
     ) -> CustomerCouponResponse | None:
         """Um card, ou `None` quando o cupom nao deve aparecer.
 
@@ -393,6 +411,8 @@ class CouponService:
             min_order_value=quantize_money(to_decimal(coupon.min_order_value)),
             valid_until=coupon.valid_until,
             label=CouponService._label(coupon),
+            visibility=coupon.visibility,
+            auto_apply=auto_apply,
             state=state,
             discount_amount=evaluation.discount,
             missing_amount=evaluation.missing_amount,
@@ -675,15 +695,12 @@ class CouponService:
                 audience=audience,
                 now=current,
             )
-            if evaluation.valid and evaluation.discount > ZERO:
+            if evaluation.valid:
                 candidatos.append((evaluation.discount, coupon))
-        if not candidatos:
-            return None
 
-        escolhido = max(
-            candidatos,
-            key=lambda par: (par[0], -(par[1].sort_order or 0), str(par[1].id)),
-        )[1]
+        escolhido = self._pick_automatic(candidatos)
+        if escolhido is None:
+            return None
         return self.lock_and_validate_for_order(
             restaurant_id=restaurant_id,
             coupon_id=escolhido.id,
@@ -692,6 +709,35 @@ class CouponService:
             delivery_fee=delivery_fee,
             customer=customer,
         )
+
+    @staticmethod
+    def _pick_automatic(
+        candidatos: list[tuple[Decimal, RestaurantCoupon]],
+    ) -> RestaurantCoupon | None:
+        """O cupom SEM CODIGO que entra sozinho, entre os que cabem.
+
+        UMA funcao para os dois lados — o checkout (`auto_apply_for_order`) e
+        o card do cliente (`auto_apply` em `list_for_customer`) —, porque a
+        escolha e decisao de dinheiro: o card que diz "este entra sozinho"
+        tem que ser o que o checkout de fato aplica, e duas copias da regra
+        divergiriam na primeira mudanca de desempate.
+
+        Maior desconto; empate por `sort_order` e depois por `id`, para a
+        escolha ser deterministica entre duas requisicoes. Cupom com codigo
+        e cupom cujo desconto nesta sacola e zero nao entram: o primeiro a
+        pessoa precisa digitar, o segundo nao desconta nada.
+        """
+        elegiveis = [
+            (desconto, coupon)
+            for desconto, coupon in candidatos
+            if coupon.code is None and desconto > ZERO
+        ]
+        if not elegiveis:
+            return None
+        return max(
+            elegiveis,
+            key=lambda par: (par[0], -(par[1].sort_order or 0), str(par[1].id)),
+        )[1]
 
     def create_redemption(self, coupon: RestaurantCoupon, customer: Customer, order_id: UUID, discount: Decimal):
         existing = self.repository.get_redemption_by_order_id(order_id)

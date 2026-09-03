@@ -360,6 +360,17 @@ class CustomerCouponResponse(BaseModel):
 
     # Nulo em cupom publico. Ver `CustomerCouponLabel`.
     label: CustomerCouponLabel | None = None
+    # Quem enxerga este cupom. O app pinta "para todos" a partir do `public`
+    # — a etiqueta `label` continua sendo so a de segmento, de proposito
+    # (ver `CustomerCouponLabel`): este campo diz o que o cupom E, e a
+    # etiqueta diz o que o card DESTACA.
+    visibility: CouponVisibility
+    # `true` em EXATAMENTE o card que o checkout aplicaria sozinho para esta
+    # sacola — calculado pela mesma escolha de `auto_apply_for_order`, e nao
+    # pelo app. Entre dois automaticos que cabem vale o de maior desconto,
+    # e essa e uma decisao de dinheiro que tem um dono so. Sem sacola
+    # (`subtotal` ausente, a tela do Clube) e para convidado, sempre `false`.
+    auto_apply: bool = False
     state: CustomerCouponState
     # O que ESTE cupom tiraria DESTA sacola. Zero quando o estado nao e
     # `applicable` — e nao o desconto hipotetico de uma sacola maior, que

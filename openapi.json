@@ -12315,6 +12315,19 @@
             ],
             "title": "Checkout Url"
           },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Quando o QR do pix deixa de ser pagavel, como o gateway devolveu. E o que o contador do app deve usar — nao o relogio do cliente. Nulo no cartao. Um segundo clique em 'pagar' devolve a MESMA cobranca com o MESMO prazo.",
+            "title": "Expires At"
+          },
           "payment_status": {
             "description": "Estado do pagamento. No pix e sempre 'pending'; no cartao ja e o desfecho ('paid', 'failed' ou 'in_review').",
             "title": "Payment Status",

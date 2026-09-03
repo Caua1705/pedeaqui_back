@@ -343,6 +343,15 @@ class Settings(BaseSettings):
     # "production" ja esteja cadastrada (ver
     # scripts/register_restaurant_payment_credential.py).
     MERCADOPAGO_ENVIRONMENT: str = "test"
+    # Quanto tempo o QR do pix fica pagavel. Vai ao gateway como
+    # `date_of_expiration` e volta na resposta como `expires_at`, que e o
+    # que o app usa para o contador — antes ele contava pelo relogio do
+    # cliente, porque a resposta nao dizia nada.
+    #
+    # Trinta minutos: e o que cabe entre fechar o pedido e abrir o app do
+    # banco, e curto o bastante para um pix abandonado nao segurar o pedido
+    # em `pending` por um dia. Mudar aqui NAO mexe em cobranca ja criada.
+    PIX_EXPIRATION_MINUTES: int = 30
     # Chave Fernet usada para cifrar/decifrar o access_token de cada
     # restaurante em restaurant_payment_credentials. E o unico lugar em que
     # essa chave existe fora do processo que a gerou — perde-la torna toda

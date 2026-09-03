@@ -465,3 +465,211 @@ lista está na exportação, que já consulta tudo.
     suíte rápida              2688 passed
     suíte db                  690 passed
     openapi.json              em dia
+
+---
+
+## 6. O contrato para o front — pronto para colar
+
+Tudo `application/json`. Nenhuma destas rotas exige `Authorization`.
+
+### 1. `POST /auth/google`
+
+```jsonc
+// manda
+{ "id_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6..." }   // o idToken, NAO o accessToken
+```
+
+Três respostas possíveis, e o `status` diz qual bloco veio preenchido.
+
+**(a) já conhecido — entra:**
+
+```jsonc
+{
+  "status": "authenticated",
+  "message": "Login realizado com sucesso.",
+  "email": "pessoa@gmail.com",
+  "access_token": "eyJ...",          // o MESMO de POST /auth/login
+  "token_type": "bearer",
+  "customer": { "id": "uuid", "name": "...", "email": "...", "phone": "...", "email_verified": true }
+}
+```
+
+**(b) e-mail já tem conta — mandamos um código, e ninguém entrou:**
+
+```jsonc
+{
+  "status": "link_confirmation_required",
+  "message": "Este e-mail já tem uma conta. Enviamos um código para ele: ...",
+  "email": "pessoa@gmail.com",
+  "link_ticket": "eyJ..."            // guarde e mande na rota 3
+}
+```
+
+**(c) cadastro novo — faltam dois campos:**
+
+```jsonc
+{
+  "status": "profile_required",
+  "message": "Falta pouco: informe telefone e data de nascimento ...",
+  "email": "pessoa@gmail.com",
+  "name": "Pessoa de Teste",         // o nome do Google; pode ser o próprio e-mail
+  "signup_ticket": "eyJ..."          // guarde e mande na rota 2
+}
+```
+
+Erros: **401** `id_token` inválido **ou** e-mail não verificado no Google (a
+mensagem distingue) · **403** conta inativa · **502** Google fora do ar (pode
+tentar de novo) · **503** o servidor não tem `GOOGLE_OAUTH_CLIENT_IDS`.
+
+### 2. `POST /auth/google/complete-signup` — fecha o caso (c)
+
+```jsonc
+// manda
+{
+  "signup_ticket": "eyJ...",
+  "phone": "85999998888",            // aceita máscara; normalizamos para dígitos
+  "birth_date": "1990-05-20",
+  "privacy_accepted": true,
+  "marketing_opt_in": false,         // opcional, default false
+  "name": "Maria da Silva"           // opcional; sem ele fica o nome do Google
+}
+
+// volta 200 — o MESMO LoginResponse do login por e-mail
+{
+  "access_token": "eyJ...",
+  "token_type": "bearer",
+  "customer": { "id": "uuid", "name": "...", "email": "...", "phone": "...", "email_verified": true },
+  "requires_email_verification": false,
+  "email": null,
+  "message": null
+}
+```
+
+Erros: **400** ticket que não vale mais (venceu, foi adulterado, ou é o ticket
+da outra rota) ou `privacy_accepted` ausente · **409** telefone já cadastrado,
+ou o `sub`/e-mail mudou de estado entre as duas telas — **409 aqui significa
+recomeçar em `POST /auth/google`**, não "tente outros dados".
+
+### 3. `POST /auth/verify-email-code` — fecha o caso (b)
+
+**É a rota de código que você já usa.** O campo novo é opcional; sem ele nada
+mudou.
+
+```jsonc
+// manda
+{ "email": "pessoa@gmail.com", "code": "123456", "google_link_ticket": "eyJ..." }
+
+// volta 200
+{
+  "verified": true,
+  "message": "Conta do Google ligada com sucesso.",
+  "linked_provider": "google",
+  "access_token": "eyJ...",
+  "token_type": "bearer",
+  "customer": { "id": "uuid", ... }
+}
+```
+
+Sem `google_link_ticket` a resposta é a de sempre — `{"verified": true,
+"message": "E-mail verificado com sucesso."}`, com os quatro campos novos em
+`null`.
+
+Erros: **400** código errado/expirado, ou ticket que não vale mais · **403**
+conta inativa · **404** cliente não encontrado · **409** essa conta do Google
+já está ligada a outra conta · **429** muitas tentativas neste código.
+
+**Reenviar o código do caso (b) é chamar `POST /auth/google` de novo.**
+`POST /auth/resend-email-code` **não serve**: ele desiste em silêncio quando o
+e-mail já está verificado, que é o caso da maioria das contas existentes. O
+cooldown de 60 s e o teto de 3 códigos em 15 min valem igual, e um
+`link_ticket` novo vem junto.
+
+### 4. `GET /customers/me` — dois campos novos a olhar
+
+```jsonc
+{ "...": "...", "password_set": false }
+```
+
+`password_set: false` é a conta que entrou pelo Google e nunca definiu senha.
+Com ela:
+
+- **"Alterar senha" não funciona** (não há senha atual) → mostre "Definir
+  senha" e mande para `POST /auth/forgot-password`, que já manda o código para
+  o e-mail que o Google verificou;
+- **"Excluir conta" também não** — a rota exige a senha atual. Avise **antes**
+  ("defina uma senha para excluir a conta"), em vez de mostrar um campo que só
+  pode responder "Senha incorreta".
+
+`GET /customers/me/export` ganhou `social_identities[]` com `provider`,
+`provider_user_id`, `created_at` e `last_login_at`.
+
+### O fluxo inteiro, em uma tela
+
+```
+                    POST /auth/google  { id_token }
+                                 │
+        ┌────────────────────────┼────────────────────────┐
+        │                        │                        │
+  authenticated          profile_required        link_confirmation_required
+        │                        │                        │
+   já tem sessão      pede telefone + nascimento    tela de código
+        │                        │                        │
+        │            POST /auth/google/complete-signup   POST /auth/verify-email-code
+        │                        │                    { email, code, google_link_ticket }
+        └────────────────────────┴────────────────────────┘
+                                 │
+                          access_token
+```
+
+---
+
+## 7. Variáveis de ambiente
+
+| Nome | Obrigatória | O que acontece se faltar |
+|---|---|---|
+| `GOOGLE_OAUTH_CLIENT_IDS` | **na prática, sim** | as duas rotas de Google respondem **503**; o resto da API sobe e funciona igual |
+| `GOOGLE_OAUTH_JWKS_URL` | não | padrão `https://www.googleapis.com/oauth2/v3/certs` |
+| `GOOGLE_OAUTH_TIMEOUT_SECONDS` | não | 5 |
+| `GOOGLE_OAUTH_TICKET_MINUTES` | não | 15 |
+
+`GOOGLE_OAUTH_CLIENT_IDS` são os client ids do Google Cloud **separados por
+vírgula** — um por plataforma (web, Android, iOS), porque o `aud` do `id_token`
+é o client id daquela plataforma:
+
+```
+GOOGLE_OAUTH_CLIENT_IDS=123-web.apps.googleusercontent.com,456-android.apps.googleusercontent.com
+```
+
+**Não há `CLIENT_SECRET`, e não é esquecimento.** O segredo existe no fluxo de
+*código de autorização*, em que o servidor troca um `code` por tokens. Aqui o
+app faz o login no aparelho e chega com o `id_token` pronto: assinatura, `aud`
+e `iss` são conferidos contra chave **pública**. Uma variável de segredo sem
+uso seria uma credencial a mais para vazar sem nada em troca. Se um dia o fluxo
+de `code` entrar, o segredo entra com ele.
+
+Nada de client id ou secret está no repositório. O `.env` do CI e o
+`docker-compose.yml` não foram tocados.
+
+---
+
+## 8. O que ficou pendente
+
+1. **Excluir a conta ainda exige senha.** Quem entrou pelo Google precisa
+   definir uma antes (forgot-password → reset-password). O app agora consegue
+   avisar (`password_set`), mas trocar a reautenticação da exclusão — aceitar
+   um `id_token` fresco, ou o código do e-mail — é **decisão de produto que não
+   está no enunciado**, e por isso não foi tomada.
+2. **Não há rota para desligar o Google de uma conta.** Não foi pedida. Quando
+   for, ela precisa recusar desligar o último método de acesso de uma conta com
+   `password_set: false` — senão a pessoa se tranca para fora.
+3. **Não há Apple.** A tabela e o `CHECK` já esperam por ela: o provedor entra
+   em `SOCIAL_AUTH_PROVIDERS` **e** numa revisão do Alembic, juntos
+   (armadilha 15 — e `espelhos_de_enum` agora enxerga esse CHECK, porque o
+   corte de um valor foi baixado para 1 nesta rodada).
+4. **`resend-email-code` continua sem servir ao caso (b)**, por decisão: mexer
+   nele seria mexer no fluxo de e-mail existente, que é gatilho de parada do
+   item 5. O reenvio é `POST /auth/google` de novo, documentado na rota.
+5. **`GOOGLE_OAUTH_CLIENT_IDS` não derruba o boot quando falta.** É o desenho
+   do `PLATFORM_METRICS_KEY`. Se você quiser que falte vire erro de boot,
+   `startup_checks.py` é o lugar — mas aí todo ambiente sem Google configurado
+   para de subir.

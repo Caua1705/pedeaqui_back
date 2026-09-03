@@ -216,6 +216,27 @@ erDiagram
 duas a retenção não é faxina de disco: é o mecanismo de exclusão (§38 da
 skill). Esticar o prazo "porque disco é barato" troca uma coisa pela outra.
 
+### O WhatsApp: o número da loja e o que saiu por ele
+
+```mermaid
+erDiagram
+    restaurants ||--o{ whatsapp_channels : "branch_id NULO = a queda"
+    branches |o--o| whatsapp_channels : "o número DAQUELA loja"
+    whatsapp_channels ||--o{ whatsapp_contact_windows : "janela de 24h, com prazo"
+    whatsapp_channels ||--o{ whatsapp_messages : "por qual número saiu"
+    orders ||--o{ whatsapp_messages : "o aviso deste pedido"
+```
+
+`whatsapp_channels` é a única tabela do schema em que `branch_id` nulo
+significa **herança** (o regime de `branches` × `restaurant_settings`, §35 da
+skill) dentro de uma tabela só. Ela é tabela, e não coluna em `branches`, por
+causa da pergunta do webhook — que chega com um `phone_number_id` e precisa
+achar a filial: **não existe UNIQUE que atravesse duas tabelas.**
+
+`whatsapp_contact_windows` guarda TELEFONE e não tem `customer_id`: o prazo é
+o mecanismo de exclusão (§38), e aqui ele já vem escrito na linha — é a
+própria janela de 24h da Meta.
+
 ---
 
 ## 2. As tabelas principais

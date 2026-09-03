@@ -157,7 +157,14 @@ RESEND_EMAIL_CODE_RATE_LIMIT = "5/minute;20/hour"
 # Conferencia do codigo de verificacao de e-mail. `attempts_count` ja limita
 # a forca bruta de UM codigo; o que falta e o atacante trocando de e-mail a
 # cada tentativa. Mais folgado que os outros porque errar o codigo digitando
-# e comum e a rota nao leva a tomada de conta.
+# e comum.
+#
+# DESDE 04/09/2026 ESTA ROTA PODE DEVOLVER SESSAO — com um `google_link_ticket`
+# no corpo, o codigo certo liga a conta do Google e responde com o JWT. A
+# frase "a rota nao leva a tomada de conta" saiu daqui por isso, e o numero
+# ficou: quem apresenta um ticket ja provou, no Google, que controla aquele
+# e-mail, e o codigo prova a mesma coisa pela caixa de entrada. Nao ha nada
+# novo a enumerar aqui, e o teto por codigo continua sendo `attempts_count`.
 VERIFY_EMAIL_CODE_RATE_LIMIT = "10/minute;100/hour"
 # Conferencia do codigo de RECUPERACAO. Mesma forma da anterior e teto por
 # hora bem menor: aqui acertar o codigo entrega a conta.
@@ -166,6 +173,19 @@ VERIFY_RESET_CODE_RATE_LIMIT = "10/minute;60/hour"
 # minutos de vida, entao o limite aqui e contencao de ruido, nao a defesa
 # principal.
 RESET_PASSWORD_RATE_LIMIT = "10/minute;60/hour"
+# Entrar com Google. A rota nao aceita senha e nao enumera nada — so responde
+# sobre o e-mail de um `id_token` que a pessoa acabou de provar ser dela —,
+# entao o limite existe contra dois outros usos: martelar `id_token` forjado
+# (cada um custa uma verificacao de assinatura RSA) e, no caso (b), disparar
+# e-mail para a caixa de entrada de quem tem conta. O segundo ja tem cooldown
+# e teto POR E-MAIL no `AuthService`; este fecha o que sobra, que e varrer
+# MUITOS e-mails a partir de um IP so.
+GOOGLE_SIGN_IN_RATE_LIMIT = "10/minute;60/hour"
+# Conclusao do cadastro por Google. E um cadastro, entao o limite e o do
+# cadastro: inflar a base a partir de um IP so custa o mesmo por qualquer uma
+# das duas portas.
+GOOGLE_COMPLETE_SIGNUP_RATE_LIMIT = "5/minute;20/hour"
+
 # Exclusao de conta. A rota exige token E senha, entao nao ha o que enumerar
 # aqui — o limite existe contra o outro lado: quem tem um token roubado
 # martelando senhas contra uma operacao IRREVERSIVEL. Bem mais apertado que a

@@ -1,4 +1,5 @@
 import logging
+import secrets
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -10,6 +11,9 @@ from sqlalchemy.orm import Session
 from src.core.config import settings
 from src.models.customer_model import Customer, PasswordResetCode
 from src.repositories.customer_repository import CustomerRepository
+from src.repositories.customer_social_identity_repository import (
+    CustomerSocialIdentityRepository,
+)
 from src.schemas.auth_schema import (
     ForgotPasswordRequest,
     LoginRequest,
@@ -26,6 +30,7 @@ from src.schemas.auth_schema import (
     VerifyResetCodeResponse,
 )
 from src.services.email_service import EmailService
+from src.services.google_signin_tickets import read_link_ticket
 from src.utils.normalization import is_valid_email, normalize_digits, normalize_email
 from src.utils.security import (
     PasswordTooLongError,
@@ -104,6 +109,46 @@ def codes_retention_cutoff(now: datetime) -> datetime:
     return now - timedelta(minutes=max(janelas) + CODES_RETENTION_MARGIN_MINUTES)
 
 
+def unusable_password_hash() -> str:
+    """Hash de um segredo sorteado e jogado fora. Ninguem conhece esta senha.
+
+    E o que `_anonymize_customer` ja usa, e o motivo e o mesmo: um valor
+    invalido qualquer tambem recusaria o login, mas este e o unico que nao
+    depende de como `verify_password` trata lixo — ele passa pelo bcrypt de
+    verdade e simplesmente nunca bate.
+
+    Quem nasce assim e a conta criada pelo "entrar com Google": `password_hash`
+    e NOT NULL e o Google nao manda senha. A conta nao abre por senha, e quem
+    quiser uma passa por `/auth/forgot-password`, que manda codigo para o
+    e-mail que o Google ja verificou.
+    """
+    return hash_password(secrets.token_urlsafe(32))
+
+
+def issue_customer_token(customer: Customer) -> str:
+    """O token de sessao do cliente. UMA construcao, para toda porta de login.
+
+    Duas copias divergiriam no dia em que uma delas ganhasse um campo, e a que
+    ficasse para tras produziria sessao que o resto do sistema le pela metade.
+    """
+    return create_signed_token(
+        subject=str(customer.id),
+        purpose="customer_access",
+        expires_delta=timedelta(minutes=settings.CUSTOMER_ACCESS_TOKEN_MINUTES),
+        extra={"type": "customer"},
+    )
+
+
+def customer_response(customer: Customer) -> LoginCustomerResponse:
+    return LoginCustomerResponse(
+        id=customer.id,
+        name=customer.name,
+        email=customer.email,
+        phone=customer.phone,
+        email_verified=customer.email_verified_at is not None,
+    )
+
+
 def _hash_new_password(password: str) -> str:
     """A senha nova, conferida e hasheada.
 
@@ -157,6 +202,9 @@ class AuthService:
     def __init__(self, db: Session):
         self.db = db
         self.customer_repository = CustomerRepository(db)
+        # Atributo, e nao construido na hora do uso: e o que permite ligar o
+        # dublê nas DUAS camadas na suite rapida (armadilha 25.1).
+        self.social_identity_repository = CustomerSocialIdentityRepository(db)
         self.email_service = EmailService()
 
     def register(self, payload: RegisterCustomerRequest) -> RegisterCustomerResponse:
@@ -203,6 +251,19 @@ class AuthService:
         )
 
     def verify_email_code(self, payload: VerifyEmailCodeRequest) -> VerifyEmailCodeResponse:
+        """Confere o codigo. Com `google_link_ticket`, LIGA a conta do Google.
+
+        O caminho do cadastro por e-mail nao mudou uma linha: sem ticket, a
+        rota faz o que sempre fez e devolve o que sempre devolveu (os campos
+        novos da resposta tem default). O segundo comportamento e PEDIDO pelo
+        corpo, e nao deduzido de estado escondido no servidor — e por isso o
+        cadastro comum nao consegue cair nele por acidente.
+
+        **E ligar NUNCA cria cliente.** O caso (b) e justamente aquele em que a
+        conta ja existe: um `create` aqui seria a segunda conta com o mesmo
+        e-mail. Quem liga e `link_identity_after_code`, que so recebe o
+        `customer` que esta funcao ja achou.
+        """
         email = normalize_email(payload.email)
         customer = self.customer_repository.get_by_email(email)
         if not customer:
@@ -227,8 +288,74 @@ class AuthService:
         code_row.used_at = utcnow()
         self.db.add(customer)
         self.db.add(code_row)
+
+        if payload.google_link_ticket:
+            return self._verified_and_linked(customer, payload.google_link_ticket)
+
         self.db.commit()
         return VerifyEmailCodeResponse(verified=True, message="E-mail verificado com sucesso.")
+
+    def _verified_and_linked(
+        self, customer: Customer, google_link_ticket: str
+    ) -> VerifyEmailCodeResponse:
+        """O codigo voltou certo E veio ticket: liga, e devolve a sessao.
+
+        O commit e UM so, com a marcacao do codigo e a identidade dentro dele:
+        commitar o codigo antes da ligacao queimaria a prova de caixa de
+        entrada num caminho que ainda pode recusar (409 de ticket velho), e a
+        pessoa teria que pedir outro codigo sem entender por que.
+
+        A conta inativa e barrada AQUI e nao no `POST /auth/google`: la, negar
+        de forma distinguivel diria a quem tem um Google com aquele e-mail
+        qual e o estado da conta.
+        """
+        # Import local, e nao no topo: `google_auth_service` importa este
+        # modulo, e no topo os dois se importariam em circulo. A seta que
+        # existe e google -> auth; esta chamada e a unica de volta.
+        from src.services.google_auth_service import link_identity_after_code
+
+        ticket = read_link_ticket(google_link_ticket)
+        if not customer.is_active:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Conta inativa")
+
+        identidade = link_identity_after_code(
+            self.social_identity_repository, customer, ticket
+        )
+        self.db.commit()
+        return VerifyEmailCodeResponse(
+            verified=True,
+            message="Conta do Google ligada com sucesso.",
+            linked_provider=identidade.provider,
+            access_token=issue_customer_token(customer),
+            token_type="bearer",
+            customer=customer_response(customer),
+        )
+
+    def send_link_confirmation_code(self, customer: Customer) -> None:
+        """O codigo do caso (b) do "entrar com Google".
+
+        MESMA maquinaria do cadastro por e-mail — mesma tabela, mesmo HMAC,
+        mesmo TTL, mesmo cooldown e mesmo teto de reenvios por e-mail. Nao ha
+        um segundo tipo de codigo, e nao deve haver: dois seriam duas janelas,
+        dois tetos e duas retencoes para envelhecer separado.
+
+        **O cooldown e o teto sao o que impede esta rota de virar uma metralhadora
+        de e-mail.** Quem tem uma conta do Google com o e-mail de alguem pode
+        chamar `POST /auth/google` em laco; sem estes dois, cada chamada seria
+        uma mensagem na caixa de entrada da pessoa.
+
+        Silenciosa quando o teto fecha, como `resend_email_code`: a resposta da
+        rota nao muda, e nao ha o que o app faca de diferente.
+        """
+        latest = self.customer_repository.latest_unused_email_code(customer.email)
+        if _is_within_resend_cooldown(latest):
+            return
+        if self._email_codes_in_window(customer.email) >= MAX_RESENDS:
+            return
+
+        resend_count = (latest.resend_count + 1) if latest else 0
+        self._create_email_verification_code(customer, resend_count=resend_count)
+        self.db.commit()
 
     def resend_email_code(self, payload: ResendEmailCodeRequest) -> MessageResponse:
         # A MESMA resposta em todo caminho, inclusive e-mail inexistente:
@@ -277,22 +404,10 @@ class AuthService:
                 message="Verifique seu e-mail para continuar.",
             )
 
-        token = create_signed_token(
-            subject=str(customer.id),
-            purpose="customer_access",
-            expires_delta=timedelta(minutes=settings.CUSTOMER_ACCESS_TOKEN_MINUTES),
-            extra={"type": "customer"},
-        )
         return LoginResponse(
-            access_token=token,
+            access_token=issue_customer_token(customer),
             token_type="bearer",
-            customer=LoginCustomerResponse(
-                id=customer.id,
-                name=customer.name,
-                email=customer.email,
-                phone=customer.phone,
-                email_verified=True,
-            ),
+            customer=customer_response(customer),
         )
 
     def forgot_password(self, payload: ForgotPasswordRequest) -> MessageResponse:

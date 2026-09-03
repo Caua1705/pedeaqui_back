@@ -40,7 +40,7 @@ class CustomerSocialIdentityRepository:
         self.db.flush()
         return identity
 
-    def register_login(
+    def mark_login(
         self, identity: CustomerSocialIdentity, now: datetime
     ) -> CustomerSocialIdentity:
         identity.last_login_at = now

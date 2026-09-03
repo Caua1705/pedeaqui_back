@@ -310,3 +310,71 @@ de segredo sem uso é uma credencial a mais para vazar sem nada em troca.
 Opcional e não obrigatória pelo desenho do `PLATFORM_METRICS_KEY`: uma
 variável obrigatória derrubaria o boot de todo mundo por causa de uma forma de
 login que ainda não está configurada.
+
+---
+
+## 4. As três rotas, os três casos
+
+    POST /auth/google                  os três desfechos, pelo `status`
+    POST /auth/google/complete-signup  caso (c): telefone + nascimento -> JWT
+    POST /auth/verify-email-code       caso (b): + `google_link_ticket` -> JWT
+
+### O caso (b), que é onde erra
+
+`POST /auth/google` com `sub` novo cujo e-mail já tem conta **não loga e não
+liga**: manda o código de seis dígitos e devolve `link_ticket`. Quem liga é
+`POST /auth/verify-email-code` quando o código volta certo — **ao cliente que
+já existe, nunca criando outro**.
+
+**A rota de código foi reaproveitada, e o fluxo de e-mail não mudou uma
+linha.** O que decide o segundo comportamento é um campo **opcional do corpo**
+(`google_link_ticket`), e não estado escondido no servidor: o cadastro por
+e-mail nunca manda esse campo, então não consegue cair no outro caminho por
+acidente. Os campos novos da resposta (`linked_provider`, `access_token`,
+`token_type`, `customer`) têm default — campo novo com default é de graça
+(armadilha 7).
+
+`TestOFluxoDeEmailNaoMudou` trava essa metade: sem ticket, a rota não devolve
+token, não liga identidade e responde a mensagem de sempre.
+
+**Um resíduo conhecido, e ele é do desenho existente:**
+`POST /auth/resend-email-code` **não serve** para reenviar o código do caso
+(b) — ele desiste em silêncio quando `email_verified_at` já está preenchido,
+que é o caso da maioria das contas. O reenvio é chamar `POST /auth/google` de
+novo (mesmo cooldown, mesmo teto, ticket novo junto). Está escrito no docstring
+da rota. Mexer no `resend_email_code` para cobrir isso **seria mexer no fluxo
+de e-mail existente**, que é o gatilho de parada do item 5 — por isso não foi
+feito.
+
+### Os tickets, e por que não uma tabela
+
+Uma tabela de "ligações pendentes" custaria migração, prazo de retenção
+(armadilha 38: `sub` + e-mail são rastro de pessoa) e mais um passo na exclusão
+de conta — para guardar um estado de 15 minutos que pertence a uma pessoa que
+está com a tela aberta. O ticket é esse estado, assinado por nós e guardado por
+ela, e **não autoriza nada sozinho**: quem autoriza é o código na caixa de
+entrada.
+
+`purpose` próprio para cada um (`google_signup`, `google_link`) — armadilha 32,
+que é exatamente o caso em que `purpose` serve: separar usos que compartilham a
+chave. Testado nos dois sentidos: nenhum dos dois vale como sessão, e nenhum
+vale pelo outro.
+
+### Mutação: 8 garantias, 8 mortas
+
+Como as rotas foram escritas antes dos testes, o vermelho veio por mutação
+dirigida — apagar a garantia e exigir que um teste caia:
+
+| Mutação | Resultado |
+|---|---|
+| caso (b) loga direto (auto-link por e-mail) | **4 falhas** |
+| `verify_email_code` ignora o `google_link_ticket` | **7 falhas** |
+| liga sem conferir de que conta é o ticket | 1 falha |
+| cadastro não reconfere se o `sub` já foi ligado | 1 falha |
+| cadastro não reconfere e-mail e telefone | 2 falhas |
+| a conta do Google nasce com o e-mail não verificado | 1 falha |
+| a senha da conta do Google é vazia em vez de inutilizável | 1 falha |
+| conta inativa entra pelo Google | 1 falha |
+
+Nenhum mutante sobreviveu. Mais a mutação do `aud` no cliente do Google (1 de
+20), são **9 de 9**.

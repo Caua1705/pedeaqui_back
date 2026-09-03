@@ -240,9 +240,9 @@ class VarredorDeEstadoEntreWorkersTests(unittest.TestCase):
         self.assertEqual(
             {chave: len(grupo) for chave, grupo in self.achados.items()},
             # 4 escritos, 2 instancias (`registro` e o `configuracao` da isca
-            # do atributo), 1 cache, e 15 declarados que nao existem nesta
+            # do atributo), 1 cache, e 16 declarados que nao existem nesta
             # arvore plantada.
-            {"escritos": 4, "instancias": 2, "caches": 1, "declarados": 15},
+            {"escritos": 4, "instancias": 2, "caches": 1, "declarados": 16},
         )
 
 

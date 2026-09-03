@@ -151,3 +151,16 @@ DEFAULT_PLATFORM_COMMISSION_PERCENT = "10.00"
 # "pedidos de ontem" para o lojista e o dia dele, nao o dia do servidor.
 PLATFORM_TIMEZONE = "America/Fortaleza"
 
+
+# Os provedores de identidade que o app do cliente aceita. ESPELHA o CHECK
+# `ck_customer_social_identities_provider` (revisao 20260904_0049) e muda
+# JUNTO com ele — armadilha 15: provedor que exista so aqui e recusado no
+# INSERT; so no banco, nunca chega a ser oferecido.
+#
+# Um valor so, e o CHECK existe justamente por isso: a segunda linha (Apple)
+# e que vai precisar das duas listas concordando, e nesse dia ninguem vai
+# lembrar que ha duas.
+SOCIAL_AUTH_PROVIDERS = ("google",)
+
+# O provedor, para quem precisa nomea-lo sem repetir a string.
+SOCIAL_PROVIDER_GOOGLE = "google"

@@ -134,6 +134,8 @@ erDiagram
     customers ||--o{ customer_addresses : "endereços salvos"
     customers ||--o{ email_verification_codes : "cadastro"
     customers ||--o{ password_reset_codes : "recuperação"
+    customers ||--o{ account_deletion_codes : "confirma a exclusão"
+    customers ||--o{ customer_social_identities : "entrar com Google"
     customers ||--o{ customer_payment_profiles : "um por restaurante"
     restaurants ||--o{ customer_payment_profiles : "a outra metade do par"
     customer_payment_profiles ||--o{ customer_saved_cards : "token do gateway"
@@ -147,6 +149,25 @@ erDiagram
 plataforma. O que é por restaurante é o **saldo** (`cashback_transactions`) e o
 **perfil de pagamento** — e a credencial salva é do lojista, então o cartão de
 uma loja não vale na outra.
+
+**São TRÊS tabelas de código de seis dígitos, e elas não se misturam de
+propósito.** `email_verification_codes` confirma o cadastro (e liga a conta do
+Google, no caso b), `password_reset_codes` recupera a senha e
+`account_deletion_codes` confirma a exclusão da conta de quem não tem senha. A
+alternativa — uma tabela com coluna `purpose` — faria a separação depender de
+um `WHERE` em toda consulta, e o dia em que alguém o esquecesse seria o dia em
+que um código pedido para entrar apagaria uma conta. As três guardam o e-mail
+em texto puro e saem juntas na retenção e na exclusão
+(`CustomerRepository.TABELAS_DE_CODIGO`).
+
+`customer_social_identities` guarda o par `(provider, sub)` do "entrar com
+Google", e **o vínculo é pelo `sub`, nunca pelo e-mail**: o e-mail muda e a
+pessoa continua a mesma, então ligar por ele transformaria uma troca de
+endereço no Google em perda da conta. O e-mail do provedor não é gravado ali —
+uma cópia dele seria dado pessoal numa segunda tabela fora de `customers`.
+Vários provedores por cliente são um estado legítimo (o Gmail pessoal e o do
+trabalho); o que o UNIQUE impede é o contrário, uma conta do provedor servindo
+dois clientes.
 
 ### O dinheiro: cupom, cashback e gateway
 

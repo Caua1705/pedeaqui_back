@@ -86,12 +86,16 @@ class FakeEmailService:
     def __init__(self):
         self.verification_codes = []
         self.reset_codes = []
+        self.deletion_codes = []
 
     def send_email_verification_code(self, email, code):
         self.verification_codes.append((email, code))
 
     def send_password_reset_code(self, email, code):
         self.reset_codes.append((email, code))
+
+    def send_account_deletion_code(self, email, code):
+        self.deletion_codes.append((email, code))
 
 
 class FakeCustomerRepository:
@@ -101,10 +105,16 @@ class FakeCustomerRepository:
         self.customer = customer
         self.email_code = email_code
         self.reset_code = reset_code
+        # A linha de EXCLUSAO e um campo proprio, e nao um alias de
+        # `email_code`: e o dublê refletindo que sao duas tabelas. Um fake que
+        # devolvesse a mesma linha para as duas consultas descreveria
+        # exatamente o sistema que a revisao 0050 existe para nao ser.
+        self.deletion_code = None
         self.recent_codes = recent_codes
         self.created = None
         self.email_codes_created = []
         self.reset_codes_created = []
+        self.deletion_codes_created = []
         self.invalidated_for = []
         # Conflito de cadastro: qual campo responde "ja existe".
         self.conflict_on = set()
@@ -128,6 +138,9 @@ class FakeCustomerRepository:
     def latest_unused_password_reset_code(self, email):
         return self.reset_code
 
+    def latest_unused_deletion_code(self, email):
+        return self.deletion_code
+
     def get_password_reset_by_token_hash(self, token_hash):
         return self.reset_code
 
@@ -135,6 +148,9 @@ class FakeCustomerRepository:
         return self.recent_codes
 
     def count_password_reset_codes_since(self, email, since):
+        return self.recent_codes
+
+    def count_deletion_codes_since(self, email, since):
         return self.recent_codes
 
     # --- escrita -----------------------------------------------------------
@@ -147,6 +163,9 @@ class FakeCustomerRepository:
 
     def create_password_reset_code(self, **values):
         self.reset_codes_created.append(values)
+
+    def create_deletion_code(self, **values):
+        self.deletion_codes_created.append(values)
 
     def invalidate_unused_password_reset_codes(self, customer_id):
         self.invalidated_for.append(customer_id)

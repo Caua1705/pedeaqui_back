@@ -169,6 +169,23 @@ jobs:
         continue-on-error: true
         run: python scripts/filtros_por_exclusao.py --tudo
 
+      # Tabela com dado de pessoa fora da exclusao de conta: VERMELHO, e nao
+      # aviso.
+      #
+      # A armadilha 38 cobre a tabela que NAO pende de `customers` — ali a
+      # retencao e o mecanismo de exclusao. Esta varredura cobre a outra
+      # metade, e o numero certo e ZERO: tabela nova com `customer_id` que o
+      # `CustomerAnonymizationService` nao alcance e dado pessoal que a pessoa
+      # pediu para apagar e que continua no banco. Nao ha divida herdada aqui.
+      #
+      # Quem cobra e `tests/test_alcance_da_anonimizacao.py`, na suite rapida;
+      # este passo so imprime a classificacao legivel de cada tabela quando
+      # algo ja falhou.
+      - name: Alcance da exclusao de conta (so a saida legivel)
+        if: failure()
+        continue-on-error: true
+        run: python scripts/alcance_da_anonimizacao.py --tudo
+
   banco:
     name: Testes contra o Postgres
     runs-on: ubuntu-latest
@@ -294,7 +311,29 @@ jobs:
       - name: Leituras de coluna nulavel (aviso)
         if: always()
         continue-on-error: true
-        run: python scripts/leituras_de_coluna_nulavel.py --url "$TEST_DATABASE_URL" --limite 182
+        # 182 -> 201 em 04/09/2026, com o "entrar com Google". Os 19 pontos
+        # novos foram olhados um a um e nenhum e defeito — sao a colisao por
+        # NOME que o proprio script avisa: `identity.email` e `ticket.email`
+        # sao campos de dataclass (`str`, nunca nulo) e nao `customers.email`;
+        # `birth_date=payload.birth_date` vem do Pydantic; o `created_at` de
+        # `customer_social_identities` e NOT NULL; e o `password_hash` de
+        # `password_is_set` tem `if not customer.password_hash` uma linha
+        # acima. O que sobra e `customer.email` nas respostas do Google, que e
+        # o MESMO ponto que `customer_service.py` ja tinha na linha de base.
+        #
+        # 201 -> 206 no mesmo dia, com a exclusao de conta por codigo. Os cinco
+        # sao TODOS `customer.email` (pedir o codigo, achar a linha, mandar o
+        # e-mail) — a mesma classe que `auth_service.py` ja tem meia duzia de
+        # vezes aqui. Se `customers.email` fosse nulo, `GET /customers/me`
+        # quebraria muito antes destes cinco pontos.
+        #
+        # 206 -> 208 com as contas conectadas, e os dois sao falso positivo por
+        # NOME: `linked_at=identidade.created_at` le uma coluna que e NOT NULL
+        # nos dois lados em `customer_social_identities`, e o `password_hash`
+        # de `verify_password` e a UNICA das 16 divergencias com defesa ja
+        # escrita — a funcao declara `str | None` e devolve False (armadilha
+        # 50). O casamento e por atributo, e o script avisa disso na saida.
+        run: python scripts/leituras_de_coluna_nulavel.py --url "$TEST_DATABASE_URL" --limite 208
         env:
           TEST_DATABASE_URL: postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
 

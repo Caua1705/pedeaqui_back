@@ -79,6 +79,40 @@ class Settings(BaseSettings):
     # cliente: o token do painel expira em 12h.
     ADMIN_ACCESS_TOKEN_MINUTES: int = 720
 
+    # ENTRAR COM GOOGLE. Os client ids do Google Cloud, separados por virgula
+    # — um por plataforma (web, Android, iOS), porque o `aud` do `id_token` e
+    # o client id DAQUELA plataforma e um so nao serve para as tres.
+    #
+    # E a unica conferencia que separa "um `id_token` do Google" de "um
+    # `id_token` PARA NOS": sem ela, um token legitimo emitido para qualquer
+    # outro aplicativo entraria aqui, e quem operasse esse aplicativo logaria
+    # como qualquer cliente dele no nosso app.
+    #
+    # NAO HA CLIENT SECRET, e a ausencia e desenho e nao esquecimento. O
+    # segredo existe no fluxo de codigo de autorizacao, em que o SERVIDOR
+    # troca um `code` por tokens. Aqui o app faz o login no aparelho e chega
+    # com o `id_token` pronto: o que conferimos e assinatura, `aud` e `iss`,
+    # todos contra chave PUBLICA. Uma variavel de segredo sem uso seria uma
+    # credencial a mais para vazar sem nada em troca. Se um dia o fluxo de
+    # `code` entrar, o segredo entra com ele.
+    #
+    # OPCIONAL: vazia, so as rotas de Google respondem 503 (o mesmo desenho de
+    # PLATFORM_METRICS_KEY). Obrigatoria, ela derrubaria o boot de todo mundo
+    # por causa de uma forma de login que ainda nao esta configurada.
+    GOOGLE_OAUTH_CLIENT_IDS: str = ""
+    GOOGLE_OAUTH_JWKS_URL: str = "https://www.googleapis.com/oauth2/v3/certs"
+    GOOGLE_OAUTH_TIMEOUT_SECONDS: float = 5
+    # Quanto vale o ticket entre `POST /auth/google` e a tela seguinte
+    # (completar cadastro, ou confirmar a ligacao por codigo). E uma TELA, nao
+    # uma sessao: 15 minutos e o mesmo teto do token de troca de senha, e cobre
+    # digitar telefone e data de nascimento com folga.
+    GOOGLE_OAUTH_TICKET_MINUTES: int = 15
+    # Quanto vale o `nonce` entre `POST /auth/google/nonce` e a volta do
+    # `id_token`. E o tempo de clicar no botao, escolher a conta e o Google
+    # responder — dez minutos cobrem isso com folga, e curto e o que faz o
+    # `nonce_token` vazado num log ter vida util pequena.
+    GOOGLE_OAUTH_NONCE_MINUTES: int = 10
+
     RESEND_API_KEY: str | None = None
     EMAIL_FROM: str = "Rapidex <no-reply@pederapidex.com>"
     EMAIL_CODE_SECRET: str
@@ -398,6 +432,20 @@ class Settings(BaseSettings):
     # Cabecalho com o IP real do cliente. Atras do Traefik o socket peer e o
     # proxy; deixe vazio apenas se a API for exposta sem proxy na frente.
     RATE_LIMIT_CLIENT_IP_HEADER: str = "x-real-ip"
+
+    @property
+    def google_oauth_client_ids(self) -> tuple[str, ...]:
+        """Os client ids, ja separados e sem os vazios.
+
+        Propriedade e nao um campo `list[str]`: `enable_decoding=False` no
+        `model_config` faz o pydantic-settings entregar a variavel como TEXTO
+        e nao tentar JSON nela — entao a lista tem que ser partida aqui.
+        """
+        return tuple(
+            pedaco.strip()
+            for pedaco in self.GOOGLE_OAUTH_CLIENT_IDS.split(",")
+            if pedaco.strip()
+        )
 
     @property
     def is_production(self) -> bool:

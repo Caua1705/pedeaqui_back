@@ -122,6 +122,14 @@ ESPERADOS = {
     "src/ai/services/chat_cache.py:menu_generation": (
         "mesmo caso do `chat_cache`, para a geracao de cardapio"
     ),
+    "src/integrations/google_identity_client.py:CHAVES_DO_GOOGLE": (
+        "cache do JWKS do Google — as chaves PUBLICAS com que ele assina os "
+        "`id_token`. Com N workers sao N copias das mesmas chaves publicas, e "
+        "isso e o CERTO: nao ha nada a compartilhar, cada copia se renova "
+        "sozinha pelo TTL, e a rotacao de chave e coberta pela rebusca por "
+        "`kid` desconhecido — nao pelo TTL. O custo de N copias e uma chamada "
+        "por hora por worker a um endereco publico e cacheado"
+    ),
     "src/core/config.py:settings": (
         "configuracao lida do ambiente no import. Igual em todo worker, porque "
         "o ambiente e o mesmo — e nada a escreve em tempo de requisicao (o "

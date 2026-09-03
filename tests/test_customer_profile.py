@@ -33,6 +33,7 @@ from src.schemas.customer_schema import (
 from src.services.customer_service import CustomerService
 from src.utils.security import hash_password, verify_password
 from src.models.order_item_model import OrderItem
+from tests import fabricas
 
 
 SENHA_ATUAL = "senha-atual-123"
@@ -141,11 +142,24 @@ def make_customer(password=SENHA_ATUAL, **overrides):
     return SimpleNamespace(**valores)
 
 
+class FakeSocialIdentityRepository:
+    """So o que `export_me` chama. Conta por quem perguntaram."""
+
+    def __init__(self, identidades=None):
+        self.identidades = identidades or []
+        self.pedido_para = None
+
+    def list_of_customer(self, customer_id):
+        self.pedido_para = customer_id
+        return self.identidades
+
+
 def make_service(
     db=None,
     customer_repository=None,
     order_repository=None,
     order_review_repository=None,
+    social_identity_repository=None,
 ):
     service = CustomerService.__new__(CustomerService)
     service.db = db or FakeDb()
@@ -153,6 +167,9 @@ def make_service(
     service.order_repository = order_repository or FakeOrderRepository()
     service.order_review_repository = (
         order_review_repository or FakeOrderReviewRepository()
+    )
+    service.social_identity_repository = (
+        social_identity_repository or FakeSocialIdentityRepository()
     )
     return service
 
@@ -203,13 +220,18 @@ class TestExportMe:
         monkeypatch.setattr(modulo, "CashbackService", FakeCashbackService)
         return make_service(**kwargs)
 
-    def test_it_gathers_the_five_blocks(self, monkeypatch):
+    def test_it_gathers_the_six_blocks(self, monkeypatch):
         """Direito de acesso e portabilidade (Art. 18, II e V). O pacote e
         montagem do que ja saia em rotas separadas.
 
         As avaliacoes entraram como quinto bloco: sao dado DELA, e sem elas
         o direito de acesso ficaria incompleto justamente no campo de texto
-        livre — que e o que a exclusao de conta depois apaga."""
+        livre — que e o que a exclusao de conta depois apaga.
+
+        As identidades sociais entraram como sexto, pelo mesmo criterio: sao
+        linhas que a plataforma guarda sobre a pessoa e que
+        `_delete_social_identities` apaga na exclusao. Tabela que sai na
+        exclusao e nao aparece no acesso e metade so do mesmo direito."""
         service = self._service(monkeypatch)
         service.list_addresses = lambda customer: []
         service.list_orders = lambda customer: []
@@ -221,7 +243,31 @@ class TestExportMe:
         assert export.orders == []
         assert export.cashback.transactions == []
         assert export.reviews == []
+        assert export.social_identities == []
         assert export.exported_at is not None
+
+    def test_it_exports_the_linked_google_account(self, monkeypatch):
+        """O par do teste acima: com identidade ligada, ela aparece.
+
+        Sem este, o bloco vazio ficaria verde contra uma exportacao que nunca
+        preenche nada — verde por ausencia, que e indistinguivel de acerto.
+        """
+        ligada = fabricas.identidade_social(
+            provider_user_id="104829173829173829173",
+            last_login_at=None,
+        )
+        service = self._service(
+            monkeypatch,
+            social_identity_repository=FakeSocialIdentityRepository([ligada]),
+        )
+        service.list_addresses = lambda customer: []
+        service.list_orders = lambda customer: []
+
+        export = service.export_me(make_customer())
+
+        assert len(export.social_identities) == 1
+        assert export.social_identities[0].provider == "google"
+        assert export.social_identities[0].provider_user_id == "104829173829173829173"
 
     def test_it_exports_only_the_holder_of_the_token(self, monkeypatch):
         """O escopo e a unica coisa que separa "meus dados" de "a base". Todo
@@ -239,6 +285,7 @@ class TestExportMe:
         assert pedidos_para == [("addresses", customer.id), ("orders", customer.id)]
         assert FakeCashbackService.chamado_com[0] is customer
         assert service.order_review_repository.pedido_para == customer.id
+        assert service.social_identity_repository.pedido_para == customer.id
 
     def test_the_password_hash_never_leaves(self):
         """Credencial nao e dado do titular, e exportar hash de senha e

@@ -309,3 +309,67 @@ class TestOAvisoDoCacheDeEmbedding:
         assert any("rate limiting" in w for w in sobre_redis)
         assert any("estimativa de entrega" in w for w in sobre_redis)
         assert any("cache de embedding" in w for w in sobre_redis)
+
+
+class TestOAvisoDoEntrarComGoogle:
+    """`GOOGLE_OAUTH_CLIENT_IDS` vazia: AVISO, e nunca erro de boot.
+
+    Entrar com Google é uma forma de login a mais. Derrubar a API inteira de
+    todo ambiente que ainda não a configurou trocaria um botão que falta por um
+    serviço fora do ar — mesmo critério do `PLATFORM_METRICS_KEY`.
+
+    E o aviso existe porque **o sintoma não aponta para cá**: sem a variável,
+    as rotas de Google respondem 503 e o resto da API fica perfeita. Quem for
+    investigar começa pelo app, pelo Google Cloud e pelo client id do front —
+    três lugares — antes de suspeitar do `.env` do servidor.
+    """
+
+    def test_sem_client_id_avisa(self, monkeypatch):
+        _settings_with(monkeypatch, GOOGLE_OAUTH_CLIENT_IDS="")
+
+        warnings = collect_configuration_warnings(settings)
+
+        assert any("GOOGLE_OAUTH_CLIENT_IDS" in warning for warning in warnings)
+
+    def test_sem_client_id_NAO_derruba_o_boot(self, monkeypatch):
+        """O par do teste acima, e é ele que diz que a escolha foi feita: o
+        mesmo ambiente que gera o aviso não pode gerar erro."""
+        _settings_with(monkeypatch, GOOGLE_OAUTH_CLIENT_IDS="")
+
+        assert collect_configuration_errors(settings) == []
+
+    def test_o_aviso_diz_o_sintoma_e_nao_so_a_variavel(self, monkeypatch):
+        """"GOOGLE_OAUTH_CLIENT_IDS está vazia" sozinho não ajuda quem está
+        procurando por que ninguém consegue entrar com Google."""
+        _settings_with(monkeypatch, GOOGLE_OAUTH_CLIENT_IDS="")
+
+        aviso = next(
+            warning
+            for warning in collect_configuration_warnings(settings)
+            if "GOOGLE_OAUTH_CLIENT_IDS" in warning
+        )
+
+        assert "503" in aviso
+        assert "/auth/google" in aviso
+
+    def test_com_client_id_o_aviso_some(self, monkeypatch):
+        _settings_with(
+            monkeypatch,
+            GOOGLE_OAUTH_CLIENT_IDS="123-web.apps.googleusercontent.com",
+        )
+
+        warnings = collect_configuration_warnings(settings)
+
+        assert not any("GOOGLE_OAUTH_CLIENT_IDS" in warning for warning in warnings)
+
+    def test_lista_com_virgula_e_espaco_tambem_conta_como_configurada(self, monkeypatch):
+        """`google_oauth_client_ids` parte a string; um valor com espaços não
+        pode ser lido como "vazio"."""
+        _settings_with(
+            monkeypatch,
+            GOOGLE_OAUTH_CLIENT_IDS=" 123-web.apps.googleusercontent.com , 456-android.apps.googleusercontent.com ",
+        )
+
+        warnings = collect_configuration_warnings(settings)
+
+        assert not any("GOOGLE_OAUTH_CLIENT_IDS" in warning for warning in warnings)

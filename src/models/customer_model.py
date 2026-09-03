@@ -95,3 +95,38 @@ class PasswordResetCode(Base):
     reset_token_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     used_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     created_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class AccountDeletionCode(Base):
+    """O codigo que confirma a EXCLUSAO da conta. Revisao 0050.
+
+    Tabela propria, e nao uma coluna `purpose` em `EmailVerificationCode`: sao
+    tres fluxos consumindo codigo de seis digitos (verificar e-mail, ligar a
+    conta do Google, apagar a conta), e um codigo que sirva a mais de um deles
+    e um codigo que faz a coisa errada — apagar a conta de quem so queria
+    entrar, sem desfazer.
+
+    Separadas, a confusao deixa de ser um `if` que alguem pode remover:
+    `latest_unused_email_code` consulta a outra tabela e nao enxerga esta.
+
+    Mesma forma da tabela de verificacao, menos as duas colunas do token de
+    reset — nao ha token aqui: o codigo certo apaga na mesma requisicao.
+    """
+
+    __tablename__ = "account_deletion_codes"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("customers.id"), nullable=False)
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    code_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    attempts_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    resend_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    used_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    # NOT NULL nos DOIS lados, ao contrario das duas tabelas de codigo acima.
+    # Elas sao herdadas (o schema nasceu a mao, e `divergencias_orm_schema.py`
+    # as conta ate hoje); esta nasce na revisao 0050, e tabela nova nao tem
+    # motivo para nascer divergindo. Ver a armadilha 50.
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )

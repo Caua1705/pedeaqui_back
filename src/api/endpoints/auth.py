@@ -1,9 +1,12 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.database import get_db
 from src.api.rate_limit import (
     FORGOT_PASSWORD_RATE_LIMIT,
+    GOOGLE_COMPLETE_SIGNUP_RATE_LIMIT,
+    GOOGLE_NONCE_RATE_LIMIT,
+    GOOGLE_SIGN_IN_RATE_LIMIT,
     LOGIN_RATE_LIMIT,
     REGISTER_RATE_LIMIT,
     RESEND_EMAIL_CODE_RATE_LIMIT,
@@ -14,6 +17,10 @@ from src.api.rate_limit import (
 )
 from src.schemas.auth_schema import (
     ForgotPasswordRequest,
+    GoogleCompleteSignupRequest,
+    GoogleNonceResponse,
+    GoogleSignInRequest,
+    GoogleSignInResponse,
     LoginRequest,
     LoginResponse,
     MessageResponse,
@@ -26,7 +33,10 @@ from src.schemas.auth_schema import (
     VerifyResetCodeRequest,
     VerifyResetCodeResponse,
 )
+from src.core.config import settings
+from src.services import google_signin_tickets as tickets
 from src.services.auth_service import AuthService
+from src.services.google_auth_service import GoogleAuthService
 
 
 router = APIRouter(prefix="/auth", tags=["customer auth"])
@@ -42,14 +52,191 @@ def register_customer(
     return AuthService(db).register(payload)
 
 
-@router.post("/verify-email-code", response_model=VerifyEmailCodeResponse)
+@router.post(
+    "/verify-email-code",
+    response_model=VerifyEmailCodeResponse,
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "description": "Codigo invalido ou expirado, ou `google_link_ticket` que nao vale mais"
+        },
+        status.HTTP_403_FORBIDDEN: {
+            "description": "Conta inativa (so no caminho com `google_link_ticket`)"
+        },
+        status.HTTP_404_NOT_FOUND: {"description": "Cliente nao encontrado"},
+        status.HTTP_409_CONFLICT: {
+            "description": "A conta do Google do ticket ja esta ligada a outra conta"
+        },
+        status.HTTP_429_TOO_MANY_REQUESTS: {"description": "Muitas tentativas neste codigo"},
+    },
+)
 @limiter.limit(VERIFY_EMAIL_CODE_RATE_LIMIT)
 def verify_email_code(
     request: Request,
     payload: VerifyEmailCodeRequest,
     db: Session = Depends(get_db),
 ) -> VerifyEmailCodeResponse:
+    """Confere o codigo de seis digitos. E a MESMA rota para dois usos.
+
+    **Sem `google_link_ticket`** — o cadastro por e-mail, sem nenhuma mudanca:
+    marca `email_verified_at`, responde `{verified, message}` e nao devolve
+    token. O login continua sendo o passo seguinte.
+
+    **Com `google_link_ticket`** — o caso (b) do "entrar com Google":
+    `POST /auth/google` encontrou um `sub` novo cujo e-mail ja tem conta,
+    mandou este codigo e devolveu o ticket. O codigo certo **liga a identidade
+    ao cliente que ja existe** — nunca cria outro — e a resposta traz
+    `access_token`, `token_type`, `customer` e `linked_provider`.
+
+    O ticket sozinho nao liga nada: quem autoriza e o codigo, que so chega na
+    caixa de entrada. E essa prova a mais que fecha o furo de juntar contas por
+    e-mail — sem ela, quem tivesse se cadastrado antes com o endereco de outra
+    pessoa receberia a conta dela pronta quando ela entrasse com o Google.
+
+    **Nao ha rota de reenvio para este codigo.** `POST /auth/resend-email-code`
+    nao serve: ele desiste em silencio quando o e-mail ja esta verificado, que
+    e o caso da maioria das contas existentes. Para outro codigo, chame
+    `POST /auth/google` de novo — o cooldown de 60 s e o teto de 3 na janela de
+    15 min continuam valendo, e um ticket novo vem junto.
+    """
     return AuthService(db).verify_email_code(payload)
+
+
+@router.post("/google/nonce", response_model=GoogleNonceResponse)
+@limiter.limit(GOOGLE_NONCE_RATE_LIMIT)
+def create_google_nonce(request: Request) -> GoogleNonceResponse:
+    """Abre um login pelo Google. Chame ANTES de mostrar o botao.
+
+    Devolve `nonce` e `nonce_token`. Passe o `nonce` para
+    `google.accounts.id.initialize({ nonce })` — o Google o copia para dentro
+    do `id_token` que assina — e guarde o `nonce_token` para mandar junto em
+    `POST /auth/google`.
+
+    **Um sem o outro nao serve para nada, e e essa a defesa.** No navegador, o
+    `id_token` e um valor que passa por varias maos; sem o nonce, um token
+    legitimo capturado em qualquer lugar seria aceito aqui como se fosse a
+    pessoa entrando agora. Com ele, o token so vale na sessao que pediu o par.
+
+    O par vale **10 minutos**. Vencido, `POST /auth/google` responde 400
+    pedindo para tocar no botao de novo — peca um par novo e recomece; nao ha
+    o que consertar do lado do app.
+
+    Nao autenticada, nao toca no banco e nao diz nada sobre ninguem: e um
+    sorteio e uma assinatura.
+    """
+    nonce, nonce_token = tickets.create_nonce()
+    return GoogleNonceResponse(
+        nonce=nonce,
+        nonce_token=nonce_token,
+        expires_in_seconds=settings.GOOGLE_OAUTH_NONCE_MINUTES * 60,
+    )
+
+
+@router.post(
+    "/google",
+    response_model=GoogleSignInResponse,
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "description": "`nonce_token` vencido ou invalido — peca outro par e recomece"
+        },
+        status.HTTP_401_UNAUTHORIZED: {
+            "description": (
+                "`id_token` invalido, `nonce` que nao bate com esta sessao, "
+                "ou e-mail nao verificado no Google"
+            )
+        },
+        status.HTTP_403_FORBIDDEN: {"description": "Conta inativa"},
+        status.HTTP_502_BAD_GATEWAY: {"description": "Nao foi possivel falar com o Google"},
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "description": "`GOOGLE_OAUTH_CLIENT_IDS` nao esta configurada neste servidor"
+        },
+    },
+)
+@limiter.limit(GOOGLE_SIGN_IN_RATE_LIMIT)
+def sign_in_with_google(
+    request: Request,
+    payload: GoogleSignInRequest,
+    db: Session = Depends(get_db),
+) -> GoogleSignInResponse:
+    """Entrar com Google. Mande o `id_token`; leia o `status` da resposta.
+
+    **Antes:** chame `POST /auth/google/nonce`, passe o `nonce` ao Google
+    Identity Services e guarde o `nonce_token` — os dois campos do corpo aqui
+    sao obrigatorios.
+
+    O servidor confere a assinatura contra as chaves publicas do Google, o
+    `aud` contra os nossos client ids, o `iss`, e o `nonce` do token contra o
+    que ESTA sessao pediu; `email_verified` falso e recusado com 401.
+
+    Mande o `id_token` (o campo `credential` do Google Identity Services, ou o
+    `idToken` do SDK nativo), nunca o `accessToken`.
+
+    ## Os tres desfechos, pelo campo `status`
+
+    **`authenticated`** — o `sub` ja e conhecido. Vem `access_token`,
+    `token_type` e `customer`: e o MESMO token de `POST /auth/login`, e a
+    sessao se usa igual.
+
+    **`link_confirmation_required`** — o `sub` e novo e o `email` ja tem conta
+    aqui. **Ninguem foi logado e nada foi ligado.** Um codigo de seis digitos
+    saiu para o e-mail, e a resposta traz `link_ticket`: leve a pessoa para a
+    tela de codigo e chame `POST /auth/verify-email-code` com
+    `{email, code, google_link_ticket}`. E de la que sai a sessao.
+
+    **`profile_required`** — o `sub` e novo e o e-mail nao tem conta. Vem
+    `signup_ticket`, `email` e `name` (o nome do Google, que pode ser o proprio
+    e-mail quando o perfil nao tem nome). Peca telefone e data de nascimento —
+    os dois campos obrigatorios que o Google nao fornece — e chame
+    `POST /auth/google/complete-signup`.
+
+    ## O que esta rota NAO faz
+
+    Nao junta contas por e-mail, em nenhuma hipotese. Nao devolve sessao para
+    um e-mail que o Google nao confirmou. E nao guarda o `id_token`: ele e
+    conferido e descartado.
+    """
+    return GoogleAuthService(db).sign_in(payload)
+
+
+@router.post(
+    "/google/complete-signup",
+    response_model=LoginResponse,
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "description": "Ticket que nao vale mais, ou aceite de privacidade ausente"
+        },
+        status.HTTP_409_CONFLICT: {
+            "description": "Telefone ja cadastrado, ou o e-mail/`sub` mudou de estado entre as duas telas"
+        },
+    },
+)
+@limiter.limit(GOOGLE_COMPLETE_SIGNUP_RATE_LIMIT)
+def complete_google_signup(
+    request: Request,
+    payload: GoogleCompleteSignupRequest,
+    db: Session = Depends(get_db),
+) -> LoginResponse:
+    """Conclui o cadastro do caso (c) e devolve a sessao.
+
+    Mande o `signup_ticket` que `POST /auth/google` deu, mais `phone`,
+    `birth_date` e `privacy_accepted`. `marketing_opt_in` e `name` sao
+    opcionais — sem `name`, fica o do Google.
+
+    **Por que estes dois campos, e por que nao da para pular.** `phone` e
+    `birth_date` sao `NOT NULL` em `customers` e o Google nao manda nenhum dos
+    dois. O telefone em especial nao aceita valor de enfeite: para cliente
+    logado, o pedido copia `customers.phone` no snapshot, e e esse numero que
+    o entregador liga.
+
+    A resposta e o mesmo `LoginResponse` do login por e-mail. A conta nasce com
+    o e-mail ja verificado (o Google provou) e **sem senha utilizavel** — quem
+    quiser uma senha usa `POST /auth/forgot-password`, que manda codigo para
+    esse mesmo e-mail.
+
+    **409 significa recomecar**, e nao "tente outros dados": entre as duas
+    telas, ou o `sub` foi ligado em outra aba, ou alguem criou conta com esse
+    e-mail. Chame `POST /auth/google` de novo — ele cai sozinho no caso certo.
+    """
+    return GoogleAuthService(db).complete_signup(payload)
 
 
 @router.post("/resend-email-code", response_model=MessageResponse)

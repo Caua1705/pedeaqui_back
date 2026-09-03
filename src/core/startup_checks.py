@@ -182,6 +182,26 @@ def collect_configuration_errors(settings: Settings) -> list[str]:
 def collect_configuration_warnings(settings: Settings) -> list[str]:
     warnings: list[str] = []
 
+    if not settings.google_oauth_client_ids:
+        # AVISO, e nao erro de boot: entrar com Google e uma forma de login a
+        # mais, e derrubar a API inteira de todo ambiente que ainda nao a
+        # configurou seria trocar um botao que falta por um servico fora do
+        # ar. Mesmo criterio do `PLATFORM_METRICS_KEY`.
+        #
+        # E ele existe porque o SINTOMA nao aponta para ca. Sem a variavel, as
+        # rotas de Google respondem 503 e o resto da API fica perfeita: quem
+        # for investigar comeca pelo app, pelo Google Cloud e pelo client id
+        # do front — tres lugares — antes de suspeitar do `.env` do servidor.
+        warnings.append(
+            "GOOGLE_OAUTH_CLIENT_IDS esta vazia: POST /auth/google, "
+            "/auth/google/complete-signup e /customers/me/social/google "
+            "respondem 503 e NINGUEM consegue entrar nem conectar pelo Google. "
+            "O resto da API funciona normalmente, entao o sintoma nao aponta "
+            "para ca. Defina os client ids do Google Cloud separados por "
+            "virgula, um por plataforma (web, Android, iOS) — o `aud` do "
+            "id_token e o client id daquela plataforma."
+        )
+
     if settings.RATE_LIMIT_ENABLED and not settings.REDIS_URL:
         warnings.append(
             "REDIS_URL nao definida: o rate limiting usa contador em memoria, "

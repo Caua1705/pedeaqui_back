@@ -45,7 +45,9 @@ from src.models.branch_model import Branch
 from src.models.branch_payment_method_model import BranchPaymentMethod
 from src.models.coupon_model import CouponTemplate, RestaurantCoupon
 from src.models.courier_model import Courier, CourierAssignment
+from src.core.constants import SOCIAL_PROVIDER_GOOGLE
 from src.models.customer_model import Customer, CustomerAddress
+from src.models.customer_social_identity_model import CustomerSocialIdentity
 from src.models.order_model import Order
 from src.models.product_model import Product
 from src.models.product_option_model import ProductOption, ProductOptionGroup
@@ -166,6 +168,23 @@ def cliente(**sobrescritas) -> Customer:
     }
     campos.update(sobrescritas)
     return Customer(**campos)
+
+
+def identidade_social(**sobrescritas) -> CustomerSocialIdentity:
+    """Instancia TRANSIENTE, sem banco. `provider_user_id` e o `sub`."""
+    campos = {
+        "id": uuid.uuid4(),
+        "customer_id": uuid.uuid4(),
+        "provider": SOCIAL_PROVIDER_GOOGLE,
+        "provider_user_id": "104829173829173829173",
+        # Escrito a mao porque instancia TRANSIENTE nao aplica `server_default`
+        # de coluna — ele so vale no INSERT (CLAUDE.md). Sem isto o dublê
+        # descreve uma linha com `created_at` nulo, que o banco nao produz.
+        "created_at": datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc),
+        "last_login_at": None,
+    }
+    campos.update(sobrescritas)
+    return CustomerSocialIdentity(**campos)
 
 
 def endereco(**sobrescritas) -> CustomerAddress:

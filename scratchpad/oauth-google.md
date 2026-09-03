@@ -204,3 +204,46 @@ precisa além do principal (a família do dublê de dado e do teste mudo): que o
 varredor **enxerga** tabela e passo de verdade, que ele **acusa** cada um dos
 quatro defeitos plantados, e — o par do `pytest.raises` — que ele **deixa
 passar** o que está certo.
+
+---
+
+## 2. A tabela: `customer_social_identities` (revisão `20260904_0049`)
+
+    id, customer_id (FK ON DELETE CASCADE), provider, provider_user_id,
+    created_at, last_login_at
+    UNIQUE (provider, provider_user_id)
+    CHECK  provider = ANY (ARRAY['google'])
+    INDEX  (customer_id)
+
+**`provider_user_id` é o `sub`.** É ele que liga, nunca o e-mail: e-mail muda,
+`sub` não. O `UNIQUE (provider, provider_user_id)` é o que faz o vínculo valer
+— uma conta do Google aponta para UM cliente, sempre.
+
+**O e-mail do Google não é gravado.** Não serve para o vínculo, e uma cópia
+dele aqui seria dado pessoal numa segunda tabela fora de `customers` — a
+mesma coisa que `delete_codes_of` existe para limpar nas tabelas de código.
+Uma cópia a menos é um passo a menos que pode ser esquecido na exclusão.
+
+**Não há `UNIQUE (customer_id, provider)`, de propósito.** Dois Google no
+mesmo cliente é legítimo (o pessoal e o do trabalho, os dois confirmados por
+código); um UNIQUE ali derrubaria a segunda ligação com `IntegrityError` no
+fim de um fluxo que deu certo. O `db` prova as duas metades.
+
+### Portões que a tabela acendeu, e o que cada um pegou
+
+- **`alcance_da_anonimizacao`** ficou vermelho na hora
+  (`tem customer_id e nao esta em ALCANCE`) → passo `_delete_social_identities`
+  no `CustomerAnonymizationService`, com três testes `db`;
+- **`test_diagrama_er_cobre_o_schema`** ficou vermelho → a tabela entrou em
+  `docs/modelo-de-dados.md`, com o parágrafo do porquê do `sub`;
+- **`espelhos_de_enum`** ficou vermelho por um motivo inesperado e melhor:
+  `MINIMO_DE_VALORES = 2` fazia o varredor **ignorar** um CHECK de um valor
+  só. Ou seja, a coluna que MAIS precisa do portão — `google` esperando
+  `apple` — era invisível para ele. Baixado para 1; a varredura contra o banco
+  de teste continua em **zero achados**, sem ruído.
+
+**O que quebraria sem o passo da anonimização** (é o que o varredor achou, e
+tem dois andares): a conta anonimizada guardaria um ponteiro para o cadastro
+da pessoa dentro do Google — e quem excluísse a conta e voltasse pelo Google
+cairia no caso (a), `sub` conhecido, **logado numa conta `is_active=False`:
+403 para sempre, sem como se recadastrar**. Nenhum teste da suíte falharia.

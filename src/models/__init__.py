@@ -17,6 +17,7 @@ from src.models.coupon_redemption_model import CouponRedemption
 from src.models.courier_model import Courier, CourierAssignment
 from src.models.customer_model import Customer, CustomerAddress, EmailVerificationCode, PasswordResetCode
 from src.models.customer_saved_card_model import CustomerPaymentProfile, CustomerSavedCard
+from src.models.customer_social_identity_model import CustomerSocialIdentity
 # `delivery_estimates` faltava aqui, e o efeito nao era um import quebrado:
 # `alembic/env.py` monta o `target_metadata` a partir de `import src.models`,
 # entao a tabela simplesmente NAO EXISTIA para o autogenerate — que propoe
@@ -63,6 +64,7 @@ __all__ = [
     "CustomerAddress",
     "CustomerPaymentProfile",
     "CustomerSavedCard",
+    "CustomerSocialIdentity",
     "DeliveryEstimate",
     "EmailVerificationCode",
     "IdempotencyKey",

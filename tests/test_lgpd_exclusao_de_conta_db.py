@@ -26,14 +26,19 @@ from src.api.dependencies.database import get_db
 from src.api.endpoints import customers as rota_de_clientes
 from src.api.middleware.rate_limit_state import RateLimitStateMiddleware
 from src.api.rate_limit import limiter
+from src.core.constants import SOCIAL_PROVIDER_GOOGLE
 from src.models.cashback_transaction_model import CashbackTransaction
 from src.models.coupon_model import CouponTemplate, RestaurantCoupon
 from src.models.coupon_redemption_model import CouponRedemption
 from src.models.customer_model import Customer, EmailVerificationCode
+from src.models.customer_social_identity_model import CustomerSocialIdentity
 from src.models.delivery_estimate_model import DeliveryEstimate
 from src.models.order_model import Order
 from src.models.order_review_model import OrderReview
 from src.repositories.customer_repository import CustomerRepository
+from src.repositories.customer_social_identity_repository import (
+    CustomerSocialIdentityRepository,
+)
 from src.services.auth_service import AuthService
 from src.services.customer_anonymization_service import (
     ANONYMIZED_NAME,
@@ -815,3 +820,63 @@ def test_avaliacao_sem_comentario_nao_atrapalha(db, cenario):
 
     db.refresh(avaliacao)
     assert avaliacao.rating == 5
+
+
+# --- A identidade social ("entrar com Google") -------------------------------
+#
+# Dois estragos diferentes num passo só, e o segundo é o que se vê primeiro:
+# o ponteiro para o cadastro da pessoa dentro do Google fica de pé, e quem
+# excluiu a conta e volta pelo Google cai no caso "sub conhecido" — logado
+# numa conta `is_active=False`, 403 para sempre e sem como se recadastrar.
+
+
+def _ligar_google(db, cliente, sub: str = "sub-do-google-123"):
+    return CustomerSocialIdentityRepository(db).create(
+        customer_id=cliente.id,
+        provider=SOCIAL_PROVIDER_GOOGLE,
+        provider_user_id=sub,
+    )
+
+
+def test_a_identidade_social_some(db, cenario):
+    identidade = _ligar_google(db, cenario.cliente)
+    db.flush()
+    id_identidade = identidade.id
+
+    anonimizar(db, cenario.cliente)
+
+    db.expunge_all()
+    assert db.get(CustomerSocialIdentity, id_identidade) is None
+
+
+def test_o_sub_fica_livre_para_uma_conta_nova(db, cenario):
+    """A consequência prática de apagar: quem excluiu a conta e volta pelo
+    Google é tratado como cliente novo.
+
+    Com a identidade sobrevivendo, o `sub` continuaria apontando para a conta
+    anonimizada — e `get_by_provider_user` a devolveria, `is_active=False`.
+    """
+    _ligar_google(db, cenario.cliente, sub="sub-que-volta")
+    db.flush()
+
+    anonimizar(db, cenario.cliente)
+
+    db.expunge_all()
+    encontrada = CustomerSocialIdentityRepository(db).get_by_provider_user(
+        SOCIAL_PROVIDER_GOOGLE, "sub-que-volta"
+    )
+    assert encontrada is None
+
+
+def test_a_identidade_de_outra_pessoa_nao_e_tocada(db, cenario):
+    """O escopo do DELETE. Sem ele, uma exclusão de conta desligaria o Google
+    da base inteira — e ninguém veria erro nenhum."""
+    vizinho = criar_cliente(db)
+    alheia = _ligar_google(db, vizinho, sub="sub-do-vizinho")
+    db.flush()
+    id_alheia = alheia.id
+
+    anonimizar(db, cenario.cliente)
+
+    db.expunge_all()
+    assert db.get(CustomerSocialIdentity, id_alheia) is not None

@@ -38,6 +38,9 @@ from src.models.order_model import Order
 from src.repositories.cashback_repository import CashbackRepository
 from src.repositories.customer_repository import CustomerRepository
 from src.repositories.customer_saved_card_repository import CustomerSavedCardRepository
+from src.repositories.customer_social_identity_repository import (
+    CustomerSocialIdentityRepository,
+)
 from src.repositories.order_review_repository import OrderReviewRepository
 from src.repositories.delivery_estimate_repository import DeliveryEstimateRepository
 from src.repositories.order_repository import OrderRepository
@@ -89,6 +92,7 @@ class CustomerAnonymizationService:
         self.cashback_repository = CashbackRepository(db)
         self.order_review_repository = OrderReviewRepository(db)
         self.saved_card_repository = CustomerSavedCardRepository(db)
+        self.social_identity_repository = CustomerSocialIdentityRepository(db)
         self.payment_credential_service = PaymentCredentialService(db)
 
     def anonymize(self, customer: Customer, password: str) -> None:
@@ -121,6 +125,7 @@ class CustomerAnonymizationService:
             self._delete_addresses(customer)
             self._delete_delivery_estimates(customer)
             self._delete_verification_codes(customer)
+            self._delete_social_identities(customer)
             self._anonymize_customer(customer)
             self.db.commit()
         except Exception:
@@ -347,6 +352,27 @@ class CustomerAnonymizationService:
 
     def _delete_verification_codes(self, customer: Customer) -> None:
         self.customer_repository.delete_codes_of(customer.id)
+
+    def _delete_social_identities(self, customer: Customer) -> None:
+        """Desliga as contas de provedor (o "entrar com Google").
+
+        Mesmo motivo de `_delete_saved_cards` apagar o PERFIL junto do cartao:
+        a linha guarda o `sub`, que e o identificador da pessoa dentro do
+        Google, e manter um ponteiro para o cadastro dela num sistema de
+        terceiro e exatamente o que a exclusao existe para nao fazer.
+
+        E ha um segundo estrago, que nao e de privacidade e e o que se ve
+        primeiro: sem este passo, quem excluisse a conta e entrasse com o
+        Google de novo cairia no caso "sub conhecido" — logado numa conta
+        `is_active=False`, 403 para sempre e sem como se recadastrar pelo
+        Google. Com ele, a pessoa volta pelo caminho de cliente novo, que e o
+        certo: a conta anterior nao existe mais.
+
+        Nao ha chamada ao Google aqui, e nao ha o que chamar: o vinculo e so
+        deste lado. O que a pessoa possa ter autorizado na conta dela do
+        Google se revoga la, na tela de permissoes deles.
+        """
+        self.social_identity_repository.delete_of_customer(customer.id)
 
     def _anonymize_customer(self, customer: Customer) -> None:
         """POR ULTIMO, mesmo sendo o principal.

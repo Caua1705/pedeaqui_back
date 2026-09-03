@@ -75,7 +75,16 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 RE_COLUNA = re.compile(r"\(?([A-Za-z_]\w*)\s*=\s*ANY\s*\(\s*ARRAY\[", re.IGNORECASE)
 RE_VALOR = re.compile(r"'([^']*)'::text")
 
-MINIMO_DE_VALORES = 2
+# UM valor ja e conjunto fechado, e o caso que mudou este numero de 2 para 1
+# em 04/09/2026 e `ck_customer_social_identities_provider`: `google` sozinho,
+# esperando `apple`. Era exatamente a coluna que mais precisa deste portao —
+# quem acrescentar o segundo provedor mexe nas duas listas ou em nenhuma, e o
+# 2 fazia o varredor ficar calado ate ser tarde.
+#
+# Nao houve custo: com o corte em 1, a varredura contra o banco de teste
+# continua devolvendo ZERO achado. Nenhum CHECK de um valor so entrou como
+# ruido — o `= ANY (ARRAY[...])` ja e forma estreita o bastante.
+MINIMO_DE_VALORES = 1
 
 SEM_ESPELHO = None
 
@@ -98,6 +107,7 @@ ESPELHOS: dict[str, str | tuple[None, str]] = {
     "coupon_templates_discount_type_check": "src/schemas/coupon_schema.py:DiscountType",
     "restaurant_coupons_discount_type_valid": "src/schemas/coupon_schema.py:DiscountType",
     "ai_feedback_feedback_check": "src/schemas/ai_feedback_schema.py:AIFeedbackRequest.feedback",
+    "ck_customer_social_identities_provider": "src/core/constants.py:SOCIAL_AUTH_PROVIDERS",
     # --- as colunas cujos valores so existem soltos -------------------------
     "ck_orders_payment_flow": (
         SEM_ESPELHO,

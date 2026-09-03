@@ -437,6 +437,19 @@ class BillableFilterAgreementTests(unittest.TestCase):
     dois lados sem mexer no outro, o painel passa a dizer que o faturamento
     foi de X pedidos e o extrato de comissao que a base foi de outro numero,
     sem ninguem conseguir explicar a diferenca.
+
+    **O que estes testes mediam mudou em 04/09/2026, e o motivo importa.**
+    Eles conferiam a FORMA do SQL — `NOT IN` de um lado, `IN OR =` do outro —
+    porque enquanto o faturamento era escrito por exclusao a forma ERA a
+    regra: ler as duas expressoes lado a lado era o que provava que uma
+    negava a outra.
+
+    Com as duas listas positivas (armadilha 47), a forma deixou de provar
+    isso, e insistir nela travaria justamente o conserto. O que ficou no
+    lugar e mais forte: os STATUS que cada lado nomeia, conferidos contra as
+    constantes, mais a garantia de que nenhum dos dois lados voltou a negar.
+    A particao em si (nada de fora, nada nos dois) mora em
+    `tests/test_particao_dos_status.py`.
     """
 
     @staticmethod
@@ -450,9 +463,19 @@ class BillableFilterAgreementTests(unittest.TestCase):
             )
         )
 
-    def test_both_sides_name_the_same_statuses(self):
+    def test_each_side_names_exactly_its_own_statuses(self):
+        """O SQL de cada lado nomeia a lista que ele diz nomear.
+
+        E o que impede um dos dois de ser editado sozinho: a constante e o
+        predicado deixam de concordar aqui, e nao seis meses depois num
+        numero do painel que ninguem consegue explicar.
+        """
+        from src.core.constants import ORDER_STATUSES, PAYMENT_STATUSES
         from src.repositories.order_repository import (
+            BILLABLE_ORDER_STATUSES,
+            BILLABLE_PAYMENT_STATUSES,
             NON_BILLABLE_ORDER_STATUSES,
+            NON_BILLABLE_PAYMENT_STATUSES,
             billable_order_conditions,
             excluded_order_conditions,
         )
@@ -462,16 +485,27 @@ class BillableFilterAgreementTests(unittest.TestCase):
         billable = self._rendered(billable_order_conditions(RESTAURANT_ID, start, end))
         excluded = self._rendered(excluded_order_conditions(RESTAURANT_ID, start, end))
 
-        for order_status in NON_BILLABLE_ORDER_STATUSES:
-            self.assertIn(order_status, billable)
-            self.assertIn(order_status, excluded)
-        self.assertIn("refunded", billable)
-        self.assertIn("refunded", excluded)
+        def nomeados(sql, vocabulario):
+            return {valor for valor in vocabulario if f"'{valor}'" in sql}
 
-    def test_one_side_negates_the_other(self):
-        # NOT IN + <> de um lado, IN OR = do outro. Um pedido do periodo cai
-        # em exatamente um dos dois conjuntos, que e o que permite somar
-        # faturados e cancelados para achar o total de pedidos feitos.
+        self.assertEqual(nomeados(billable, ORDER_STATUSES), set(BILLABLE_ORDER_STATUSES))
+        self.assertEqual(nomeados(excluded, ORDER_STATUSES), set(NON_BILLABLE_ORDER_STATUSES))
+        self.assertEqual(
+            nomeados(billable, PAYMENT_STATUSES), set(BILLABLE_PAYMENT_STATUSES)
+        )
+        self.assertEqual(
+            nomeados(excluded, PAYMENT_STATUSES), set(NON_BILLABLE_PAYMENT_STATUSES)
+        )
+
+    def test_neither_side_decides_by_exclusion(self):
+        """Nenhum dos dois lados volta a ser escrito por negacao.
+
+        E a armadilha 47 sobre o WHERE que decide COMISSAO: enquanto era
+        `NOT IN` + `<>`, um `payment_status` novo nascia faturavel e o
+        restaurante pagava por ele sem ninguem ter decidido. O `OR` do lado
+        excluido continua sendo cobrado — sem ele, os dois lados deixariam de
+        se somar no total de pedidos do periodo.
+        """
         from src.repositories.order_repository import (
             billable_order_conditions,
             excluded_order_conditions,
@@ -482,9 +516,10 @@ class BillableFilterAgreementTests(unittest.TestCase):
         billable = self._rendered(billable_order_conditions(RESTAURANT_ID, start, end))
         excluded = self._rendered(excluded_order_conditions(RESTAURANT_ID, start, end))
 
-        self.assertIn("NOT IN", billable)
-        self.assertIn("!=", billable)
-        self.assertNotIn("NOT IN", excluded)
+        for rendered in (billable, excluded):
+            self.assertNotIn("NOT IN", rendered)
+            self.assertNotIn("!=", rendered)
+            self.assertNotIn("<>", rendered)
         self.assertIn(" OR ", excluded)
 
     def test_both_sides_read_the_same_period(self):

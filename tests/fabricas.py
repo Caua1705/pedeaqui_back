@@ -466,6 +466,12 @@ def entregador(**sobrescritas) -> Courier:
         "access_link_hash": None,
         "access_code_hash": None,
         "access_generated_at": None,
+        # Escritas explicitamente porque `default=` de coluna so vale no
+        # INSERT: numa instancia transiente, o contador nasceria `None` e
+        # `None + 1` estouraria na primeira falha de codigo.
+        "access_failed_attempts": 0,
+        "access_failed_at": None,
+        "access_blocked_until": None,
         "deleted_at": None,
         "created_at": datetime(2026, 9, 1, 12, tzinfo=timezone.utc),
     }

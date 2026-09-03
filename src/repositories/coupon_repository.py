@@ -13,6 +13,36 @@ from src.models.order_model import Order
 from src.services.customer_segment import segment_expression
 
 
+# Os status em que um pedido CONTA como compra feita — a resposta de "esta
+# pessoa ja comprou aqui?", que e o que decide o cupom de primeira compra.
+#
+# Lista POSITIVA, e nao `notin_(('cancelled', 'rejected'))` (armadilha 47).
+# Aqui o valor novo cai do lado que tira o cupom do cliente, e esse erro nao
+# gera reclamacao nenhuma: ninguem escreve para dizer que um desconto que
+# nunca viu deixou de aparecer. So deixa de usar.
+#
+# **Constante propria, e nao `NON_BILLABLE_ORDER_STATUSES` negada**, apesar de
+# hoje serem exatamente os mesmos dois status do outro lado. Sao duas
+# perguntas diferentes — "a plataforma cobra comissao por isto?" e "esta
+# pessoa ja e cliente?" — e um dia elas divergem por motivos que nada tem a
+# ver um com o outro. E o mesmo criterio de `ADMIN_USER_ROLES` x
+# `PAPEIS_DE_PESSOA`.
+#
+# `pending` conta de proposito: e o pedido recem-criado, e trata-lo como "nao
+# comprou" abriria a porta de usar o cupom de primeira compra duas vezes
+# fechando dois pedidos no mesmo minuto. O pedido que morre sem pagamento
+# vira `cancelled` em 30 minutos pela varredura da armadilha 48, e ai sai
+# desta lista sozinho.
+ORDER_STATUSES_THAT_COUNT_AS_PURCHASE = (
+    "pending",
+    "accepted",
+    "preparing",
+    "ready",
+    "out_for_delivery",
+    "completed",
+)
+
+
 class CouponRepository:
     def __init__(self, db: Session):
         self.db = db
@@ -248,10 +278,18 @@ class CouponRepository:
         return self.count_applied_redemptions_for_customer(coupon_id, customer_id)
 
     def customer_has_valid_order(self, customer_id: uuid.UUID, restaurant_id: uuid.UUID) -> bool:
+        """Esta pessoa ja comprou neste restaurante? — a pergunta do
+        `first_order_only`.
+
+        O recorte e `ORDER_STATUSES_THAT_COUNT_AS_PURCHASE`, positivo: status
+        novo em `ORDER_STATUSES` nao entra sozinho, e quem o criar tem que
+        decidir se ele conta como compra. `tests/test_particao_dos_status.py`
+        cobra essa decisao.
+        """
         stmt = select(Order.id).where(
             Order.customer_id == customer_id,
             Order.restaurant_id == restaurant_id,
-            Order.status.notin_(("cancelled", "rejected")),
+            Order.status.in_(ORDER_STATUSES_THAT_COUNT_AS_PURCHASE),
         ).limit(1)
         return self.db.scalar(stmt) is not None
 

@@ -137,6 +137,9 @@ PAPEL_ESPERADO = {
     ("GET", "/admin/couriers/{courier_id}/assignments"): PESSOAS,
     ("GET", "/admin/orders/{order_id}/courier"): PESSOAS,
     ("DELETE", "/admin/orders/{order_id}/courier"): PESSOAS,
+    # O que a loja paga aos motoboys: GERENCIA com recorte de filial, como
+    # os relatorios de dinheiro de Desempenho (`ensure_pode_ler_dinheiro`).
+    ("GET", "/admin/reports/couriers"): GERENCIA,
     # --- clientes e relatorios: o que uma senha vazada nao pode alcancar
     ("GET", "/admin/customers"): GERENCIA,
     ("GET", "/admin/reports/commission"): SOMENTE_DONO,

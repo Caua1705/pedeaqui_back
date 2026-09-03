@@ -75,16 +75,21 @@ import logging
 import re
 import time
 import uuid
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from dataclasses import dataclass
 from decimal import Decimal
 from urllib.parse import quote
 
 import httpx
 
-from src.core.constants import PAYMENT_STATUSES
+from src.core.constants import PAYMENT_STATUSES, PLATFORM_TIMEZONE
 
 
 logger = logging.getLogger("uvicorn.error")
+
+# O fuso em que o prazo do pix vai ao Mercado Pago (ver `_mercadopago_datetime`).
+_OPERATION_TIMEZONE = ZoneInfo(PLATFORM_TIMEZONE)
 
 SANDBOX_PROVIDER = "sandbox"
 MERCADOPAGO_PROVIDER = "mercadopago"
@@ -285,6 +290,11 @@ class PaymentIntent:
     # cliente que "cc_rejected_bad_filled_security_code").
     raw_status: str | None = None
     raw_status_detail: str | None = None
+    # Quando o QR do pix deixa de ser pagavel, COMO O GATEWAY DEVOLVEU — e
+    # nao o que mandamos. A diferenca importa no segundo clique em "pagar":
+    # a idempotencia devolve a mesma cobranca, com o prazo original, e e
+    # esse que o app precisa mostrar. Nulo no cartao e no que nao expira.
+    expires_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -395,8 +405,13 @@ def create_payment(
     previous_payment_id: str | None = None,
     card: CardPaymentInput | None = None,
     order_number: int | None = None,
+    pix_expires_at: datetime | None = None,
 ) -> PaymentIntent:
     """Cria a cobranca no gateway.
+
+    `pix_expires_at` e o instante em que o QR deixa de ser pagavel. So tem
+    efeito no pix (cartao nao tem o que expirar) e NAO entra na chave de
+    idempotencia — ver `_mercadopago_idempotency_key`.
 
     `access_token` e a credencial DO RESTAURANTE (resolvida pelo
     PaymentCredentialService a partir do restaurant_id do pedido, nunca de
@@ -424,7 +439,7 @@ def create_payment(
     isto sem ter um pedido em maos.
     """
     if provider == SANDBOX_PROVIDER:
-        return _create_sandbox_payment(order_id, payment_method)
+        return _create_sandbox_payment(order_id, payment_method, pix_expires_at)
 
     if provider == MERCADOPAGO_PROVIDER:
         if not access_token:
@@ -449,6 +464,7 @@ def create_payment(
             payer_email=payer_email,
             card=card,
             application_fee=application_fee,
+            pix_expires_at=pix_expires_at,
         )
         payload = _call_mercadopago(
             method="POST",
@@ -475,6 +491,7 @@ def _mercadopago_body(
     payer_email: str,
     card: CardPaymentInput | None,
     application_fee: Decimal | None,
+    pix_expires_at: datetime | None = None,
 ) -> dict:
     """Corpo do POST /v1/payments, que e diferente por metodo.
 
@@ -492,6 +509,8 @@ def _mercadopago_body(
 
     if payment_method == "pix":
         body["payment_method_id"] = "pix"
+        if pix_expires_at is not None:
+            body["date_of_expiration"] = _mercadopago_datetime(pix_expires_at)
         return body
 
     if card is None:
@@ -528,6 +547,35 @@ def _mercadopago_body(
     return body
 
 
+def _mercadopago_datetime(moment: datetime) -> str:
+    """O formato de data deles: `2026-09-03T19:30:00.000-03:00`.
+
+    ISO 8601 com milissegundos e o deslocamento COM dois pontos — o `%z` do
+    Python sai sem eles. No fuso da operacao, e nao em UTC, porque e assim
+    que o prazo aparece no painel de Atividade do Mercado Pago, que e onde
+    alguem vai conferir "o pix venceu mesmo?".
+    """
+    local = moment.astimezone(_OPERATION_TIMEZONE)
+    sem_dois_pontos = local.strftime("%Y-%m-%dT%H:%M:%S.000%z")
+    return sem_dois_pontos[:-2] + ":" + sem_dois_pontos[-2:]
+
+
+def _parse_mercadopago_datetime(value) -> datetime | None:
+    """`date_of_expiration` da resposta, ou nulo se nao veio ou nao deu para
+    ler. Falha fechada: um formato que eles mudem vira `expires_at` nulo (o
+    app volta a contar sozinho), nunca 500 numa cobranca que JA existe."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        logger.warning("[Pagamento][mercadopago] date_of_expiration ilegivel: %r", value)
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
 def _mercadopago_intent(payload: dict) -> PaymentIntent:
     """Le a resposta da criacao — INCLUSIVE o veredito.
 
@@ -557,6 +605,7 @@ def _mercadopago_intent(payload: dict) -> PaymentIntent:
         qr_code=transaction_data.get("qr_code"),
         raw_status=raw_status,
         raw_status_detail=payload.get("status_detail"),
+        expires_at=_parse_mercadopago_datetime(payload.get("date_of_expiration")),
     )
 
 
@@ -925,7 +974,11 @@ def sign_sandbox_payload(raw_body: bytes, secret: str) -> str:
     return hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
 
 
-def _create_sandbox_payment(order_id: uuid.UUID, payment_method: str) -> PaymentIntent:
+def _create_sandbox_payment(
+    order_id: uuid.UUID,
+    payment_method: str,
+    pix_expires_at: datetime | None = None,
+) -> PaymentIntent:
     # A recusa por metodo tem que estar AQUI e nao so no ramo do Mercado
     # Pago: o sandbox e o provider PADRAO (PAYMENT_PROVIDER), e antes disto
     # ele nem recebia `payment_method` — devolvia intent valido para
@@ -945,6 +998,7 @@ def _create_sandbox_payment(order_id: uuid.UUID, payment_method: str) -> Payment
         payment_status="pending",
         checkout_url=None,
         qr_code=None,
+        expires_at=pix_expires_at,
     )
 
 
@@ -1275,8 +1329,17 @@ def _mercadopago_idempotency_key(
     O `order_id` fica no comeco da chave de proposito: e o que permite achar
     a tentativa no painel de "Atividade" deles a partir do pedido.
     """
+    # O prazo do pix fica FORA do hash. Ele e `agora + N minutos`, entao
+    # muda a cada segundo — e com ele dentro, o clique duplo em "pagar" (a
+    # propria razao de a chave existir) abriria um segundo pix em vez de
+    # devolver o mesmo. O Mercado Pago aceita a chave repetida com esse
+    # campo diferente: a cobranca que volta e a original, com o prazo
+    # original, que e o que o app tem que mostrar.
     material = json.dumps(
-        {"body": body, "previous_payment_id": previous_payment_id},
+        {
+            "body": {chave: valor for chave, valor in body.items() if chave != "date_of_expiration"},
+            "previous_payment_id": previous_payment_id,
+        },
         sort_keys=True,
         separators=(",", ":"),
     )

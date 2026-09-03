@@ -18,6 +18,7 @@ evento do stream do painel saem do writer, de graca.
 (`api/dependencies/courier_auth.py`) e e a unica leitura de credencial.
 """
 
+import math
 import uuid
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -66,6 +67,28 @@ COMPLETED = "completed"
 # link "morre", e quem o tem nao consegue distinguir por que.
 LINK_INVALIDO = "Link inválido"
 CODIGO_INVALIDO = "Código de acesso inválido"
+CODIGO_AUSENTE = "Código de acesso ausente"
+# A frase da trava diz as DUAS saidas, porque o motoboy travado nao tem como
+# pedir socorro pelo app: ou ele espera, ou a loja gera outro acesso — e a
+# segunda destrava na hora.
+TRAVADO = (
+    "Muitas tentativas. Tente de novo em {minutos} min, "
+    "ou peça um acesso novo ao restaurante."
+)
+
+# A trava por falhas de codigo. Cinco erros DENTRO da janela travam o cadastro
+# pela MESMA janela — um numero so, dois papeis.
+#
+# O contador e por ENTREGADOR e nao por IP, e e essa a diferenca que ele
+# compra: `COURIER_RATE_LIMIT` conta 600/h por IP, e quem tem o link troca de
+# IP. Cinco a cada quinze minutos sao 480 por dia — um milhao de combinacoes
+# viram anos, com ou sem proxy.
+#
+# **Fixo, sem escalada.** Dobrar a trava a cada reincidencia castiga o motoboy
+# que erra de novo depois de destravar; o atacante so espera. O teto fixo ja
+# compra os anos, e errar continua custando quinze minutos.
+MAX_ACCESS_ATTEMPTS = 5
+ACCESS_LOCK_WINDOW = timedelta(minutes=15)
 
 # Teto do recorte do historico. Um trimestre cobre "quanto fiz este mes" com
 # folga; acima disso e relatorio do dono, nao tela do motoboy.
@@ -87,29 +110,102 @@ class CourierDeliveryService:
     # --- Quem e ---------------------------------------------------------------
 
     def authenticate(self, link_token: str, access_code: str | None) -> Courier:
-        """O cadastro que o par abre. 404 para o link, 401 para o codigo.
+        """O cadastro que o par abre. 404 para o link, 401 para o codigo, 429
+        para o cadastro travado por falhas.
 
         Sao codigos diferentes de proposito: o app precisa distinguir "peca
-        um link novo ao restaurante" (404) de "digite o codigo de novo"
-        (401). O que o 401 revela — que o link existe — ja esta revelado a
-        quem tem o link, e o rate limit por IP e o que segura a forca bruta
-        sobre os seis digitos.
+        um link novo ao restaurante" (404) de "digite o codigo de novo" (401)
+        e de "espere" (429). O que o 401 revela — que o link existe — ja esta
+        revelado a quem tem o link.
 
         As duas conferencias sao `compare_digest` (armadilha 18). A do link
         e a reconferencia depois do WHERE, com a mesma honestidade de
         `get_order_by_tracking_token`: ela compra falha fechada se o WHERE
         deixar de ser igualdade exata um dia.
+
+        **A trava vem ANTES de conferir o codigo, e durante ela nem o codigo
+        certo abre.** Conferir primeiro devolveria justamente a resposta que
+        a forca bruta procura: a trava so trava se valer para a tentativa
+        certa tambem. O preco esta na frase do 429, que diz as duas saidas.
         """
         courier = self.courier_repository.get_by_link_hash(hash_courier_link_token(link_token))
         if courier is None or not courier.is_active:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=LINK_INVALIDO)
         if not verify_courier_link_token(link_token, courier.access_link_hash):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=LINK_INVALIDO)
+
+        now = self.clock()
+        self._ensure_is_not_blocked(courier, now)
+
+        # Codigo ausente nao e chute: e app mal montado, ou a requisicao que
+        # sai antes de a pessoa digitar. Nao conta contra a trava.
         if not access_code:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Código de acesso ausente")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=CODIGO_AUSENTE)
+
         if not verify_courier_access_code(access_code, link_token, courier.access_code_hash):
+            self._register_access_failure(courier, now)
+            # A MESMA guarda do topo: se esta falha foi a quinta, a resposta
+            # ja e o 429 com o prazo — e nao um 401 mandando tentar de novo
+            # uma porta que acabou de fechar.
+            self._ensure_is_not_blocked(courier, now)
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=CODIGO_INVALIDO)
+
+        self._clear_access_failures(courier)
         return courier
+
+    def _ensure_is_not_blocked(self, courier: Courier, now: datetime) -> None:
+        if courier.access_blocked_until is None:
+            return
+        if courier.access_blocked_until <= now:
+            return
+        faltam = (courier.access_blocked_until - now).total_seconds()
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=TRAVADO.format(minutos=max(1, math.ceil(faltam / 60))),
+        )
+
+    def _register_access_failure(self, courier: Courier, now: datetime) -> None:
+        """Conta a falha e, na quinta dentro da janela, fecha a trava.
+
+        **Falha isolada nao acumula.** Com a ultima mais velha que a janela o
+        contador RECOMECA em 1 — sem isso, dois erros na segunda e tres na
+        sexta somariam cinco, e o motoboy ficaria de fora no meio do turno por
+        digitacao de semanas diferentes.
+
+        Commit proprio porque isto roda na DEPENDENCIA e a requisicao termina
+        em 401: sem ele, `get_db` fecha a sessao sem gravar e a tentativa
+        errada some — que e a trava inteira virando enfeite.
+        """
+        na_janela = (
+            courier.access_failed_at is not None
+            and now - courier.access_failed_at < ACCESS_LOCK_WINDOW
+        )
+        courier.access_failed_attempts = courier.access_failed_attempts + 1 if na_janela else 1
+        courier.access_failed_at = now
+        if courier.access_failed_attempts >= MAX_ACCESS_ATTEMPTS:
+            courier.access_blocked_until = now + ACCESS_LOCK_WINDOW
+        self._commit()
+
+    def _clear_access_failures(self, courier: Courier) -> None:
+        """Acerto zera as tres colunas — e so escreve quando ha o que zerar.
+
+        O par viaja em TODA requisicao e o app recarrega a lista a cada
+        parada: gravar sempre transformaria a tela do motoboy num UPDATE em
+        `couriers` por requisicao, para nao mudar nada.
+        """
+        if courier.access_failed_attempts == 0 and courier.access_blocked_until is None:
+            return
+        courier.access_failed_attempts = 0
+        courier.access_failed_at = None
+        courier.access_blocked_until = None
+        self._commit()
+
+    def _commit(self) -> None:
+        try:
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
 
     def me(self, courier: Courier) -> CourierMeResponse:
         branch = self.branch_repository.get_by_id_and_restaurant(

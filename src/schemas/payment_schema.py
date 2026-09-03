@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from enum import Enum
 
 from pydantic import BaseModel, Field, model_validator
@@ -182,6 +183,15 @@ class StartPaymentResponse(BaseModel):
     )
     checkout_url: str | None = None
     qr_code: str | None = None
+    expires_at: datetime | None = Field(
+        default=None,
+        description=(
+            "Quando o QR do pix deixa de ser pagavel, como o gateway devolveu. "
+            "E o que o contador do app deve usar — nao o relogio do cliente. "
+            "Nulo no cartao. Um segundo clique em 'pagar' devolve a MESMA "
+            "cobranca com o MESMO prazo."
+        ),
+    )
     status_detail: str | None = Field(
         default=None,
         description=(

@@ -1,8 +1,8 @@
 # Entregadores
 
 Cobre `services/admin_courier_service.py`, `services/courier_delivery_service.py`,
-`services/courier_fee.py`, `api/dependencies/courier_auth.py` e a revisão
-`20260903_0045`. Fase 1: cadastro, código de acesso, atribuição, a tela do
+`services/courier_fee.py`, `api/dependencies/courier_auth.py` e as revisões
+`20260903_0045` e `20260904_0047`. Fase 1: cadastro, código de acesso, atribuição, a tela do
 motoboy (lista, saiu, entregue, histórico) e a taxa que a loja paga por
 corrida.
 
@@ -49,18 +49,73 @@ exigiria consultar o banco a cada requisição — que é o que já fazemos.
 |---|---|---|
 | 404 `Link inválido` | link desconhecido, regenerado, entregador inativo ou excluído — **mesma frase para os quatro** | "peça um link novo ao restaurante" |
 | 401 | código ausente ou errado | "digite o código de novo" |
+| 429 | cadastro travado por falhas (abaixo) | mostrar o prazo da frase, e a outra saída |
 
 O 401 revela que o link existe, e isso é aceito: quem tem o link já sabe
-disso. O que segura a força bruta sobre os seis dígitos é o rate limit por IP
-(`COURIER_RATE_LIMIT`, 30/min e 600/h): um milhão de combinações a 600 por
-hora são mais de dois meses.
+disso.
 
 **O acesso sai em claro UMA vez**, na resposta de `POST /admin/couriers/{id}/access`.
 Não há rota que o devolva de novo; segunda via é gerar outro par. Mesmo
 desenho da senha temporária de lojista.
 
-**Resíduo conhecido (fase 2):** contador de falhas por entregador com trava
-temporária, no banco (armadilha 20). Hoje só o rate limit por IP.
+### 2.1 A trava por falhas de código
+
+**Cinco erros dentro de 15 minutos travam o cadastro por 15 minutos.** Três
+colunas em `couriers` (`access_failed_attempts`, `access_failed_at`,
+`access_blocked_until`, revisão `20260904_0047`) e a política inteira em
+`CourierDeliveryService` — `MAX_ACCESS_ATTEMPTS` e `ACCESS_LOCK_WINDOW`.
+
+**Por que não bastava o rate limit por IP.** `COURIER_RATE_LIMIT` conta
+30/min e 600/h, e a conta antiga deste documento — "um milhão de combinações
+a 600 por hora são mais de dois meses" — vale para **um** IP. Quem tem o link
+não está preso a um: proxy residencial, 4G, outro café. O balde do rate limit
+é o IP; o balde da trava é o **entregador**, e trocar de rede não o esvazia.
+Cinco a cada quinze minutos são 480 por dia, e um milhão de combinações viram
+anos.
+
+**O contador só anda para quem já passou pelo link.** A conferência do link
+vem antes, e link desconhecido é 404 sem tocar em coluna nenhuma. Quem faz o
+contador subir é o motoboy digitando errado, ou alguém que roubou o link.
+
+Quatro decisões que parecem detalhe e não são:
+
+- **a trava vem ANTES de conferir o código, e durante ela nem o código certo
+  abre.** Deixar a tentativa certa passar devolveria justamente a resposta que
+  a força bruta procura — a trava só trava se valer para ela também;
+- **falha isolada não acumula.** Com a última mais velha que a janela, o
+  contador recomeça em 1. Sem isso, dois erros na segunda e três na sexta
+  somariam cinco, e o motoboy ficaria de fora no meio do turno por digitação
+  de semanas diferentes;
+- **é fixa, sem escalada.** Dobrar a trava a cada reincidência castiga o
+  motoboy que erra de novo depois de destravar; o atacante só espera. O teto
+  fixo já compra os anos;
+- **código AUSENTE não conta.** Não é chute: é app mal montado, ou a
+  requisição que sai antes de a pessoa digitar. Contar isso travaria o motoboy
+  por um bug do app.
+
+**O que acontece quando o motoboy legítimo erra.** Quase nunca acontece em
+turno: o app guarda o par e o manda sozinho, e ele digita o código **uma vez**,
+na instalação. Se o painel regenerou o acesso, o **link** também mudou, e a
+resposta é 404 ("peça um link novo") — que não encosta no contador. Quando
+acontece, há duas saídas e **nenhuma delas está dentro do app**:
+
+1. esperar (≤ 15 min; a frase do 429 diz quantos faltam);
+2. **ligar para a loja.** `POST /admin/couriers/{id}/access` gera outro par e
+   zera contador e trava na mesma escrita — destrava na hora, e de quebra mata
+   o par que alguém esteve chutando. Para o dono saber que é isso,
+   `AdminCourierResponse.access_blocked_until` mostra a trava **enquanto ela
+   vale** (instante já passado sai nulo: publicar o cru faria o painel escrever
+   "travado até 19h10" às 20h).
+
+**O custo aceito:** quem tem o link pode travar o motoboy de propósito, 15
+minutos por vez. Quem tem o link já é um problema maior, e a saída — regenerar
+— mata o link dele junto.
+
+Escrita e commit ficam em `authenticate`, que roda na **dependência**: a
+requisição termina em 401, e sem commit próprio o `get_db` fecharia a sessão
+sem gravar — a trava inteira viraria enfeite. No acerto só escreve quando há o
+que zerar, senão a lista que o motoboy recarrega a cada parada viraria um
+UPDATE em `couriers` por requisição.
 
 ---
 
@@ -130,6 +185,14 @@ consultas que alimentam o item — a página e os dois polls do stream. O
 custo é fixo por página: uma consulta para as atribuições e uma para os
 entregadores, qualquer que seja o tamanho da página.
 `tests/test_entregador_na_listagem_db.py` conta as consultas.
+
+**O dono vê quanto deve a cada motoboy** em `GET /admin/reports/couriers?start_date&end_date&branch_id`
+(GERENCIA com recorte, como os relatórios de dinheiro de Desempenho): uma
+linha por entregador com entregas concluídas no período, as sem taxa
+separadas, e a soma. É a mesma definição de entrega do histórico que o
+próprio motoboy vê (`CourierRepository.totals_by_courier` e
+`list_deliveries_by_courier` leem a mesma atribuição aberta e a mesma linha
+`completed`), então os dois números batem. Excluído entra, marcado.
 
 **A atribuição de um pedido entregue continua aberta.** Ela é o registro de
 quem entregou. Por isso desativar ou excluir um motoboy fecha as corridas
@@ -206,5 +269,3 @@ prova pelo HTTP que Bearer não abre `/courier` e o par não abre `/admin`.
 | Mapa de calor | agregação de `orders.delivery_latitude/longitude` por período |
 | Métricas de tempo médio | `order_status_history` já tem os instantes; é consulta de relatório por entregador |
 | Tentativas fora da área | estado "não entregue" com motivo — aresta NOVA no grafo, e aí a frente da máquina de estados abre de verdade |
-| Relatório de taxas por entregador para o dono | a mesma consulta do histórico do entregador, pelo lado do painel, com recorte de filial |
-| Trava por falhas de código | contador por entregador, no banco |

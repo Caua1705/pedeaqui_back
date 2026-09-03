@@ -13,7 +13,7 @@ uma corrida que o dono pagou.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import func, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.orm import Session
 
 from src.models.courier_model import Courier, CourierAssignment
@@ -231,3 +231,62 @@ class CourierRepository:
         )
         row = self.db.execute(stmt).tuples().first()
         return row
+
+    def totals_by_courier(
+        self,
+        restaurant_id: uuid.UUID,
+        branch_id: uuid.UUID | None,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> list[dict]:
+        """Por entregador: quantas entregas concluiu no periodo e a soma das
+        taxas congeladas — o que o dono deve a cada um.
+
+        A MESMA definicao de entrega de `list_deliveries_by_courier`
+        (atribuicao aberta de pedido `completed`, instante da linha
+        `completed` do historico), agrupada. Duas definicoes divergiriam no
+        dia em que o motoboy conferisse o proprio historico contra o
+        pagamento do dono.
+
+        O excluido ENTRA: ele saiu, mas as corridas que fez no periodo sao
+        pagas do mesmo jeito. `deleted_at` sai na linha para a tela marcar.
+
+        `deliveries_without_fee` conta as corridas com snapshot NULO (a
+        filial nao tinha taxa na atribuicao). Elas entram em
+        `deliveries_count` e nao em `fee_total` — somar zero as esconderia
+        exatamente no relatorio que existe para pagar.
+        """
+        conditions = [
+            Courier.restaurant_id == restaurant_id,
+            CourierAssignment.unassigned_at.is_(None),
+            Order.status == "completed",
+            OrderStatusHistory.created_at >= start_at,
+            OrderStatusHistory.created_at < end_at,
+        ]
+        if branch_id is not None:
+            conditions.append(Courier.branch_id == branch_id)
+        sem_taxa = case((CourierAssignment.courier_fee_snapshot.is_(None), 1), else_=0)
+        stmt = (
+            select(
+                Courier.id.label("courier_id"),
+                Courier.name.label("name"),
+                Courier.phone.label("phone"),
+                Courier.branch_id.label("branch_id"),
+                Courier.deleted_at.label("deleted_at"),
+                func.count(CourierAssignment.id).label("deliveries_count"),
+                func.coalesce(func.sum(sem_taxa), 0).label("deliveries_without_fee"),
+                func.coalesce(func.sum(CourierAssignment.courier_fee_snapshot), 0).label("fee_total"),
+            )
+            .select_from(CourierAssignment)
+            .join(Courier, Courier.id == CourierAssignment.courier_id)
+            .join(Order, Order.id == CourierAssignment.order_id)
+            .join(
+                OrderStatusHistory,
+                (OrderStatusHistory.order_id == Order.id)
+                & (OrderStatusHistory.status == "completed"),
+            )
+            .where(*conditions)
+            .group_by(Courier.id, Courier.name, Courier.phone, Courier.branch_id, Courier.deleted_at)
+            .order_by(Courier.name.asc(), Courier.id.asc())
+        )
+        return [dict(linha) for linha in self.db.execute(stmt).mappings().all()]

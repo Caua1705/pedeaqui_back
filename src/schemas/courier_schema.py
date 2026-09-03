@@ -13,6 +13,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from src.schemas.admin_report_schema import ReportPeriod
 from src.schemas.common_schema import BaseResponse
 from src.utils.normalization import normalize_digits, normalize_text
 
@@ -124,6 +125,14 @@ class AdminCourierResponse(BaseResponse):
     # so em `POST /admin/couriers/{id}/access`, uma vez.
     has_access: bool
     access_generated_at: datetime | None = None
+    # Ate quando ele esta travado por errar o codigo. **Nulo e o estado
+    # normal**, e o campo so vem preenchido enquanto a trava esta valendo —
+    # um instante ja passado faria o painel escrever "travado ate 14h02" as
+    # 15h, que e pior que nao dizer nada.
+    #
+    # E o que o dono precisa ver para atender o telefone: o motoboy travado
+    # nao consegue pedir socorro pelo app, e a saida e regenerar o acesso.
+    access_blocked_until: datetime | None = None
     created_at: datetime | None = None
 
 
@@ -321,3 +330,38 @@ class CourierHistoryResponse(BaseModel):
     deliveries_without_fee: int
     fee_total: float
     deliveries: list[CourierHistoryItem]
+
+
+# --- O relatorio do dono ------------------------------------------------------
+
+
+class AdminCourierFeeReportItem(BaseModel):
+    courier_id: UUID
+    name: str
+    phone: str
+    branch_id: UUID
+    # Saiu do cadastro, mas fez corridas no periodo e e pago por elas.
+    is_deleted: bool
+    deliveries_count: int
+    # Corridas com taxa NULA (a filial nao tinha taxa na atribuicao). Entram
+    # em `deliveries_count` e NAO em `fee_total`: e o numero a acertar a mao.
+    deliveries_without_fee: int
+    fee_total: Decimal
+
+
+class AdminCourierFeeReportResponse(BaseModel):
+    """Quanto o dono deve a cada motoboy no periodo.
+
+    `Decimal` e nao `float`, como os outros relatorios de dinheiro do painel
+    (`CommissionReportResponse`, `SalesSummaryResponse`): e o formato que o
+    painel ja le nessa tela, e misturar os dois num mesmo menu e a armadilha
+    34 por outra porta.
+    """
+
+    restaurant_id: UUID
+    branch_id: UUID | None = None
+    period: ReportPeriod
+    deliveries_count: int
+    deliveries_without_fee: int
+    fee_total: Decimal
+    couriers: list[AdminCourierFeeReportItem]

@@ -21,6 +21,7 @@ O que precisa de atencao humana vai para o log como warning.
 
 import logging
 import uuid
+from datetime import timedelta
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -352,6 +353,7 @@ class PaymentService:
             payer_email=payer_email,
             previous_payment_id=previous_payment_id,
             card=card,
+            pix_expires_at=self._pix_expiration(payment_method),
             # application_fee (corte da plataforma no split) fica de fora:
             # e um campo opcional que so passa a ser preenchido quando
             # existir contrato de marketplace com o restaurante.
@@ -400,8 +402,19 @@ class PaymentService:
             payment_status=intent.payment_status,
             checkout_url=intent.checkout_url,
             qr_code=intent.qr_code,
+            # Do GATEWAY, nunca de `_pix_expiration`: no segundo clique a
+            # cobranca que volta e a original, e o prazo dela tambem.
+            expires_at=intent.expires_at,
             status_detail=intent.raw_status_detail,
         )
+
+    @staticmethod
+    def _pix_expiration(payment_method: str | None):
+        """Quando o QR deste pix deixa de ser pagavel. `None` fora do pix:
+        cartao responde na hora e nao tem o que expirar."""
+        if payment_method != "pix":
+            return None
+        return utcnow() + timedelta(minutes=settings.PIX_EXPIRATION_MINUTES)
 
     def _record_synchronous_verdict(self, order, intent) -> None:
         """Grava no historico o desfecho que veio no PROPRIO POST.
@@ -960,6 +973,7 @@ class PaymentService:
         previous_payment_id: str | None = None,
         card: CardPaymentInput | None = None,
         application_fee=None,
+        pix_expires_at=None,
     ):
         try:
             return create_payment(
@@ -974,6 +988,7 @@ class PaymentService:
                 previous_payment_id=previous_payment_id,
                 card=card,
                 application_fee=application_fee,
+                pix_expires_at=pix_expires_at,
             )
         # A ordem dos except importa: as duas primeiras sao subclasses de
         # PaymentGatewayError e sao os casos que se distinguem dele.

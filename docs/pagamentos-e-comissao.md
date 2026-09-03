@@ -140,8 +140,22 @@ X-Idempotency-Key: {order_id}:{hash}   uma chave por TENTATIVA, ver abaixo
 transaction_amount, description
 payment_method_id: "pix"
 payer.email                            ver abaixo
+date_of_expiration                     agora + PIX_EXPIRATION_MINUTES (30), no fuso da operação
 application_fee                        só no corpo se != None (split; hoje sempre None)
 ```
+
+### O prazo do pix volta na resposta
+
+`StartPaymentResponse.expires_at` é o `date_of_expiration` **que o gateway
+devolveu**, não o que mandamos. É o que o app usa para o contador — antes
+ele contava pelo relógio do cliente. Nulo no cartão.
+
+**O prazo fica fora da chave de idempotência.** Ele é `agora + N minutos` e
+muda a cada segundo; dentro do hash, o clique duplo em "pagar" abriria um
+segundo pix em vez de devolver o mesmo. Com ele fora, o segundo clique
+devolve a cobrança original, com o prazo original, e o contador do app não
+reinicia. Pix vencido chega por webhook como `cancelled` → `failed`, e a
+próxima tentativa nasce com chave nova (`previous_payment_id`).
 
 ### A chave de idempotência é por tentativa, não por pedido
 

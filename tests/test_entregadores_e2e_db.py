@@ -154,6 +154,66 @@ def test_o_codigo_e_o_link_sao_o_par(cliente_http, loja):
     assert link_errado.status_code == 404
 
 
+def test_cinco_codigos_errados_travam_o_cadastro(cliente_http, loja):
+    """A trava por falhas, pelo HTTP — e é aqui que se prova o que a suíte
+    rápida não consegue: a contagem roda na DEPENDÊNCIA, e a requisição
+    termina em 401. Sem o commit próprio, `get_db` fecharia a sessão sem
+    gravar e a quinta tentativa seria sempre a primeira.
+
+    Durante a trava, **nem o código certo abre** — que é o ponto inteiro
+    dela: deixar a tentativa certa passar seria devolver justamente a
+    resposta que a força bruta procura.
+    """
+    ze = _cadastrar_e_gerar(cliente_http, loja)
+    link, codigo = ze["link_token"], ze["access_code"]
+
+    for _ in range(5):
+        errado = cliente_http.get(f"/courier/{link}/me", headers={"X-Courier-Code": "000000"})
+    assert errado.status_code == 429, errado.text
+    assert "acesso novo ao restaurante" in errado.json()["detail"]
+
+    travado = cliente_http.get(f"/courier/{link}/me", headers={"X-Courier-Code": codigo})
+    assert travado.status_code == 429, travado.text
+
+    # E o painel vê o motivo: é o que o dono tem quando o motoboy liga.
+    listado = cliente_http.get(f"/admin/couriers/{ze['courier']['id']}", headers=loja["auth"])
+    assert listado.json()["access_blocked_until"] is not None
+
+
+def test_regenerar_o_acesso_destrava_o_motoboy(cliente_http, loja):
+    """A saída que não passa pelo app. O motoboy travado só recebe 429 na
+    tela dele; quem destrava é a loja, gerando outro par."""
+    ze = _cadastrar_e_gerar(cliente_http, loja)
+    for _ in range(5):
+        cliente_http.get(f"/courier/{ze['link_token']}/me", headers={"X-Courier-Code": "000000"})
+
+    novo = cliente_http.post(
+        f"/admin/couriers/{ze['courier']['id']}/access", headers=loja["auth"]
+    ).json()
+
+    aberto = cliente_http.get(
+        f"/courier/{novo['link_token']}/me", headers={"X-Courier-Code": novo["access_code"]}
+    )
+    assert aberto.status_code == 200, aberto.text
+    listado = cliente_http.get(f"/admin/couriers/{ze['courier']['id']}", headers=loja["auth"])
+    assert listado.json()["access_blocked_until"] is None
+
+
+def test_o_acerto_zera_a_contagem_de_falhas(cliente_http, loja):
+    """Quatro erros e um acerto não deixam resíduo: o quinto erro de amanhã
+    não pode ser a quinta falha de hoje."""
+    ze = _cadastrar_e_gerar(cliente_http, loja)
+    link, codigo = ze["link_token"], ze["access_code"]
+    for _ in range(4):
+        cliente_http.get(f"/courier/{link}/me", headers={"X-Courier-Code": "000000"})
+
+    assert cliente_http.get(f"/courier/{link}/me", headers={"X-Courier-Code": codigo}).status_code == 200
+
+    for _ in range(4):
+        errado = cliente_http.get(f"/courier/{link}/me", headers={"X-Courier-Code": "000000"})
+    assert errado.status_code == 401, errado.text
+
+
 def test_regenerar_mata_o_link_antigo_na_hora(cliente_http, loja):
     ze = _cadastrar_e_gerar(cliente_http, loja)
     antigo = {"link": ze["link_token"], "codigo": ze["access_code"]}

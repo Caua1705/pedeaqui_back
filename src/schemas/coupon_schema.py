@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, time
 from decimal import Decimal
 from enum import Enum
 from typing import Literal
@@ -6,8 +6,38 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from src.core.constants import PAYMENT_METHODS
 from src.schemas.admin_customer_schema import CustomerSegment
 from src.schemas.common_schema import BaseResponse
+
+
+def _formas_de_pagamento_permitidas(value: list[str] | None) -> list[str] | None:
+    """A lista de formas em que o cupom vale, ou nulo para qualquer uma.
+
+    Lista VAZIA e recusada, e nao convertida em nulo: vazia significa "em
+    nenhuma forma", que e um cupom que ninguem consegue usar — quem quer
+    qualquer forma omite o campo ou manda `null`. Repetida e colapsada
+    mantendo a ordem. Forma fora de `PAYMENT_METHODS` e 422: e a mesma lista
+    do CHECK do banco e da forma de pagamento do pedido (armadilha 15).
+    """
+    if value is None:
+        return None
+    if not value:
+        raise ValueError("allowed_payment_methods vazio não vale em forma nenhuma; omita o campo para valer em todas")
+    desconhecidas = [forma for forma in value if forma not in PAYMENT_METHODS]
+    if desconhecidas:
+        raise ValueError(f"forma de pagamento desconhecida: {', '.join(desconhecidas)}")
+    return list(dict.fromkeys(value))
+
+
+def _faixa_do_dia_valida(valid_hours_from: time | None, valid_hours_until: time | None) -> None:
+    """Os dois ou nenhum, e nunca iguais — espelha o CHECK
+    `ck_restaurant_coupons_valid_hours`. Uma faixa de zero minutos nao e "o
+    dia inteiro" nem "nunca": e um cupom que ninguem sabe quando vale."""
+    if (valid_hours_from is None) != (valid_hours_until is None):
+        raise ValueError("valid_hours_from e valid_hours_until andam juntos: informe os dois ou nenhum")
+    if valid_hours_from is not None and valid_hours_from == valid_hours_until:
+        raise ValueError("valid_hours_from e valid_hours_until não podem ser iguais")
 
 
 DiscountType = Literal["fixed", "percent", "free_delivery"]
@@ -65,6 +95,12 @@ class CustomerCouponState(str, Enum):
     APPLICABLE = "applicable"
     MISSING_AMOUNT = "missing_amount"
     LOGIN_REQUIRED = "login_required"
+    # A forma de pagamento escolhida nao esta em `allowed_payment_methods`.
+    # O cliente resolve trocando a forma — e o card diz em qual vale.
+    PAYMENT_METHOD_NOT_ALLOWED = "payment_method_not_allowed"
+    # Fora de `valid_hours_from`-`valid_hours_until` (hora da operacao). O
+    # cliente nao resolve agora, mas resolve as 15h — e o card diz quando.
+    OUTSIDE_HOURS = "outside_hours"
 
 
 class PublicCouponResponse(BaseResponse):
@@ -156,6 +192,12 @@ class CouponCampaignFields(BaseModel):
     first_order_only: bool = False
     visibility: CouponVisibility = CouponVisibility.PUBLIC
     target_segment: CustomerSegment | None = None
+    # "So no pix." Nulo = qualquer forma. Valores de `PAYMENT_METHODS`.
+    allowed_payment_methods: list[str] | None = None
+    # "Das 15h as 18h", hora LOCAL da operacao. Os dois ou nenhum; a faixa
+    # pode virar a noite (22:00 a 02:00). Inicio inclusivo, fim exclusivo.
+    valid_hours_from: time | None = None
+    valid_hours_until: time | None = None
     is_active: bool = True
     # A posicao na vitrine. As duas consultas publicas ja ordenavam por ela
     # desde sempre; o painel e que nao tinha como escrever o valor, entao todo
@@ -193,8 +235,14 @@ class CouponCampaignFields(BaseModel):
     def normalize_title(cls, value: str) -> str:
         return value.strip()
 
+    @field_validator("allowed_payment_methods")
+    @classmethod
+    def validate_allowed_payment_methods(cls, value: list[str] | None) -> list[str] | None:
+        return _formas_de_pagamento_permitidas(value)
+
     @model_validator(mode="after")
     def validate_campaign(self):
+        _faixa_do_dia_valida(self.valid_hours_from, self.valid_hours_until)
         # `valid_until` nulo nao tem ordem a respeitar: campanha sem fim nao
         # pode terminar antes de comecar.
         if self.valid_until is not None and self.valid_until <= self.valid_from:
@@ -245,8 +293,20 @@ class CouponUpdate(BaseModel):
     first_order_only: bool | None = None
     visibility: CouponVisibility | None = None
     target_segment: CustomerSegment | None = None
+    # `{"allowed_payment_methods": null}` TIRA a restricao (volta a valer em
+    # qualquer forma); campo ausente preserva. Mesma mecanica de `code`.
+    allowed_payment_methods: list[str] | None = None
+    # Os dois juntos, ou `null` nos dois para voltar ao dia inteiro. O par e
+    # conferido sobre a MESCLA com o banco, em `update_admin`.
+    valid_hours_from: time | None = None
+    valid_hours_until: time | None = None
     is_active: bool | None = None
     sort_order: int | None = Field(default=None, ge=0)
+
+    @field_validator("allowed_payment_methods")
+    @classmethod
+    def validate_update_payment_methods(cls, value: list[str] | None) -> list[str] | None:
+        return _formas_de_pagamento_permitidas(value)
 
     @field_validator("code")
     @classmethod
@@ -302,6 +362,9 @@ class CouponAdminResponse(BaseResponse):
     first_order_only: bool
     visibility: CouponVisibility
     target_segment: CustomerSegment | None = None
+    allowed_payment_methods: list[str] | None = None
+    valid_hours_from: time | None = None
+    valid_hours_until: time | None = None
     is_active: bool
     # Sem devolver a posicao atual, o painel nao tem como desenhar a lista na
     # ordem que ele acabou de gravar — teria que reordenar por conta e as duas
@@ -357,9 +420,30 @@ class CustomerCouponResponse(BaseModel):
     # o card. Antes deste `| None`, um cupom permanente derrubava a LISTA
     # inteira do cliente na serializacao, e nao so o proprio card.
     valid_until: datetime | None = None
+    # "So no pix": as formas em que o cupom vale, ou nulo para qualquer uma.
+    # Vem SEMPRE que existe, e nao so quando o estado e
+    # `payment_method_not_allowed`: a sacola antes da escolha da forma
+    # precisa mostrar "so no pix" ANTES de o cliente escolher o cartao e ver
+    # o desconto sumir — a pior ordem possivel (docs/cupons.md §7.1).
+    allowed_payment_methods: list[str] | None = None
+    # "Das 15h as 18h", hora da operacao, `HH:MM:SS`. Nulos = o dia inteiro.
+    # Vem sempre, pelo mesmo motivo: o card diz quando vale.
+    valid_hours_from: time | None = None
+    valid_hours_until: time | None = None
 
     # Nulo em cupom publico. Ver `CustomerCouponLabel`.
     label: CustomerCouponLabel | None = None
+    # Quem enxerga este cupom. O app pinta "para todos" a partir do `public`
+    # — a etiqueta `label` continua sendo so a de segmento, de proposito
+    # (ver `CustomerCouponLabel`): este campo diz o que o cupom E, e a
+    # etiqueta diz o que o card DESTACA.
+    visibility: CouponVisibility
+    # `true` em EXATAMENTE o card que o checkout aplicaria sozinho para esta
+    # sacola — calculado pela mesma escolha de `auto_apply_for_order`, e nao
+    # pelo app. Entre dois automaticos que cabem vale o de maior desconto,
+    # e essa e uma decisao de dinheiro que tem um dono so. Sem sacola
+    # (`subtotal` ausente, a tela do Clube) e para convidado, sempre `false`.
+    auto_apply: bool = False
     state: CustomerCouponState
     # O que ESTE cupom tiraria DESTA sacola. Zero quando o estado nao e
     # `applicable` — e nao o desconto hipotetico de uma sacola maior, que
@@ -410,6 +494,10 @@ class CouponPreviewRequest(CouponSelector):
     subtotal: Decimal = Field(ge=0)
     delivery_fee: Decimal = Field(default=Decimal("0.00"), ge=0)
     order_type: str
+    # A forma que o cliente escolheu, quando ja escolheu. Sem ela o cupom
+    # restrito a forma cabe (a validacao que vale e a do pedido, que sempre
+    # a tem); com ela o preview explica `payment_method_not_allowed`.
+    payment_method: str | None = Field(default=None, max_length=50)
 
     @model_validator(mode="after")
     def require_coupon(self):

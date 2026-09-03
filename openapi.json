@@ -1656,8 +1656,126 @@
         "title": "AdminCourierCreate",
         "type": "object"
       },
+      "AdminCourierFeeReportItem": {
+        "properties": {
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
+          "courier_id": {
+            "format": "uuid",
+            "title": "Courier Id",
+            "type": "string"
+          },
+          "deliveries_count": {
+            "title": "Deliveries Count",
+            "type": "integer"
+          },
+          "deliveries_without_fee": {
+            "title": "Deliveries Without Fee",
+            "type": "integer"
+          },
+          "fee_total": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Fee Total",
+            "type": "string"
+          },
+          "is_deleted": {
+            "title": "Is Deleted",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "phone": {
+            "title": "Phone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "courier_id",
+          "name",
+          "phone",
+          "branch_id",
+          "is_deleted",
+          "deliveries_count",
+          "deliveries_without_fee",
+          "fee_total"
+        ],
+        "title": "AdminCourierFeeReportItem",
+        "type": "object"
+      },
+      "AdminCourierFeeReportResponse": {
+        "description": "Quanto o dono deve a cada motoboy no periodo.\n\n`Decimal` e nao `float`, como os outros relatorios de dinheiro do painel\n(`CommissionReportResponse`, `SalesSummaryResponse`): e o formato que o\npainel ja le nessa tela, e misturar os dois num mesmo menu e a armadilha\n34 por outra porta.",
+        "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "couriers": {
+            "items": {
+              "$ref": "#/components/schemas/AdminCourierFeeReportItem"
+            },
+            "title": "Couriers",
+            "type": "array"
+          },
+          "deliveries_count": {
+            "title": "Deliveries Count",
+            "type": "integer"
+          },
+          "deliveries_without_fee": {
+            "title": "Deliveries Without Fee",
+            "type": "integer"
+          },
+          "fee_total": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Fee Total",
+            "type": "string"
+          },
+          "period": {
+            "$ref": "#/components/schemas/ReportPeriod"
+          },
+          "restaurant_id": {
+            "format": "uuid",
+            "title": "Restaurant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "restaurant_id",
+          "period",
+          "deliveries_count",
+          "deliveries_without_fee",
+          "fee_total",
+          "couriers"
+        ],
+        "title": "AdminCourierFeeReportResponse",
+        "type": "object"
+      },
       "AdminCourierResponse": {
         "properties": {
+          "access_blocked_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Blocked Until"
+          },
           "access_generated_at": {
             "anyOf": [
               {
@@ -6119,6 +6237,20 @@
       "CouponAdminResponse": {
         "description": "O cupom como o painel do lojista o le.\n\n`total_usage_count` e o par de `total_usage_limit`, e conta a mesma coisa\nque `evaluate` conta para decidir se o cupom ainda vale: redencoes em\n`applied`, so. Redencao estornada (o pedido foi cancelado) devolve a vaga e\nsai da conta — a tela mostra o numero que barra o proximo cliente, nao um\nhistorico de tentativas. Sem ele o painel exibia \"limite: 100\" e nao sabia\nquantos ja tinham usado.\n\nOPCIONAL com default, e nao obrigatorio: o numero e preenchido pelo\nservice, nao sai de coluna nenhuma, entao um `model_validate(coupon)` novo\nque esqueca de passa-lo devolve `null` em vez de estourar na serializacao.",
         "properties": {
+          "allowed_payment_methods": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Payment Methods"
+          },
           "code": {
             "anyOf": [
               {
@@ -6286,6 +6418,30 @@
             "title": "Valid From",
             "type": "string"
           },
+          "valid_hours_from": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Hours From"
+          },
+          "valid_hours_until": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Hours Until"
+          },
           "valid_until": {
             "anyOf": [
               {
@@ -6351,6 +6507,20 @@
       "CouponCreate": {
         "additionalProperties": false,
         "properties": {
+          "allowed_payment_methods": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Payment Methods"
+          },
           "code": {
             "anyOf": [
               {
@@ -6504,6 +6674,30 @@
             "title": "Valid From",
             "type": "string"
           },
+          "valid_hours_from": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Hours From"
+          },
+          "valid_hours_until": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Hours Until"
+          },
           "valid_until": {
             "anyOf": [
               {
@@ -6576,6 +6770,18 @@
           "order_type": {
             "title": "Order Type",
             "type": "string"
+          },
+          "payment_method": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Method"
           },
           "subtotal": {
             "anyOf": [
@@ -6752,6 +6958,20 @@
       "CouponUpdate": {
         "additionalProperties": false,
         "properties": {
+          "allowed_payment_methods": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Payment Methods"
+          },
           "code": {
             "anyOf": [
               {
@@ -6955,6 +7175,30 @@
               }
             ],
             "title": "Valid From"
+          },
+          "valid_hours_from": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Hours From"
+          },
+          "valid_hours_until": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Hours Until"
           },
           "valid_until": {
             "anyOf": [
@@ -8108,6 +8352,25 @@
       "CustomerCouponResponse": {
         "description": "Um cupom no app do cliente, com o estado JA DECIDIDO pelo backend.\n\nO front nao calcula nada aqui — nem o desconto, nem se cabe, nem quanto\nfalta. Ele pinta `label`, pinta `state` e mostra `discount_amount`.\n\n**Por que a conta nao pode ser do lado de la.** Ela depende de\n`max_discount_amount`, do teto por cliente, do cooldown, do\nprimeira-compra e de qual parte da sacola o desconto morde\n(`free_delivery` desconta a taxa, os outros dois descontam o subtotal).\nReproduzir isso no app seria a segunda implementacao da regra de cupom, e\na divergencia apareceria onde mais custa: o card promete R$ 15, o\ncheckout tira R$ 10, e o cliente ve o desconto encolher entre uma tela e\na outra.\n\n## O que NAO vem aqui, e nao e esquecimento\n\n`discount_value`, `max_discount_amount`, `total_usage_limit`,\n`usage_limit_per_customer` e `cooldown_days` sao PARAMETROS da conta e\nlimites internos da campanha. Quem precisa deles e quem calcula, e quem\ncalcula e o backend. Publicados, so serviriam para alguem refazer a\nconta errado — ou para mapear os limites da campanha de fora.\n\n`min_order_value` fica, porque ele nao e parametro: e a frase \"pedido\nminimo R$ 30\" que o card precisa escrever. E `valid_until` fica pelo\nmesmo motivo — \"valido ate\" e texto de card.",
         "properties": {
+          "allowed_payment_methods": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Payment Methods"
+          },
+          "auto_apply": {
+            "default": false,
+            "title": "Auto Apply",
+            "type": "boolean"
+          },
           "code": {
             "anyOf": [
               {
@@ -8187,6 +8450,30 @@
             "title": "Title",
             "type": "string"
           },
+          "valid_hours_from": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Hours From"
+          },
+          "valid_hours_until": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Hours Until"
+          },
           "valid_until": {
             "anyOf": [
               {
@@ -8198,6 +8485,9 @@
               }
             ],
             "title": "Valid Until"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/CouponVisibility"
           }
         },
         "required": [
@@ -8205,6 +8495,7 @@
           "title",
           "discount_type",
           "min_order_value",
+          "visibility",
           "state",
           "discount_amount",
           "missing_amount"
@@ -8217,7 +8508,9 @@
         "enum": [
           "applicable",
           "missing_amount",
-          "login_required"
+          "login_required",
+          "payment_method_not_allowed",
+          "outside_hours"
         ],
         "title": "CustomerCouponState",
         "type": "string"
@@ -12314,6 +12607,19 @@
               }
             ],
             "title": "Checkout Url"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Quando o QR do pix deixa de ser pagavel, como o gateway devolveu. E o que o contador do app deve usar — nao o relogio do cliente. Nulo no cartao. Um segundo clique em 'pagar' devolve a MESMA cobranca com o MESMO prazo.",
+            "title": "Expires At"
           },
           "payment_status": {
             "description": "Estado do pagamento. No pix e sempre 'pending'; no cartao ja e o desfecho ('paid', 'failed' ou 'in_review').",
@@ -17565,6 +17871,88 @@
         ]
       }
     },
+    "/admin/reports/couriers": {
+      "get": {
+        "description": "Quanto o restaurante deve a cada entregador no periodo.\n\nUma linha por entregador com entregas concluidas no periodo: quantas,\nquantas SEM taxa (a filial nao tinha taxa configurada na atribuicao —\nentram na contagem e nao na soma, para acertar a mao), e a soma das\ntaxas congeladas. Entregador excluido entra, marcado: ele saiu, mas fez\ncorridas que sao pagas.\n\nE a mesma conta do historico que o proprio entregador ve pelo link dele\n(`GET /courier/{link}/history`), agrupada — os dois batem.\n\nAte 92 dias. Quem nao e dono precisa mandar `branch_id`.",
+        "operationId": "courier_fee_report_admin_reports_couriers_get",
+        "parameters": [
+          {
+            "description": "Primeiro dia do periodo (inclusive), no fuso da operacao",
+            "in": "query",
+            "name": "start_date",
+            "required": true,
+            "schema": {
+              "description": "Primeiro dia do periodo (inclusive), no fuso da operacao",
+              "format": "date",
+              "title": "Start Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Ultimo dia do periodo (inclusive)",
+            "in": "query",
+            "name": "end_date",
+            "required": true,
+            "schema": {
+              "description": "Ultimo dia do periodo (inclusive)",
+              "format": "date",
+              "title": "End Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+              "title": "Branch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCourierFeeReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Courier Fee Report",
+        "tags": [
+          "admin couriers"
+        ]
+      }
+    },
     "/admin/reports/payment-methods": {
       "get": {
         "description": "Quanto entrou por forma de pagamento no periodo.\n\n`payment_method` nulo e pedido sem forma registrada, e continua nulo na\nresposta — nao vira \"other\", que e uma forma de pagamento de verdade.\n\nQuem nao e dono precisa mandar `branch_id`. E o relatorio em que o\nrecorte mais muda a leitura: as formas aceitas sao de cada filial\n(`branch_payment_methods`), entao a soma da rede mistura lojas que nem\noferecem os mesmos meios.",
@@ -20327,6 +20715,24 @@
                 }
               ],
               "title": "Order Type"
+            }
+          },
+          {
+            "description": "A forma de pagamento JA ESCOLHIDA, quando o cliente ja escolheu. Com ela, o cupom restrito a outra forma vem com `state = payment_method_not_allowed`; sem ela ele vem `applicable` e o card diz em que forma vale (`allowed_payment_methods`).",
+            "in": "query",
+            "name": "payment_method",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A forma de pagamento JA ESCOLHIDA, quando o cliente ja escolheu. Com ela, o cupom restrito a outra forma vem com `state = payment_method_not_allowed`; sem ela ele vem `applicable` e o card diz em que forma vale (`allowed_payment_methods`).",
+              "title": "Payment Method"
             }
           }
         ],

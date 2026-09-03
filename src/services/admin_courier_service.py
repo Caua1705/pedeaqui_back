@@ -10,6 +10,8 @@ O que este arquivo NAO faz: escrever status de pedido. Quem escreve e
 """
 
 import uuid
+from datetime import date, datetime
+from decimal import Decimal
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
@@ -30,14 +32,19 @@ from src.schemas.courier_schema import (
     AdminBranchCourierFeeUpdate,
     AdminCourierAccessResponse,
     AdminCourierCreate,
+    AdminCourierFeeReportItem,
+    AdminCourierFeeReportResponse,
     AdminCourierResponse,
     AdminCourierUpdate,
     AdminOrderCourierResponse,
     AssignmentErrorCode,
 )
+from src.schemas.admin_report_schema import ReportPeriod
+from src.services.admin_report_service import MAX_REPORT_DAYS
 from src.services.courier_fee import calculate_courier_fee
+from src.utils.date_window import period_bounds
 from src.services.order_state_machine import TERMINAL_ORDER_STATUSES
-from src.utils.money import money_to_float, quantize_money
+from src.utils.money import money_to_float, quantize_money, to_decimal
 from src.utils.security import (
     generate_courier_access_code,
     generate_courier_link_token,
@@ -57,6 +64,10 @@ class AdminCourierService:
         self.branch_repository = BranchRepository(db)
         self.courier_repository = CourierRepository(db)
         self.order_repository = OrderRepository(db)
+        # Injetavel, pela convencao da armadilha 51: quem decide se a trava
+        # do entregador ainda vale e uma comparacao com o agora, e o teste
+        # precisa poder escolher o instante.
+        self.clock = utcnow
 
     # --- A taxa da filial ---------------------------------------------------
 
@@ -164,6 +175,12 @@ class AdminCourierService:
         Inativo nao ganha acesso (409): seria um par que a dependencia
         recusaria de qualquer jeito, e o dono veria "funcionou" numa tela e
         "nao entra" na outra.
+
+        **E a saida do motoboy TRAVADO por errar o codigo**, e por isso ela
+        zera o contador e a trava na mesma escrita. Ele nao tem como pedir
+        socorro pelo app — o que ele tem e o telefone da loja —, e destravar
+        sem trocar o par deixaria valendo um codigo que alguem esteve
+        chutando. Um par novo resolve as duas metades de uma vez.
         """
         courier = self._get_courier(scope, courier_id)
         if not courier.is_active:
@@ -177,6 +194,9 @@ class AdminCourierService:
         courier.access_link_hash = hash_courier_link_token(link_token)
         courier.access_code_hash = hash_courier_access_code(access_code, link_token)
         courier.access_generated_at = now
+        courier.access_failed_attempts = 0
+        courier.access_failed_at = None
+        courier.access_blocked_until = None
         self._commit()
         return AdminCourierAccessResponse(
             courier_id=courier.id,
@@ -295,6 +315,60 @@ class AdminCourierService:
         self.courier_repository.mark_assignment_unassigned(assignment, scope.admin_user.id, utcnow())
         self._commit()
 
+    # --- O relatorio do dono ------------------------------------------------
+
+    def fee_report(
+        self,
+        *,
+        restaurant_id: uuid.UUID,
+        start_date: date,
+        end_date: date,
+        branch_id: uuid.UUID | None,
+    ) -> AdminCourierFeeReportResponse:
+        """Quanto o dono deve a cada motoboy no periodo.
+
+        Mesmo recorte dos relatorios de Desempenho: datas no fuso da
+        operacao, fim exclusivo, teto de `MAX_REPORT_DAYS`. O `branch_id` ja
+        chega resolvido pelo escopo (a rota passa por `resolve_branch_filter`
+        e `ensure_pode_ler_dinheiro`), e o restaurante e o do token.
+        """
+        if end_date < start_date:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="end_date não pode ser anterior a start_date"
+            )
+        if (end_date - start_date).days + 1 > MAX_REPORT_DAYS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Período máximo do relatório: {MAX_REPORT_DAYS} dias",
+            )
+        start_at, end_at = period_bounds(start_date, end_date)
+        linhas = self.courier_repository.totals_by_courier(restaurant_id, branch_id, start_at, end_at)
+
+        couriers = [
+            AdminCourierFeeReportItem(
+                courier_id=linha["courier_id"],
+                name=linha["name"],
+                phone=linha["phone"],
+                branch_id=linha["branch_id"],
+                is_deleted=linha["deleted_at"] is not None,
+                deliveries_count=int(linha["deliveries_count"]),
+                deliveries_without_fee=int(linha["deliveries_without_fee"]),
+                fee_total=quantize_money(to_decimal(linha["fee_total"])),
+            )
+            for linha in linhas
+        ]
+        return AdminCourierFeeReportResponse(
+            restaurant_id=restaurant_id,
+            branch_id=branch_id,
+            period=ReportPeriod(
+                start_date=start_date, end_date=end_date, days=(end_date - start_date).days + 1
+            ),
+            deliveries_count=sum(item.deliveries_count for item in couriers),
+            deliveries_without_fee=sum(item.deliveries_without_fee for item in couriers),
+            fee_total=quantize_money(sum((item.fee_total for item in couriers), Decimal("0"))),
+            couriers=couriers,
+        )
+
     # --- Escopo -------------------------------------------------------------
 
     def _find_order_in_scope(self, scope: AdminScope, order_id: uuid.UUID) -> Order | None:
@@ -390,8 +464,7 @@ class AdminCourierService:
             ),
         )
 
-    @staticmethod
-    def _courier_response(courier: Courier) -> AdminCourierResponse:
+    def _courier_response(self, courier: Courier) -> AdminCourierResponse:
         return AdminCourierResponse(
             id=courier.id,
             branch_id=courier.branch_id,
@@ -400,8 +473,22 @@ class AdminCourierService:
             is_active=bool(courier.is_active),
             has_access=courier.access_link_hash is not None and courier.access_code_hash is not None,
             access_generated_at=courier.access_generated_at,
+            access_blocked_until=self._trava_em_vigor(courier),
             created_at=courier.created_at,
         )
+
+    def _trava_em_vigor(self, courier: Courier) -> datetime | None:
+        """A trava so sai na resposta enquanto ela vale.
+
+        A coluna guarda o instante em que a ultima trava termina, e ele fica
+        gravado depois de passar — util no banco, mentira na tela. Publicar o
+        instante cru faria o painel escrever "travado ate 14h02" as 15h.
+        """
+        if courier.access_blocked_until is None:
+            return None
+        if courier.access_blocked_until <= self.clock():
+            return None
+        return courier.access_blocked_until
 
     @staticmethod
     def _courier_fee_response(branch: Branch) -> AdminBranchCourierFeeResponse:

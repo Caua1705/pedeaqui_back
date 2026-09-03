@@ -19,7 +19,7 @@ from src.models.coupon_model import (
     RestaurantCoupon,
 )
 from src.models.customer_model import Customer
-from src.core.constants import ORDER_TYPES
+from src.core.constants import ORDER_TYPES, PAYMENT_METHODS
 from src.repositories.coupon_repository import CouponRepository
 from src.repositories.restaurant_repository import RestaurantRepository
 from src.schemas.coupon_schema import (
@@ -37,7 +37,7 @@ from src.schemas.coupon_schema import (
     CustomerCouponState,
     CustomerCouponsResponse,
 )
-from src.services.coupon_window import ja_acabou, ja_comecou
+from src.services.coupon_window import dentro_do_horario, hora_da_operacao, ja_acabou, ja_comecou
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import ZERO, quantize_money, to_decimal
 from src.utils.normalization import normalize_digits
@@ -116,6 +116,12 @@ class CustomerAudience:
 REASON_TO_STATE = {
     "minimum_order_not_reached": CustomerCouponState.MISSING_AMOUNT,
     "login_required": CustomerCouponState.LOGIN_REQUIRED,
+    # Os dois entraram em 04/09/2026, e entram pelo mesmo criterio: sao
+    # consertos que o cliente faz. Trocar a forma de pagamento e o primeiro;
+    # esperar as 15h e o segundo — e o card precisa dizer quando, senao a
+    # campanha da tarde e invisivel de manha e o lojista jura que ela sumiu.
+    "payment_method_not_allowed": CustomerCouponState.PAYMENT_METHOD_NOT_ALLOWED,
+    "outside_hours": CustomerCouponState.OUTSIDE_HOURS,
 }
 
 
@@ -156,8 +162,17 @@ class CouponService:
         customer: Customer | None,
         audience: CustomerAudience | None = None,
         now: datetime | None = None,
+        payment_method: str | None = None,
     ) -> CouponEvaluation:
         """CABE OU NAO CABE. A unica resposta para essa pergunta no sistema.
+
+        `payment_method` e a forma que o cliente ESCOLHEU, quando ja
+        escolheu. `None` nao e "forma invalida": e "ainda nao escolheu" (o
+        Clube, a sacola antes do checkout), e nesse caso o cupom restrito a
+        forma CABE — o card diz em que forma ele vale, e a validacao que
+        barra e a do pedido, que sempre tem a forma. Sem essa regra, um
+        cupom "so no pix" sumiria da tela antes de o cliente ter como
+        escolher o pix.
 
         Chamam esta funcao a listagem do app, o preview, a auto-aplicacao e a
         criacao do pedido. As tres primeiras sao PREVIEW; a validacao que
@@ -216,6 +231,19 @@ class CouponService:
             limite = self._customer_limit_reason(coupon, customer, restaurant_id, current)
             if limite is not None:
                 return limite
+
+        # As duas restricoes que o cliente RESOLVE vem antes do minimo, de
+        # proposito: "so no pix" e "das 15h as 18h" sao a primeira coisa a
+        # dizer, e o minimo e um numero que so faz sentido quando o resto
+        # cabe.
+        if not dentro_do_horario(coupon.valid_hours_from, coupon.valid_hours_until, hora_da_operacao(current)):
+            return CouponEvaluation(False, reason="outside_hours")
+        if (
+            coupon.allowed_payment_methods
+            and payment_method is not None
+            and payment_method not in coupon.allowed_payment_methods
+        ):
+            return CouponEvaluation(False, reason="payment_method_not_allowed")
 
         if subtotal < minimum:
             return CouponEvaluation(
@@ -326,6 +354,7 @@ class CouponService:
         delivery_fee: Decimal | None,
         order_type: str | None,
         customer: Customer | None,
+        payment_method: str | None = None,
     ) -> CustomerCouponsResponse:
         """A lista de cupons do app, com o estado JA DECIDIDO.
 
@@ -340,6 +369,8 @@ class CouponService:
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
         if order_type is not None and order_type not in ORDER_TYPES:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de pedido inválido")
+        if payment_method is not None and payment_method not in PAYMENT_METHODS:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Forma de pagamento inválida")
         products_subtotal = quantize_money(to_decimal(subtotal))
         fee = quantize_money(to_decimal(delivery_fee))
         # Retirada nao tem taxa a descontar, entao um cupom de frete gratis
@@ -349,7 +380,7 @@ class CouponService:
 
         current = self._aware(self.clock())
         audience = self.audience_of(customer, restaurant.id, now=current)
-        cards = []
+        avaliados = []
         for coupon in self.repository.list_in_window(restaurant.id, now=current):
             evaluation = self.evaluate(
                 coupon,
@@ -359,8 +390,26 @@ class CouponService:
                 customer=customer,
                 audience=audience,
                 now=current,
+                payment_method=payment_method,
             )
-            card = self._customer_card(coupon, evaluation)
+            avaliados.append((coupon, evaluation))
+
+        # O automatico que o checkout aplicaria a ESTA sacola, pela mesma
+        # escolha de `auto_apply_for_order`. Sem sacola nao ha o que comparar
+        # (a tela do Clube), e convidado nao recebe automatico no checkout —
+        # nos dois casos nenhum card e marcado, porque marcar seria prometer
+        # o que o checkout nao vai fazer.
+        escolhido = None
+        if subtotal is not None and customer is not None:
+            escolhido = self._pick_automatic(
+                [(evaluation.discount, coupon) for coupon, evaluation in avaliados if evaluation.valid]
+            )
+
+        cards = []
+        for coupon, evaluation in avaliados:
+            card = self._customer_card(
+                coupon, evaluation, auto_apply=escolhido is not None and coupon.id == escolhido.id
+            )
             if card is not None:
                 cards.append(card)
         return CustomerCouponsResponse(coupons=cards)
@@ -369,6 +418,7 @@ class CouponService:
     def _customer_card(
         coupon: RestaurantCoupon,
         evaluation: CouponEvaluation,
+        auto_apply: bool = False,
     ) -> CustomerCouponResponse | None:
         """Um card, ou `None` quando o cupom nao deve aparecer.
 
@@ -392,7 +442,12 @@ class CouponService:
             discount_type=coupon.discount_type,
             min_order_value=quantize_money(to_decimal(coupon.min_order_value)),
             valid_until=coupon.valid_until,
+            allowed_payment_methods=coupon.allowed_payment_methods,
+            valid_hours_from=coupon.valid_hours_from,
+            valid_hours_until=coupon.valid_hours_until,
             label=CouponService._label(coupon),
+            visibility=coupon.visibility,
+            auto_apply=auto_apply,
             state=state,
             discount_amount=evaluation.discount,
             missing_amount=evaluation.missing_amount,
@@ -531,6 +586,7 @@ class CouponService:
             delivery_fee=effective_delivery_fee,
             customer=customer,
             now=agora,
+            payment_method=payload.payment_method,
         )
         subtotal = quantize_money(payload.subtotal)
         delivery_fee = quantize_money(effective_delivery_fee)
@@ -556,8 +612,13 @@ class CouponService:
         subtotal: Decimal,
         delivery_fee: Decimal,
         customer: Customer | None,
+        payment_method: str | None = None,
     ) -> tuple[RestaurantCoupon, Decimal]:
         """A VALIDACAO QUE VALE. Tudo antes disto e preview.
+
+        `payment_method` aqui e a forma do PEDIDO, que ja passou por
+        `_resolve_payment_flow`: e o ponto em que "so no pix" barra de
+        verdade quem escolheu o cartao.
 
         Roda com o cupom travado (`SELECT ... FOR UPDATE`) e dentro da
         transacao do pedido — e o que impede dois pedidos simultaneos de
@@ -581,6 +642,7 @@ class CouponService:
             delivery_fee=delivery_fee,
             customer=customer,
             now=agora,
+            payment_method=payment_method,
         )
         if not evaluation.valid:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=evaluation.reason or "Cupom inválido")
@@ -618,6 +680,7 @@ class CouponService:
         subtotal: Decimal,
         delivery_fee: Decimal,
         customer: Customer | None,
+        payment_method: str | None = None,
     ) -> tuple[RestaurantCoupon, Decimal] | None:
         """O cupom SEM CODIGO que esta sacola ganha sozinha. `None` se nenhum.
 
@@ -674,16 +737,14 @@ class CouponService:
                 customer=customer,
                 audience=audience,
                 now=current,
+                payment_method=payment_method,
             )
-            if evaluation.valid and evaluation.discount > ZERO:
+            if evaluation.valid:
                 candidatos.append((evaluation.discount, coupon))
-        if not candidatos:
-            return None
 
-        escolhido = max(
-            candidatos,
-            key=lambda par: (par[0], -(par[1].sort_order or 0), str(par[1].id)),
-        )[1]
+        escolhido = self._pick_automatic(candidatos)
+        if escolhido is None:
+            return None
         return self.lock_and_validate_for_order(
             restaurant_id=restaurant_id,
             coupon_id=escolhido.id,
@@ -691,7 +752,37 @@ class CouponService:
             subtotal=subtotal,
             delivery_fee=delivery_fee,
             customer=customer,
+            payment_method=payment_method,
         )
+
+    @staticmethod
+    def _pick_automatic(
+        candidatos: list[tuple[Decimal, RestaurantCoupon]],
+    ) -> RestaurantCoupon | None:
+        """O cupom SEM CODIGO que entra sozinho, entre os que cabem.
+
+        UMA funcao para os dois lados — o checkout (`auto_apply_for_order`) e
+        o card do cliente (`auto_apply` em `list_for_customer`) —, porque a
+        escolha e decisao de dinheiro: o card que diz "este entra sozinho"
+        tem que ser o que o checkout de fato aplica, e duas copias da regra
+        divergiriam na primeira mudanca de desempate.
+
+        Maior desconto; empate por `sort_order` e depois por `id`, para a
+        escolha ser deterministica entre duas requisicoes. Cupom com codigo
+        e cupom cujo desconto nesta sacola e zero nao entram: o primeiro a
+        pessoa precisa digitar, o segundo nao desconta nada.
+        """
+        elegiveis = [
+            (desconto, coupon)
+            for desconto, coupon in candidatos
+            if coupon.code is None and desconto > ZERO
+        ]
+        if not elegiveis:
+            return None
+        return max(
+            elegiveis,
+            key=lambda par: (par[0], -(par[1].sort_order or 0), str(par[1].id)),
+        )[1]
 
     def create_redemption(self, coupon: RestaurantCoupon, customer: Customer, order_id: UUID, discount: Decimal):
         existing = self.repository.get_redemption_by_order_id(order_id)

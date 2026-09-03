@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, ForeignKey, Numeric, Text, TIMESTAMP
+from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, Text, TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -46,6 +46,12 @@ class Courier(Base):
     chave). `access_code_hash` e HMAC do codigo de 6 digitos com o PROPRIO
     link como chave: seis digitos precisam de chave contra forca bruta num
     dump, e o dump nao tem o link. Nulos = acesso nunca gerado ou revogado.
+
+    **A trava por falhas mora aqui, e nao numa tabela de tentativas**, porque
+    a pergunta e "este cadastro pode tentar agora?" — estado de uma linha,
+    lido em TODA requisicao (o par viaja sempre, sem sessao). Quem escreve as
+    tres e `CourierDeliveryService.authenticate`; quem as zera sao o acerto e
+    a regeneracao do acesso pelo painel, que e a saida do motoboy travado.
     """
 
     __tablename__ = "couriers"
@@ -67,6 +73,13 @@ class Courier(Base):
     access_link_hash: Mapped[str | None] = mapped_column(Text, unique=True)
     access_code_hash: Mapped[str | None] = mapped_column(Text)
     access_generated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    # A trava por falhas de codigo. Zero e "nunca errou", e por isso a coluna
+    # e NOT NULL: nulo aqui nao teria significado nenhum, e `NULL >= 5` nao e
+    # falso (armadilha 54). Os dois instantes sao nullable porque neles o
+    # nulo SIGNIFICA — "nunca falhou" e "nao esta travado".
+    access_failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    access_failed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    access_blocked_until: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()

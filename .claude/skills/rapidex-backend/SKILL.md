@@ -620,6 +620,50 @@ método nos dois fluxos** (pix pelo gateway e pix na entrega), vale `online` —
 caminho restritivo. Não há campo para o cliente escolher, e errar para o lado
 restritivo não entrega comida de graça.
 
+**Desde 04/09/2026 isto não depende mais de alguém lembrar.**
+`scripts/espelhos_de_enum.py` lê todo `CHECK (col = ANY (ARRAY[...]))` do
+banco de teste — depois do `alembic upgrade head`, então é o schema de
+verdade — e cobra que cada um esteja em `ESPELHOS`, apontando para o conjunto
+do código que o espelha ou dizendo por que não há espelho. Depois compara
+valor a valor, e a mensagem separa os dois estragos, que são diferentes:
+
+| Divergência | O que acontece |
+|---|---|
+| valor só no **banco** | a filial oferece na tela e o pedido é recusado na criação com 400 |
+| valor só no **código** | passa pela validação do schema e morre no INSERT |
+
+Eram **23 colunas de enum no banco e duas** com alguém cobrando a igualdade.
+Hoje 12 têm espelho declarado e 11 dizem `SEM_ESPELHO` com o motivo — os
+valores dessas vivem soltos como literal (`'applied'`, `'online'`,
+`'hero'`), e `SEM_ESPELHO` não é "tudo bem": é a fronteira do portão,
+anotada onde dá para ver.
+
+**Registro explícito e não "procure a constante com os mesmos valores"**, e o
+motivo é o de sempre: casar por igualdade parece mais esperto e é inútil —
+quando as duas listas divergem, que é o único caso que importa, a busca não
+acha nada e o resultado fica indistinguível de "esta coluna não tem espelho".
+
+**E ele acha constraint DUPLICADA**, que é a armadilha 4 na forma que o
+`audit_indexes.py` não vê — ele olha `pg_index`, não `pg_constraint`. Duas
+CHECK com a definição idêntica são avaliadas as duas em todo INSERT e todo
+UPDATE, e nenhuma recusa nada que a outra já não recusasse.
+
+A primeira execução achou uma: **`admin_users` tinha duas CHECK idênticas
+sobre `role`** (`admin_users_role_check`, o nome que o Postgres gerou no
+`CREATE TABLE`, e `ck_admin_users_role`, criada à mão pela revisão `0003`).
+A revisão `20260904_0048` derruba a primeira. O nome canônico é o `ck_`, e
+**revisão que mexer nos papéis daqui em diante usa só ele** — a `0020`
+continua recriando as duas de propósito (revisão aplicada não se reescreve),
+e a `0048`, que roda depois, derruba a sobra outra vez.
+
+**O critério da duplicata é a definição inteira, e não (tabela, coluna,
+valores).** A primeira versão usava a segunda forma e acusou um par que não é
+duplicata: em `restaurant_coupons`, a lista de tipos de desconto e a regra que
+amarra o VALOR ao tipo falam da mesma coluna e citam os mesmos três literais.
+Derrubar a segunda abriria cupom percentual de valor zero — e falso positivo
+aqui é caro de um jeito específico, porque o achado pede um `DROP`, e um
+`DROP` na constraint errada não dá erro nenhum no dia em que roda.
+
 ---
 
 ## 16. `HTTPException` embrulha tudo em `detail` — o OpenAPI precisa dizer isso
@@ -1892,6 +1936,86 @@ três valores, todo filtro que era `== True` vira `== <o valor específico>`, e
 nunca `!= <o outro>`. A negação era equivalente quando havia dois valores; ela
 deixa de ser no minuto em que entra o terceiro, e o novo valor cai
 silenciosamente do lado permissivo.
+
+**E esta regra deixou de depender de leitura humana em 03/09/2026.**
+`scripts/filtros_por_exclusao.py` varre `src/` procurando negação (`!=`,
+`not in`, `.notin_()`) sobre valor de **conjunto fechado** — e conjunto
+fechado é o que está declarado em algum lugar: os `CHECK` do
+`schema_baseline.sql`, os das revisões, os `CheckConstraint` do ORM, as
+classes `str, Enum` e as tuplas maiúsculas de literais. São 72 conjuntos, e
+o critério não é "achou um `!=`": são 85 no repositório, e a maioria compara
+id, hash ou tamanho.
+
+**O varredor NÃO classifica, e isso é desenho.** Classificar exige entender o
+fluxo, e um varredor que erra a classificação é pior que um que reporta tudo.
+Quem classifica é a pessoa, uma vez, e a resposta fica escrita em
+`ESPERADOS` — 32 sítios, cada um dizendo **para onde cai o valor novo**:
+
+| Forma | Exemplo | O valor novo |
+|---|---|---|
+| **guarda invertida** | `if x != A: return` | cai fora da ação. Equivale a `if x == A: agir`. Fecha |
+| **negação completa** | `if x not in (todos)` | é recusado. Fecha |
+| **negação de permitidos** | `if x not in PERMITIDOS: recusar` | cai fora da lista, é recusado. Fecha |
+| **filtro de conjunto** | `WHERE x != A`, `.notin_(EXCLUÍDOS)` | **cai do lado permissivo. É esta armadilha** |
+
+**As duas do meio se escrevem igual e são opostas**, e essa é a distinção que
+não dá para automatizar: negar a lista dos PERMITIDOS recusa o valor novo;
+negar a lista dos EXCLUÍDOS o aceita. `payment_status not in PAYABLE_STATUSES`
+é falha fechada e `status.notin_(NON_BILLABLE_ORDER_STATUSES)` era a comissão
+calculada por exclusão — e as duas linhas têm a mesma cara.
+
+### O que a varredura achou, e o que foi consertado (03–04/09/2026)
+
+**Quatro sítios da última forma, e três deles em cima de dinheiro.** Os
+quatro viraram lista positiva; nenhum mudou de conjunto (as listas positivas
+de hoje são exatamente o que a negação produzia, e
+`tests/test_particao_dos_status.py` trava isso).
+
+- **`Order.status.notin_(NON_BILLABLE_ORDER_STATUSES)` e
+  `Order.payment_status != 'refunded'`**, as duas metades do WHERE de
+  `billable_order_conditions` — a comissão da plataforma calculada por
+  exclusão nos dois eixos. Estado novo nascia **cobrando**, e quem pagava a
+  conta era o lojista. Viraram `BILLABLE_ORDER_STATUSES` e
+  `BILLABLE_PAYMENT_STATUSES`;
+- **`Order.status.not_in(NON_BILLABLE_ORDER_STATUSES)` em
+  `admin_customer_repository`** — a TERCEIRA cópia da mesma regra ("isto virou
+  venda?"), no ticket médio e no RFV do cliente. Passou a ler a mesma
+  constante do extrato: duas cópias divergindo fariam o painel contar um
+  status que o extrato não conta;
+- **`Order.status.notin_(('cancelled', 'rejected'))`** no "já comprou aqui?"
+  do cupom de primeira compra. Aqui o estrago é o cliente **perder** o cupom,
+  e é o tipo de erro que ninguém reclama — só deixa de usar. Virou
+  `ORDER_STATUSES_THAT_COUNT_AS_PURCHASE`, constante própria e não a
+  negação da de faturamento: são duas perguntas diferentes que hoje coincidem.
+
+E um da forma de **negação de permitidos** que ninguém conhecia:
+`AdminUser.role != PAPEL_DE_MAQUINA`, na consulta que monta a tela da equipe.
+Equivalente hoje porque há uma conta de máquina só; na revisão que criar a
+segunda, ela traria a nova **para a tela da equipe**, sozinha. Virou
+`role.in_(PAPEIS_DE_PESSOA)`.
+
+### A lista positiva sozinha não basta
+
+Trocar `notin_` por `in_` move o estado novo do lado permissivo para o
+restritivo — mas ele passa a nascer **fora de tudo**, e continua silencioso.
+O que transforma esse silêncio em vermelho é a **partição**, em
+`tests/test_particao_dos_status.py`: todo valor de `ORDER_STATUSES` e de
+`PAYMENT_STATUSES` tem que estar em exatamente uma das duas listas, e o teste
+cai no commit que criar o estado novo dizendo qual é.
+
+E a partição vale sobre a constante, que só significa alguma coisa se for a
+coluna: dois testes `db` conferem `ORDER_STATUSES` e `PAYMENT_STATUSES` contra
+o `CHECK` do Postgres depois de `alembic upgrade head`. É a armadilha 15
+aplicada aos dois enums que decidem comissão.
+
+### Os dois limites do varredor
+
+**Conjunto não declarado é invisível** — não há como saber que `"applied"` é
+um de dois valores se ninguém escreveu os dois; o conserto é declarar o
+conjunto, não adivinhar. E **conjunto que chega por PARÂMETRO** não é
+resolvido: `.notin_(exclude_statuses)`, com a lista vindo de quem chama. São
+dois sítios em `courier_repository`, e nos dois o service passa
+`TERMINAL_ORDER_STATUSES` de propósito. Ele também lê `src/`, não os testes.
 
 **Correlato, e é a outra metade do mesmo conserto: o parâmetro booleano
 `require_public` saiu de `evaluate` na mesma frente.** Ele fazia "de qual

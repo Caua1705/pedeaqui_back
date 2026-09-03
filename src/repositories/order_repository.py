@@ -21,6 +21,46 @@ from src.models.restaurant_model import Restaurant
 # contagem do que sobrou de fora) precisam concordar exatamente.
 NON_BILLABLE_ORDER_STATUSES = ("cancelled", "rejected")
 
+# E o outro lado da mesma particao, POSITIVO (armadilha 47). Aqui era
+# `status.notin_(NON_BILLABLE_ORDER_STATUSES)`, e a negacao fazia a comissao
+# ser calculada por EXCLUSAO: status novo em `ORDER_STATUSES` nascia
+# FATURAVEL, e o restaurante pagava por ele sem ninguem ter decidido.
+#
+# O `notin_` continua existindo em `_nothing_to_settle` e em `excluded_*`, e
+# ali esta certo — naqueles a acao acontece PARA o conjunto, e nao para o
+# complemento dele. O que nao pode e a pergunta "isto virou venda?" ser
+# respondida pelo que ela NAO e.
+BILLABLE_ORDER_STATUSES = (
+    "pending",
+    "accepted",
+    "preparing",
+    "ready",
+    "out_for_delivery",
+    "completed",
+)
+
+# A MESMA particao, do lado do pagamento — e as duas listas sao POSITIVAS de
+# proposito (armadilha 47).
+#
+# Aqui era `payment_status != 'refunded'`, e a diferenca nao e de estilo: e a
+# comissao da plataforma calculada por EXCLUSAO. Um `payment_status` novo —
+# `in_review` foi o ultimo, e a analise antifraude pode segurar uma cobranca
+# por 48h uteis — nascia FATURAVEL pela negacao, e alguem pagava a conta sem
+# ninguem ter decidido. Com a lista positiva ele nasce fora do faturamento,
+# que e o lado que fecha; e `tests/test_particao_dos_status.py` transforma
+# esse silencio em vermelho, cobrando que todo valor de `PAYMENT_STATUSES`
+# esteja em exatamente UMA das duas listas.
+#
+# `failed` e `pending` faturam de proposito e isso NAO mudou aqui: e a
+# armadilha 48, e quem a trata e a varredura que cancela o pedido sem
+# pagamento depois de 30 minutos — nao um estado a menos nesta lista.
+BILLABLE_PAYMENT_STATUSES = ("on_delivery", "pending", "in_review", "paid", "failed")
+
+# O complemento, escrito e nao deduzido: `notin_(BILLABLE)` daria o mesmo
+# conjunto hoje e devolveria a negacao pela porta dos fundos — um estado novo
+# voltaria a entrar num dos dois lados sozinho, so que no outro.
+NON_BILLABLE_PAYMENT_STATUSES = ("refunded",)
+
 
 def billable_order_conditions(
     restaurant_id: uuid.UUID,
@@ -50,8 +90,8 @@ def billable_order_conditions(
         Order.restaurant_id == restaurant_id,
         Order.created_at >= start_at,
         Order.created_at < end_at,
-        Order.status.notin_(NON_BILLABLE_ORDER_STATUSES),
-        Order.payment_status != "refunded",
+        Order.status.in_(BILLABLE_ORDER_STATUSES),
+        Order.payment_status.in_(BILLABLE_PAYMENT_STATUSES),
     ]
     if branch_id is not None:
         conditions.append(Order.branch_id == branch_id)
@@ -66,11 +106,17 @@ def excluded_order_conditions(
 ) -> list:
     """O complemento exato de `billable_order_conditions` no mesmo periodo.
 
-    Complemento de verdade: `status IN (...) OR payment_status = 'refunded'`
-    e a negacao de `status NOT IN (...) AND payment_status <> 'refunded'`.
     Um pedido do periodo cai em um dos dois conjuntos e nunca nos dois, que
     e o que permite ao relatorio de cancelamentos e ao de faturamento serem
     lidos lado a lado.
+
+    **O que garante isso deixou de ser a leitura da expressao.** Enquanto o
+    faturamento dizia `payment_status <> 'refunded'`, o complemento era a
+    negacao literal dele e bastava conferir de olho. Com as duas listas
+    positivas, quem garante que elas particionam `PAYMENT_STATUSES` — sem
+    sobra e sem sobreposicao — e `tests/test_particao_dos_status.py`. E a
+    troca certa: a leitura de olho valia enquanto alguem estivesse olhando,
+    e nao no dia em que um `payment_status` novo entrar.
 
     `branch_id` entra do mesmo jeito que no billable, e tem que entrar: com o
     recorte valendo so num dos dois, a taxa de cancelamento sairia com os
@@ -82,7 +128,7 @@ def excluded_order_conditions(
         Order.created_at < end_at,
         or_(
             Order.status.in_(NON_BILLABLE_ORDER_STATUSES),
-            Order.payment_status == "refunded",
+            Order.payment_status.in_(NON_BILLABLE_PAYMENT_STATUSES),
         ),
     ]
     if branch_id is not None:

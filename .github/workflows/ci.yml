@@ -169,6 +169,23 @@ jobs:
         continue-on-error: true
         run: python scripts/filtros_por_exclusao.py --tudo
 
+      # Tabela com dado de pessoa fora da exclusao de conta: VERMELHO, e nao
+      # aviso.
+      #
+      # A armadilha 38 cobre a tabela que NAO pende de `customers` — ali a
+      # retencao e o mecanismo de exclusao. Esta varredura cobre a outra
+      # metade, e o numero certo e ZERO: tabela nova com `customer_id` que o
+      # `CustomerAnonymizationService` nao alcance e dado pessoal que a pessoa
+      # pediu para apagar e que continua no banco. Nao ha divida herdada aqui.
+      #
+      # Quem cobra e `tests/test_alcance_da_anonimizacao.py`, na suite rapida;
+      # este passo so imprime a classificacao legivel de cada tabela quando
+      # algo ja falhou.
+      - name: Alcance da exclusao de conta (so a saida legivel)
+        if: failure()
+        continue-on-error: true
+        run: python scripts/alcance_da_anonimizacao.py --tudo
+
   banco:
     name: Testes contra o Postgres
     runs-on: ubuntu-latest

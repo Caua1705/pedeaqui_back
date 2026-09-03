@@ -162,3 +162,45 @@ na tela do ticket — o aceite continua explícito, como no cadastro por e-mail.
 - [ ] 1. tabela de identidade social
 - [ ] 2. os três casos
 - [ ] 3. o que não pode quebrar
+
+---
+
+## 1. Ferramenta antes do conserto: `alcance_da_anonimizacao.py`
+
+A frente acrescenta uma tabela que pende de `customers`. A armadilha 38 cobre
+a tabela que **não** pende (retenção é o mecanismo de exclusão, e por isso ela
+nasce com prazo) — e não havia nada cobrando a outra metade.
+
+`scripts/alcance_da_anonimizacao.py` cobra que toda tabela com `customer_id`
+esteja declarada em `ALCANCE`, de um de três jeitos:
+
+    Alcancada(passo)      o método do service que a alcança — tem que EXISTIR
+    Fora(motivo)          por que a linha sobrevive, por decisão
+    Indireta(via, passo)  não tem `customer_id`: pende por outra tabela
+
+**A primeira execução já ensinou uma coisa que eu tinha errado**, e é a razão
+de `Indireta` existir: `order_reviews` guarda o **comentário** que a pessoa
+escreveu e **não tem `customer_id`** — o `UPDATE` chega nela por
+`orders.customer_id`. `customer_saved_cards` chega por
+`customer_payment_profiles`. Duas tabelas com dado de pessoa que uma varredura
+só de coluna não veria.
+
+**Vermelho visto antes do conserto**, com a entrada da tabela nova declarada
+e a tabela ainda inexistente:
+
+```
+!! customer_social_identities
+   esta em ALCANCE como direta e nao tem mais `customer_id` no ORM.
+   Entrada de cemiterio ...
+1 failed, 8 passed
+```
+
+Baseline de hoje: 10 tabelas com `customer_id`, 13 declaradas, **0 achados**.
+As quatro `Fora` são `cashback_transactions`, `coupon_redemptions`,
+`coupon_claims` e `ai_voice_sessions`, cada uma com o motivo escrito.
+
+`tests/test_alcance_da_anonimizacao.py` tem os três testes que o portão
+precisa além do principal (a família do dublê de dado e do teste mudo): que o
+varredor **enxerga** tabela e passo de verdade, que ele **acusa** cada um dos
+quatro defeitos plantados, e — o par do `pytest.raises` — que ele **deixa
+passar** o que está certo.

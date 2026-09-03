@@ -3,7 +3,7 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from src.core.constants import PAPEL_DE_DONO, PAPEL_DE_MAQUINA
+from src.core.constants import PAPEIS_DE_PESSOA, PAPEL_DE_DONO
 from src.models.admin_user_model import AdminUser
 
 
@@ -35,12 +35,19 @@ class AdminUserRepository:
         tela propria em `/admin/printing`, que e onde ele faz sentido — com
         nome de impressora e estado de heartbeat ao lado. Misturado aqui ele
         vira uma linha sem telefone, sem cargo e sem ninguem por tras.
+
+        **`IN (papeis de pessoa)`, e nao `!= PAPEL_DE_MAQUINA`** — armadilha
+        47. As duas formas sao equivalentes hoje, porque `ADMIN_USER_ROLES`
+        tem exatamente uma conta de maquina; deixam de ser na revisao que
+        acrescentar a segunda, e ai a negacao a traz PARA A TELA DA EQUIPE
+        sozinha. A forma positiva obriga quem criar o papel a decidir de que
+        lado ele fica, que e a decisao que a negacao toma por omissao.
         """
         stmt = (
             select(AdminUser)
             .where(
                 AdminUser.restaurant_id == restaurant_id,
-                AdminUser.role != PAPEL_DE_MAQUINA,
+                AdminUser.role.in_(PAPEIS_DE_PESSOA),
             )
             .order_by(AdminUser.created_at)
         )

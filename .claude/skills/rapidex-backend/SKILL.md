@@ -1893,6 +1893,48 @@ nunca `!= <o outro>`. A negação era equivalente quando havia dois valores; ela
 deixa de ser no minuto em que entra o terceiro, e o novo valor cai
 silenciosamente do lado permissivo.
 
+**E esta regra deixou de depender de leitura humana em 03/09/2026.**
+`scripts/filtros_por_exclusao.py` varre `src/` procurando negação (`!=`,
+`not in`, `.notin_()`) sobre valor de **conjunto fechado** — e conjunto
+fechado é o que está declarado em algum lugar: os `CHECK` do
+`schema_baseline.sql`, os das revisões, os `CheckConstraint` do ORM, as
+classes `str, Enum` e as tuplas maiúsculas de literais. São 72 conjuntos, e
+o critério não é "achou um `!=`": são 85 no repositório, e a maioria compara
+id, hash ou tamanho.
+
+**O varredor NÃO classifica, e isso é desenho.** Classificar exige entender o
+fluxo, e um varredor que erra a classificação é pior que um que reporta tudo.
+Quem classifica é a pessoa, uma vez, e a resposta fica escrita em
+`ESPERADOS` — 18 sítios, cada um dizendo **para onde cai o valor novo**:
+
+| Forma | Exemplo | O valor novo |
+|---|---|---|
+| **guarda invertida** | `if x != A: return` | cai fora da ação. Equivale a `if x == A: agir`. Fecha |
+| **negação completa** | `if x not in (todos)` | é recusado. Fecha |
+| **filtro de conjunto** | `WHERE x != A`, `.notin_()` | **cai do lado permissivo. É esta armadilha** |
+
+A varredura achou **um** sítio da terceira forma que ninguém conhecia:
+`AdminUser.role != PAPEL_DE_MAQUINA`, na consulta que monta a tela da equipe.
+Hoje é equivalente à forma positiva porque há uma conta de máquina só; na
+revisão que criar a segunda, ela traria a nova **para a tela da equipe**,
+sozinha. Virou `role.in_(PAPEIS_DE_PESSOA)`.
+
+E duas ficaram declaradas como **dívida aberta**, porque o conserto é decisão
+de produto e não refatoração:
+
+- **`Order.payment_status != 'refunded'`**, em `billable_order_conditions`. É
+  o WHERE do faturamento: `payment_status` novo nasce **faturável**, e a
+  plataforma cobra comissão sobre um estado que ninguém classificou. É a
+  armadilha 48 (*"`== "failed"`, nunca `!= "paid"`"*) pelo lado do extrato;
+- **`Order.status.notin_(('cancelled', 'rejected'))`**, no "já comprou aqui?"
+  do cupom de primeira compra. Status novo passa a contar como compra, e o
+  cliente perde o cupom.
+
+Duas coisas que o varredor não faz, e vale saber antes de confiar nele:
+**conjunto não declarado é invisível** (não há como saber que `"applied"` é um
+de dois valores se ninguém escreveu os dois — o conserto é declarar o
+conjunto, não adivinhar), e ele **lê `src/`, não os testes**.
+
 **Correlato, e é a outra metade do mesmo conserto: o parâmetro booleano
 `require_public` saiu de `evaluate` na mesma frente.** Ele fazia "de qual
 superfície eu vim" ser decisão do CHAMADOR — e uma rota nova que esquecesse de

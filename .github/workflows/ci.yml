@@ -150,6 +150,25 @@ jobs:
         continue-on-error: true
         run: python scripts/estado_entre_workers.py --tudo
 
+      # Filtro por EXCLUSAO sobre coluna de enum: VERMELHO, e nao aviso.
+      #
+      # E a armadilha 47. `visibility != 'private'` — a traducao literal do
+      # booleano que virou enum de tres valores — publicava cupom de SEGMENTO
+      # na vitrine anonima do cardapio, com codigo, sem erro e sem log. A
+      # classe inteira e silenciosa: nao ha sintoma para denunciar um sitio
+      # novo, e por isso a revisao tem que ser cobrada e nao lembrada.
+      #
+      # Ha divida herdada, e ela esta DECLARADA com motivo em `ESPERADOS` —
+      # 18 sitios, cada um dizendo para onde cai o valor novo. Sitio novo fora
+      # da lista e regressao; entrada da lista que sumir do codigo tambem.
+      #
+      # Quem cobra e `tests/test_filtros_por_exclusao.py`, na suite rapida.
+      # `--tudo` imprime tambem a classificacao de cada sitio declarado.
+      - name: Filtro por exclusao sobre enum (so a saida legivel)
+        if: failure()
+        continue-on-error: true
+        run: python scripts/filtros_por_exclusao.py --tudo
+
   banco:
     name: Testes contra o Postgres
     runs-on: ubuntu-latest

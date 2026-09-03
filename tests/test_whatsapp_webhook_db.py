@@ -263,3 +263,41 @@ class TestOStatusDaMensagem:
 
         assert resultado == {"status": "ok"}
         assert db.query(WhatsAppMessage).count() == 0
+
+
+class TestCoexistenciaNaoAbreJanela:
+    """O atendente humano respondendo pelo celular não mexe na janela da API.
+
+    É o que a Meta garante — *"messages sent from the WhatsApp Business app
+    ... do not create, extend, or affect Cloud API conversation windows"* — e
+    é o que faz o nosso desenho continuar valendo com coexistência ligada.
+
+    O estrago se lêssemos o eco como mensagem do cliente: uma janela de 24h
+    que não existe do lado deles, e o próximo texto livre saindo achando que
+    pode. A Meta recusaria com `131047` e o cliente não seria avisado.
+    """
+
+    def test_o_eco_do_atendente_nao_grava_nada(self, db: Session) -> None:
+        restaurante = fab.criar_restaurante(db)
+        filial = fab.criar_filial(db, restaurante)
+        criar_canal(db, restaurante, filial, "pni-1")
+
+        resultado = entregar(
+            db,
+            metadados("pni-1")
+            | {
+                "message_echoes": [
+                    {
+                        "from": "5585999990000",
+                        "to": TELEFONE,
+                        "id": "wamid.DO_ATENDENTE",
+                        "timestamp": "1757000000",
+                        "type": "text",
+                        "text": {"body": "ja estou separando"},
+                    }
+                ]
+            },
+        )
+
+        assert resultado == {"status": "ok"}
+        assert db.query(WhatsAppContactWindow).count() == 0

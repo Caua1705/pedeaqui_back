@@ -426,12 +426,105 @@ do webhook único, e pela mesma razão.
 6. Os **dois números** precisam estar conectados ao WABA na Cloud API, cada
    um com **verificação em duas etapas** (PIN de 6 dígitos) definida.
 
-> ⚠️ **O número sai do aplicativo WhatsApp Business do celular.** Um número
-> na Cloud API não atende ao mesmo tempo no app do celular. Se hoje alguém
-> responde cliente por ali, isso PARA no minuto da migração. É a decisão de
-> operação que mais atrasa piloto: ou o Júnior aceita, ou entra um chip novo
-> só para os avisos. Decidir isto ANTES do passo 6, porque migrar de volta é
-> trabalhoso.
+> ⚠️ **O número sai do aplicativo WhatsApp Business do celular** — a menos
+> que a COEXISTÊNCIA esteja ligada, e ela **não está disponível no caminho
+> manual**. Leia a seção B-bis inteira antes de executar o passo 6: é ela que
+> decide se o Júnior aceita ou não.
+
+### B-bis. Coexistência: existe, resolve, e HOJE não é nossa
+
+**Conferido na documentação da Meta em 04/09/2026.** A resposta curta é: a
+coexistência é real, o Brasil está entre os países suportados, o nosso
+desenho a suporta sem mudar uma linha — **e ela exige Embedded Signup, que
+exige ser Tech Provider.** É exatamente por isso que a Cardápio Web oferece:
+eles já são.
+
+> *"You must already be a Solution Partner or Tech Provider"* — e
+> *"You must use Embedded Signup with session logging"*, nos requisitos do
+> onboarding de coexistência.
+
+Não há caminho manual. No painel de *Configuração da API*, onde eu vou estar,
+a opção não aparece — a conexão de coexistência acontece **dentro do fluxo de
+Embedded Signup**, com o lojista digitando o número, recebendo um código pelo
+WhatsApp e confirmando no aplicativo dele.
+
+#### O que isso deixa na mesa, agora
+
+Três saídas, e nenhuma é indolor:
+
+| Saída | Custo |
+|---|---|
+| **Júnior aceita perder o app naquele número** | ele deixa de atender cliente pelo celular naquele número. É a saída que mata o piloto, e é a que o enunciado já temia |
+| **Chip novo só para os avisos** | o cliente recebe aviso de um número que não é o que ele conhece, e responder ali não fala com ninguém. Barato de fazer, ruim de explicar |
+| **Virar Tech Provider antes do piloto** | Business Verification + App Review + acesso avançado a `whatsapp_business_messaging` e `whatsapp_business_management`. Semanas, não meses — e é o caminho que a estrutura desta rodada já esperava |
+
+**A minha leitura:** a terceira é a única que não estraga o produto, e ela já
+estava no plano ("no futuro viro Tech Provider"). O que mudou é a ORDEM — ela
+deixou de ser "depois do piloto" e virou "o que destrava o piloto no número
+que o lojista já usa". A decisão é sua; o backend não muda em nenhuma das
+três.
+
+#### O que muda quando a coexistência entrar (e por que nada nosso quebra)
+
+A Meta passa a exigir a assinatura de **três campos novos**, no MESMO webhook:
+
+| Campo | O que traz | O que fazemos |
+|---|---|---|
+| `smb_message_echoes` | o que o **atendente humano** respondeu pelo celular | ignoramos |
+| `smb_app_state_sync` | os contatos do celular dele | ignoramos |
+| `history` | **até seis meses de conversa passada da loja** | ignoramos |
+
+**Ignorar é decisão, e agora é uma trava.** `tests/test_whatsapp_coexistencia.py`
+e `TestCoexistenciaNaoAbreJanela` travam os três contra o formato REAL da
+documentação, e a mutação confirma que pegam o erro plausível — o dia em que
+alguém "der suporte a coexistência" lendo `message_echoes` como `messages`.
+
+**A pergunta do enunciado — "o webhook passa a receber mensagem que o
+atendente humano respondeu?" — tem resposta em duas partes:**
+
+1. **Sim, se assinarmos `smb_message_echoes`** (e a coexistência obriga a
+   assinar). Nosso parser lê `value.messages`; o eco vem em
+   `value.message_echoes`. Chega, é roteado, e não vira nada.
+2. **E não pode virar nada**, porque a Meta diz com todas as letras:
+
+   > *"Messages sent from the WhatsApp Business app are not subject to the
+   > customer service window and do not create, extend, or affect Cloud API
+   > conversation windows."*
+
+   Ou seja: a resposta do atendente **não abre nem estende** a janela de 24h
+   da API. Se lêssemos o eco como mensagem do cliente, gravaríamos uma janela
+   que não existe do lado deles — e o próximo texto livre sairia achando que
+   pode, para voltar `131047` com o cliente não avisado.
+
+**O `history` é o que mais assusta e o mais fácil.** As mensagens antigas vêm
+em `value.history[].threads[].messages`; lemos `value.messages`, o nível de
+cima. Seis meses de conversa de clientes que nunca pediram nada pelo app
+chegam e **não entram em processo nenhum** — que é a única resposta aceitável
+pela armadilha 38.
+
+#### O que o Júnior perde COM a coexistência ligada
+
+Não é de graça, e ele precisa saber antes:
+
+- **ferramentas de negócio do app**: catálogo, pedidos e status ficam sem
+  suporte;
+- **respostas rápidas e mensagens de marketing** do app: sem suporte;
+- **listas de transmissão**: desativadas (as antigas viram somente leitura);
+- **mensagens temporárias, ver uma vez e localização ao vivo**: desligadas
+  nas conversas 1:1;
+- **grupos e chamadas de voz/vídeo**: não sincronizam / não têm suporte;
+- taxa fixa de 20 mensagens por segundo — irrelevante no nosso volume.
+
+O que **continua**: ele responde cliente pelo celular normalmente, e o
+histórico fica sincronizado dos dois lados.
+
+#### E uma coisa que vira pendência nossa no mesmo dia
+
+Se o lojista desconectar a Cloud API pelas configurações do app, a Meta
+dispara um webhook `account_update` com o evento `PARTNER_REMOVED`. **Não
+assinamos esse campo hoje** — e um número que para de funcionar em silêncio é
+exatamente o modo de falha que esta rodada inteira tentou evitar. Está na
+parte III.
 
 ## C. O token — e ele não vai para o `.env`
 
@@ -444,9 +537,30 @@ do webhook único, e pela mesma razão.
    marcar `whatsapp_business_messaging` e `whatsapp_business_management` →
    copiar.
 
-> ⚠️ O token de **24 horas** que aparece em *WhatsApp → Configuração da API*
-> serve só para teste. Com ele, os avisos param sozinhos no dia seguinte, sem
-> nada errado do nosso lado.
+> ⚠️ **O token de 24 horas é o que mata o piloto no dia seguinte.**
+>
+> O que aparece em *WhatsApp → Configuração da API*, num campo já preenchido e
+> com um botão de copiar do lado, é **temporário**. Ele é o caminho fácil, é o
+> que a tela oferece primeiro, e é o errado. Com ele os avisos funcionam na
+> demonstração, param sozinhos no dia seguinte, e **não há nada errado do
+> nosso lado para eu achar**: o log vai dizer `failed` com um erro de
+> autenticação, e o pedido vai continuar entrando normalmente.
+>
+> **O caminho do token permanente é o dos passos 7 a 9, e ele tem três
+> pedaços que não são intercambiáveis:**
+>
+> 1. um **usuário do sistema** (*Configurações do Negócio → Usuários →
+>    Usuários do sistema*), que é uma identidade da EMPRESA. Token de pessoa
+>    morre quando a pessoa sai, troca senha ou perde o acesso;
+> 2. os **dois recursos atribuídos a ele** — o app e o WABA. Sem os dois, o
+>    token nasce e falha na primeira chamada com "permissão";
+> 3. a validade **"Nunca expira"**, escolhida na tela de gerar o token, com
+>    `whatsapp_business_messaging` e `whatsapp_business_management` marcadas.
+>
+> **Como sei que peguei o certo:** o temporário vem da tela de *Configuração
+> da API* e some quando eu recarrego a página; o permanente vem da tela do
+> usuário do sistema, aparece UMA vez num diálogo e some para sempre depois de
+> fechar — se eu não colar direto no script de cadastro, gero outro.
 
 O token **não entra no `.env`**: é do Júnior, é por número, e mora cifrado no
 banco. Ele entra por um script de cadastro (item 1 desta rodada), do mesmo
@@ -577,7 +691,20 @@ que abriram, não que ficou boa — isso se vê no celular.
   janela de 24h e descarta o conteúdo da mensagem recebida de propósito:
   guardar texto de cliente é dado pessoal com prazo, e não há quem leia.
 - **Onboarding automático (Tech Provider / Embedded Signup).** Muda só de
-  onde o token chega; a coluna é a mesma.
+  onde o token chega; a coluna é a mesma. **Mas ele deixou de ser só
+  conveniência:** é o único caminho para a COEXISTÊNCIA (parte II, B-bis), e
+  a coexistência é o que decide se o Júnior aceita ligar o número que ele já
+  usa. Ver a tabela das três saídas.
+- **Os três campos de webhook da coexistência** — `smb_message_echoes`,
+  `smb_app_state_sync` e `history`. Hoje eles são **ignorados de propósito**,
+  com trava (`tests/test_whatsapp_coexistencia.py`). Se um dia o eco do
+  atendente precisar aparecer em algum lugar nosso, ele entra como dado
+  pessoal com prazo, e não como mais uma coluna.
+- **`account_update` com `PARTNER_REMOVED`.** É o webhook que avisa quando o
+  lojista desconecta a Cloud API pelo aplicativo dele. Não assinamos o campo,
+  e sem ele o número para de funcionar **em silêncio** — o modo de falha que
+  esta rodada inteira tentou evitar. Entra junto com a coexistência, porque é
+  ela que dá ao lojista o botão de desconectar.
 - **`docs/whatsapp.md` não existe.** O desenho está neste scratchpad, que é
   registro de rodada e não documentação. Quando a frente virar rotina, ele
   vira doc — como `docs/cupons.md` e `docs/entregadores.md`.

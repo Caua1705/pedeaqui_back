@@ -7,9 +7,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.models.customer_model import Customer, CustomerAddress
+from src.models.customer_social_identity_model import CustomerSocialIdentity
 from src.models.order_item_model import OrderItem
 from src.models.order_model import Order
 from src.repositories.customer_repository import CustomerRepository
+from src.repositories.customer_social_identity_repository import (
+    CustomerSocialIdentityRepository,
+)
 from src.repositories.order_repository import OrderRepository
 from src.repositories.order_review_repository import OrderReviewRepository
 from src.schemas.auth_schema import MessageResponse
@@ -20,6 +24,7 @@ from src.schemas.customer_schema import (
     CustomerAddressResponse,
     CustomerDataExportResponse,
     CustomerOrderHistoryItem,
+    CustomerSocialIdentityItem,
     IgnoredImportedAddress,
     ImportCustomerAddressesRequest,
     ImportCustomerAddressesResponse,
@@ -28,6 +33,7 @@ from src.schemas.customer_schema import (
 )
 from src.schemas.order_review_schema import CustomerReviewItem
 from src.schemas.order_schema import OrderItemResponse
+from src.services.auth_service import password_is_set
 from src.services.cashback_service import CashbackService
 from src.utils.money import money_to_float, quantize_money
 from src.utils.security import PasswordTooLongError, hash_password, utcnow, verify_password
@@ -70,6 +76,7 @@ class CustomerService:
     def __init__(self, db: Session):
         self.db = db
         self.customer_repository = CustomerRepository(db)
+        self.social_identity_repository = CustomerSocialIdentityRepository(db)
         self.order_repository = OrderRepository(db)
         self.order_review_repository = OrderReviewRepository(db)
 
@@ -82,7 +89,11 @@ class CustomerService:
             birth_date=customer.birth_date,
             email_verified=customer.email_verified_at is not None,
             marketing_opt_in=customer.marketing_opt_in,
+            password_set=password_is_set(customer),
         )
+
+    def _social_identities(self, customer: Customer) -> list[CustomerSocialIdentity]:
+        return self.social_identity_repository.list_of_customer(customer.id)
 
     def export_me(self, customer: Customer) -> CustomerDataExportResponse:
         """Tudo que a plataforma guarda sobre este cliente, num pacote so.
@@ -109,6 +120,10 @@ class CustomerService:
                 customer, limit=MAX_EXPORT_CASHBACK_ROWS, offset=0
             ),
             reviews=self._export_reviews(customer),
+            social_identities=[
+                CustomerSocialIdentityItem.model_validate(identidade)
+                for identidade in self._social_identities(customer)
+            ],
         )
 
     def _export_reviews(self, customer: Customer) -> list[CustomerReviewItem]:

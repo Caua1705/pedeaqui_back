@@ -177,6 +177,10 @@ def identidade_social(**sobrescritas) -> CustomerSocialIdentity:
         "customer_id": uuid.uuid4(),
         "provider": SOCIAL_PROVIDER_GOOGLE,
         "provider_user_id": "104829173829173829173",
+        # Escrito a mao porque instancia TRANSIENTE nao aplica `server_default`
+        # de coluna — ele so vale no INSERT (CLAUDE.md). Sem isto o dublê
+        # descreve uma linha com `created_at` nulo, que o banco nao produz.
+        "created_at": datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc),
         "last_login_at": None,
     }
     campos.update(sobrescritas)

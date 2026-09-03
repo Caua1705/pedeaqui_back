@@ -43,7 +43,11 @@ from src.schemas.auth_schema import (
     VerifyEmailCodeRequest,
 )
 from src.services import google_signin_tickets as tickets
-from src.services.auth_service import AuthService
+from src.services.auth_service import (
+    UNUSABLE_PASSWORD_PREFIX,
+    AuthService,
+    password_is_set,
+)
 from src.services.google_auth_service import GoogleAuthService
 from src.utils.security import decode_signed_token, hash_verification_code, utcnow
 from tests import fabricas
@@ -493,8 +497,13 @@ class TestOCadastroConcluido(unittest.TestCase):
 
         self._concluir()
         criado = self.servico.customer_repository.created
-        self.assertTrue(criado.password_hash.startswith("$2"))
+        # O prefixo `!` e o que permite PERGUNTAR se ha senha; o bcrypt de um
+        # segredo sorteado e o que a torna impossivel de acertar. As duas
+        # metades, e nenhuma sozinha.
+        self.assertTrue(criado.password_hash.startswith(UNUSABLE_PASSWORD_PREFIX))
+        self.assertIn("$2", criado.password_hash)
         self.assertFalse(verify_password("", criado.password_hash))
+        self.assertFalse(password_is_set(fabricas.cliente(password_hash=criado.password_hash)))
 
     def test_liga_a_identidade_pelo_sub(self) -> None:
         self._concluir()

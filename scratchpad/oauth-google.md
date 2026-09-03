@@ -378,3 +378,90 @@ dirigida — apagar a garantia e exigir que um teste caia:
 
 Nenhum mutante sobreviveu. Mais a mutação do `aud` no cliente do Google (1 de
 20), são **9 de 9**.
+
+---
+
+## 5. O que não pode quebrar — o que cada um precisa saber
+
+**A resposta curta para os quatro primeiros é a mesma, e é o motivo de o caso
+(b) existir: todos pendem de `customers.id`, e o `sub` NÃO substitui o
+`customer_id` em lugar nenhum.** Enquanto (a) e (b) preservarem o mesmo id, os
+quatro continuam intactos sem uma linha de mudança. Quem os quebraria seria o
+caso (b) resolvido como o (c) — e é isso que `TestOCasoB` e
+`test_o_historico_do_cliente_sobrevive_a_ligacao` (db) travam.
+
+| O quê | O que precisa saber da identidade social | Estado |
+|---|---|---|
+| **Cashback** | nada. `cashback_transactions.customer_id` — saldo por (cliente, restaurante). Caso (c) nasce com zero, que é certo | intacto |
+| **Cupom por segmento** | nada. O RFV sai de `orders` agregado por `customer_id` | intacto |
+| **Cupom de primeira compra** | nada — **e é o que sangra em silêncio se o (b) errar**: cliente antigo em conta nova volta a "nunca comprou" e ganha o desconto de novo. Ninguém reclama de um desconto que recebeu | intacto |
+| **Histórico** e **"repetir pedido"** | nada. `GET /customers/me/orders` e `/me/orders/{id}` filtram por `customer_id`; o "repetir" é do front, montado sobre `order_items.product_id` — **não há rota de repetição no backend** (conferido: nenhuma ocorrência em `src/`) | intacto |
+| **Exclusão de conta (LGPD)** | **precisava, e não sabia** | **consertado** |
+| **`CustomerAnonymizationService`** | **precisava, e não sabia** | **consertado** |
+
+### O que quebrou, e o conserto
+
+**1. A exclusão de conta não alcançava a tabela nova.** Achado pelo portão
+(`alcance_da_anonimizacao`), não por leitura. Dois estragos:
+
+- o ponteiro para o cadastro da pessoa **dentro do Google** sobrevivia à
+  anonimização — exatamente o que `_delete_saved_cards` já evita com o perfil
+  de pagamento;
+- quem excluísse a conta e voltasse pelo Google cairia no caso (a) e seria
+  logado numa conta `is_active=False`: **403 para sempre, sem como se
+  recadastrar pelo Google.**
+
+Conserto: `_delete_social_identities`, dentro da transação única. Três testes
+`db` — a linha some, o `sub` fica livre para uma conta nova, e a identidade do
+vizinho não é tocada.
+
+**2. A exportação da LGPD não mostrava o que a exclusão apaga.**
+`GET /customers/me/export` ganhou `social_identities[]` (provider, `sub`,
+`created_at`, `last_login_at`). O critério é o das avaliações: tabela que sai
+na exclusão e não aparece no acesso é metade só do mesmo direito. O `sub`
+entra — é identificador **da própria pessoa**, devolvido só a ela numa rota
+autenticada que não aceita id de terceiro.
+
+**3. Conta do Google não tem senha, e três telas dependem de senha.**
+`password_hash` é `NOT NULL`; a conta nasce com hash de um segredo sorteado.
+Isso fecha o login (bom) e fecha também **alterar senha** e **excluir a
+conta** — a segunda é caminho de LGPD.
+
+Conserto: `unusable_password_hash()` passou a levar o prefixo `!` (convenção do
+Django), e `GET /customers/me` ganhou **`password_set: bool`**. O prefixo faz
+duas coisas: permite *perguntar* se há senha, e recusa por conta própria
+(`!$2b$...` não começa com `$2`, cai no formato antigo e o `split` devolve `!`
+como algoritmo). Duas recusas independentes.
+
+O caminho para quem tem `password_set: false` **já existe inteiro e não é
+novo**: `POST /auth/forgot-password` → `verify-reset-code` → `reset-password`
+manda o código para o e-mail que o Google verificou. Está escrito nos
+docstrings de `DELETE /customers/me` e `PATCH /customers/me/password`.
+
+> **Pendência de produto, e é decisão sua.** Excluir a conta continua exigindo
+> senha, então quem entrou pelo Google precisa **definir uma antes**. Trocar
+> isso — aceitar um `id_token` fresco, ou o código do e-mail, como
+> reautenticação da exclusão — é decisão de produto que não está no enunciado,
+> e por isso não foi feita. O que foi feito é a tela conseguir avisar em vez de
+> responder "Senha incorreta" sem saída.
+
+`social_providers` **não** entrou em `GET /customers/me`, de propósito: exigiria
+consulta, e `get_me` é tradução pura do objeto que já chegou (é o que
+`test_colunas_em_desacordo.py` usa construindo o service com sessão nenhuma). A
+lista está na exportação, que já consulta tudo.
+
+### Portões, depois de tudo
+
+    alcance_da_anonimizacao   0 achados   (12 tabelas com customer_id, 14 declaradas)
+    espelhos_de_enum          0 achados   (23 colunas de enum)
+    escrita_e_transacao       0 achados
+    estado_entre_workers      0 achados   (CHAVES_DO_GOOGLE declarada)
+    filtros_por_exclusao      0 achados
+    dubles_de_dado            0 achados
+    dados_pessoais_em_chave   0 achados
+    testes_mudos              0 achados
+    divergencias_orm_schema   41          (inalterado — o model novo bate com o DDL)
+    leituras_de_coluna_nulavel 201        (era 182; os 19 novos conferidos um a um)
+    suíte rápida              2688 passed
+    suíte db                  690 passed
+    openapi.json              em dia

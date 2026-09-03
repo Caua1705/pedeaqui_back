@@ -311,7 +311,16 @@ jobs:
       - name: Leituras de coluna nulavel (aviso)
         if: always()
         continue-on-error: true
-        run: python scripts/leituras_de_coluna_nulavel.py --url "$TEST_DATABASE_URL" --limite 182
+        # 182 -> 201 em 04/09/2026, com o "entrar com Google". Os 19 pontos
+        # novos foram olhados um a um e nenhum e defeito — sao a colisao por
+        # NOME que o proprio script avisa: `identity.email` e `ticket.email`
+        # sao campos de dataclass (`str`, nunca nulo) e nao `customers.email`;
+        # `birth_date=payload.birth_date` vem do Pydantic; o `created_at` de
+        # `customer_social_identities` e NOT NULL; e o `password_hash` de
+        # `password_is_set` tem `if not customer.password_hash` uma linha
+        # acima. O que sobra e `customer.email` nas respostas do Google, que e
+        # o MESMO ponto que `customer_service.py` ja tinha na linha de base.
+        run: python scripts/leituras_de_coluna_nulavel.py --url "$TEST_DATABASE_URL" --limite 201
         env:
           TEST_DATABASE_URL: postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
 

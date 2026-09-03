@@ -109,20 +109,48 @@ def codes_retention_cutoff(now: datetime) -> datetime:
     return now - timedelta(minutes=max(janelas) + CODES_RETENTION_MARGIN_MINUTES)
 
 
-def unusable_password_hash() -> str:
-    """Hash de um segredo sorteado e jogado fora. Ninguem conhece esta senha.
+#: Marca de "esta conta nao tem senha". A convencao e a do Django, e o
+#: caractere e escolhido por nao aparecer em hash nenhum: bcrypt comeca com
+#: `$2`, e o formato antigo com `pbkdf2_sha256$`.
+UNUSABLE_PASSWORD_PREFIX = "!"
 
-    E o que `_anonymize_customer` ja usa, e o motivo e o mesmo: um valor
-    invalido qualquer tambem recusaria o login, mas este e o unico que nao
-    depende de como `verify_password` trata lixo — ele passa pelo bcrypt de
-    verdade e simplesmente nunca bate.
+
+def unusable_password_hash() -> str:
+    """Uma senha que nao existe, e que se RECONHECE como inexistente.
+
+    Duas coisas dentro de um valor so, e as duas sao necessarias:
+
+    1. **hash de um segredo sorteado e jogado fora** — o que `_anonymize_customer`
+       ja faz. Ninguem conhece essa senha, nem nos, e ela passa pelo bcrypt de
+       verdade: a recusa nao depende de como `verify_password` trata lixo;
+    2. **o prefixo `!`**, que e o que permite PERGUNTAR se ha senha. Sem ele,
+       um bcrypt aleatorio e indistinguivel de uma senha real, e a tela do app
+       so descobriria que nao ha senha oferecendo "alterar senha" e recebendo
+       "senha atual incorreta" — sem nada que a pessoa possa fazer a respeito.
+
+    O prefixo tambem fecha por conta propria: `!$2b$...` nao comeca com `$2`,
+    entao `verify_password` cai no formato antigo, o `split` devolve `!` como
+    algoritmo e a resposta e `False`. Sao duas recusas independentes.
 
     Quem nasce assim e a conta criada pelo "entrar com Google": `password_hash`
-    e NOT NULL e o Google nao manda senha. A conta nao abre por senha, e quem
-    quiser uma passa por `/auth/forgot-password`, que manda codigo para o
-    e-mail que o Google ja verificou.
+    e NOT NULL e o Google nao manda senha. Quem quiser uma senha passa por
+    `/auth/forgot-password`, que manda codigo para o e-mail que o Google ja
+    verificou.
     """
-    return hash_password(secrets.token_urlsafe(32))
+    return UNUSABLE_PASSWORD_PREFIX + hash_password(secrets.token_urlsafe(32))
+
+
+def password_is_set(customer: Customer) -> bool:
+    """Se esta conta tem uma senha que pode ser usada.
+
+    Falso so para quem entrou pelo Google e nunca definiu uma. E o que o app
+    precisa saber para oferecer "definir senha" em vez de "alterar senha" — e
+    para explicar por que a exclusao de conta, que exige a senha atual, ainda
+    nao esta disponivel para aquela conta.
+    """
+    if not customer.password_hash:
+        return False
+    return not customer.password_hash.startswith(UNUSABLE_PASSWORD_PREFIX)
 
 
 def issue_customer_token(customer: Customer) -> str:

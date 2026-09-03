@@ -145,6 +145,38 @@ class CurrentCustomerResponse(BaseResponse):
     birth_date: date
     email_verified: bool
     marketing_opt_in: bool
+    # SE HA SENHA UTILIZAVEL. Falso na conta criada pelo "entrar com Google"
+    # que nunca definiu uma.
+    #
+    # `false` muda DUAS telas: "alterar senha" vira "definir senha" (por
+    # `/auth/forgot-password`, que manda codigo para o e-mail que o Google ja
+    # verificou), e a EXCLUSAO DE CONTA — que exige a senha atual — precisa
+    # avisar que a senha tem que ser definida antes. Ver o docstring de
+    # `DELETE /customers/me`.
+    #
+    # A LISTA DE PROVEDORES LIGADOS NAO ESTA AQUI, e a ausencia e escolha:
+    # ela exige consulta, e `get_me` e traducao pura do objeto que ja chegou —
+    # e o que faz `GET /customers/me` nao ir ao banco uma segunda vez, e o que
+    # `tests/test_colunas_em_desacordo.py` usa ao construir o service com
+    # sessao nenhuma. Quem quiser a lista tem ela na exportacao da LGPD, que
+    # ja consulta tudo. `password_set` sai do proprio `customer`, sem consulta.
+    password_set: bool = True
+
+
+class CustomerSocialIdentityItem(BaseResponse):
+    """Uma conta de provedor ligada a esta pessoa, na exportacao de dados.
+
+    `provider_user_id` entra, e a decisao merece a linha: e o `sub` do Google,
+    um identificador estavel da pessoa DENTRO do provedor. Omiti-lo faria a
+    exportacao do Art. 18, II descrever um dado que a plataforma guarda e nao
+    mostra — e ele e da propria pessoa, devolvido so a ela, numa rota
+    autenticada que nao aceita id de terceiro.
+    """
+
+    provider: str
+    provider_user_id: str
+    created_at: datetime
+    last_login_at: datetime | None = None
 
 
 class UpdateCurrentCustomerRequest(BaseModel):
@@ -285,3 +317,8 @@ class CustomerDataExportResponse(BaseModel):
     # isto o direito de acesso ficaria incompleto justamente no campo de
     # texto livre, que e o que a exclusao de conta depois apaga.
     reviews: list[CustomerReviewItem]
+    # As contas de provedor ligadas. Entram pelo mesmo motivo das avaliacoes:
+    # sao linhas que a plataforma guarda sobre a pessoa, e que a exclusao de
+    # conta depois apaga (`_delete_social_identities`). Uma tabela que sai na
+    # exclusao e nao aparece no acesso e uma metade so do mesmo direito.
+    social_identities: list[CustomerSocialIdentityItem]

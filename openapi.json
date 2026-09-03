@@ -8139,6 +8139,11 @@
             "title": "Name",
             "type": "string"
           },
+          "password_set": {
+            "default": true,
+            "title": "Password Set",
+            "type": "boolean"
+          },
           "phone": {
             "title": "Phone",
             "type": "string"
@@ -8565,6 +8570,13 @@
             },
             "title": "Reviews",
             "type": "array"
+          },
+          "social_identities": {
+            "items": {
+              "$ref": "#/components/schemas/CustomerSocialIdentityItem"
+            },
+            "title": "Social Identities",
+            "type": "array"
           }
         },
         "required": [
@@ -8573,7 +8585,8 @@
           "addresses",
           "orders",
           "cashback",
-          "reviews"
+          "reviews",
+          "social_identities"
         ],
         "title": "CustomerDataExportResponse",
         "type": "object"
@@ -8774,6 +8787,43 @@
         ],
         "title": "CustomerSegment",
         "type": "string"
+      },
+      "CustomerSocialIdentityItem": {
+        "description": "Uma conta de provedor ligada a esta pessoa, na exportacao de dados.\n\n`provider_user_id` entra, e a decisao merece a linha: e o `sub` do Google,\num identificador estavel da pessoa DENTRO do provedor. Omiti-lo faria a\nexportacao do Art. 18, II descrever um dado que a plataforma guarda e nao\nmostra — e ele e da propria pessoa, devolvido so a ela, numa rota\nautenticada que nao aceita id de terceiro.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "last_login_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Login At"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "provider_user_id": {
+            "title": "Provider User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "provider_user_id",
+          "created_at"
+        ],
+        "title": "CustomerSocialIdentityItem",
+        "type": "object"
       },
       "DeleteCustomerAccountRequest": {
         "description": "A senha atual, e nada mais.\n\nCorpo em `DELETE` e incomum mas legal. A alternativa — senha na\nquerystring — a colocaria no log de todo proxy no caminho.",
@@ -19853,7 +19903,7 @@
     },
     "/customers/me": {
       "delete": {
-        "description": "Exclusao da conta (LGPD, Art. 18, VI). NAO TEM DESFAZER.\n\nE o par natural de `GET /me/export`, que fica logo acima: **vejo o que\nvoces tem** e **apaguem**.\n\nA conta e ANONIMIZADA, nao apagada — o pedido continua existindo para o\nrestaurante, sem nada da pessoa dentro. O e-mail e o telefone sao\nliberados para recadastro, e o token desta propria chamada morre junto.\nOs campos exatos estao em `CustomerAnonymizationService`.\n\n## O SALDO DE CASHBACK E PERDIDO. Avise antes de chamar esta rota.\n\nO recadastro nasce com **id novo** — e o que libera o e-mail e o telefone\ne justamente a saida deles da tabela. O cashback continua ligado ao id\nvelho, e nao ha caminho de volta: a pessoa volta como desconhecida.\n\n**Chame `GET /customers/me/cashback` na tela de confirmacao** e mostre o\n`balance` — que e o acumulado em TODOS os restaurantes, e e exatamente o\nque se perde aqui. A quebra de `by_restaurant[]` serve para nomear as\nlojas no aviso (\"R$ 40 no Junior da Picanha\"). Nao ha como esta rota\navisar: quando ela responde, a conta ja foi anonimizada, e nao ha\ndesfazer.\n\nDesde que o credito e o resgate existem, o aviso deixou de ser\nhipotetico: o saldo e dinheiro que a pessoa gastaria no proximo pedido.\n\nO saldo NAO vem no corpo da resposta, e nao e esquecimento: um numero\nentregue depois do fato nao evita a perda, e publicar um corpo aqui\ntrocaria o `204` por `200` — mudanca de contrato para um app que ja\nconsome esta rota.\n\nO corpo leva a senha atual: `DELETE` com corpo e incomum mas legal, e a\nalternativa a colocaria na querystring, ou seja, no log do proxy.",
+        "description": "Exclusao da conta (LGPD, Art. 18, VI). NAO TEM DESFAZER.\n\nE o par natural de `GET /me/export`, que fica logo acima: **vejo o que\nvoces tem** e **apaguem**.\n\nA conta e ANONIMIZADA, nao apagada — o pedido continua existindo para o\nrestaurante, sem nada da pessoa dentro. O e-mail e o telefone sao\nliberados para recadastro, e o token desta propria chamada morre junto.\nOs campos exatos estao em `CustomerAnonymizationService`.\n\n## O SALDO DE CASHBACK E PERDIDO. Avise antes de chamar esta rota.\n\nO recadastro nasce com **id novo** — e o que libera o e-mail e o telefone\ne justamente a saida deles da tabela. O cashback continua ligado ao id\nvelho, e nao ha caminho de volta: a pessoa volta como desconhecida.\n\n**Chame `GET /customers/me/cashback` na tela de confirmacao** e mostre o\n`balance` — que e o acumulado em TODOS os restaurantes, e e exatamente o\nque se perde aqui. A quebra de `by_restaurant[]` serve para nomear as\nlojas no aviso (\"R$ 40 no Junior da Picanha\"). Nao ha como esta rota\navisar: quando ela responde, a conta ja foi anonimizada, e nao ha\ndesfazer.\n\nDesde que o credito e o resgate existem, o aviso deixou de ser\nhipotetico: o saldo e dinheiro que a pessoa gastaria no proximo pedido.\n\nO saldo NAO vem no corpo da resposta, e nao e esquecimento: um numero\nentregue depois do fato nao evita a perda, e publicar um corpo aqui\ntrocaria o `204` por `200` — mudanca de contrato para um app que ja\nconsome esta rota.\n\nO corpo leva a senha atual: `DELETE` com corpo e incomum mas legal, e a\nalternativa a colocaria na querystring, ou seja, no log do proxy.\n\n## CONTA QUE ENTROU PELO GOOGLE E NUNCA DEFINIU SENHA\n\nEla nao tem senha para mandar aqui, e esta rota exige uma. **O caminho e\ndefinir a senha antes**, e ele ja existe inteiro:\n`POST /auth/forgot-password` manda um codigo para o e-mail que o Google\nverificou, `POST /auth/verify-reset-code` devolve o `reset_token` e\n`POST /auth/reset-password` grava a senha. Depois disso, esta rota\nfunciona como para qualquer conta.\n\n**A tela precisa avisar antes, e nao depois.** `GET /customers/me` traz\n`password_set`: com `false`, mostre \"defina uma senha para excluir a\nconta\" em vez de um campo de senha que so pode receber \"Senha incorreta\".\nSem esse aviso, a pessoa fica sem saida visivel num caminho de LGPD.",
         "operationId": "delete_me_customers_me_delete",
         "requestBody": {
           "content": {
@@ -20698,6 +20748,7 @@
     },
     "/customers/me/password": {
       "patch": {
+        "description": "Troca a senha, conferindo a atual.\n\n**Conta que entrou pelo Google e nunca definiu senha nao passa aqui**: nao\nha \"senha atual\" para conferir, e a resposta e sempre \"Senha atual\nincorreta\". Quem tem `password_set: false` em `GET /customers/me` deve ser\nmandado para `POST /auth/forgot-password`, que e o caminho de DEFINIR a\nprimeira senha — o codigo vai para o e-mail que o Google ja verificou.",
         "operationId": "change_password_customers_me_password_patch",
         "requestBody": {
           "content": {

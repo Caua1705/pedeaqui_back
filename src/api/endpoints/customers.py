@@ -120,6 +120,20 @@ def delete_me(
 
     O corpo leva a senha atual: `DELETE` com corpo e incomum mas legal, e a
     alternativa a colocaria na querystring, ou seja, no log do proxy.
+
+    ## CONTA QUE ENTROU PELO GOOGLE E NUNCA DEFINIU SENHA
+
+    Ela nao tem senha para mandar aqui, e esta rota exige uma. **O caminho e
+    definir a senha antes**, e ele ja existe inteiro:
+    `POST /auth/forgot-password` manda um codigo para o e-mail que o Google
+    verificou, `POST /auth/verify-reset-code` devolve o `reset_token` e
+    `POST /auth/reset-password` grava a senha. Depois disso, esta rota
+    funciona como para qualquer conta.
+
+    **A tela precisa avisar antes, e nao depois.** `GET /customers/me` traz
+    `password_set`: com `false`, mostre "defina uma senha para excluir a
+    conta" em vez de um campo de senha que so pode receber "Senha incorreta".
+    Sem esse aviso, a pessoa fica sem saida visivel num caminho de LGPD.
     """
     CustomerAnonymizationService(db).anonymize(current_customer, payload.password)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -204,6 +218,14 @@ def change_password(
     current_customer: Customer = Depends(get_current_customer),
     db: Session = Depends(get_db),
 ) -> MessageResponse:
+    """Troca a senha, conferindo a atual.
+
+    **Conta que entrou pelo Google e nunca definiu senha nao passa aqui**: nao
+    ha "senha atual" para conferir, e a resposta e sempre "Senha atual
+    incorreta". Quem tem `password_set: false` em `GET /customers/me` deve ser
+    mandado para `POST /auth/forgot-password`, que e o caminho de DEFINIR a
+    primeira senha — o codigo vai para o e-mail que o Google ja verificou.
+    """
     return CustomerService(db).change_password(current_customer, payload)
 
 

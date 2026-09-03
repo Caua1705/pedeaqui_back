@@ -6,7 +6,9 @@ from types import SimpleNamespace
 from fastapi import HTTPException
 
 from main import app
+from src.models.branch_model import Branch
 from src.services.restaurant_service import RestaurantService
+from tests import fabricas
 
 
 class FakeRestaurantRepository:
@@ -53,37 +55,43 @@ class FakeBranchRepository:
         return self.methods
 
 
-def make_branch(restaurant_id):
-    return SimpleNamespace(
+def make_branch(restaurant_id, **sobrescreve):
+    """Filial transiente — `Branch` de verdade, sem sessão e sem banco.
+
+    Model real e não `SimpleNamespace` porque é justamente aqui que a
+    diferença aparece: `_build_address` lê seis atributos, e um dublê de
+    atributos livres responderia qualquer nome que o teste escrevesse — o
+    teste ficaria verde descrevendo uma filial que a aplicação não produz.
+    Com o `Branch`, coluna que não passe vale `None` e nome errado é
+    `TypeError` na hora.
+    """
+    padrao = dict(
         id=uuid.uuid4(),
         restaurant_id=restaurant_id,
         name="LJ. Matriz",
+        slug="matriz",
         display_name="Manoel Dias Branco",
         email=None,
         phone="(85) 3025-3303",
         whatsapp="(85) 9 9754-6465",
-        address_street="Av. Manoel Dias Branco",
-        address_number="100",
-        address_neighborhood="Praia do Futuro",
-        address_city="Fortaleza",
-        address_state="CE",
-        address_zipcode=None,
-        address="Endereço legado",
-        neighborhood="Bairro legado",
+        # O conjunto VIVO: é o que `AdminBranchUpdate` grava, e o único que
+        # `_build_address` lê.
+        address="Av. Manoel Dias Branco",
+        neighborhood="Praia do Futuro",
         city="Fortaleza",
         state="CE",
         zipcode=None,
+        # `address_number` é a única das seis `address_*` que sobreviveu: não
+        # existe campo de número no painel, então ela não sobrescreve ninguém.
+        address_number="100",
     )
+    return Branch(**{**padrao, **sobrescreve})
 
 
 class RestaurantInfoServiceTests(unittest.TestCase):
     def setUp(self):
-        self.restaurant = SimpleNamespace(
-            id=uuid.uuid4(),
-            slug="restaurante-teste",
-            name="Restaurante Teste",
-            logo_path=None,
-            is_active=True,
+        self.restaurant = fabricas.restaurante(
+            slug="restaurante-teste", name="Restaurante Teste"
         )
         self.branch = make_branch(self.restaurant.id)
 
@@ -99,32 +107,18 @@ class RestaurantInfoServiceTests(unittest.TestCase):
 
     def test_builds_public_info_with_multiple_periods_and_payment_flows(self):
         hours = [
-            SimpleNamespace(
-                weekday=0,
-                opens_at=time(11, 0),
-                closes_at=time(14, 0),
-                is_closed=False,
-            ),
-            SimpleNamespace(
-                weekday=0,
-                opens_at=time(17, 30),
-                closes_at=time(22, 15),
-                is_closed=False,
-            ),
-            SimpleNamespace(
-                weekday=1, opens_at=None, closes_at=None, is_closed=True
-            ),
+            fabricas.horario(opens_at=time(11, 0), closes_at=time(14, 0)),
+            fabricas.horario(opens_at=time(17, 30), closes_at=time(22, 15)),
+            fabricas.horario(weekday=1, opens_at=None, closes_at=None, is_closed=True),
         ]
         methods = [
-            SimpleNamespace(
-                id=uuid.uuid4(), payment_flow="online", method_type="pix",
-                brand=None, label="PIX", icon_key="pix", enabled=True,
-                requires_gateway=True,
+            fabricas.forma_de_pagamento(
+                payment_flow="online", method_type="pix", label="PIX",
+                icon_key="pix", requires_gateway=True,
             ),
-            SimpleNamespace(
-                id=uuid.uuid4(), payment_flow="delivery", method_type="cash",
-                brand=None, label="Dinheiro", icon_key="cash", enabled=True,
-                requires_gateway=False,
+            fabricas.forma_de_pagamento(
+                payment_flow="delivery", method_type="cash", label="Dinheiro",
+                icon_key="cash",
             ),
         ]
         service = self.make_service(hours, methods)
@@ -158,6 +152,72 @@ class RestaurantInfoServiceTests(unittest.TestCase):
             service.get_detailed_public_info(self.restaurant.slug)
 
         self.assertEqual(raised.exception.status_code, 404)
+
+
+class BranchAddressTests(unittest.TestCase):
+    """O endereço público sai do conjunto VIVO, o que o painel grava.
+
+    As seis `branches.address_*` são resto do schema pré-Alembic e nada as
+    escreve — mas `_build_address` as LIA primeiro, e elas venciam. Numa
+    filial com elas preenchidas, o lojista corrigia o endereço no painel e o
+    app do cliente continuava mostrando o antigo, sem erro e sem log.
+    """
+
+    def setUp(self):
+        self.restaurant_id = uuid.uuid4()
+
+    def test_o_conjunto_morto_nao_sobrescreve_mais_o_que_o_painel_gravou(self):
+        filial = make_branch(
+            self.restaurant_id,
+            address="Av. Manoel Dias Branco",
+            neighborhood="Praia do Futuro",
+            city="Fortaleza",
+            state="CE",
+            zipcode="60182-015",
+            # O que o painel não alcança, e que antes vencia.
+            address_street="Rua Antiga",
+            address_neighborhood="Bairro Antigo",
+            address_city="Cidade Antiga",
+            address_state="XX",
+            address_zipcode="00000-000",
+        )
+
+        endereco = RestaurantService._build_address(filial)
+
+        self.assertEqual(endereco.street, "Av. Manoel Dias Branco")
+        self.assertEqual(endereco.neighborhood, "Praia do Futuro")
+        self.assertEqual(endereco.city, "Fortaleza")
+        self.assertEqual(endereco.state, "CE")
+        self.assertEqual(endereco.zipcode, "60182-015")
+        self.assertNotIn("Antig", endereco.full_address)
+
+    def test_o_numero_continua_saindo_de_address_number(self):
+        """A única das seis que sobrou, porque não tem par vivo.
+
+        Não existe `branches.number` nem campo de número em
+        `AdminBranchUpdate`: `address_number` não sobrescreve ninguém, e
+        largá-la apagaria o número da casa do endereço público.
+        """
+        filial = make_branch(self.restaurant_id, address_number="100")
+
+        endereco = RestaurantService._build_address(filial)
+
+        self.assertEqual(endereco.number, "100")
+        self.assertIn("Av. Manoel Dias Branco, 100", endereco.full_address)
+
+    def test_filial_sem_numero_monta_o_endereco_do_mesmo_jeito(self):
+        """Coluna não passada vale `None` no model transiente — e é o caso real:
+        nada no código escreve `address_number`, então a filial nova nasce sem.
+        """
+        filial = make_branch(self.restaurant_id, address_number=None, zipcode=None)
+
+        endereco = RestaurantService._build_address(filial)
+
+        self.assertIsNone(endereco.number)
+        self.assertEqual(
+            endereco.full_address,
+            "Av. Manoel Dias Branco - Praia do Futuro - Fortaleza - CE",
+        )
 
 
 class RestaurantInfoOpenAPIContractTests(unittest.TestCase):

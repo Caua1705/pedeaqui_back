@@ -206,10 +206,12 @@ def criar_grupo_de_opcoes(
     nome: str = "Grupo",
     is_required: bool = False,
     is_active: bool = True,
+    sort_order: int = 0,
 ) -> ProductOptionGroup:
     grupo = ProductOptionGroup(
         product_id=produto.id,
         name=nome,
+        sort_order=sort_order,
         min_select=1 if is_required else 0,
         max_select=1,
         is_required=is_required,
@@ -226,10 +228,12 @@ def criar_opcao(
     nome: str = "Opcao",
     is_active: bool = True,
     additional_price: Decimal = Decimal("0.00"),
+    sort_order: int = 0,
 ) -> ProductOption:
     opcao = ProductOption(
         option_group_id=grupo.id,
         name=nome,
+        sort_order=sort_order,
         additional_price=additional_price,
         is_active=is_active,
     )

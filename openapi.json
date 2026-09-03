@@ -207,6 +207,227 @@
         "title": "AddressInput",
         "type": "object"
       },
+      "AdminAssignOrdersRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "order_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Order Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "order_ids"
+        ],
+        "title": "AdminAssignOrdersRequest",
+        "type": "object"
+      },
+      "AdminAssignmentBatchResponse": {
+        "description": "Um item por `order_id` do corpo, NA MESMA ORDEM.\n\nPor item e nao tudo-ou-nada: um pedido de retirada no meio do lote nao\npode derrubar os outros quatro que o atendente selecionou. A escrita\ncontinua sendo uma so — os itens `ok` sao gravados juntos, e os outros\nnao sao gravados.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AdminAssignmentResultItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AdminAssignmentBatchResponse",
+        "type": "object"
+      },
+      "AdminAssignmentResponse": {
+        "properties": {
+          "assigned_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned At"
+          },
+          "courier_fee_snapshot": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Courier Fee Snapshot"
+          },
+          "courier_id": {
+            "format": "uuid",
+            "title": "Courier Id",
+            "type": "string"
+          },
+          "distance_km_snapshot": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distance Km Snapshot"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "order_id": {
+            "format": "uuid",
+            "title": "Order Id",
+            "type": "string"
+          },
+          "order_number": {
+            "title": "Order Number",
+            "type": "integer"
+          },
+          "order_status": {
+            "title": "Order Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "order_id",
+          "order_number",
+          "order_status",
+          "courier_id"
+        ],
+        "title": "AdminAssignmentResponse",
+        "type": "object"
+      },
+      "AdminAssignmentResultItem": {
+        "properties": {
+          "assignment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminAssignmentResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssignmentErrorCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "order_id": {
+            "format": "uuid",
+            "title": "Order Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_id",
+          "ok"
+        ],
+        "title": "AdminAssignmentResultItem",
+        "type": "object"
+      },
+      "AdminBranchCourierFeeResponse": {
+        "properties": {
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
+          "courier_fee_base": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Courier Fee Base"
+          },
+          "courier_fee_per_km": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Courier Fee Per Km"
+          }
+        },
+        "required": [
+          "branch_id"
+        ],
+        "title": "AdminBranchCourierFeeResponse",
+        "type": "object"
+      },
+      "AdminBranchCourierFeeUpdate": {
+        "description": "A taxa do entregador DESTA filial. Dois estados por campo:\n\n- campo ausente do corpo: nao mexe;\n- campo com valor, ou com `null` explicito: grava. `null` e \"sem taxa\"\n  (a atribuicao passa a congelar snapshot nulo), e nao \"volta a herdar\"\n  — aqui nao ha heranca, como nas cinco colunas do frete do cliente.",
+        "properties": {
+          "courier_fee_base": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Courier Fee Base"
+          },
+          "courier_fee_per_km": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Courier Fee Per Km"
+          }
+        },
+        "title": "AdminBranchCourierFeeUpdate",
+        "type": "object"
+      },
       "AdminBranchDeliveryPauseRequest": {
         "description": "Pausa a entrega desta filial por um tempo, e so por um tempo.\n\n`minutes` conta a partir de AGORA. `0` retoma a entrega na hora — e o\nbotao \"voltamos\" de quem parou por 60 minutos e resolveu em 20.\n\n**Por que a pausa tem prazo, se `accepts_delivery` ja existe.** Aquele\nresolve \"desligar sem apagar configuracao\"; o que ele nao resolve e o\n*temporariamente*. Uma chave manual precisa de alguem que lembre de\ndesliga-la, e o dia em que ela e usada — chuva as 19h, entregador que\nsumiu — e exatamente o dia em que ninguem lembra. A loja amanhece aberta\nsem aceitar entrega, e o unico sintoma e a ausencia de pedido, que nao\nacende alarme nenhum.\n\nO teto de 24h e o que impede esta rota de virar um segundo\n`accepts_delivery`: pausa de tres dias e a chave estrutural com passos a\nmais, e ai a distincao acima deixa de existir.\n\n`reason` e mostrado AO CLIENTE junto do horario de volta (\"Voltamos a\nentregar as 20:30\"). Sem prazo, o cliente fecha o app; com prazo, ele\nvolta.",
         "properties": {
@@ -1374,6 +1595,176 @@
         "title": "AdminCategoryUpdate",
         "type": "object"
       },
+      "AdminCourierAccessResponse": {
+        "description": "A UNICA vez que o link e o codigo existem fora do hash.\n\nNao ha rota que os devolva de novo, e isso e propriedade: uma rota \"me\nmostra de novo\" seria uma rota que entrega a credencial de outra pessoa.\nSegunda via e chamar esta rota outra vez, que gera OUTRO par e mata o\nanterior na mesma resposta.\n\n`link_token` e o segredo do link; o painel monta a URL do app do\nentregador com ele. `access_code` e o que o motoboy digita uma vez.",
+        "properties": {
+          "access_code": {
+            "title": "Access Code",
+            "type": "string"
+          },
+          "access_generated_at": {
+            "format": "date-time",
+            "title": "Access Generated At",
+            "type": "string"
+          },
+          "courier_id": {
+            "format": "uuid",
+            "title": "Courier Id",
+            "type": "string"
+          },
+          "link_token": {
+            "title": "Link Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "courier_id",
+          "link_token",
+          "access_code",
+          "access_generated_at"
+        ],
+        "title": "AdminCourierAccessResponse",
+        "type": "object"
+      },
+      "AdminCourierCreate": {
+        "additionalProperties": false,
+        "description": "Nome e telefone. Nada mais, de proposito: e o que o dono sabe do\nmotoboy, e cada campo a mais e um que ninguem preenche.\n\n`extra=\"forbid\"` porque o corpo NAO e lugar de escolher codigo de acesso:\no codigo e sorteado pelo servidor em `POST /admin/couriers/{id}/access`.",
+        "properties": {
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "phone": {
+            "maxLength": 30,
+            "minLength": 8,
+            "title": "Phone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "branch_id",
+          "name",
+          "phone"
+        ],
+        "title": "AdminCourierCreate",
+        "type": "object"
+      },
+      "AdminCourierResponse": {
+        "properties": {
+          "access_generated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Generated At"
+          },
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "has_access": {
+            "title": "Has Access",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "phone": {
+            "title": "Phone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "branch_id",
+          "name",
+          "phone",
+          "is_active",
+          "has_access"
+        ],
+        "title": "AdminCourierResponse",
+        "type": "object"
+      },
+      "AdminCourierUpdate": {
+        "additionalProperties": false,
+        "description": "PATCH parcial. `is_active = false` fecha as corridas abertas e tira o\nacesso na hora; `true` de volta NAO recria o acesso — o par gerado antes\ncontinua valendo, que e o que \"raramente trocado\" pede.",
+        "properties": {
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "maxLength": 30,
+                "minLength": 8,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
+          }
+        },
+        "title": "AdminCourierUpdate",
+        "type": "object"
+      },
       "AdminCustomerListItem": {
         "properties": {
           "average_ticket": {
@@ -1931,12 +2322,62 @@
         "title": "AdminOptionUpdate",
         "type": "object"
       },
+      "AdminOrderCourierResponse": {
+        "description": "Quem esta com o pedido. Os dois nulos = ninguem ainda, que e estado\nnormal do pedido e nao um 404.",
+        "properties": {
+          "assignment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminAssignmentResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "courier": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminCourierResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "AdminOrderCourierResponse",
+        "type": "object"
+      },
       "AdminOrderListItem": {
         "properties": {
           "branch_id": {
             "format": "uuid",
             "title": "Branch Id",
             "type": "string"
+          },
+          "courier_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Courier Id"
+          },
+          "courier_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Courier Name"
           },
           "created_at": {
             "anyOf": [
@@ -3749,6 +4190,17 @@
         },
         "title": "AdminUserUpdate",
         "type": "object"
+      },
+      "AssignmentErrorCode": {
+        "description": "Por que um pedido do lote NAO foi atribuido. Enum para a lista sair\nno /openapi.json (armadilha 16): o painel escreve a mensagem por codigo,\nnao pelo texto.",
+        "enum": [
+          "not_found",
+          "not_delivery",
+          "order_closed",
+          "other_branch"
+        ],
+        "title": "AssignmentErrorCode",
+        "type": "string"
       },
       "BannerResponse": {
         "properties": {
@@ -5766,6 +6218,10 @@
             "title": "Restaurant Id",
             "type": "string"
           },
+          "sort_order": {
+            "title": "Sort Order",
+            "type": "integer"
+          },
           "target_segment": {
             "anyOf": [
               {
@@ -5831,9 +6287,16 @@
             "type": "string"
           },
           "valid_until": {
-            "format": "date-time",
-            "title": "Valid Until",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
           },
           "visibility": {
             "$ref": "#/components/schemas/CouponVisibility"
@@ -5848,10 +6311,10 @@
           "discount_value",
           "min_order_value",
           "valid_from",
-          "valid_until",
           "first_order_only",
           "visibility",
-          "is_active"
+          "is_active",
+          "sort_order"
         ],
         "title": "CouponAdminResponse",
         "type": "object"
@@ -5990,6 +6453,12 @@
             "default": "0.00",
             "title": "Min Order Value"
           },
+          "sort_order": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Sort Order",
+            "type": "integer"
+          },
           "target_segment": {
             "anyOf": [
               {
@@ -6036,9 +6505,16 @@
             "type": "string"
           },
           "valid_until": {
-            "format": "date-time",
-            "title": "Valid Until",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
           },
           "visibility": {
             "$ref": "#/components/schemas/CouponVisibility",
@@ -6050,8 +6526,7 @@
           "title",
           "discount_type",
           "discount_value",
-          "valid_from",
-          "valid_until"
+          "valid_from"
         ],
         "title": "CouponCreate",
         "type": "object"
@@ -6410,6 +6885,18 @@
             ],
             "title": "Min Order Value"
           },
+          "sort_order": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sort Order"
+          },
           "target_segment": {
             "anyOf": [
               {
@@ -6504,6 +6991,427 @@
         ],
         "title": "CouponVisibility",
         "type": "string"
+      },
+      "CourierHistoryItem": {
+        "properties": {
+          "address_neighborhood": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address Neighborhood"
+          },
+          "courier_fee": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Courier Fee"
+          },
+          "delivered_at": {
+            "format": "date-time",
+            "title": "Delivered At",
+            "type": "string"
+          },
+          "distance_km": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distance Km"
+          },
+          "order_id": {
+            "format": "uuid",
+            "title": "Order Id",
+            "type": "string"
+          },
+          "order_number": {
+            "title": "Order Number",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "order_id",
+          "order_number",
+          "delivered_at"
+        ],
+        "title": "CourierHistoryItem",
+        "type": "object"
+      },
+      "CourierHistoryResponse": {
+        "description": "\"Quanto fiz\": as entregas concluidas no periodo e a soma das taxas.\n\n`deliveries_without_fee` conta as corridas cujo snapshot e nulo (a\nfilial nao tinha taxa na atribuicao). Elas entram em\n`deliveries_count` e NAO entram em `fee_total` — e o numero que o\nmotoboy leva ao dono para acertar a mao.",
+        "properties": {
+          "deliveries": {
+            "items": {
+              "$ref": "#/components/schemas/CourierHistoryItem"
+            },
+            "title": "Deliveries",
+            "type": "array"
+          },
+          "deliveries_count": {
+            "title": "Deliveries Count",
+            "type": "integer"
+          },
+          "deliveries_without_fee": {
+            "title": "Deliveries Without Fee",
+            "type": "integer"
+          },
+          "end_date": {
+            "format": "date",
+            "title": "End Date",
+            "type": "string"
+          },
+          "fee_total": {
+            "title": "Fee Total",
+            "type": "number"
+          },
+          "start_date": {
+            "format": "date",
+            "title": "Start Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start_date",
+          "end_date",
+          "deliveries_count",
+          "deliveries_without_fee",
+          "fee_total",
+          "deliveries"
+        ],
+        "title": "CourierHistoryResponse",
+        "type": "object"
+      },
+      "CourierMeResponse": {
+        "properties": {
+          "branch_name": {
+            "title": "Branch Name",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "branch_name"
+        ],
+        "title": "CourierMeResponse",
+        "type": "object"
+      },
+      "CourierOrderResponse": {
+        "description": "Um pedido nas maos do entregador — o que ele precisa para entregar.\n\nNAO e o `OrderDetailResponse`: aquele traz itens, valores de desconto e\no historico inteiro, e o motoboy nao precisa de nada disso. O que ele\nprecisa e endereco, telefone, e quanto receber na porta.\n\n`amount_to_collect` e o total SO quando o pedido e pago na entrega. Pago\nonline (ou pix ainda pendente) e zero: nao ha o que receber.",
+        "properties": {
+          "address_city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address City"
+          },
+          "address_complement": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address Complement"
+          },
+          "address_neighborhood": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address Neighborhood"
+          },
+          "address_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address Number"
+          },
+          "address_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address Reference"
+          },
+          "address_street": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address Street"
+          },
+          "amount_to_collect": {
+            "title": "Amount To Collect",
+            "type": "number"
+          },
+          "assigned_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned At"
+          },
+          "can_deliver": {
+            "title": "Can Deliver",
+            "type": "boolean"
+          },
+          "can_leave": {
+            "title": "Can Leave",
+            "type": "boolean"
+          },
+          "courier_fee": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Courier Fee"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "customer_name": {
+            "title": "Customer Name",
+            "type": "string"
+          },
+          "customer_phone": {
+            "title": "Customer Phone",
+            "type": "string"
+          },
+          "delivery_latitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Latitude"
+          },
+          "delivery_longitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Longitude"
+          },
+          "is_paid": {
+            "title": "Is Paid",
+            "type": "boolean"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "order_id": {
+            "format": "uuid",
+            "title": "Order Id",
+            "type": "string"
+          },
+          "order_number": {
+            "title": "Order Number",
+            "type": "integer"
+          },
+          "payment_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Method"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "number"
+          }
+        },
+        "required": [
+          "order_id",
+          "order_number",
+          "status",
+          "can_leave",
+          "can_deliver",
+          "customer_name",
+          "customer_phone",
+          "is_paid",
+          "amount_to_collect",
+          "total"
+        ],
+        "title": "CourierOrderResponse",
+        "type": "object"
+      },
+      "CourierOrdersStatusRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "order_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Order Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "order_ids"
+        ],
+        "title": "CourierOrdersStatusRequest",
+        "type": "object"
+      },
+      "CourierStatusBatchResponse": {
+        "description": "Um item por `order_id` do corpo, na mesma ordem. Os `ok` JA SAIRAM,\nmesmo que outro do lote tenha falhado.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CourierStatusResultItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "CourierStatusBatchResponse",
+        "type": "object"
+      },
+      "CourierStatusErrorCode": {
+        "description": "Por que um pedido do lote NAO mudou. Enum para a lista sair no\n/openapi.json (armadilha 16).",
+        "enum": [
+          "not_found",
+          "wrong_status"
+        ],
+        "title": "CourierStatusErrorCode",
+        "type": "string"
+      },
+      "CourierStatusResultItem": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CourierStatusErrorCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "order": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CourierOrderResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "order_id": {
+            "format": "uuid",
+            "title": "Order Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_id",
+          "ok"
+        ],
+        "title": "CourierStatusResultItem",
+        "type": "object"
       },
       "CreateCustomerAddressRequest": {
         "additionalProperties": false,
@@ -7280,9 +8188,16 @@
             "type": "string"
           },
           "valid_until": {
-            "format": "date-time",
-            "title": "Valid Until",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
           }
         },
         "required": [
@@ -7290,7 +8205,6 @@
           "title",
           "discount_type",
           "min_order_value",
-          "valid_until",
           "state",
           "discount_amount",
           "missing_amount"
@@ -12567,6 +13481,112 @@
         ]
       }
     },
+    "/admin/branches/{branch_id}/courier-fee": {
+      "get": {
+        "description": "Quanto esta filial paga ao entregador por corrida.\n\n`null` nos dois campos e \"sem taxa configurada\": a atribuicao congela\nsnapshot nulo e o historico do entregador mostra a corrida sem valor.\nNao e zero, de proposito.",
+        "operationId": "get_courier_fee_admin_branches__branch_id__courier_fee_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "branch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Branch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminBranchCourierFeeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Courier Fee",
+        "tags": [
+          "admin couriers"
+        ]
+      },
+      "patch": {
+        "description": "`base + km x por_km`, congelada em cada atribuicao a partir daqui.\n\nMotoboy pago por corrida: `courier_fee_base` preenchida e\n`courier_fee_per_km` em `0` (ou ausente). Campo ausente do corpo nao e\ntocado; `null` explicito apaga. **Nao mexe em nenhuma corrida ja\natribuida** — a taxa e congelada no momento da atribuicao.\n\nNenhum numero que o CLIENTE paga muda com isto.",
+        "operationId": "update_courier_fee_admin_branches__branch_id__courier_fee_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "branch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Branch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminBranchCourierFeeUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminBranchCourierFeeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Courier Fee",
+        "tags": [
+          "admin couriers"
+        ]
+      }
+    },
     "/admin/branches/{branch_id}/delivery-pause": {
       "patch": {
         "description": "Pausa a entrega desta filial por ate 24 horas — e so por um tempo.\n\n`{\"minutes\": 40, \"reason\": \"chuva forte\"}` pausa; `{\"minutes\": 0}`\nretoma na hora. Nao ha DELETE porque \"pare por 40 minutos\" e \"volte\nagora\" sao o mesmo botao na mesma tela.\n\n**Isto nao substitui `order-types`.** Aquele desliga a entrega por tempo\nindeterminado e espera alguem religar; este vence sozinho. A distincao\nimporta porque o dia em que a pausa e usada — chuva as 19h, entregador\nque sumiu — e exatamente o dia em que ninguem lembra de desfaze-la, e a\nloja amanheceria aberta sem aceitar entrega, com a ausencia de pedido\ncomo unico sintoma.\n\nO motivo sai para o CLIENTE junto do horario de volta (\"A entrega esta\npausada. Motivo: chuva forte. Voltamos a entregar as 20:30.\"): pausa sem\nprazo faz o cliente fechar o app, com prazo ele volta.",
@@ -13968,6 +14988,417 @@
         ]
       }
     },
+    "/admin/couriers": {
+      "get": {
+        "description": "Os entregadores do restaurante do token, inativos inclusive.\n\nExcluidos nao aparecem. `has_access` diz se ja existe um link+codigo\nvalendo — o par em si nunca sai desta rota.",
+        "operationId": "list_couriers_admin_couriers_get",
+        "parameters": [
+          {
+            "description": "Filtra por filial. Quem so tem acesso a uma filial ja vem filtrado.",
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filtra por filial. Quem so tem acesso a uma filial ja vem filtrado.",
+              "title": "Branch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AdminCourierResponse"
+                  },
+                  "title": "Response List Couriers Admin Couriers Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Couriers",
+        "tags": [
+          "admin couriers"
+        ]
+      },
+      "post": {
+        "description": "Nome e telefone, numa filial. Nasce ativo e SEM acesso: o link e o\ncodigo saem de `POST /admin/couriers/{id}/access`.\n\nO telefone e unico por filial (409). Quem serve duas lojas tem dois\ncadastros, um por filial.",
+        "operationId": "create_courier_admin_couriers_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminCourierCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCourierResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Courier",
+        "tags": [
+          "admin couriers"
+        ]
+      }
+    },
+    "/admin/couriers/{courier_id}": {
+      "delete": {
+        "description": "Exclui o entregador: some das listas, perde o acesso na hora, os\npedidos abertos voltam para a fila. O historico de corridas dele\ncontinua existindo — e o que o dono usa para pagar.\n\nO telefone fica livre para um cadastro novo.",
+        "operationId": "delete_courier_admin_couriers__courier_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "courier_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Courier Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Courier",
+        "tags": [
+          "admin couriers"
+        ]
+      },
+      "get": {
+        "operationId": "get_courier_admin_couriers__courier_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "courier_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Courier Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCourierResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Courier",
+        "tags": [
+          "admin couriers"
+        ]
+      },
+      "patch": {
+        "description": "PATCH parcial: nome, telefone, ativo/inativo.\n\n`is_active: false` tira o acesso na hora e **devolve os pedidos abertos\ndele para a fila** (as atribuicoes sao fechadas). `true` de volta nao\nreabre nada e nao recria o acesso: o par gerado antes continua valendo.",
+        "operationId": "update_courier_admin_couriers__courier_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "courier_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Courier Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminCourierUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCourierResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Courier",
+        "tags": [
+          "admin couriers"
+        ]
+      }
+    },
+    "/admin/couriers/{courier_id}/access": {
+      "post": {
+        "description": "Gera (ou REGENERA) o link e o codigo do entregador.\n\nA resposta e a unica vez que os dois existem em claro. O painel monta a\nURL do app do entregador com `link_token` e entrega o par ao motoboy;\nele digita o codigo uma vez e o app guarda.\n\nChamar de novo gera outro par, e **o anterior morre na hora** — nao ha\nsessao nem token derivado que sobreviva. E o botao de \"o motoboy saiu\".\nEntregador inativo responde 409.",
+        "operationId": "generate_courier_access_admin_couriers__courier_id__access_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "courier_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Courier Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCourierAccessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Generate Courier Access",
+        "tags": [
+          "admin couriers"
+        ]
+      }
+    },
+    "/admin/couriers/{courier_id}/assignments": {
+      "get": {
+        "description": "Os pedidos que estao nas maos deste entregador agora (atribuicoes\nabertas), do mais antigo ao mais novo. Historico e o do proprio\nentregador, pelo link dele.",
+        "operationId": "list_open_assignments_admin_couriers__courier_id__assignments_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "courier_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Courier Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AdminAssignmentResponse"
+                  },
+                  "title": "Response List Open Assignments Admin Couriers  Courier Id  Assignments Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Open Assignments",
+        "tags": [
+          "admin couriers"
+        ]
+      },
+      "post": {
+        "description": "Atribui um ou mais pedidos a este entregador.\n\n**A resposta e por item, na ordem do corpo.** Cada pedido diz `ok` ou o\n`error`: `not_found` (nao alcancado por este lojista), `not_delivery`\n(retirada), `order_closed` (ja terminou) ou `other_branch` (o motoboy e\nde outra filial). Os `ok` sao gravados juntos; os outros nao sao\ngravados. A rota so responde erro HTTP para o entregador em si (404 fora\ndo escopo, 409 inativo) ou para o corpo (422).\n\n**Reatribuir e chamar esta rota com outro entregador**: a atribuicao\nanterior e fechada e a nova aberta, com a taxa de agora. Atribuir ao\nmesmo de novo nao muda nada.\n\nA taxa do entregador e congelada aqui (`courier_fee_snapshot`), da\nconfiguracao da filial sobre a distancia que o pedido ja tinha. Nulo\nquando a filial nao tem taxa configurada.",
+        "operationId": "assign_orders_admin_couriers__courier_id__assignments_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "courier_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Courier Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminAssignOrdersRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAssignmentBatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Assign Orders",
+        "tags": [
+          "admin couriers"
+        ]
+      }
+    },
     "/admin/customers": {
       "get": {
         "description": "Clientes que ja pediram neste restaurante (BLOCO D1).\n\nAgrupado por telefone, do pedido mais recente para o mais antigo. Nao\ndevolve e-mail, CPF nem o id de cadastro: sao dados da conta global da\nplataforma, nao do relacionamento com esta loja.\n\n**Os cinco filtros valem antes do `LIMIT`**, e o `total` do envelope conta\no que sobrou depois deles. Filtrar a pagina ja paginada devolveria tres\nlinhas de cinquenta e um total que nao bate com o que a tela mostra.\n\nAs duas datas sao lidas no fuso da operacao (America/Fortaleza), como nos\nrelatorios, e `last_order_to` e INCLUSIVO — o dia inteiro entra.",
@@ -14873,6 +16304,95 @@
         "summary": "Cancel Order",
         "tags": [
           "admin orders"
+        ]
+      }
+    },
+    "/admin/orders/{order_id}/courier": {
+      "delete": {
+        "description": "Tira o pedido das maos de quem estiver com ele. 409 se ninguem\nestiver. A linha da atribuicao nao e apagada: fica fechada, com quem e\nquando, no historico.",
+        "operationId": "unassign_order_admin_orders__order_id__courier_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Unassign Order",
+        "tags": [
+          "admin couriers"
+        ]
+      },
+      "get": {
+        "description": "Quem esta com este pedido. Os dois campos nulos = ninguem ainda —\nestado normal do pedido, e nao 404. 404 e o pedido que este lojista nao\nalcanca.",
+        "operationId": "get_order_courier_admin_orders__order_id__courier_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOrderCourierResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Order Courier",
+        "tags": [
+          "admin couriers"
         ]
       }
     },
@@ -17208,6 +18728,406 @@
         ]
       }
     },
+    "/courier/{link_token}/history": {
+      "get": {
+        "description": "As entregas concluidas no periodo e a soma das taxas — \"quanto fiz\".\n\nAte 92 dias. Corrida sem taxa (a filial nao tinha taxa configurada na\natribuicao) conta como entrega e nao como zero: sai em\n`deliveries_without_fee`, que e o numero que o motoboy leva ao dono.",
+        "operationId": "get_history_courier__link_token__history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "link_token",
+            "required": true,
+            "schema": {
+              "title": "Link Token",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Primeiro dia (inclusive), no fuso da operacao. Sem datas: hoje.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Primeiro dia (inclusive), no fuso da operacao. Sem datas: hoje.",
+              "title": "Start Date"
+            }
+          },
+          {
+            "description": "Ultimo dia (inclusive). Ausente: o mesmo de start_date.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Ultimo dia (inclusive). Ausente: o mesmo de start_date.",
+              "title": "End Date"
+            }
+          },
+          {
+            "description": "O codigo de 6 digitos entregue junto com o link. Vai em toda requisicao.",
+            "in": "header",
+            "name": "X-Courier-Code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "O codigo de 6 digitos entregue junto com o link. Vai em toda requisicao.",
+              "title": "X-Courier-Code"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CourierHistoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Codigo de acesso ausente ou errado (cabecalho `X-Courier-Code`)"
+          },
+          "404": {
+            "description": "Link invalido: desconhecido, regenerado, inativo ou excluido"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get History",
+        "tags": [
+          "courier"
+        ]
+      }
+    },
+    "/courier/{link_token}/me": {
+      "get": {
+        "description": "Quem e o entregador deste link. E a rota que o app chama para conferir\no codigo digitado antes de guarda-lo: 200 e o par certo.",
+        "operationId": "get_me_courier__link_token__me_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "link_token",
+            "required": true,
+            "schema": {
+              "title": "Link Token",
+              "type": "string"
+            }
+          },
+          {
+            "description": "O codigo de 6 digitos entregue junto com o link. Vai em toda requisicao.",
+            "in": "header",
+            "name": "X-Courier-Code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "O codigo de 6 digitos entregue junto com o link. Vai em toda requisicao.",
+              "title": "X-Courier-Code"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CourierMeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Codigo de acesso ausente ou errado (cabecalho `X-Courier-Code`)"
+          },
+          "404": {
+            "description": "Link invalido: desconhecido, regenerado, inativo ou excluido"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Me",
+        "tags": [
+          "courier"
+        ]
+      }
+    },
+    "/courier/{link_token}/orders": {
+      "get": {
+        "description": "Os pedidos atribuidos a ele que ainda nao terminaram, do mais antigo\nao mais novo.\n\nCada um traz status, endereco, forma de pagamento, `is_paid`, e\n`amount_to_collect` — o que ha para receber na porta, que e o total so\nquando o pedido e pago na entrega. `can_leave` e `can_deliver` dizem o\nque o botao pode fazer: em preparo ainda nao sai.",
+        "operationId": "list_orders_courier__link_token__orders_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "link_token",
+            "required": true,
+            "schema": {
+              "title": "Link Token",
+              "type": "string"
+            }
+          },
+          {
+            "description": "O codigo de 6 digitos entregue junto com o link. Vai em toda requisicao.",
+            "in": "header",
+            "name": "X-Courier-Code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "O codigo de 6 digitos entregue junto com o link. Vai em toda requisicao.",
+              "title": "X-Courier-Code"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CourierOrderResponse"
+                  },
+                  "title": "Response List Orders Courier  Link Token  Orders Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Codigo de acesso ausente ou errado (cabecalho `X-Courier-Code`)"
+          },
+          "404": {
+            "description": "Link invalido: desconhecido, regenerado, inativo ou excluido"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Orders",
+        "tags": [
+          "courier"
+        ]
+      }
+    },
+    "/courier/{link_token}/orders/out-for-delivery": {
+      "post": {
+        "description": "\"Sai para entrega\", um ou varios de uma vez.\n\n**A resposta e por item, na ordem do corpo.** `not_found` e o pedido que\nnao esta com ele; `wrong_status` e o pedido que ainda nao esta pronto\n(ou ja saiu), com a frase em `message`. Os que deram `ok` JA SAIRAM,\nmesmo que outro do lote tenha falhado — nao ha como desfazer uma moto\nque ja esta na rua.\n\nO cliente ve a mudanca no acompanhamento do pedido; o painel recebe o\nevento no stream. Nenhuma notificacao e disparada alem disso.",
+        "operationId": "mark_out_for_delivery_courier__link_token__orders_out_for_delivery_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "link_token",
+            "required": true,
+            "schema": {
+              "title": "Link Token",
+              "type": "string"
+            }
+          },
+          {
+            "description": "O codigo de 6 digitos entregue junto com o link. Vai em toda requisicao.",
+            "in": "header",
+            "name": "X-Courier-Code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "O codigo de 6 digitos entregue junto com o link. Vai em toda requisicao.",
+              "title": "X-Courier-Code"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CourierOrdersStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CourierStatusBatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Codigo de acesso ausente ou errado (cabecalho `X-Courier-Code`)"
+          },
+          "404": {
+            "description": "Link invalido: desconhecido, regenerado, inativo ou excluido"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mark Out For Delivery",
+        "tags": [
+          "courier"
+        ]
+      }
+    },
+    "/courier/{link_token}/orders/{order_id}/delivered": {
+      "post": {
+        "description": "\"Entregue\". So a partir de `out_for_delivery` (409 antes disso).\n\nPedido que nao esta com ele — inclusive o que ja foi entregue — e 404:\nterminal saiu da lista dele. E a mesma escrita do painel, entao o\ncashback do cliente e creditado aqui, de graca.",
+        "operationId": "mark_delivered_courier__link_token__orders__order_id__delivered_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "link_token",
+            "required": true,
+            "schema": {
+              "title": "Link Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "O codigo de 6 digitos entregue junto com o link. Vai em toda requisicao.",
+            "in": "header",
+            "name": "X-Courier-Code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "O codigo de 6 digitos entregue junto com o link. Vai em toda requisicao.",
+              "title": "X-Courier-Code"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CourierOrderResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Codigo de acesso ausente ou errado (cabecalho `X-Courier-Code`)"
+          },
+          "404": {
+            "description": "Link invalido: desconhecido, regenerado, inativo ou excluido"
+          },
+          "409": {
+            "description": "O pedido ainda nao saiu para entrega"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mark Delivered",
+        "tags": [
+          "courier"
+        ]
+      }
+    },
     "/customers/me": {
       "delete": {
         "description": "Exclusao da conta (LGPD, Art. 18, VI). NAO TEM DESFAZER.\n\nE o par natural de `GET /me/export`, que fica logo acima: **vejo o que\nvoces tem** e **apaguem**.\n\nA conta e ANONIMIZADA, nao apagada — o pedido continua existindo para o\nrestaurante, sem nada da pessoa dentro. O e-mail e o telefone sao\nliberados para recadastro, e o token desta propria chamada morre junto.\nOs campos exatos estao em `CustomerAnonymizationService`.\n\n## O SALDO DE CASHBACK E PERDIDO. Avise antes de chamar esta rota.\n\nO recadastro nasce com **id novo** — e o que libera o e-mail e o telefone\ne justamente a saida deles da tabela. O cashback continua ligado ao id\nvelho, e nao ha caminho de volta: a pessoa volta como desconhecida.\n\n**Chame `GET /customers/me/cashback` na tela de confirmacao** e mostre o\n`balance` — que e o acumulado em TODOS os restaurantes, e e exatamente o\nque se perde aqui. A quebra de `by_restaurant[]` serve para nomear as\nlojas no aviso (\"R$ 40 no Junior da Picanha\"). Nao ha como esta rota\navisar: quando ela responde, a conta ja foi anonimizada, e nao ha\ndesfazer.\n\nDesde que o credito e o resgate existem, o aviso deixou de ser\nhipotetico: o saldo e dinheiro que a pessoa gastaria no proximo pedido.\n\nO saldo NAO vem no corpo da resposta, e nao e esquecimento: um numero\nentregue depois do fato nao evita a perda, e publicar um corpo aqui\ntrocaria o `204` por `200` — mudanca de contrato para um app que ja\nconsome esta rota.\n\nO corpo leva a senha atual: `DELETE` com corpo e incomum mas legal, e a\nalternativa a colocaria na querystring, ou seja, no log do proxy.",
@@ -17973,6 +19893,81 @@
           }
         ],
         "summary": "Get Order",
+        "tags": [
+          "customers"
+        ]
+      }
+    },
+    "/customers/me/orders/{order_id}/cancel": {
+      "post": {
+        "description": "O cliente logado desistindo do proprio pedido, de QUALQUER aparelho.\n\nE a contrapartida autenticada de\n`POST /{slug}/orders/track/{token}/cancel`, do mesmo jeito que a rota\nacima e a de `/orders/track/{token}`: aqui o vinculo sai de\n`orders.customer_id`, entao nao ha token nenhum para guardar nem para\nvazar. O `tracking_token` so vive no `localStorage` do aparelho que fez o\npedido — quem pediu pelo celular e abriu o app no computador nao alcancava\no proprio pedido.\n\n**A rota do token continua existindo**, e nao e redundancia: ela e a unica\nsaida do convidado, que nao tem conta para autenticar.\n\n**Ate onde ela vai: `pending` e `accepted`**, a mesma janela da outra\nporta. A partir de `preparing` o insumo ja saiu do estoque e quem decide\nquem come o prejuizo passa a ser o lojista — a rota responde **409** e o\napp manda o cliente falar com o restaurante.\n\n**O corpo e opcional**, e o motivo dentro dele tambem, pelo mesmo motivo\nda outra: exigir justificativa de quem desiste de um pedido que nem\ncomecou produz um campo preenchido com \"a\".\n\n## O que ela faz junto, e que o app nao precisa pedir\n\nE a MESMA escrita do cancelamento pelo painel, entao o cupom volta a ficar\ndisponivel, o cashback resgatado volta para o saldo e **o pagamento online\ne estornado**. O estorno acontece depois do commit e nao pode derrubar\nesta resposta: se o gateway estiver fora do ar, o cancelamento vale e uma\nvarredura devolve o dinheiro depois.\n\n**Sem `Idempotency-Key`**, e ela nao faz falta: o segundo clique chega com\no pedido ja em `cancelled` e leva 409 da maquina de estados.",
+        "operationId": "cancel_order_customers_me_orders__order_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CustomerCancelOrderRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Nao autenticado"
+          },
+          "404": {
+            "description": "Pedido nao encontrado, ou nao e deste cliente"
+          },
+          "409": {
+            "description": "O pedido ja saiu da janela em que o cliente cancela sozinho (a partir de `preparing`), ou ja e um estado final"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Cancel Order",
         "tags": [
           "customers"
         ]

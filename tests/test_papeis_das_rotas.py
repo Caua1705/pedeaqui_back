@@ -115,6 +115,28 @@ PAPEL_ESPERADO = {
     ("GET", "/admin/branches/{branch_id}/print-agent"): PESSOAS,
     ("GET", "/admin/branches/{branch_id}/printers"): GERENCIA,
     ("POST", "/admin/branches/{branch_id}/print-test"): PESSOAS,
+    # --- entregadores
+    #
+    # A taxa e o que a LOJA PAGA por corrida: ler e termo comercial (GERENCIA,
+    # como o cupom), escrever e dinheiro (SOMENTE_DONO). Nenhuma rota daqui
+    # aceita o agente de impressao.
+    ("GET", "/admin/branches/{branch_id}/courier-fee"): GERENCIA,
+    ("PATCH", "/admin/branches/{branch_id}/courier-fee"): SOMENTE_DONO,
+    # Ler a lista e do balcao: e o atendente quem atribui pedido a motoboy.
+    # Cadastrar, editar, excluir e gerar o codigo sao da gerencia, como o
+    # setor de impressao — o codigo e credencial, e credencial nao sai da
+    # senha que mais circula.
+    ("GET", "/admin/couriers"): PESSOAS,
+    ("POST", "/admin/couriers"): GERENCIA,
+    ("GET", "/admin/couriers/{courier_id}"): PESSOAS,
+    ("PATCH", "/admin/couriers/{courier_id}"): GERENCIA,
+    ("DELETE", "/admin/couriers/{courier_id}"): GERENCIA,
+    ("POST", "/admin/couriers/{courier_id}/access"): GERENCIA,
+    # Atribuir e desatribuir e trabalho do balcao, como mover o pedido.
+    ("POST", "/admin/couriers/{courier_id}/assignments"): PESSOAS,
+    ("GET", "/admin/couriers/{courier_id}/assignments"): PESSOAS,
+    ("GET", "/admin/orders/{order_id}/courier"): PESSOAS,
+    ("DELETE", "/admin/orders/{order_id}/courier"): PESSOAS,
     # --- clientes e relatorios: o que uma senha vazada nao pode alcancar
     ("GET", "/admin/customers"): GERENCIA,
     ("GET", "/admin/reports/commission"): SOMENTE_DONO,

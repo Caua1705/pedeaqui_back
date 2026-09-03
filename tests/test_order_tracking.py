@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from src.schemas.order_schema import CreateOrderRequest
 from src.services.order_service import OrderService
 from src.utils.security import generate_tracking_token, hash_tracking_token
+from tests import fabricas
 
 
 class FakeDb:
@@ -68,57 +69,25 @@ class LookupRepository:
 
 
 def build_create_service():
-    branch = SimpleNamespace(
-        id=uuid.uuid4(),
-        # As tres chaves da operacao sao da FILIAL desde a revisao
-        # 20260818_0025; os seis campos nulos sao "herda o padrao do
-        # restaurante", que e como toda filial nasce.
-        is_open=True,
-        accepts_delivery=True,
-        accepts_pickup=True,
-        delivery_paused_until=None,
-        delivery_pause_reason=None,
-        min_order_value=None,
-        service_fee_enabled=None,
-        service_fee_amount=None,
-        estimated_delivery_time_min=None,
-        estimated_delivery_time_max=None,
-        default_delivery_fee=None,
-        free_delivery_enabled=None,
-        free_delivery_min_order_value=None,
-    )
+    branch = fabricas.filial(is_open=True, accepts_delivery=True, accepts_pickup=True)
     product_id = uuid.uuid4()
-    product = SimpleNamespace(
-        id=product_id,
-        code="P1",
-        catalog_key=None,
-        name="Picanha",
-        description=None,
-        price=Decimal("50.00"),
-        option_groups=[],
-    )
+    product = fabricas.produto(id=product_id, code="P1")
 
     service = OrderService(FakeDb())
     service.restaurant_service = SimpleNamespace(
-        get_active_restaurant=lambda slug: SimpleNamespace(id=uuid.uuid4())
+        get_active_restaurant=lambda slug: fabricas.restaurante()
     )
     service.branch_repository = SimpleNamespace(
         get_active_by_id_and_restaurant=lambda branch_id, restaurant_id: branch,
         list_enabled_payment_methods=lambda branch_id: [
-            SimpleNamespace(method_type="cash", payment_flow="delivery"),
+            fabricas.forma_de_pagamento(method_type="cash", payment_flow="delivery"),
         ],
     )
     service.branch_hours_service = SimpleNamespace(ensure_branch_is_open=lambda branch_id: None)
     service.menu_repository = SimpleNamespace(
-        get_settings=lambda restaurant_id: SimpleNamespace(
-            min_order_value=Decimal("0"),
+        get_settings=lambda restaurant_id: fabricas.configuracoes(
             service_fee_enabled=False,
             service_fee_amount=Decimal("0"),
-            estimated_delivery_time_min=None,
-            estimated_delivery_time_max=None,
-            default_delivery_fee=None,
-            free_delivery_enabled=None,
-            free_delivery_min_order_value=None,
             platform_commission_percent=Decimal("10.00"),
         )
     )
@@ -188,12 +157,10 @@ class TokenGenerationTests(unittest.TestCase):
 class PublicLookupTests(unittest.TestCase):
     def test_order_is_found_by_its_token(self):
         restaurant_id = uuid.uuid4()
-        order = SimpleNamespace(
-            id=uuid.uuid4(),
-            tracking_token="token-do-pedido",
-            items=[],
-            status_history=[],
-        )
+        # SEM `tracking_token`: o model nao tem essa coluna desde a revisao
+        # 20260812_0017 — so `tracking_token_hash`. O dublê antigo a escrevia,
+        # e descrevia um pedido que a aplicacao nao produz.
+        order = fabricas.pedido(tracking_token_hash=hash_tracking_token("token-do-pedido"))
         repository = LookupRepository(orders_by_token={"token-do-pedido": order})
         service = build_lookup_service(repository, restaurant_id)
 
@@ -214,7 +181,7 @@ class PublicLookupTests(unittest.TestCase):
     def test_order_number_is_not_a_valid_key_anymore(self):
         # A defesa concreta contra a enumeracao: numero de pedido nao abre
         # mais nada.
-        order = SimpleNamespace(id=uuid.uuid4(), tracking_token="segredo", items=[], status_history=[])
+        order = fabricas.pedido(tracking_token_hash=hash_tracking_token("segredo"))
         service = build_lookup_service(LookupRepository(orders_by_token={"segredo": order}))
 
         with self.assertRaises(HTTPException):
@@ -232,9 +199,9 @@ class PublicLookupTests(unittest.TestCase):
 
 class AuthenticatedLookupTests(unittest.TestCase):
     def test_customer_reads_his_own_order_without_any_token(self):
-        customer = SimpleNamespace(id=uuid.uuid4())
-        order_id = uuid.uuid4()
-        order = SimpleNamespace(id=order_id, items=[], status_history=[])
+        customer = fabricas.cliente()
+        order = fabricas.pedido(customer_id=customer.id)
+        order_id = order.id
         repository = LookupRepository(orders_by_customer={(order_id, customer.id): order})
         service = build_lookup_service(repository)
 

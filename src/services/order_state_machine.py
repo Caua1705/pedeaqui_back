@@ -69,6 +69,19 @@ PREPARED_ORDER_STATUSES = ("preparing", "ready", "out_for_delivery")
 # o cliente desiste sem custo para ninguem.
 CUSTOMER_CANCELLABLE_STATUSES = ("pending", "accepted")
 
+# Ate onde o ENTREGADOR anda no grafo: de pronto para na rua, e de na rua
+# para entregue. Sao arestas que JA existem em ORDER_STATUS_TRANSITIONS —
+# esta tabela nao abre caminho nenhum, so diz quais dos existentes a porta
+# do entregador pode usar. Nem cancelar, nem voltar, nem aceitar.
+#
+# Dicionario e nao lista de pares porque a tela do motoboy pergunta "deste
+# estado, o que EU posso fazer?" (`can_leave`, `can_deliver`), e a resposta
+# e um destino so por estado.
+COURIER_TRANSITIONS: dict[str, str] = {
+    "ready": "out_for_delivery",
+    "out_for_delivery": "completed",
+}
+
 # Estados de pagamento que autorizam o pedido a entrar na cozinha.
 # `on_delivery` entra porque o dinheiro so existe no fim mesmo.
 #
@@ -205,6 +218,29 @@ def ensure_customer_can_cancel(current_status: str) -> None:
         detail=(
             f"Pedido em '{current_status}' nao pode mais ser cancelado por voce. "
             "Fale com o restaurante."
+        ),
+    )
+
+
+def ensure_courier_can_set(current_status: str, new_status: str) -> None:
+    """A regra da PORTA do entregador: so `ready -> out_for_delivery` e
+    `out_for_delivery -> completed`.
+
+    Mora aqui, e nao no service da porta, pelo mesmo motivo de
+    `ensure_customer_can_cancel`: e uma regra sobre o grafo, e o grafo e um
+    arquivo so. O writer continua sem saber quem chamou — ele so confere a
+    transicao geral; esta funcao roda ANTES, na porta.
+
+    A recusa cita o status atual para o app escrever a frase certa: "ainda
+    esta em preparo" e uma coisa, "ja saiu" e outra.
+    """
+    if COURIER_TRANSITIONS.get(current_status) == new_status:
+        return
+    raise HTTPException(
+        status_code=http_status.HTTP_409_CONFLICT,
+        detail=(
+            f"O entregador nao pode levar o pedido de '{current_status}' para "
+            f"'{new_status}'."
         ),
     )
 

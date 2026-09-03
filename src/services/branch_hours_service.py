@@ -31,6 +31,17 @@ BRANCH_TIMEZONE = ZoneInfo(PLATFORM_TIMEZONE)
 class BranchHoursService:
     def __init__(self, db: Session):
         self.branch_repository = BranchRepository(db)
+        # O RELOGIO, INJETAVEL — mesmo desenho de `CouponService.clock`.
+        #
+        # `find_current_period` sempre aceitou um `now`, mas
+        # `ensure_branch_is_open` nao tinha como passar um: ele lia o relogio
+        # da maquina. O sintoma nao e teorico. Um teste que declara a filial
+        # "aberta o dia inteiro" como 00:00-23:59 e `_period_covers_same_day`
+        # compara `current_time <= closes_at`: entre 23:59:01 e 23:59:59 a
+        # faixa nao cobre nada e a filial fica FECHADA. Um minuto por dia, num
+        # teste cujo comentario dizia, com todas as letras, existir "para nao
+        # depender da hora em que o teste roda".
+        self.clock = lambda: datetime.now(BRANCH_TIMEZONE)
 
     def find_current_period(
         self,
@@ -38,7 +49,7 @@ class BranchHoursService:
         now: datetime | None = None,
     ) -> BranchBusinessHour | None:
         """A faixa de funcionamento que contem o momento atual, ou None."""
-        moment = now or datetime.now(BRANCH_TIMEZONE)
+        moment = now or self.clock()
         current_time = moment.time()
 
         for period in self._open_periods(branch_id, moment.weekday()):
@@ -52,14 +63,23 @@ class BranchHoursService:
 
         return None
 
-    def ensure_branch_is_open(self, branch_id: uuid.UUID) -> BranchBusinessHour:
+    def ensure_branch_is_open(
+        self,
+        branch_id: uuid.UUID,
+        now: datetime | None = None,
+    ) -> BranchBusinessHour:
         """Bloqueia pedido fora do horario da filial.
 
         Vale para retirada tambem, e ai esta metade do motivo desta funcao
         existir: pedido de retirada nao passa pela estimativa de entrega,
         entao nunca chegava perto de uma checagem de horario.
+
+        `now` existe para quem JA tem um instante nas maos passa-lo adiante,
+        em vez de ler o relogio uma segunda vez: duas leituras na mesma
+        requisicao podem cair em lados diferentes da virada de faixa, e ai a
+        resposta conta uma historia que nunca foi verdade num unico momento.
         """
-        period = self.find_current_period(branch_id)
+        period = self.find_current_period(branch_id, now)
         if period is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

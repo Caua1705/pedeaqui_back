@@ -39,6 +39,7 @@ from src.integrations.payment_gateway import (
 from src.models.order_model import Order
 from src.services import payment_refund_service as modulo
 from src.services.commission import zero_commission_for_refund
+from tests import fabricas
 from src.services.payment_refund_service import (
     ACTION_CANCELLED,
     ACTION_FAILED,
@@ -124,9 +125,8 @@ def build_service(order):
 
 class _FakeCredentialService:
     def get_active_credential(self, restaurant_id):
-        from types import SimpleNamespace
 
-        return SimpleNamespace(access_token=f"token-de-{restaurant_id}")
+        return fabricas.credencial_de_pagamento(access_token=f"token-de-{restaurant_id}")
 
 
 def gateway(status, refunded=Decimal("0"), raw=None):

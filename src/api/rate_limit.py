@@ -80,6 +80,12 @@ REVIEW_ORDER_RATE_LIMIT = "10/minute;60/hour"
 # ja em `cancelled` e a maquina de estados responde 409.
 CANCEL_ORDER_RATE_LIMIT = "10/minute;60/hour"
 CREATE_ORDER_RATE_LIMIT = "10/minute;60/hour"
+# Rotas do ENTREGADOR (link + codigo de 6 digitos, sem login). O limite e a
+# barreira contra forca bruta de quem conseguiu o link: seis digitos sao um
+# milhao de combinacoes, e a 600 por hora por IP isso e mais de dois meses.
+# Folgado o bastante para a tela do motoboy, que recarrega a lista a cada
+# parada e marca varios pedidos numa noite.
+COURIER_RATE_LIMIT = "30/minute;600/hour"
 # Criar cobranca chama o gateway, que cobra por requisicao e tem limite
 # proprio. Um pouco mais folgado que criar pedido porque o cliente pode
 # legitimamente tentar de novo depois de um cartao recusado.

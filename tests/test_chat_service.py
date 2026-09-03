@@ -8,13 +8,13 @@ Duas coisas aqui merecem rede antes de qualquer refatoracao:
 1. **A validacao dos ids que o LLM devolve.** O modelo pode inventar produto —
    e a unica coisa entre a alucinacao dele e a tela do cliente e
    `_validate_selected_product_ids`.
-2. **O historico de sessao e um dicionario de MODULO** (`_SESSION_HISTORY`),
-   com TTL e teto de mensagens. Estado global entre requisicoes e o tipo de
-   coisa que uma refatoracao move de lugar sem querer — e a armadilha 20 ja
-   registra que ele nao sobrevive a mais de um worker.
+2. **O historico de sessao saiu daqui em 04/09/2026** e mora em
+   `src/ai/services/chat_history.py`, com backend trocavel. Os testes dele
+   ficaram neste arquivo de proposito: o que se mede e o CONTRATO que o
+   `ChatService` consome, e ele nao pode mudar quando o backend mudar.
 
-Todo teste daqui limpa `_SESSION_HISTORY` (fixture `sessao_limpa`): sem isso
-um teste enche o dicionario e o proximo mede o lixo do anterior.
+Todo teste daqui limpa o historico (fixture `sessao_limpa`): sem isso um teste
+enche a memoria e o proximo mede o lixo do anterior.
 """
 
 import uuid
@@ -28,17 +28,11 @@ from fastapi import HTTPException
 from src.models.branch_model import Branch
 from src.models.product_model import Product
 from src.services import chat_service as chat_module
-from src.services.chat_service import (
-    _MAX_SESSION_MESSAGES,
-    _SESSION_HISTORY,
-    _SESSION_TTL,
-    ChatService,
-    _cleanup_inactive_sessions,
-    _get_session_conversation,
-    _message_digest,
-    _store_session_turn,
-)
+from src.ai.services.chat_history import MAXIMO_DE_MENSAGENS, TTL, historico
+from src.services.chat_service import ChatService, _message_digest
 from src.services.menu_service import MenuService
+from src.ai.schemas.chat_response_schema import ChatLLMResponse
+from tests import fabricas
 
 
 AGORA = datetime(2026, 8, 11, 20, 41, tzinfo=timezone.utc)
@@ -51,9 +45,9 @@ BRANCH_ID = uuid.uuid4()
 
 @pytest.fixture(autouse=True)
 def sessao_limpa():
-    _SESSION_HISTORY.clear()
+    historico.esquecer_tudo()
     yield
-    _SESSION_HISTORY.clear()
+    historico.esquecer_tudo()
 
 
 class FakeDb:
@@ -120,7 +114,7 @@ def make_restaurant(name="Restaurante de Teste", assistant_notes=None):
     desde a revisao 20260823_0034 o prompt nao a le mais, e um fake que a
     trouxesse de graca deixaria passar um fallback acidental para ela.
     """
-    return SimpleNamespace(id=uuid.uuid4(), name=name, assistant_notes=assistant_notes)
+    return fabricas.restaurante(name=name, assistant_notes=assistant_notes)
 
 
 # Sentinela para distinguir "o teste nao falou de filial" (usa a padrao) de
@@ -270,7 +264,13 @@ class TestValidateSelectedProductIds:
 
 
 def make_llm_response(response_type="text", message="Oi!", selected_product_ids=()):
-    return SimpleNamespace(
+    """O tipo REAL da decisao do modelo.
+
+    `ChatLLMResponse` valida `selected_product_ids` como `list[UUID]`: um
+    dublê solto aceitaria string, e o teste passaria descrevendo uma resposta
+    que o modelo nunca produz.
+    """
+    return ChatLLMResponse(
         response_type=response_type,
         message=message,
         selected_product_ids=list(selected_product_ids),
@@ -599,7 +599,7 @@ class TestOEstadoDaLojaChegaAoModelo:
         monkeypatch.setattr(
             chat_module,
             "ChatLLMService",
-            lambda: SimpleNamespace(invoke=fake_invoke),
+            lambda: SimpleNamespace(invoke=fake_invoke, ultimo_uso=None),
         )
 
         service.chat(uuid.uuid4(), BRANCH_ID, "sessao-1", "quero carne")
@@ -647,7 +647,7 @@ class TestOContextoChegaAoModelo:
         monkeypatch.setattr(
             chat_module,
             "ChatLLMService",
-            lambda: SimpleNamespace(invoke=fake_invoke),
+            lambda: SimpleNamespace(invoke=fake_invoke, ultimo_uso=None),
         )
 
         service.chat(uuid.uuid4(), BRANCH_ID, "sessao-1", "quero carne")
@@ -682,7 +682,9 @@ class TestOContextoChegaAoModelo:
         monkeypatch.setattr(
             chat_module,
             "ChatLLMService",
-            lambda: SimpleNamespace(invoke=lambda **kwargs: make_llm_response("text", "oi")),
+            lambda: SimpleNamespace(
+                invoke=lambda **kwargs: make_llm_response("text", "oi"), ultimo_uso=None
+            ),
         )
 
         service.chat(uuid.uuid4(), BRANCH_ID, "sessao-1", "quanto custa a picanha?")
@@ -692,66 +694,71 @@ class TestOContextoChegaAoModelo:
 
 
 # ---------------------------------------------------------------------------
-# O historico de sessao — dicionario de modulo
+# O historico de sessao — o CONTRATO, nao o backend
 # ---------------------------------------------------------------------------
 
 
 class TestSessionConversation:
     def test_an_unknown_session_starts_empty(self):
-        assert _get_session_conversation("nunca-vista") == []
+        assert historico.ler("nunca-vista", AGORA) == []
 
     def test_a_turn_stores_the_user_and_the_assistant(self):
-        _store_session_turn("s1", "quero pizza", "temos calabresa", AGORA)
+        historico.gravar("s1", "quero pizza", "temos calabresa", AGORA)
 
-        assert _get_session_conversation("s1") == [
+        assert historico.ler("s1", AGORA) == [
             {"role": "user", "content": "quero pizza"},
             {"role": "assistant", "content": "temos calabresa"},
         ]
 
     def test_the_history_is_capped_at_twenty_messages(self):
-        """Teto de `_MAX_SESSION_MESSAGES`. Sem ele, uma conversa longa cresce
-        sem limite dentro do processo — e o prompt do LLM junto."""
+        """Teto de `MAXIMO_DE_MENSAGENS`. Sem ele, uma conversa longa cresce
+        sem limite — e o prompt do LLM junto, em TODA mensagem seguinte."""
         for turno in range(30):
-            _store_session_turn("s1", f"pergunta {turno}", f"resposta {turno}", AGORA)
+            historico.gravar("s1", f"pergunta {turno}", f"resposta {turno}", AGORA)
 
-        conversa = _get_session_conversation("s1")
+        conversa = historico.ler("s1", AGORA)
 
-        assert len(conversa) == _MAX_SESSION_MESSAGES
+        assert len(conversa) == MAXIMO_DE_MENSAGENS
         # O teto corta pelo COMECO: o que sobra e o fim da conversa.
         assert conversa[-1] == {"role": "assistant", "content": "resposta 29"}
 
-    def test_the_last_interaction_moves_forward_on_every_turn(self):
-        _store_session_turn("s1", "a", "b", AGORA)
-        depois = AGORA + timedelta(minutes=30)
-        _store_session_turn("s1", "c", "d", depois)
+    def test_a_turn_novo_renova_o_prazo_da_sessao(self):
+        """Afirmado pelo COMPORTAMENTO, e nao pelo `last_interaction`.
 
-        assert _SESSION_HISTORY["s1"]["last_interaction"] == depois
+        O teste antigo lia `_SESSION_HISTORY[...]["last_interaction"]` — um
+        detalhe do backend de memoria, que o backend de Redis nao tem. O que
+        importa e a consequencia: conversar de novo mantem a sessao viva.
+        """
+        historico.gravar("s1", "a", "b", AGORA)
+        meia_hora_depois = AGORA + timedelta(minutes=30)
+        historico.gravar("s1", "c", "d", meia_hora_depois)
+
+        # Uma hora depois do PRIMEIRO turno a sessao teria vencido; do segundo,
+        # nao. Ela sobrevive, entao o prazo andou.
+        assert historico.ler("s1", AGORA + TTL + timedelta(seconds=1)) != []
 
 
 class TestSessionCleanup:
     def test_a_session_older_than_the_ttl_is_removed(self):
-        _store_session_turn("velha", "a", "b", AGORA)
+        historico.gravar("velha", "a", "b", AGORA)
 
-        _cleanup_inactive_sessions(AGORA + _SESSION_TTL + timedelta(seconds=1))
-
-        assert "velha" not in _SESSION_HISTORY
+        assert historico.ler("velha", AGORA + TTL + timedelta(seconds=1)) == []
 
     def test_a_session_exactly_at_the_ttl_survives(self):
         """A comparacao e `>`, nao `>=`. Registrado porque e a fronteira que
         uma reescrita troca sem perceber."""
-        _store_session_turn("no-limite", "a", "b", AGORA)
+        historico.gravar("no-limite", "a", "b", AGORA)
 
-        _cleanup_inactive_sessions(AGORA + _SESSION_TTL)
-
-        assert "no-limite" in _SESSION_HISTORY
+        assert historico.ler("no-limite", AGORA + TTL) != []
 
     def test_only_the_expired_ones_go(self):
-        _store_session_turn("velha", "a", "b", AGORA)
-        _store_session_turn("nova", "a", "b", AGORA + timedelta(minutes=59))
+        historico.gravar("velha", "a", "b", AGORA)
+        historico.gravar("nova", "a", "b", AGORA + timedelta(minutes=59))
 
-        _cleanup_inactive_sessions(AGORA + _SESSION_TTL + timedelta(seconds=1))
+        vencido = AGORA + TTL + timedelta(seconds=1)
 
-        assert list(_SESSION_HISTORY) == ["nova"]
+        assert historico.ler("velha", vencido) == []
+        assert historico.ler("nova", vencido) != []
 
 
 class TestMessageDigest:
@@ -861,7 +868,8 @@ class TestChatPipeline:
             chat_module,
             "ChatLLMService",
             lambda: SimpleNamespace(
-                invoke=lambda **kwargs: make_llm_response("products", "temos esta", [produto.id])
+                invoke=lambda **kwargs: make_llm_response("products", "temos esta", [produto.id]),
+                ultimo_uso=None,
             ),
         )
 
@@ -869,7 +877,7 @@ class TestChatPipeline:
 
         assert response.response_type == "products"
         assert [p.name for p in response.products] == ["Pizza Calabresa"]
-        assert _get_session_conversation("sessao-1") == [
+        assert historico.ler("sessao-1", AGORA) == [
             {"role": "user", "content": "quero pizza"},
             {"role": "assistant", "content": "temos esta"},
         ]
@@ -900,7 +908,7 @@ class TestChatPipeline:
         with pytest.raises(RuntimeError):
             service.chat(uuid.uuid4(), BRANCH_ID, "sessao-1", "quero pizza")
 
-        assert _get_session_conversation("sessao-1") == []
+        assert historico.ler("sessao-1", AGORA) == []
 
 
 # ---------------------------------------------------------------------------

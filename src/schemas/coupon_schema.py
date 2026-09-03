@@ -137,7 +137,19 @@ class CouponCampaignFields(BaseModel):
     max_discount_amount: Decimal | None = Field(default=None, ge=0)
     min_order_value: Decimal = Field(default=Decimal("0.00"), ge=0)
     valid_from: datetime
-    valid_until: datetime
+    # NULO = A CAMPANHA NAO EXPIRA. Nao e campo em branco nem dado faltando:
+    # e "10% no canal proprio, sem prazo", e o precedente esta duas dezenas de
+    # linhas acima — `code` nulo significa "aplica sozinho" desde a revisao
+    # `20260828_0043`.
+    #
+    # Do lado do PATCH isso ja funciona sem nada a mais: `update_admin` usa
+    # `exclude_unset=True`, entao `{"valid_until": null}` TIRA o prazo e um
+    # PATCH que nao mande o campo preserva o que esta gravado. Mesma mecanica
+    # do `code`.
+    #
+    # Quem le a janela e `src/services/coupon_window.py`, nunca este campo
+    # direto.
+    valid_until: datetime | None = None
     total_usage_limit: int | None = Field(default=None, ge=1)
     usage_limit_per_customer: int | None = Field(default=None, ge=1)
     cooldown_days: int | None = Field(default=None, ge=1)
@@ -145,6 +157,15 @@ class CouponCampaignFields(BaseModel):
     visibility: CouponVisibility = CouponVisibility.PUBLIC
     target_segment: CustomerSegment | None = None
     is_active: bool = True
+    # A posicao na vitrine. As duas consultas publicas ja ordenavam por ela
+    # desde sempre; o painel e que nao tinha como escrever o valor, entao todo
+    # cupom ficava no `DEFAULT 0` da coluna e a ordem saia do desempate.
+    #
+    # `ge=0` e nao positivo: zero e a posicao normal de quem nunca foi
+    # arrastado, e recusa-lo tornaria invalido o valor que TODO cupom de hoje
+    # ja tem gravado — um PATCH de `is_active` passaria a dar 422 por causa de
+    # um campo que o lojista nem tocou (o merge valida o cupom inteiro).
+    sort_order: int = Field(default=0, ge=0)
 
     @field_validator("code")
     @classmethod
@@ -174,7 +195,9 @@ class CouponCampaignFields(BaseModel):
 
     @model_validator(mode="after")
     def validate_campaign(self):
-        if self.valid_until <= self.valid_from:
+        # `valid_until` nulo nao tem ordem a respeitar: campanha sem fim nao
+        # pode terminar antes de comecar.
+        if self.valid_until is not None and self.valid_until <= self.valid_from:
             raise ValueError("valid_until deve ser posterior a valid_from")
         if self.discount_type in {"fixed", "percent"} and self.discount_value <= 0:
             raise ValueError("discount_value deve ser maior que zero")
@@ -223,6 +246,7 @@ class CouponUpdate(BaseModel):
     visibility: CouponVisibility | None = None
     target_segment: CustomerSegment | None = None
     is_active: bool | None = None
+    sort_order: int | None = Field(default=None, ge=0)
 
     @field_validator("code")
     @classmethod
@@ -269,7 +293,9 @@ class CouponAdminResponse(BaseResponse):
     max_discount_amount: Decimal | None = None
     min_order_value: Decimal
     valid_from: datetime
-    valid_until: datetime
+    # Nulo = campanha sem prazo. O painel precisa saber distinguir isso de
+    # "campo nao preenchido": o card diz "sem prazo" em vez de data vazia.
+    valid_until: datetime | None = None
     total_usage_limit: int | None = None
     usage_limit_per_customer: int | None = None
     cooldown_days: int | None = None
@@ -277,6 +303,10 @@ class CouponAdminResponse(BaseResponse):
     visibility: CouponVisibility
     target_segment: CustomerSegment | None = None
     is_active: bool
+    # Sem devolver a posicao atual, o painel nao tem como desenhar a lista na
+    # ordem que ele acabou de gravar — teria que reordenar por conta e as duas
+    # telas voltariam a discordar.
+    sort_order: int
     total_usage_count: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -323,7 +353,10 @@ class CustomerCouponResponse(BaseModel):
     image_url: str | None = None
     discount_type: DiscountType
     min_order_value: Decimal
-    valid_until: datetime
+    # Nulo = campanha sem prazo, e o app escreve "sem prazo" em vez de esconder
+    # o card. Antes deste `| None`, um cupom permanente derrubava a LISTA
+    # inteira do cliente na serializacao, e nao so o proprio card.
+    valid_until: datetime | None = None
 
     # Nulo em cupom publico. Ver `CustomerCouponLabel`.
     label: CustomerCouponLabel | None = None

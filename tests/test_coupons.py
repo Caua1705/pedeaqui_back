@@ -23,8 +23,11 @@ from src.models.order_model import Order
 from src.schemas.coupon_schema import CouponCampaignFields, CouponPreviewRequest
 from src.schemas.order_schema import CreateOrderRequest
 from src.services.admin_order_service import AdminOrderService
+from src.services.coupon_window import dentro_da_janela
 from src.services.coupon_service import CouponService, CustomerAudience
 from src.services.order_service import OrderService
+from src.models.coupon_redemption_model import CouponRedemption
+from tests import fabricas
 
 
 NOW = datetime(2026, 7, 22, 12, tzinfo=timezone.utc)
@@ -126,29 +129,39 @@ class FakeCouponRepository:
     def customer_has_valid_order(self, customer_id, restaurant_id):
         return self.has_order
 
-    def get_by_id_and_restaurant(self, coupon_id, restaurant_id, for_update=False):
-        if self.coupon.id == coupon_id and self.coupon.restaurant_id == restaurant_id:
-            return self.coupon
-        return None
+    # `agora` NAO e enfeite de assinatura: quando ele vem, o SQL de verdade
+    # recorta pela janela de validade, e um dublê que o ignorasse devolveria
+    # cupom vencido para o checkout — deixando verde justamente o caminho que
+    # `_find_coupon` passou a fechar.
+    def get_by_id_and_restaurant(self, coupon_id, restaurant_id, for_update=False, agora=None):
+        if self.coupon.id != coupon_id or self.coupon.restaurant_id != restaurant_id:
+            return None
+        return self._recortado_pela_janela(agora)
 
-    def get_by_code_and_restaurant(self, code, restaurant_id, for_update=False):
+    def get_by_code_and_restaurant(self, code, restaurant_id, for_update=False, agora=None):
         if self.coupon.code is None:
             return None
-        if self.coupon.code.lower() == code.lower() and self.coupon.restaurant_id == restaurant_id:
-            return self.coupon
-        return None
+        if self.coupon.code.lower() != code.lower() or self.coupon.restaurant_id != restaurant_id:
+            return None
+        return self._recortado_pela_janela(agora)
 
-    def lock_coupon(self, restaurant_id, coupon_id=None, coupon_code=None):
+    def _recortado_pela_janela(self, agora):
+        if agora is None:
+            return self.coupon
+        dentro = dentro_da_janela(self.coupon.valid_from, self.coupon.valid_until, agora)
+        return self.coupon if dentro else None
+
+    def lock_coupon(self, restaurant_id, coupon_id=None, coupon_code=None, agora=None):
         self.lock_calls += 1
         if coupon_id is not None:
-            return self.get_by_id_and_restaurant(coupon_id, restaurant_id)
-        return self.get_by_code_and_restaurant(coupon_code, restaurant_id)
+            return self.get_by_id_and_restaurant(coupon_id, restaurant_id, agora=agora)
+        return self.get_by_code_and_restaurant(coupon_code, restaurant_id, agora=agora)
 
     def get_redemption_by_order_id(self, order_id):
         return next((item for item in self.redemptions if item.order_id == order_id), None)
 
     def create_redemption(self, **values):
-        redemption = SimpleNamespace(**values, status="applied", reversed_at=None)
+        redemption = CouponRedemption(**values, status="applied", reversed_at=None)
         self.redemptions.append(redemption)
         return redemption
 
@@ -237,13 +250,17 @@ class CouponServiceTests(unittest.TestCase):
         self.assertEqual(result.reason, "login_required")
 
     def test_code_lookup_is_case_insensitive(self):
-        found = self.service._find_coupon(
+        found, dentro_da_janela = self.service._find_coupon(
             self.coupon.restaurant_id,
             coupon_id=None,
             coupon_code="promo10",
             for_update=False,
+            agora=NOW,
         )
         self.assertIs(found, self.coupon)
+        # A segunda metade do retorno e o que separa "nao existe" de "existe e
+        # venceu". Aqui o cupom esta dentro da janela, e o `True` diz isso.
+        self.assertTrue(dentro_da_janela)
 
     def test_only_one_coupon_selector_is_accepted(self):
         with self.assertRaises(ValidationError):
@@ -259,7 +276,8 @@ class CouponServiceTests(unittest.TestCase):
         self.assertEqual(self.evaluate(restaurant_id=uuid.uuid4()).reason, "coupon_from_another_restaurant")
         with self.assertRaises(HTTPException):
             self.service._find_coupon(
-                uuid.uuid4(), coupon_id=self.coupon.id, coupon_code=None, for_update=False
+                uuid.uuid4(), coupon_id=self.coupon.id, coupon_code=None,
+                for_update=False, agora=NOW,
             )
 
     def test_preview_never_creates_redemption(self):
@@ -606,11 +624,13 @@ class FakeOrderCouponService:
         return self.coupon, Decimal("10.00")
 
     def create_redemption(self, coupon, customer, order_id, discount):
-        self.redemption = SimpleNamespace(
+        self.redemption = CouponRedemption(
+            id=uuid.uuid4(),
             coupon_id=coupon.id,
             customer_id=customer.id,
             order_id=order_id,
             discount_amount=discount,
+            idempotency_key=f"order:{order_id}",
             status="applied",
         )
         self.db.events.append("redemption")
@@ -620,38 +640,12 @@ class FakeOrderCouponService:
 class OrderCouponIntegrationTests(unittest.TestCase):
     def test_order_recalculates_total_saves_snapshot_and_redemption(self):
         db = FakeDb()
-        restaurant = SimpleNamespace(id=uuid.uuid4())
-        branch = SimpleNamespace(
-        id=uuid.uuid4(),
-        # As tres chaves da operacao sao da FILIAL desde a revisao
-        # 20260818_0025; os seis campos nulos sao "herda o padrao do
-        # restaurante", que e como toda filial nasce.
-        is_open=True,
-        accepts_delivery=True,
-        accepts_pickup=True,
-        delivery_paused_until=None,
-        delivery_pause_reason=None,
-        min_order_value=None,
-        service_fee_enabled=None,
-        service_fee_amount=None,
-        estimated_delivery_time_min=None,
-        estimated_delivery_time_max=None,
-        default_delivery_fee=None,
-        free_delivery_enabled=None,
-        free_delivery_min_order_value=None,
-    )
+        restaurant = fabricas.restaurante()
+        branch = fabricas.filial(is_open=True, accepts_delivery=True, accepts_pickup=True)
         product_id = uuid.uuid4()
-        product = SimpleNamespace(
-            id=product_id,
-            code="P1",
-        catalog_key=None,
-            name="Produto",
-            description=None,
-            price=Decimal("25.00"),
-            option_groups=[],
-        )
+        product = fabricas.produto(id=product_id, code="P1", name="Produto", price=Decimal("25.00"))
         coupon = make_coupon(restaurant_id=restaurant.id, code="SAVE10")
-        customer = SimpleNamespace(id=uuid.uuid4(), name="Ana", phone="8599999999")
+        customer = fabricas.cliente(name="Ana", phone="8599999999")
         payload = CreateOrderRequest.model_validate({
             "branch_id": str(branch.id),
             "order_type": "pickup",
@@ -668,24 +662,18 @@ class OrderCouponIntegrationTests(unittest.TestCase):
         service.branch_repository = SimpleNamespace(
             get_active_by_id_and_restaurant=lambda branch_id, restaurant_id: branch,
             list_enabled_payment_methods=lambda branch_id: [
-                SimpleNamespace(method_type="cash", payment_flow="delivery"),
+                fabricas.forma_de_pagamento(method_type="cash", payment_flow="delivery"),
             ],
         )
         service.branch_hours_service = SimpleNamespace(
             ensure_branch_is_open=lambda branch_id: None
         )
         service.menu_repository = SimpleNamespace(
-            get_settings=lambda restaurant_id: SimpleNamespace(
-                min_order_value=Decimal("0"),
-                service_fee_enabled=True,
-                service_fee_amount=Decimal("3.00"),
-                estimated_delivery_time_min=None,
-                estimated_delivery_time_max=None,
-                default_delivery_fee=None,
-                free_delivery_enabled=None,
-                free_delivery_min_order_value=None,
-                platform_commission_percent=Decimal("10.00"),
-            )
+            get_settings=lambda restaurant_id: fabricas.configuracoes(
+            service_fee_enabled=True,
+            service_fee_amount=Decimal("3.00"),
+            platform_commission_percent=Decimal("10.00"),
+        )
         )
         service.product_repository = SimpleNamespace(list_active_by_ids=lambda restaurant_id, ids: [product])
         service.order_repository = FakeOrderRepository(db)
@@ -749,7 +737,7 @@ class OrderCouponIntegrationTests(unittest.TestCase):
                 order.id,
                 AdminScope(admin_user=None, restaurant_id=restaurant_id, branch_id=None),
                 UpdateOrderStatusRequest(status="cancelled", note=None),
-                admin_user=SimpleNamespace(id=uuid.uuid4(), email="lojista@exemplo.com"),
+                admin_user=fabricas.usuario_do_painel(email="lojista@exemplo.com"),
             )
 
         self.assertEqual(result, "detail")

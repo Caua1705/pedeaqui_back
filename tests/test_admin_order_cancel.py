@@ -26,9 +26,10 @@ from src.schemas.admin_order_schema import CancelOrderRequest
 from src.services.admin_order_service import AdminOrderService
 from src.services.order_service import OrderService
 from src.services.payment_refund_service import PaymentRefundService
+from tests import fabricas
 
 
-ADMIN = SimpleNamespace(id=uuid.uuid4(), email="lojista@exemplo.com")
+ADMIN = fabricas.usuario_do_painel(email="lojista@exemplo.com")
 
 
 class FakeDb:

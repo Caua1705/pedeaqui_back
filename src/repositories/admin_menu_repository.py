@@ -29,7 +29,11 @@ from sqlalchemy.orm import Session, selectinload
 
 from src.models.category_model import Category
 from src.models.product_model import Product
-from src.models.product_option_model import ProductOption, ProductOptionGroup
+from src.models.product_option_model import (
+    ProductOption,
+    ProductOptionGroup,
+    ordem_dos_grupos,
+)
 from src.utils.normalization import normalize_text
 
 
@@ -272,7 +276,12 @@ class AdminMenuRepository:
             select(ProductOptionGroup)
             .options(selectinload(ProductOptionGroup.options))
             .where(ProductOptionGroup.product_id == product_id)
-            .order_by(ProductOptionGroup.sort_order.asc(), ProductOptionGroup.name.asc())
+            # A MESMA expressao que `Product.option_groups` usa — a funcao, e
+            # nao uma copia parecida dela. Aqui havia `sort_order, name`, e a
+            # vitrine nao ordenava nada: as duas telas podiam listar os grupos
+            # em ordens diferentes. As opcoes de dentro saem ordenadas pelo
+            # `order_by` do proprio relationship.
+            .order_by(*ordem_dos_grupos())
         )
         return list(self.db.scalars(stmt).all())
 

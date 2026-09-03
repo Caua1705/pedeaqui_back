@@ -19,7 +19,7 @@ o código já escreveu.
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from src.models.ai_feedback_model import AIFeedback
 from src.repositories.ai_feedback_repository import AIFeedbackRepository
@@ -97,7 +97,7 @@ class TestExpurgoDoFeedback:
 
     def test_mantem_o_que_esta_dentro_da_janela(self, db):
         restaurante = criar_restaurante(db)
-        recente = self._criar_feedback(db, restaurante, 1)
+        recente = TestExpurgoDoFeedback._criar_feedback(db, restaurante, 1)
 
         removidos = AIFeedbackRepository(db).delete_created_before(
             feedback_retention_cutoff(utcnow())
@@ -147,3 +147,96 @@ class TestExpurgoDoFeedback:
         )
 
         assert removidos == 0
+
+
+@pytest.mark.db
+class TestALinhaSemData:
+    """`created_at` NULO — a linha que a retencao nunca alcancava.
+
+    `ai_feedback.created_at` e a UNICA das seis tabelas com varredura de
+    retencao cujo `created_at` aceita nulo (conferido no
+    `information_schema`: as outras cinco sao NOT NULL). E `created_at <
+    cutoff` com nulo nao e falso — e NULO —, entao a linha nunca casava e o
+    texto em claro do cliente ficava para sempre.
+
+    Nao ha 500, nao ha log, nao ha tela onde isso apareca. E o pior modo de
+    falha desta classe inteira, e por isso ele veio antes dos que dao 500.
+
+    O nulo nao vem do ORM — a coluna tem `DEFAULT now()` e o model sempre a
+    omite, deixando o banco preencher. Ele vem de INSERT feito por fora, que e
+    a mesma origem de todas as 15 (armadilha 33).
+    """
+
+    def _criar_sem_data(self, db, restaurante):
+        """INSERT CRU, e a razao disso e o achado deste teste.
+
+        **O ORM nao consegue gravar este nulo nem quando se pede.**
+        `AIFeedback(created_at=None)` nao grava `NULL`: com `server_default`,
+        o SQLAlchemy trata o `None` explicito como "deixe o banco preencher" e
+        OMITE a coluna do INSERT. Medido — a linha sai com `now()`.
+
+        Isso prova, do lado de dentro, o que a armadilha 33 diz do lado de
+        fora: esta linha so pode ter nascido de escrita feita **por fora do
+        ORM** — SQL manual no Supabase, script de importacao, correcao a mao.
+        E por isso o teste tem que escrever do mesmo jeito que ela nasceu.
+        """
+        db.execute(
+            text(
+                """
+                INSERT INTO ai_feedback (
+                    restaurant_id, session_id, user_message, assistant_message,
+                    response_type, selected_product_ids, feedback, created_at
+                ) VALUES (
+                    :restaurant_id, :session_id, :user_message, :assistant_message,
+                    'text', '{}'::uuid[], 'like', NULL
+                )
+                """
+            ),
+            {
+                "restaurant_id": restaurante.id,
+                "session_id": "sessao-sem-data",
+                "user_message": "moro na rua das Flores, 200",
+                "assistant_message": "Temos entrega para essa regiao!",
+            },
+        )
+        db.flush()
+        return db.scalar(
+            select(AIFeedback).where(AIFeedback.session_id == "sessao-sem-data")
+        )
+
+    def test_a_linha_sem_data_e_apagada_pela_retencao(self, db):
+        """Apagar e a escolha certa, e vale dizer por que.
+
+        A linha nao tem como provar que e recente, e o que ela guarda e texto
+        em claro de pessoa. Entre manter dado pessoal de idade desconhecida e
+        perder uma amostra de qualidade do Rapi, a LGPD decide — e o que se
+        perde e uma linha que ja estava fora do inventario.
+        """
+        restaurante = criar_restaurante(db)
+        sem_data = self._criar_sem_data(db, restaurante)
+
+        removidos = AIFeedbackRepository(db).delete_created_before(
+            feedback_retention_cutoff(utcnow())
+        )
+
+        assert removidos == 1
+        assert db.get(AIFeedback, sem_data.id) is None
+
+    def test_a_linha_recente_continua_sobrevivendo(self, db):
+        """O outro lado: o `IS NULL` nao pode virar "apaga tudo".
+
+        Sem este teste, um `or_` mal colocado passaria apagando a tabela
+        inteira a cada varredura — e o sintoma seria a amostra de qualidade
+        sumir sem ninguem entender por que.
+        """
+        restaurante = criar_restaurante(db)
+        recente = TestExpurgoDoFeedback._criar_feedback(db, restaurante, 1)
+        sem_data = self._criar_sem_data(db, restaurante)
+
+        removidos = AIFeedbackRepository(db).delete_created_before(
+            feedback_retention_cutoff(utcnow())
+        )
+
+        assert removidos == 1
+        assert db.get(AIFeedback, recente.id) is not None
+        assert db.get(AIFeedback, sem_data.id) is None

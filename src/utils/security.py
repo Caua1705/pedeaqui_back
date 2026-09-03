@@ -184,6 +184,59 @@ def verify_tracking_token(token: str, token_hash: str) -> bool:
     return hmac.compare_digest(hash_tracking_token(token), token_hash)
 
 
+# --- O entregador: link de 256 bits e codigo de 6 digitos --------------------
+
+_COURIER_ACCESS_CODE_DIGITS = 6
+
+
+def generate_courier_link_token() -> str:
+    """O segredo do link individual do entregador. Mesma forma e mesmo motivo
+    do token de acompanhamento: `secrets`, 32 bytes, cabe em link de WhatsApp
+    e nao da para adivinhar."""
+    return secrets.token_urlsafe(32)
+
+
+def hash_courier_link_token(token: str) -> str:
+    """sha-256 sem chave, como `hash_tracking_token`, e pelo mesmo motivo: a
+    entrada tem 256 bits, chave nao compra nada contra ela, e nao existe
+    variavel de ambiente cuja perda mate todo link em circulacao."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def verify_courier_link_token(token: str, token_hash: str | None) -> bool:
+    if not token_hash:
+        return False
+    return hmac.compare_digest(hash_courier_link_token(token), token_hash)
+
+
+def generate_courier_access_code() -> str:
+    """Seis digitos, como o codigo de verificacao de e-mail. E o que o
+    motoboy digita uma vez, ditado por telefone ou colado do WhatsApp."""
+    return f"{secrets.randbelow(10 ** _COURIER_ACCESS_CODE_DIGITS):0{_COURIER_ACCESS_CODE_DIGITS}d}"
+
+
+def hash_courier_access_code(code: str, link_token: str) -> str:
+    """HMAC do codigo com o PROPRIO link como chave.
+
+    Seis digitos sao um milhao de possibilidades: sem chave, um dump do banco
+    recupera o codigo de todo entregador numa fracao de segundo. A chave e o
+    link — que o dump nao tem, porque so o hash dele esta gravado. Isso
+    compra a resistencia do HMAC sem uma variavel de ambiente nova (regra da
+    armadilha 32: segredo novo por publico novo — aqui o segredo novo e o
+    proprio link, um por entregador).
+
+    Consequencia: o codigo so confere junto do link certo. E o par que
+    autentica, nunca um dos dois sozinho.
+    """
+    return hmac.new(link_token.encode("utf-8"), code.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def verify_courier_access_code(code: str, link_token: str, code_hash: str | None) -> bool:
+    if not code_hash:
+        return False
+    return hmac.compare_digest(hash_courier_access_code(code, link_token), code_hash)
+
+
 def hash_reset_token(token: str) -> str:
     return _hmac_hex(token, settings.PASSWORD_RESET_SECRET)
 

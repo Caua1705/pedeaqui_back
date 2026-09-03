@@ -3,12 +3,12 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from time import perf_counter
-from typing import TypedDict
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.ai.schemas.chat_response_schema import ChatResponse
+from src.ai.services.chat_history import Mensagem, historico
 from src.ai.services.chat_llm_service import ChatLLMService
 from src.ai.services.greeting import greeting_reply, is_greeting
 from src.ai.services.retrieval_service import RetrievalService
@@ -20,6 +20,7 @@ from src.repositories.product_repository import ProductRepository
 from src.repositories.restaurant_repository import RestaurantRepository
 from src.schemas.admin_settings_schema import MAX_ASSISTANT_NOTES_LENGTH
 from src.schemas.ai_feedback_schema import AIFeedbackRequest, AIFeedbackResponse
+from src.services.ai_usage_service import AIUsageService
 from src.services.branch_hours_service import BRANCH_TIMEZONE, BranchHoursService
 from src.services.branch_operation import resolve_branch_operation, resolver_atendimento
 from src.services.menu_service import MenuService
@@ -29,26 +30,11 @@ from src.utils.normalization import fold_for_match
 
 logger = logging.getLogger("uvicorn.error")
 
-_MAX_SESSION_MESSAGES = 20
-_SESSION_TTL = timedelta(hours=1)
-
 # O teto de cartoes por turno. O MESMO numero esta escrito no `SYSTEM_PROMPT`,
 # na secao "NO MAXIMO 3 PRODUTOS POR RESPOSTA", e e aquele que decide o que o
 # cliente LE — este aqui so decide quantos cartoes saem. Ver `_limitar_cartoes`.
 _MAX_CARTOES = 3
 
-
-class SessionMessage(TypedDict):
-    role: str
-    content: str
-
-
-class SessionState(TypedDict):
-    messages: list[SessionMessage]
-    last_interaction: datetime
-
-
-_SESSION_HISTORY: dict[str, SessionState] = {}
 
 # Ver `_take_cold_start_flag`.
 _cold_start_pending = True
@@ -266,11 +252,12 @@ class ChatService:
         """
         # UM `now` para o turno inteiro: a limpeza das sessoes vencidas e o
         # registro deste turno precisam concordar sobre que horas sao, senao
-        # uma sessao pode ser limpa e regravada no mesmo pedido.
+        # uma sessao pode ser limpa e regravada no mesmo pedido. Por isso ele
+        # entra nos dois lados de `historico`, e nao sai de um relogio la
+        # dentro (armadilha 51).
         now = _utc_now()
         session_started_at = perf_counter()
-        _cleanup_inactive_sessions(now)
-        conversation = _get_session_conversation(session_id)
+        conversation = historico.ler(session_id, now)
         session_ms = (perf_counter() - session_started_at) * 1000
         logger.info("[AI /chat perf] session_ms=%.2f", session_ms)
 
@@ -312,6 +299,8 @@ class ChatService:
 
         llm_started_at = perf_counter()
         llm_response = self._invoke_llm(
+            restaurant=restaurant,
+            branch=branch,
             restaurant_context=restaurant_context,
             branch_state=branch_state,
             conversation=conversation,
@@ -344,7 +333,7 @@ class ChatService:
         # Gravado SO depois da resposta pronta: uma falha no meio nao pode
         # deixar a pergunta no historico sem a resposta, senao ela envenena o
         # proximo prompt daquela sessao.
-        _store_session_turn(session_id, message, response.message, now)
+        historico.gravar(session_id, message, response.message, now)
         post_ms = (perf_counter() - post_started_at) * 1000
 
         # UMA linha com o turno inteiro, e nao so as oito espalhadas. As
@@ -408,7 +397,7 @@ class ChatService:
             message=greeting_reply(restaurant.name),
             products=[],
         )
-        _store_session_turn(session_id, message, response.message, now)
+        historico.gravar(session_id, message, response.message, now)
 
         logger.info(
             "[AI /chat perf] etapas | guard_ms=%.2f | session_ms=%.2f "
@@ -608,11 +597,13 @@ class ChatService:
 
         return f"Aberta agora: {aberta}\nEntrega: {entrega}"
 
-    @staticmethod
     def _invoke_llm(
+        self,
+        restaurant,
+        branch,
         restaurant_context: str,
         branch_state: str,
-        conversation: list[SessionMessage],
+        conversation: list[Mensagem],
         retrieved_products: list[dict],
         message: str,
     ):
@@ -630,6 +621,15 @@ class ChatService:
         exatamente o caso que `embedding_service.py` ja mediu e resolveu com
         `lru_cache` (mediana de 654 ms para 340 ms). Medir antes de repetir a
         solucao e o ponto desta rodada.
+
+        **E daqui sai o CUSTO do turno**, e por isso a funcao deixou de ser
+        `@staticmethod`. Este e o unico ponto do pipeline que tem as duas
+        pontas ao mesmo tempo: o `usage` que a OpenAI devolveu e o restaurante
+        de quem e a conversa. A alternativa era devolver `(resposta, uso)` e
+        gravar no `_answer` — e isso poria em toda chamada um segundo item que
+        as vezes e None por um motivo que so o corpo explica.
+
+        A gravacao nao levanta: ver `AIUsageService.registrar_texto`.
         """
         client_started_at = perf_counter()
         llm_service = ChatLLMService()
@@ -648,6 +648,11 @@ class ChatService:
         logger.info(
             "[AI /chat] Structured Output | response_type=%s",
             llm_response.response_type,
+        )
+        AIUsageService(self.db).registrar_texto(
+            restaurant_id=restaurant.id,
+            branch_id=branch.id,
+            uso=llm_service.ultimo_uso,
         )
         return llm_response
 
@@ -863,8 +868,7 @@ def _contar_turno_com_llm(houve_resgate: bool) -> tuple[int, int]:
 
     TRES LIMITES, e nenhum deles e conserto pendente:
 
-    - **Vive no processo.** Zera a cada deploy, como `_SESSION_HISTORY` e
-      `_cold_start_pending`. Para a pergunta que ele responde — "a taxa
+    - **Vive no processo.** Zera a cada deploy, como `_cold_start_pending`. Para a pergunta que ele responde — "a taxa
       mudou depois que eu mexi no prompt?" — isso e util e nao atrapalha: o
       contador reinicia justamente no deploy que muda a variavel.
     - **E por worker.** Com N workers saem N placares independentes, cada um
@@ -1070,39 +1074,6 @@ def _as_product_id(raw_id) -> uuid.UUID | None:
         return None
 
 
-def _get_session_conversation(session_id: str) -> list[SessionMessage]:
-    session = _SESSION_HISTORY.get(session_id)
-    return session["messages"][-_MAX_SESSION_MESSAGES:] if session else []
-
-
-def _cleanup_inactive_sessions(now: datetime) -> None:
-    expired_session_ids = [
-        session_id
-        for session_id, session in _SESSION_HISTORY.items()
-        if now - session["last_interaction"] > _SESSION_TTL
-    ]
-    for session_id in expired_session_ids:
-        del _SESSION_HISTORY[session_id]
-
-
-def _store_session_turn(
-    session_id: str,
-    user_message: str,
-    assistant_message: str,
-    now: datetime,
-) -> None:
-    session = _SESSION_HISTORY.setdefault(
-        session_id,
-        {"messages": [], "last_interaction": now},
-    )
-    session["messages"].extend(
-        [
-            {"role": "user", "content": user_message},
-            {"role": "assistant", "content": assistant_message},
-        ]
-    )
-    session["messages"] = session["messages"][-_MAX_SESSION_MESSAGES:]
-    session["last_interaction"] = now
 
 
 def _take_cold_start_flag() -> bool:

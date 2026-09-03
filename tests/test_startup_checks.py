@@ -128,11 +128,14 @@ class TestQuantosWorkers:
 class TestAvisoDoHistoricoDoChat:
     """O guard que existe para o `--workers` não chegar em silêncio.
 
-    O histórico de conversa do `/chat` é um `dict` de módulo
-    (`chat_service._SESSION_HISTORY`) e não tem caminho de Redis — ao
-    contrário do rate limit e do cache de entrega, que `REDIS_URL` resolve.
-    Com N workers a conversa se perde entre requisições, sem erro e sem log:
-    o sintoma é o Rapi esquecendo o que a pessoa acabou de dizer.
+    Sem `REDIS_URL`, o histórico de conversa do `/chat` vive em memória do
+    processo (`HistoricoEmMemoria`). Com N workers a conversa se perde entre
+    requisições, sem erro e sem log: o sintoma é o Rapi esquecendo o que a
+    pessoa acabou de dizer.
+
+    **Com `REDIS_URL`, o aviso não sai** — desde 04/09/2026 o histórico tem
+    backend de Redis e é compartilhado. A condição tem os dois termos, e os
+    testes abaixo cobram os dois lados.
     """
 
     def test_um_worker_nao_avisa(self):
@@ -150,16 +153,35 @@ class TestAvisoDoHistoricoDoChat:
         assert "/chat" in aviso
         assert "MEMORIA DO PROCESSO" in aviso
 
-    def test_o_aviso_diz_que_redis_nao_resolve(self):
-        """A parte que evita o conserto errado.
+    def test_o_aviso_manda_definir_REDIS_URL(self):
+        """A parte que aponta o conserto, e ela INVERTEU em 04/09/2026.
 
-        Quem lê "em memória" no boot vai atrás de `REDIS_URL`, porque é o que
-        resolve os outros dois avisos deste arquivo. Aqui não resolve, e o
-        aviso tem que dizer isso ou custa uma tarde.
+        Antes o aviso dizia "REDIS_URL NAO resolve este caso", e dizia certo: o
+        historico era um `dict` de modulo, sem caminho de Redis nenhum. Quem
+        lesse "em memoria" no boot iria atras da variavel — que resolve os
+        outros dois avisos deste arquivo — e perderia a tarde.
+
+        Agora ela resolve (`src/ai/services/chat_history.py`), e o aviso passou
+        a mandar defini-la. Este teste existe para as duas frases nunca
+        conviverem: uma delas esta sempre errada.
         """
         aviso = collect_runtime_warnings(["uvicorn", "--workers", "2"], {})[0]
 
-        assert "REDIS_URL NAO resolve" in aviso
+        assert "DEFINA REDIS_URL" in aviso
+        assert "NAO resolve" not in aviso
+
+    def test_com_REDIS_URL_o_aviso_some(self):
+        """Com o Redis configurado, N workers dividem a MESMA conversa.
+
+        Manter o aviso incondicional seria pior que nao te-lo: ele apareceria
+        em todo boot de uma configuracao correta, e aviso que sempre aparece e
+        aviso que ninguem le — inclusive no dia em que ele estiver certo.
+        """
+        avisos = collect_runtime_warnings(
+            ["uvicorn", "--workers", "4"], {"REDIS_URL": "redis://algum-host:6379/0"}
+        )
+
+        assert avisos == []
 
     def test_web_concurrency_sozinha_tambem_avisa(self):
         """O jeito silencioso de chegar a N workers: nada muda no comando."""

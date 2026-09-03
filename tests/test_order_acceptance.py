@@ -20,7 +20,9 @@ from types import SimpleNamespace
 
 from fastapi import HTTPException
 
-from src.schemas.order_schema import CreateOrderRequest
+from tests import fabricas
+
+from src.schemas.order_schema import AddressInput, CreateOrderRequest
 from src.services.order_service import OrderService
 from src.utils.security import utcnow
 
@@ -67,43 +69,26 @@ def build_service(
     branch_is_open=True,
     enabled_payment_methods=(("cash", "delivery"),),
 ):
-    branch = SimpleNamespace(
-        id=uuid.uuid4(),
+    # DADO e tipo real (armadilha do `serves_people`); COLABORADOR continua
+    # `SimpleNamespace`, que e para o que ele serve. A filial, o produto, o
+    # restaurante e as configuracoes abaixo sao dado; os `service.*_repository`
+    # sao colaborador.
+    branch = fabricas.filial(
         is_open=is_open,
         accepts_delivery=accepts_delivery,
         accepts_pickup=accepts_pickup,
-        delivery_paused_until=None,
-        delivery_pause_reason=None,
-        # Nulos: esta filial nao sobrescreve nada e herda os padroes do
-        # restaurante, que e o estado em que toda filial nasce.
-        min_order_value=None,
-        service_fee_enabled=None,
-        service_fee_amount=None,
-        estimated_delivery_time_min=None,
-        estimated_delivery_time_max=None,
-        default_delivery_fee=None,
-        free_delivery_enabled=None,
-        free_delivery_min_order_value=None,
     )
-    product_id = uuid.uuid4()
-    product = SimpleNamespace(
-        id=product_id,
-        code="P1",
-        catalog_key=None,
-        name="Picanha",
-        description=None,
-        price=Decimal("50.00"),
-        option_groups=[],
-    )
+    product = fabricas.produto(code="P1")
+    product_id = product.id
 
     service = OrderService(FakeDb())
     service.restaurant_service = SimpleNamespace(
-        get_active_restaurant=lambda slug: SimpleNamespace(id=uuid.uuid4())
+        get_active_restaurant=lambda slug: fabricas.restaurante()
     )
     service.branch_repository = SimpleNamespace(
         get_active_by_id_and_restaurant=lambda branch_id, restaurant_id: branch,
         list_enabled_payment_methods=lambda branch_id: [
-            SimpleNamespace(method_type=method, payment_flow=flow)
+            fabricas.forma_de_pagamento(method_type=method, payment_flow=flow)
             for method, flow in enabled_payment_methods
         ],
     )
@@ -111,17 +96,7 @@ def build_service(
         ensure_branch_is_open=_open_branch if branch_is_open else _closed_branch
     )
     service.menu_repository = SimpleNamespace(
-        get_settings=lambda restaurant_id: SimpleNamespace(
-            min_order_value=Decimal("0"),
-            service_fee_enabled=False,
-            service_fee_amount=Decimal("0"),
-            estimated_delivery_time_min=None,
-            estimated_delivery_time_max=None,
-            default_delivery_fee=None,
-            free_delivery_enabled=None,
-            free_delivery_min_order_value=None,
-            platform_commission_percent=Decimal("10.00"),
-        )
+        get_settings=lambda restaurant_id: fabricas.configuracoes()
     )
     service.product_repository = SimpleNamespace(
         list_active_by_ids=lambda restaurant_id, ids: [product]
@@ -131,7 +106,9 @@ def build_service(
 
 
 def _open_branch(branch_id):
-    return SimpleNamespace(prep_time_min=20, prep_time_max=30)
+    # `ensure_branch_is_open` devolve a FAIXA de funcionamento, um
+    # `BranchBusinessHour` — e e dela que saem os dois tempos de preparo.
+    return fabricas.horario(prep_time_min=20, prep_time_max=30)
 
 
 def _closed_branch(branch_id):
@@ -174,9 +151,8 @@ class StoreAvailabilityTests(unittest.TestCase):
         service, branch, product_id = build_service(accepts_pickup=False)
         service._estimate_delivery = lambda *args, **kwargs: None
         payload = build_payload(branch, product_id, order_type="delivery")
-        payload.address = SimpleNamespace(
-            street="Rua A", number="1", neighborhood="Centro",
-            complement=None, reference=None, city="Fortaleza", state="CE", zipcode=None,
+        payload.address = AddressInput(
+            street="Rua A", number="1", neighborhood="Centro", city="Fortaleza", state="CE",
         )
 
         service.create_order("junior", payload)
@@ -203,22 +179,7 @@ class StoreAvailabilityTests(unittest.TestCase):
         pausada recusa.
         """
         service, pausada, product_id = build_service(is_open=False)
-        aberta = SimpleNamespace(
-            id=uuid.uuid4(),
-            is_open=True,
-            accepts_delivery=True,
-            accepts_pickup=True,
-            delivery_paused_until=None,
-            delivery_pause_reason=None,
-            min_order_value=None,
-            service_fee_enabled=None,
-            service_fee_amount=None,
-            estimated_delivery_time_min=None,
-            estimated_delivery_time_max=None,
-            default_delivery_fee=None,
-            free_delivery_enabled=None,
-            free_delivery_min_order_value=None,
-        )
+        aberta = fabricas.filial(is_open=True)
         filiais = {pausada.id: pausada, aberta.id: aberta}
         service.branch_repository.get_active_by_id_and_restaurant = (
             lambda branch_id, restaurant_id: filiais[branch_id]
@@ -233,9 +194,8 @@ class StoreAvailabilityTests(unittest.TestCase):
 
 def delivery_payload(branch, product_id, **kwargs):
     payload = build_payload(branch, product_id, order_type="delivery", **kwargs)
-    payload.address = SimpleNamespace(
-        street="Rua A", number="1", neighborhood="Centro",
-        complement=None, reference=None, city="Fortaleza", state="CE", zipcode=None,
+    payload.address = AddressInput(
+        street="Rua A", number="1", neighborhood="Centro", city="Fortaleza", state="CE",
     )
     return payload
 
@@ -247,17 +207,8 @@ def with_estimate(service, delivery_fee):
     existir. De onde a taxa veio (rota do Google, contingencia, token
     reaproveitado) e assunto de test_delivery_estimate.
     """
-    service._estimate_delivery = lambda *args, **kwargs: SimpleNamespace(
+    service._estimate_delivery = lambda *args, **kwargs: fabricas.estimativa_de_entrega(
         delivery_fee=delivery_fee,
-        latitude=None,
-        longitude=None,
-        distance_km=4.2,
-        travel_time_min=18,
-        prep_time_min=20,
-        prep_time_max=30,
-        eta_min=38,
-        eta_max=48,
-        provider="google_routes",
     )
 
 

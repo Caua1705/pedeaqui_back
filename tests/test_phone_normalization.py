@@ -24,6 +24,7 @@ from pydantic import ValidationError
 
 from src.schemas.order_schema import CreateOrderRequest, CustomerInput
 from src.services.order_service import OrderService
+from tests import fabricas
 
 
 FORMATTED = "(85) 99999-9999"
@@ -59,7 +60,7 @@ class CreateOrderPhoneTests(unittest.TestCase):
         # snapshot do pedido tem que sair em digitos mesmo assim.
         db = FakeDb()
         service, payload = build_order_service(db, uuid.uuid4())
-        customer = SimpleNamespace(id=uuid.uuid4(), name="Ana", phone=FORMATTED)
+        customer = fabricas.cliente(name="Ana", phone=FORMATTED)
 
         service.create_order("junior", payload, customer)
 
@@ -115,35 +116,9 @@ class FakeOrderRepository:
 
 
 def build_order_service(db, restaurant_id, phone=DIGITS):
-    branch = SimpleNamespace(
-        id=uuid.uuid4(),
-        # As tres chaves da operacao sao da FILIAL desde a revisao
-        # 20260818_0025; os seis campos nulos sao "herda o padrao do
-        # restaurante", que e como toda filial nasce.
-        is_open=True,
-        accepts_delivery=True,
-        accepts_pickup=True,
-        delivery_paused_until=None,
-        delivery_pause_reason=None,
-        min_order_value=None,
-        service_fee_enabled=None,
-        service_fee_amount=None,
-        estimated_delivery_time_min=None,
-        estimated_delivery_time_max=None,
-        default_delivery_fee=None,
-        free_delivery_enabled=None,
-        free_delivery_min_order_value=None,
-    )
+    branch = fabricas.filial(is_open=True, accepts_delivery=True, accepts_pickup=True)
     product_id = uuid.uuid4()
-    product = SimpleNamespace(
-        id=product_id,
-        code="P1",
-        catalog_key=None,
-        name="Picanha",
-        description=None,
-        price=Decimal("50.00"),
-        option_groups=[],
-    )
+    product = fabricas.produto(id=product_id, code="P1")
 
     service = OrderService(db)
     service.restaurant_service = SimpleNamespace(
@@ -153,7 +128,7 @@ def build_order_service(db, restaurant_id, phone=DIGITS):
         get_active_by_id_and_restaurant=lambda branch_id, restaurant: branch,
         # A filial aceita dinheiro na entrega: e o que o payload usa.
         list_enabled_payment_methods=lambda branch: [
-            SimpleNamespace(method_type="cash", payment_flow="delivery"),
+            fabricas.forma_de_pagamento(method_type="cash", payment_flow="delivery"),
         ],
     )
     # Filial aberta agora: a validacao de horario e feita pelo
@@ -162,15 +137,9 @@ def build_order_service(db, restaurant_id, phone=DIGITS):
         ensure_branch_is_open=lambda branch: None
     )
     service.menu_repository = SimpleNamespace(
-        get_settings=lambda restaurant: SimpleNamespace(
-            min_order_value=Decimal("0"),
+        get_settings=lambda restaurant: fabricas.configuracoes(
             service_fee_enabled=False,
             service_fee_amount=Decimal("0"),
-            estimated_delivery_time_min=None,
-            estimated_delivery_time_max=None,
-            default_delivery_fee=None,
-            free_delivery_enabled=None,
-            free_delivery_min_order_value=None,
             platform_commission_percent=Decimal("10.00"),
         )
     )

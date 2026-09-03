@@ -2,6 +2,7 @@ from src.models.admin_error_report_model import AdminErrorReport
 from src.models.admin_user_model import AdminUser
 from src.models.ai_feedback_model import AIFeedback
 from src.models.ai_product_embedding_model import AIProductEmbedding
+from src.models.ai_usage_event_model import AIUsageEvent
 from src.models.ai_voice_session_model import AIVoiceSession
 from src.models.branch_model import Branch
 from src.models.branch_business_hour_model import BranchBusinessHour
@@ -13,6 +14,7 @@ from src.models.category_model import Category
 from src.models.coupon_claim_model import CouponClaim
 from src.models.coupon_model import CouponTemplate, RestaurantCoupon
 from src.models.coupon_redemption_model import CouponRedemption
+from src.models.courier_model import Courier, CourierAssignment
 from src.models.customer_model import Customer, CustomerAddress, EmailVerificationCode, PasswordResetCode
 from src.models.customer_saved_card_model import CustomerPaymentProfile, CustomerSavedCard
 # `delivery_estimates` faltava aqui, e o efeito nao era um import quebrado:
@@ -42,6 +44,7 @@ __all__ = [
     "AdminUser",
     "AIFeedback",
     "AIProductEmbedding",
+    "AIUsageEvent",
     "AIVoiceSession",
     "Branch",
     "BranchBusinessHour",
@@ -54,6 +57,8 @@ __all__ = [
     "CouponClaim",
     "CouponTemplate",
     "CouponRedemption",
+    "Courier",
+    "CourierAssignment",
     "Customer",
     "CustomerAddress",
     "CustomerPaymentProfile",

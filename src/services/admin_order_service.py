@@ -305,6 +305,11 @@ class AdminOrderService:
         stream nao encaixaria na mesma linha da tabela que o painel ja
         desenha.
         """
+        # A atribuicao aberta chega pelo `selectinload` das tres consultas que
+        # alimentam este item (ver `_COURIER_LOADER` no repositorio). Em
+        # objeto transiente, ou sem motoboy, e `None`.
+        assignment = order.courier_assignment
+        courier = assignment.courier if assignment is not None else None
         return AdminOrderListItem(
             id=order.id,
             order_number=order.order_number,
@@ -317,6 +322,8 @@ class AdminOrderService:
             payment_status=order.payment_status,
             total=money_to_float(order.total),
             created_at=order.created_at,
+            courier_id=courier.id if courier is not None else None,
+            courier_name=courier.name if courier is not None else None,
         )
 
     @staticmethod

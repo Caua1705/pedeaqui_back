@@ -723,16 +723,32 @@ numeração por restaurante. O primeiro pedido de um restaurante novo pode ser o
 
 ## 20. Nada em memória sobrevive a mais de um worker
 
-Três estruturas são dicionários no processo:
+**Não confie nesta lista de cabeça — ela já esteve errada.** Quem responde é
+`scripts/estado_entre_workers.py`, que varre `src/` e cobra no portão. A lista
+escrita à mão aqui dizia *três* estruturas; a varredura achou **15 sítios**, e
+cinco deles eram contadores em `chat_service.py` que ninguém tinha anotado.
 
 | O quê | Efeito com N workers |
 |---|---|
-| Histórico de sessão do chat | o Rapi "esquece" a conversa quando cai em outro worker |
+| Histórico de sessão do chat | **resolvido em 04/09/2026**: `HistoricoNoRedis` com chave hasheada e TTL. Sem `REDIS_URL` cai no backend de memória, e aí o Rapi "esquece" ao mudar de worker |
 | Cache de estimativa de entrega | chamadas repetidas (e pagas) ao Google |
 | Contadores de rate limit | limite efetivo vira N × o configurado |
+| Contadores de diagnóstico do chat | cada worker conta a sua fatia; a razão que o log imprime continua valendo, e o número absoluto não decide nada |
+| Flag de cold start | N linhas de cold start, uma por processo — e isso é o certo |
 
-`REDIS_URL` resolve os dois últimos sem tocar em código. **O histórico do chat não
-tem caminho de Redis** — continuaria em memória.
+`REDIS_URL` resolve os três primeiros sem tocar em código, e
+`startup_checks` avisa no boot quando `--workers > 1` sem ela.
+
+**O critério da varredura não é "é um dicionário".** A primeira medição
+perguntou isso e achou 24 — as 24 eram tabela constante (`PAYMENT_METHOD_LABELS`,
+`ORDER_STATUS_TRANSITIONS`), que se compartilha de graça porque ninguém escreve.
+O que quebra é **escrita em tempo de requisição**: `global` + atribuição,
+`X[chave] = ...`, método que muta, e `X.campo = ...`.
+
+O que é estado de processo **de propósito** mora em `ESPERADOS`, com o motivo e
+o que acontece com N workers em cada caso. Sítio novo fora da lista é vermelho —
+e uma entrada da lista que deixar de existir no código também, para ela não
+virar cemitério.
 
 Foi por isso que o stream SSE do painel **não** usa fila em memória: com mais de
 um worker, o pedido criado no worker A nunca chegaria ao painel conectado no
@@ -863,7 +879,7 @@ Desenho inteiro em `docs/pagamentos-e-comissao.md`, seção 6.
 
 ---
 
-## 25.1 Há UMA escrita de status de pedido, e agora três portas chegam nela
+## 25.1 Há UMA escrita de status de pedido, e agora quatro portas chegam nela
 
 `OrderStatusChangeService.apply` é o único lugar do sistema que grava
 `orders.status`. Chegam nele:
@@ -871,7 +887,13 @@ Desenho inteiro em `docs/pagamentos-e-comissao.md`, seção 6.
 - `PATCH /admin/orders/{id}/status` — o lojista movendo o pedido;
 - `PATCH /admin/orders/{id}/cancel` — o lojista cancelando, com motivo;
 - `POST /restaurants/{slug}/orders/track/{token}/cancel` — o **cliente**
-  desistindo antes do preparo (rota de 25/08/2026).
+  desistindo antes do preparo (rota de 25/08/2026);
+- `POST /courier/{link}/orders/out-for-delivery` e `.../{id}/delivered` — o
+  **entregador** saindo e entregando (03/09/2026). A regra da porta é
+  `ensure_courier_can_set`, sobre `COURIER_TRANSITIONS`: só
+  `ready → out_for_delivery → completed`, sem abrir aresta nenhuma no
+  grafo. Quem autoriza é a atribuição aberta com o `courier.id`; ver
+  `docs/entregadores.md`.
 
 A regra já estava escrita quando havia só as duas primeiras: *"cancelar não é
 uma segunda escrita de status"*. A terceira é o teste dela — um cancelamento
@@ -880,9 +902,9 @@ cashback fica retido, o histórico não registra quem cancelou e o pagamento nã
 é estornado**. Quatro bugs de dinheiro por um copiar e colar.
 
 **O que esse service NÃO faz é autorizar**, e isso é desenho, não omissão. Ele
-recebe o pedido já carregado e já autorizado, porque as três portas autorizam
+recebe o pedido já carregado e já autorizado, porque as quatro portas autorizam
 de formas incomparáveis: escopo de lojista pelo token no painel,
-`tracking_token` no app do cliente. Um `if` aqui dentro decidindo de quem é o
+`tracking_token` no app do cliente, a atribuição aberta no app do entregador. Um `if` aqui dentro decidindo de quem é o
 pedido é exatamente onde esse tipo de coisa vaza.
 
 **Quem pode cancelar em que estado também fica de fora**, pelo mesmo motivo: é
@@ -2027,3 +2049,411 @@ E uma pista que economiza a investigação inteira: **um 502 nosso sai com os
 cabeçalhos de CORS** (o `CORSMiddleware` é a camada mais externa, armadilha
 22) e com corpo JSON legível. 502 que o navegador reporta como falta de CORS
 não é nosso — é o Traefik, e a aplicação não respondeu.
+
+---
+
+## 50. O `nullable=` do model NUNCA vira DDL — e em 41 colunas ele mente
+
+O schema deste projeto **não nasceu do ORM**: foi criado à mão no Supabase e só
+depois virou `alembic/schema_baseline.sql`. O `Base.metadata` foi escrito
+**depois**, olhando para tabelas que já existiam. E como
+`Base.metadata.create_all()` não é usado em lugar nenhum — nem na suíte `db`,
+cujo schema sai do baseline mais as revisões (armadilha 24) —, **o
+`nullable=False` do model nunca é cobrado por ninguém**.
+
+Ele orienta o type checker e decide se o SQLAlchemy manda a coluna no INSERT.
+Nada mais. `scripts/divergencias_orm_schema.py` conta **41 colunas** em que os
+dois lados discordam, em três classes com custos diferentes:
+
+- **16 — o ORM diz NOT NULL e o banco aceita NULL.** Risco de **leitura**: a
+  anotação promete valor e o banco pode dar `None`.
+- **20 — o banco diz NOT NULL e o ORM diz nullable.** Risco de **escrita**, mas
+  só nas **duas sem `DEFAULT`** (`ai_product_embeddings.content`,
+  `coupon_templates.image_path`): ali um `Modelo(...)` incompleto passa no type
+  checker e estoura `IntegrityError` em runtime. Hoje não estoura porque nada
+  instancia os dois models — circunstância, não decisão, e
+  `tests/test_models_nunca_instanciados.py` avisa quando mudar.
+- **6 — coluna que o ORM não mapeia.** `Modelo.created_at` é `AttributeError`
+  numa tabela que **tem** `created_at`.
+
+**A que mordia de verdade era `restaurant_coupons.valid_until`** — e ela foi
+**consertada em 03/09/2026, no CÓDIGO e não no schema.** O caminho merece ser
+sabido de cor porque a forma dele se repete: `CouponService._aware(None)` levanta `AttributeError`,
+e `evaluate` abre com ele. `preview` e `lock_and_validate_for_order` chegam ao
+cupom por `_find_coupon` — **id ou código, sem filtro de janela**. Ou seja: a
+consulta que protege a vitrine (`list_in_window`, com `valid_until >= now`)
+**não protege o checkout**. Uma linha com `valid_until` nulo é invisível na
+lista e derruba quem digitar o código.
+
+**Por que ela NÃO foi alinhada:** cupom sem data de fim é campanha permanente,
+e o precedente estava no mesmo módulo — a revisão `20260828_0043` tornou `code`
+nulo **com significado**. Nas outras 15 o banco estava frouxo e o model certo;
+nesta era o contrário. Ver as armadilhas 54 e 55, e
+`src/services/coupon_window.py`.
+
+**O critério que saiu disso, e que vale para a próxima:** tratar o nulo no
+código só tem duas formas, e as duas custam mais que a migração — *relaxar o
+schema de resposta* publica no contrato um estado que não deve existir e empurra
+o `if` para todo cliente; *inventar um valor* faz o backend mentir, o que é pior
+que o 500 porque o 500 é visível. **Trate no código quando o nulo tem
+SIGNIFICADO de produto, ou quando o tratamento não é nem uma coisa nem outra.
+Fora disso, alinhe o schema.**
+
+As sete de risco real que sobraram derrubam pelo **schema de resposta**, com
+`ValidationError` (500): `customers.email` e `.birth_date` (`GET
+/customers/me`), `customer_addresses.number` e `.neighborhood` (a lista inteira
+de endereços, não só o quebrado), `order_item_options.option_group_id` e
+`.option_id` (o pedido inteiro, na comanda e no painel) e `admin_users.is_active`
+(`GET /admin/users`).
+
+E duas que **não** dão 500, e são piores de achar:
+`ai_feedback.created_at` nulo faz o DELETE de retenção (`created_at < cutoff`)
+**nunca alcançar a linha** — dado pessoal em claro que não sai;
+`coupon_redemptions.idempotency_key` nulo perde a garantia do `UNIQUE`, porque
+no Postgres NULL é distinto de qualquer outro NULL.
+
+**A única com defesa já escrita é `customers.password_hash`**:
+`verify_password` declara `str | None` e devolve `False`. Falha fechada.
+
+**Nenhum caminho de escrita do ORM produz esses nulos.** Eles entram por linha
+escrita **fora** do ORM: SQL manual no Supabase, script de importação, linha
+anterior à criação da coluna. É o outro lado da armadilha 33.
+
+**Onde isso está escrito e o que já está pronto:**
+`docs/alinhamento-orm-schema.md` tem o roteiro, `alembic/preparadas/` tem as
+duas revisões (ver armadilha 53), `tests/test_colunas_em_desacordo.py` prova
+cada caminho que quebra, e o CI roda o script como **aviso** — passar de 42 vira
+`::warning::`, nunca vermelho: portão vermelho contra dívida herdada é portão
+que se aprende a ignorar.
+
+---
+
+## 51. A faixa "00:00–23:59" NÃO é o dia inteiro — e o relógio precisa ser injetado
+
+`_period_covers_same_day` compara `opens_at <= agora <= closes_at`. Uma faixa
+`00:00–23:59` cobre tudo **menos os 59 segundos entre 23:59:01 e 23:59:59** — e
+nesse minuto a filial fica **fechada**.
+
+Isso não é defeito: o lojista disse "até 23:59". O defeito era o teste que
+declarava a loja "aberta o dia inteiro" com essa faixa, e cujo comentário dizia,
+com todas as letras, existir *"para não depender da hora em que o teste roda"*.
+**Ele falhava um minuto por dia**, com um vermelho que não aponta para a hora em
+lugar nenhum.
+
+**Não há, hoje, jeito limpo de cadastrar 24 horas.** `00:00–00:00` não serve:
+`opens_at <= closes_at` é verdadeiro, então cai no ramo do mesmo dia e cobre
+exatamente a meia-noite — conferido, e é o contrário do que a intuição diz. O
+que cobriria é `closes_at` com **segundos** (`23:59:59`), e nem o painel nem
+`BusinessHourInput` pedem segundos.
+
+**A convenção que saiu disso: `self.clock` injetável**, o mesmo desenho que
+`CouponService` já usava e que agora `BranchHoursService`,
+`DeliveryEstimateService` e `BranchAvailabilityService` também têm.
+`ensure_branch_is_open` passou a aceitar `now` — antes só `find_current_period`
+aceitava, e por isso era ele quem lia o relógio da máquina.
+
+Como os testes constroem esses serviços por `__new__`, **esquecer de injetar é
+`AttributeError` alto** em vez de voltar calado ao relógio da máquina. Foi o que
+aconteceu: 65 testes ficaram vermelhos até declararem o instante.
+
+### Como se acha essa classe inteira, e não um caso
+
+Grep de `datetime.now()` não resolve — são mais de cem ocorrências e a maioria é
+legítima. O que resolve é **empírico**: um plugin de pytest descartável troca
+`datetime`/`date` por subclasses congeladas em todo módulo sob a raiz do
+projeto, e a suíte roda em instantes adversariais (12:00, 23:59:30, 00:00:30,
+domingo 03:00, 31/12 23:00). O que falhar num instante e passar noutro é a
+classe procurada.
+
+**Dois detalhes decidem se a varredura vale:**
+
+1. **Congelar em `pytest_configure` não alcança os testes** — eles só existem em
+   `sys.modules` depois da coleta. Congele de novo em
+   `pytest_collection_modifyitems`.
+2. **Filtrar por nome de módulo não alcança os testes** — `pythonpath = .` faz o
+   pytest importá-los como `test_x`, sem prefixo `tests.`. Filtre pelo
+   `__file__`.
+
+Antes de acertar os dois, a varredura acusava 24 falhas; depois, 17 — e as 7 que
+sumiram eram do próprio plugin, com os dois lados da conta em relógios
+diferentes. **Congelamento parcial produz falha que parece achado.**
+
+O que sobra é ruído conhecido: PyJWT valida `exp` com `time.time()`, que é C e
+não passa pelo `datetime` trocado. Elas são **idênticas em todos os instantes**,
+e é assim que se sabe que são ruído.
+
+**A suíte `db` não pode ser varrida assim**: lá o `created_at` sai do
+`server_default now()`, que é o relógio do *Postgres*. Congelar o Python
+produziria falha falsa. Aqueles se leem à mão — e os deste repositório usam
+margens em **dias**, que é o cuidado certo.
+
+---
+
+## 52. Dublê de dado: 141 na suíte, e o que eles escondiam
+
+O CLAUDE.md proíbe dublar schema ou model com `SimpleNamespace`. A regra estava
+escrita e a suíte tinha **141 violações** — nenhuma maliciosa, cada uma o
+caminho curto de alguém com pressa.
+
+`scripts/dubles_de_dado.py` as acha por **AST**: para cada `SimpleNamespace(...)`,
+compara as chaves com as colunas do `Base.metadata` (**mais os
+`relationship`** — `option_groups` é atributo legítimo de `Product` e não é
+coluna), com os campos de todo `BaseModel` de `src/` (**inclusive
+`src/ai/schemas/`**) e com os de toda **dataclass** de `src/`. Casando 60% ou
+mais das chaves, é dublê de dado.
+
+`tests/test_dubles_de_dado.py` trava o zero — e tem **três testes além do
+principal**, porque o modo de falha real é o varredor parar de enxergar e o
+teste principal ficar verde por vacuidade: um confere que ele enxerga os três
+tipos de origem, outro planta um dublê e exige que seja acusado, outro planta um
+dublê de **colaborador** e exige que seja deixado passar.
+
+### O que a conversão achou, e é o motivo de ela valer a noite
+
+- **`restaurant_settings.payment_methods`**: a coluna **saiu da tabela** na
+  revisão `20260820_0027` — quem manda em forma de pagamento é
+  `branch_payment_methods`. O dublê ainda a passava. Teste verde descrevendo uma
+  linha que não existe há oito revisões.
+- **`orders.tracking_token`**: o model **não mapeia** essa coluna, só
+  `tracking_token_hash`. Dois dublês a escreviam — e o **mesmo arquivo**, três
+  funções acima, afirmava `assertFalse(hasattr(stored, "tracking_token"))`.
+- **`make_code_row` servia duas tabelas diferentes**: escrevia
+  `reset_token_hash`/`reset_token_expires_at` **sempre**, mas
+  `email_verification_codes` não tem essas colunas — só `password_reset_codes`.
+- **`DeliveryEstimateResult` × `DeliveryEstimateResponse`**: o dataclass tem
+  `latitude`/`longitude` e o schema **não** (`to_response()` as remove). E
+  `OrderService` lê `delivery_estimate.latitude` ao gravar o pedido. Dublar o
+  resultado com a forma da resposta descreve um objeto sem as coordenadas.
+- **`total=10`** em dublê de pedido: a coluna é `Numeric` e volta `Decimal`.
+
+Os tipos de verdade vivem em `tests/fabricas.py` (transiente, sem banco) e
+`tests/fabricas_db.py` (com banco). **`SimpleNamespace` continua certo para
+dublar colaborador** — repositório, serviço, cliente HTTP, `db`. Não há contrato
+nosso a respeitar nesses.
+
+### As duas classes irmãs, e o que a varredura delas achou
+
+**Dublê por dicionário:** um só na suíte, e já estava certo — um `dict` de
+kwargs que alimenta `Customer(**values)`.
+
+**Mock permissivo:** **não há `MagicMock` nem `Mock` em lugar nenhum** deste
+repositório; a suíte usa só `patch`, e os fakes são classes escritas à mão. O
+que existe é outra coisa, e vale saber o nome: **asserção tautológica**. Há 24
+usos de `patch.object(OrderService, "to_order_detail_response",
+return_value="detail")` seguidos de `assertEqual(result, "detail")` — que só diz
+que o dublê devolveu o que mandaram devolver. Em 23 há asserção de verdade ao
+lado. Em **uma** não havia: um teste cujo nome promete isolamento de tenant e
+que passaria com o repositório ignorando `restaurant_id` inteiro.
+
+### O procedimento barato que fecha a porta
+
+**Todo `pytest.raises` novo confere que a MESMA chamada com o dado CERTO não
+levanta.** Foi assim que apareceu que um teste novo desta própria rodada estava
+verde pelo motivo errado: o `ValidationError` vinha do `Literal` de
+`discount_type` (`"percentage"` em vez de `"percent"`) e não da coluna nula que
+o teste dizia exercitar.
+
+---
+
+## 53. Migração escrita e não aplicada precisa de trava, e de duas
+
+Migração pronta esperando decisão é útil — tira a escolha do meio da madrugada,
+o roteiro fica revisado e o dono só escolhe o dia. E é perigosa por dois motivos
+independentes.
+
+**Perigo 1: ela aplicar sozinha.** Basta o arquivo cair em `alembic/versions/`
+— um `git mv` distraído, um merge — e o próximo `alembic upgrade head` do
+entrypoint a executa **em produção**, sem ninguém ter decidido nada.
+
+**Perigo 2: ela envelhecer calada.** A lista de colunas foi escrita contra o
+schema de hoje; uma revisão futura que alinhe uma delas deixa a preparada
+descrevendo um banco que não existe mais, e o defeito só aparece na noite da
+aplicação.
+
+Por isso `alembic/preparadas/` — diretório que o Alembic **não lê**
+(`script_location = alembic` faz ele enxergar só `versions/`) — e
+`tests/test_revisoes_preparadas.py`, que cobra as duas coisas: que o
+`ScriptDirectory` **não conhece** aquelas revisões (pergunta feita a ele, não ao
+caminho do arquivo — é ele que o `upgrade` consulta), e que a lista de colunas
+ainda descreve o schema real.
+
+**E um terceiro teste que muda a natureza da entrega: as revisões RODAM.** Contra
+o Postgres 17 de teste, dentro de uma transação que volta (o Postgres tem DDL
+transacional), conferindo pelo `inspect()` que as colunas ficam `NOT NULL` e que
+o downgrade devolve. Sem isso, "pronta" quer dizer "nunca executada", e o
+primeiro lugar onde ela roda de verdade acaba sendo produção, de madrugada, com
+a API fora do ar.
+
+### O `SET NOT NULL` de verdade é em duas etapas, e elas não podem ir juntas
+
+`ALTER COLUMN ... SET NOT NULL` toma **`ACCESS EXCLUSIVE`** — que bloqueia
+`SELECT` também — **e varre a tabela**. O caminho que não trava:
+
+| | lock | varre? |
+|---|---|---|
+| `ADD CONSTRAINT ... CHECK (c IS NOT NULL) NOT VALID` | `ACCESS EXCLUSIVE`, ms | não |
+| `VALIDATE CONSTRAINT` | `SHARE UPDATE EXCLUSIVE` — não bloqueia leitura nem escrita | sim |
+| `SET NOT NULL` com a CHECK válida | `ACCESS EXCLUSIVE`, instantâneo | **não** (PG ≥ 12 aceita a CHECK como prova) |
+| `DROP CONSTRAINT` | instantâneo | não |
+
+**As duas etapas não podem ir no mesmo `alembic upgrade`**, e o motivo é o mesmo
+de sempre neste repositório: `alembic/env.py` abre **uma transação para o upgrade
+inteiro**. O `VALIDATE` rodaria dentro da transação que ainda segura o `ACCESS
+EXCLUSIVE` do `ADD CONSTRAINT`, e o ganho evapora. São duas execuções, com
+`ALEMBIC_TARGET` na primeira.
+
+Ganho que não é de lock: **a etapa 1 já recusa nulo novo**. Do commit dela em
+diante o buraco para de crescer, mesmo que a etapa 2 demore semanas — e quando o
+`VALIDATE` rodar, não há corrida com escrita concorrente.
+
+---
+
+## 54. `NULL >= x` não é falso — é NULO. E a regra que vive em três cópias
+
+Duas metades da mesma armadilha, e ela custou o pior defeito do levantamento da
+armadilha 50.
+
+**A metade do SQL.** `WHERE valid_until >= agora` com a coluna nula **não
+descarta a linha por ser falsa**: a comparação é NULA, e o `WHERE` não a
+aceita. Do lado de fora as duas coisas parecem a mesma; a diferença aparece no
+dia em que o nulo passa a ter significado. Um cupom sem prazo — que *deveria*
+sempre valer — **sumia de toda consulta**. Sem erro, sem log, com o lojista
+jurando que criou a campanha.
+
+**A metade do Python.** A mesma janela também estava escrita em
+`CouponService.evaluate`, e ali o nulo não sumia: `_aware(None)` levantava
+`AttributeError`. **No checkout.**
+
+**E o motivo de as duas terem escapado é a terceira cópia.** A regra "está na
+janela?" existia em `coupon_repository.list_in_window` (SQL),
+`menu_repository` (SQL de novo) e `coupon_service.evaluate` (Python).
+Consertar duas faria a campanha permanente aparecer numa superfície e sumir na
+outra.
+
+Hoje mora em `src/services/coupon_window.py`, com as **duas formas lado a
+lado** — o predicado (que explica a recusa: `not_started` × `expired`, coisa
+que um `WHERE` não devolve) e a expressão SQL. Não dá para ter só uma; o que
+dá é fazer as duas mudarem juntas.
+
+**A regra geral:** coluna nulável em `WHERE` precisa de `IS NULL` explícito
+quando o nulo significa alguma coisa. E se a mesma pergunta é feita em SQL e em
+Python, as duas formas moram no mesmo arquivo.
+
+**Correlato de defesa em profundidade, e a correção que ela precisou.**
+`_find_coupon` passou a aplicar o mesmo filtro — "aparece na vitrine" e "chega
+ao checkout" viraram a mesma pergunta. Mas a primeira versão disso **trocou a
+mensagem por um 404**, e isso foi um erro: *"cupom não encontrado" para um
+código que existe manda o cliente conferir se digitou errado e tentar de novo*.
+
+Hoje `_find_coupon` devolve **o cupom E se ele está dentro da janela**, com uma
+segunda consulta (sem `FOR UPDATE`) só no caminho em que a primeira volta
+vazia. "Não existe" continua 404; "existe e venceu" volta a ser 400 `expired`,
+e "existe e não começou", 400 `not_started`.
+
+E o par serve para mais do que a mensagem: `lock_and_validate_for_order`
+**cobra que as duas formas da regra concordem** — o `dentro_da_janela` vem do
+SQL, o `expired` vem do Python, e discordância entre elas vira **409 com log de
+erro**. Defesa em profundidade que ninguém contesta é um segundo filtro; duas
+formas que se conferem é uma defesa.
+
+---
+
+## 55. Com `server_default`, o SQLAlchemy IGNORA o `None` que você passou
+
+`Modelo(created_at=None)` numa coluna com `server_default=func.now()` **não
+grava `NULL`**. O SQLAlchemy trata o `None` explícito como "deixe o banco
+preencher" e **omite a coluna do INSERT**. A linha sai com `now()`.
+
+Medido, não deduzido, e apareceu escrevendo um teste que precisava justamente
+da linha sem data.
+
+**Duas consequências, e as duas importam:**
+
+1. **Teste que precisa do nulo tem que escrever por SQL cru.** Pelo ORM é
+   impossível, e um teste que tentasse ficaria verde descrevendo uma linha que
+   ele não criou.
+2. **É a prova, do lado de dentro, da armadilha 33.** Se o ORM não consegue
+   produzir aquele nulo nem quando se pede, então a linha nula que existe em
+   produção **só pode ter vindo de escrita feita por fora** — SQL manual no
+   Supabase, script de importação, correção à mão.
+
+Onde isso mordeu: `ai_feedback.created_at` nulo fazia
+`WHERE created_at < cutoff` **nunca alcançar a linha** (armadilha 54, a metade
+do SQL), e o texto em claro que a pessoa digitou para o Rapi ficava para
+sempre. Sem 500, sem log. `delete_created_before` passou a levar
+`OR created_at IS NULL`, e apagar é a escolha certa: a linha não tem como
+provar que é recente, e o que ela guarda é dado pessoal.
+
+**É a única das seis tabelas com varredura de retenção cujo `created_at` aceita
+nulo** — as outras cinco são `NOT NULL`, conferido no `information_schema`.
+
+---
+
+## 56. O Redis guarda dado pessoal, e a exclusão de conta não o alcança
+
+`CustomerAnonymizationService` **não menciona Redis em lugar nenhum**. Ele
+trabalha só no Postgres — e um dos passos dele apaga as linhas de
+`delivery_estimates` pelo `customer_id`. A cópia da mesma estimativa no Redis
+fica.
+
+**E o pior está na CHAVE:**
+
+```
+delivery-estimate:v1:{slug}:{branch_id}:{latitude:.4f}:{longitude:.4f}:...
+```
+
+Quatro casas decimais são **~11 metros** — identifica uma casa, não um bairro.
+O valor ao lado (`DeliveryEstimateResult` em JSON) carrega as coordenadas de
+novo.
+
+É exatamente o cuidado que `ChatCache.embedding_key` toma e explica com todas
+as letras, três arquivos ao lado: *"o que o cliente digita não vai para chave
+de Redis. É texto de pessoa, aparece em `KEYS`, em `MONITOR`, em qualquer
+dump."* A regra estava escrita; a estimativa de entrega não a seguiu — e o que
+ela põe na chave é mais preciso que o texto.
+
+**A chave não carrega `customer_id`, então não há como apagar por pessoa.** Não
+é um `DELETE` faltando: é uma chave com a forma errada.
+
+**Consertado em 03/09/2026**, e o conserto teve três metades — a terceira é a
+que costuma faltar:
+
+1. **a chave** virou `delivery-estimate:v2:{branch_id}:{digest}:{bucket}`. O
+   `branch_id` fica legível de propósito: identificador não diz nada sobre a
+   pessoa, e sem ele não há como varrer as chaves de uma filial para depurar;
+2. **o valor**, que carregava as mesmas coordenadas. `SETEX chave valor` expõe
+   o valor no `MONITOR` tanto quanto a chave. Elas deixaram de ser gravadas e
+   são recolocadas na volta a partir do destino que `estimate` já resolveu — e
+   recolocar é **mais correto**, porque a chave agrupa por 4 casas decimais e o
+   acerto pode vir de uma coordenada vizinha;
+3. **a varredura**, `scripts/dados_pessoais_em_chave.py`, porque a regra já
+   estava escrita e mesmo assim foi quebrada. Ela achou um SEGUNDO caso que
+   ninguém conhecia: `ChatCache.retrieval_key` punha a **mensagem do cliente**
+   em claro na chave. Aquele cache vive só em memória — mas o de embedding
+   também vivia, e subir para o Redis foi uma mudança de poucas linhas.
+
+**A regra que sai disso:** cache em memória com dado pessoal na chave é a mesma
+armadilha, adiada. A promoção para Redis é barata demais para se contar com ela
+não acontecer.
+
+**E o `v2` não é enfeite.** Mudar o formato da chave sem versionar deixa as
+entradas antigas sendo lidas pelo código novo — e, num rollback, as novas sendo
+lidas pelo antigo. Versionar torna os dois conjuntos inalcançáveis um pelo
+outro, que é o que uma mudança de formato pede.
+
+**O que segura hoje é o TTL — e só enquanto não houver persistência.** Com
+`RDB`/`AOF` ligado, um snapshot grava a chave em disco e o arquivo não expira
+sozinho: "10 minutos" vira "até alguém apagar o dump", e dump costuma ir para
+backup.
+
+**Ao investigar isso:** `INFO persistence` e não `CONFIG GET` (Redis gerenciado
+costuma bloquear `CONFIG`); `scan_iter` e não `KEYS` (que trava o Redis
+inteiro); e **conte, nunca imprima** — listar as chaves põe coordenada de
+cliente no terminal e no histórico do shell, que é o mesmo problema feito à
+mão.
+
+Inventário do que está lá: a estimativa (coordenada, TTL 600 s), o rate limit
+(**IP**, na chave, por desenho do `slowapi`), o cache de embedding (mensagem
+**hasheada** — o único que já nasceu certo) e o `MenuGeneration` (contador, sem
+dado pessoal). O `docs/lgpd-proposta.md` **não menciona o Redis**: o inventário
+está incompleto enquanto ele estiver de fora.

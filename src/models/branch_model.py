@@ -19,11 +19,25 @@ class Branch(Base):
     slug: Mapped[str] = mapped_column(Text, nullable=False)
     display_name: Mapped[str | None] = mapped_column(Text)
     email: Mapped[str | None] = mapped_column(Text)
+    # --- Endereco: o conjunto VIVO. E o que `AdminBranchUpdate` grava e o
+    # unico que `RestaurantService._build_address` le. ---
     address: Mapped[str] = mapped_column(Text, nullable=False)
     neighborhood: Mapped[str] = mapped_column(Text, nullable=False)
     city: Mapped[str] = mapped_column(Text, nullable=False)
     state: Mapped[str] = mapped_column(Text, nullable=False)
     zipcode: Mapped[str | None] = mapped_column(Text)
+    # --- Endereco: o conjunto MORTO. Nao escreva nestas. ---
+    #
+    # Resto do schema pre-Alembic (estao no `schema_baseline.sql`, e nenhuma
+    # revisao as toca). NADA no codigo escreve nelas, e ate a correcao do
+    # `_build_address` elas eram LIDAS PRIMEIRO — venciam o conjunto vivo. O
+    # efeito numa filial com elas preenchidas: o lojista corrigia o endereco
+    # no painel, o painel exibia o valor novo (ele le `address`) e o app do
+    # cliente continuava mostrando o antigo, sem erro e sem log.
+    #
+    # Hoje sao orfas e podem sair numa revisao futura — MENOS
+    # `address_number`, que continua sendo lida por nao ter par vivo: nao
+    # existe `branches.number` nem campo de numero no painel.
     address_street: Mapped[str | None] = mapped_column(Text)
     address_number: Mapped[str | None] = mapped_column(Text)
     address_neighborhood: Mapped[str | None] = mapped_column(Text)
@@ -39,6 +53,16 @@ class Branch(Base):
     delivery_min_fee: Mapped[Decimal | None] = mapped_column(Numeric)
     delivery_max_fee: Mapped[Decimal | None] = mapped_column(Numeric)
     delivery_max_distance_km: Mapped[Decimal | None] = mapped_column(Numeric)
+    # --- A taxa do ENTREGADOR. Mesmo regime das cinco de cima: so da filial,
+    # sem heranca, NULL = nao configurado. ---
+    #
+    # E o que a loja PAGA ao motoboy por corrida, e nao o que o cliente paga:
+    # nao entra em estimativa, em `orders.total` nem na comissao. E lida uma
+    # vez, na atribuicao do pedido, e congelada em
+    # `courier_assignments.courier_fee_snapshot` (ver `services/courier_fee.py`).
+    # Motoboy pago por corrida = `base` preenchida e `per_km = 0`.
+    courier_fee_base: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    courier_fee_per_km: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     # --- Estado do dia. NOT NULL, e NAO herda nada do restaurante. ---
     #
     # Sao o que alguem no balcao aperta durante o expediente. Estavam em

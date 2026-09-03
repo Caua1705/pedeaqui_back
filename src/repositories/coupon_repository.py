@@ -6,7 +6,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from src.models.coupon_claim_model import CouponClaim
-from src.models.coupon_model import CouponTemplate, RestaurantCoupon
+from src.services.coupon_window import filtro_de_janela
+from src.models.coupon_model import CouponTemplate, RestaurantCoupon, ordem_dos_cupons
 from src.models.coupon_redemption_model import CouponRedemption
 from src.models.order_model import Order
 from src.services.customer_segment import segment_expression
@@ -22,10 +23,20 @@ class CouponRepository:
         restaurant_id: uuid.UUID,
         *,
         for_update: bool = False,
+        agora: datetime | None = None,
     ) -> RestaurantCoupon | None:
+        """`agora` recorta pela JANELA de validade; sem ele, traz qualquer cupom.
+
+        Os dois modos existem e nao sao intercambiaveis. O PAINEL precisa
+        enxergar a campanha vencida — e la que o lojista a edita ou a
+        reativa —, e por isso o default e nao filtrar. Ja as superficies do
+        CLIENTE passam `agora`, para o cupom fora da janela nem chegar a ser
+        avaliado.
+        """
         stmt = select(RestaurantCoupon).options(joinedload(RestaurantCoupon.template)).where(
             RestaurantCoupon.id == coupon_id,
             RestaurantCoupon.restaurant_id == restaurant_id,
+            *(filtro_de_janela(agora) if agora is not None else []),
         )
         if for_update:
             stmt = stmt.with_for_update(of=RestaurantCoupon)
@@ -37,10 +48,13 @@ class CouponRepository:
         restaurant_id: uuid.UUID,
         *,
         for_update: bool = False,
+        agora: datetime | None = None,
     ) -> RestaurantCoupon | None:
+        """Ver `get_by_id_and_restaurant` sobre o `agora`."""
         stmt = select(RestaurantCoupon).options(joinedload(RestaurantCoupon.template)).where(
             RestaurantCoupon.restaurant_id == restaurant_id,
             func.lower(RestaurantCoupon.code) == code.strip().lower(),
+            *(filtro_de_janela(agora) if agora is not None else []),
         )
         if for_update:
             stmt = stmt.with_for_update(of=RestaurantCoupon)
@@ -52,11 +66,16 @@ class CouponRepository:
         *,
         coupon_id: uuid.UUID | None = None,
         coupon_code: str | None = None,
+        agora: datetime | None = None,
     ) -> RestaurantCoupon | None:
         if coupon_id is not None:
-            return self.get_by_id_and_restaurant(coupon_id, restaurant_id, for_update=True)
+            return self.get_by_id_and_restaurant(
+                coupon_id, restaurant_id, for_update=True, agora=agora
+            )
         if coupon_code is not None:
-            return self.get_by_code_and_restaurant(coupon_code, restaurant_id, for_update=True)
+            return self.get_by_code_and_restaurant(
+                coupon_code, restaurant_id, for_update=True, agora=agora
+            )
         return None
 
     def list_in_window(
@@ -90,10 +109,9 @@ class CouponRepository:
             .where(
                 RestaurantCoupon.restaurant_id == restaurant_id,
                 RestaurantCoupon.is_active.is_(True),
-                RestaurantCoupon.valid_from <= current,
-                RestaurantCoupon.valid_until >= current,
+                *filtro_de_janela(current),
             )
-            .order_by(RestaurantCoupon.sort_order.asc(), RestaurantCoupon.created_at.desc())
+            .order_by(*ordem_dos_cupons())
         )
         return list(self.db.scalars(stmt).unique().all())
 

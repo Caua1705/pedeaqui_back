@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from src.db.base import Base
+from src.models.product_option_model import ordem_dos_grupos
 
 
 class Product(Base):
@@ -71,4 +72,12 @@ class Product(Base):
     restaurant = relationship("Restaurant", back_populates="products")
     branch = relationship("Branch")
     category = relationship("Category", back_populates="products")
-    option_groups = relationship("ProductOptionGroup", back_populates="product")
+    # `order_by` pela MESMA expressao que a query do painel usa. Sem ele o
+    # `selectinload` emite um SELECT sem `ORDER BY` e o `sort_order` que o
+    # lojista arrastou nao tem efeito nenhum na vitrine. Ver
+    # `product_option_model.ordem_dos_grupos`.
+    option_groups = relationship(
+        "ProductOptionGroup",
+        back_populates="product",
+        order_by=ordem_dos_grupos,
+    )

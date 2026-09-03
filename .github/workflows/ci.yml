@@ -106,6 +106,50 @@ jobs:
       - name: Conferir se o lock cobre o requirements.txt
         run: python scripts/check_lockfile.py
 
+      # Teste escrito que NAO RODA: VERMELHO, e nao aviso.
+      #
+      # Em 02/09/2026 um arquivo nasceu com `class OPainelEscreveTests:` — sem
+      # prefixo `Test` e sem herdar `TestCase`. O pytest coletou zero casos
+      # dela, sem erro e sem aviso: nove testes escritos, revisados e
+      # commitados que nunca rodaram. E a familia do dublê de dado e da
+      # descoberta vazia — o portao fica verde porque NADA RODOU, e verde por
+      # ausencia e indistinguivel de verde por acerto.
+      #
+      # Nunca houve divida herdada aqui: o unico caso nasceu e morreu no mesmo
+      # dia. Zero que cresce e regressao.
+      #
+      # Quem cobra e `tests/test_testes_mudos.py`, na suite rapida, e ele
+      # audita as DUAS suites do repositorio (a da API e a do agente de
+      # impressao, cada uma a partir da raiz dela). Este passo so imprime a
+      # saida legivel quando algo ja falhou.
+      - name: Teste escrito que nao roda (so a saida legivel)
+        if: failure()
+        continue-on-error: true
+        run: |
+          python scripts/testes_mudos.py
+          python scripts/testes_mudos.py --raiz print-agent
+
+      # Estado que mora no PROCESSO: VERMELHO, e nao aviso.
+      #
+      # A armadilha 20 diz que nada em memoria sobrevive a mais de um worker,
+      # e o `Dockerfile` sobe UM — entao nada disto quebra hoje. E por isso que
+      # a classe e perigosa: ela e latente atras de uma linha de configuracao,
+      # e no dia de escalar o sintoma depende de qual worker atendeu (sem erro
+      # e sem log).
+      #
+      # Aqui HA divida herdada, ao contrario das outras tres varreduras — mas
+      # ela esta DECLARADA com motivo em `ESPERADOS`, e e a lista que serve de
+      # linha de base. Sitio novo fora dela e regressao. A regra tinha uma
+      # tabela escrita a mao com 3 entradas; a varredura achou 15 sitios.
+      #
+      # Quem cobra e `tests/test_estado_entre_workers.py`, na suite rapida.
+      # `--tudo` imprime tambem o que e proposital, com o que acontece com N
+      # workers em cada caso.
+      - name: Estado entre workers (so a saida legivel)
+        if: failure()
+        continue-on-error: true
+        run: python scripts/estado_entre_workers.py --tudo
+
   banco:
     name: Testes contra o Postgres
     runs-on: ubuntu-latest
@@ -179,6 +223,110 @@ jobs:
       - run: pytest -q -m db
         env:
           TEST_DATABASE_URL: postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
+
+      # AVISO, NAO FALHA — e `continue-on-error` e o que garante isso: o job
+      # fica verde mesmo que este passo estoure, por qualquer motivo.
+      #
+      # As 41 divergencias entre o `nullable=` do model e o DDL do banco sao
+      # herdadas: o schema nasceu a mao no Supabase e o `Base.metadata` foi
+      # escrito depois, olhando para tabelas que ja existiam. Nenhuma delas foi
+      # introduzida por um commit, e um portao VERMELHO contra divida herdada e
+      # um portao que se aprende a ignorar — ate o dia em que ele acusar uma
+      # divergencia nova e alguem o desligar para conseguir entregar.
+      #
+      # O que faltava era so isto: o numero nao crescer calado. Passando de 41,
+      # o `::warning::` aparece no Summary do Actions e na PR, com o nome da
+      # coluna nova na saida logo acima.
+      #
+      # O SCHEMA AQUI E O QUE O PASSO ANTERIOR DEIXOU. A fixture
+      # `engine_de_teste` apaga e remonta o schema no SETUP e nao o derruba no
+      # fim, entao depois de `pytest -m db` o banco esta em head. Nao ha
+      # segunda montagem justamente para nao existir uma segunda versao do
+      # procedimento para envelhecer sozinha (o mesmo motivo do comentario do
+      # passo anterior). Se a suite `db` falhar, `if: always()` faz este passo
+      # rodar mesmo assim e o script diz "Nenhuma tabela no schema" — que e um
+      # aviso honesto, e nao um numero errado.
+      #
+      # O limite mora aqui, no YAML, de proposito: mudar o numero esperado vira
+      # um diff que alguem revisa.
+      - name: Divergencias entre o ORM e o schema (aviso)
+        if: always()
+        continue-on-error: true
+        run: python scripts/divergencias_orm_schema.py --url "$TEST_DATABASE_URL" --limite 41
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
+
+      # A SEGUNDA metade da mesma pergunta, e tambem AVISO.
+      #
+      # O passo acima conta QUANTAS colunas discordam; este conta em quantos
+      # LUGARES o codigo le uma delas como se ela nao pudesse ser nula —
+      # leitura que quebra (metodo em cima, comparacao de ordem, argumento de
+      # chamada) mais campo de schema declarado sem `| None`, que e por onde a
+      # maioria dos 500 nasce.
+      #
+      # Os dois numeros se movem por motivos diferentes: o de cima muda quando
+      # o SCHEMA muda, o de baixo quando o CODIGO muda. Um passo so nao
+      # distinguiria "acrescentei uma coluna" de "acrescentei uma leitura".
+      #
+      # O limite e LINHA DE BASE, nao conta de defeitos: o casamento e por nome
+      # de atributo, e `email` ou `created_at` sao colunas de meia duzia de
+      # tabelas. Ele responde "entrou leitura nova?" — e essa pergunta so tem
+      # valor se o numero nao crescer calado.
+      - name: Leituras de coluna nulavel (aviso)
+        if: always()
+        continue-on-error: true
+        run: python scripts/leituras_de_coluna_nulavel.py --url "$TEST_DATABASE_URL" --limite 182
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
+
+      # Escopo de tenant: VERMELHO, e nao aviso.
+      #
+      # Mesma regra dos dubles e do Redis: o numero certo e ZERO. Quem cobra e
+      # `tests/test_escopo_das_rotas.py`, na suite rapida; este passo so
+      # imprime a tabela legivel quando algo ja falhou — inclusive a coluna
+      # `[EBfr]` de cada rota, que e o que se le para achar a que mudou.
+      - name: Escopo de tenant das rotas /admin (so a saida legivel)
+        if: failure()
+        continue-on-error: true
+        run: python scripts/escopo_das_rotas.py --tudo
+
+      # Dado pessoal em chave de Redis: VERMELHO, e nao aviso.
+      #
+      # Mesma regra dos dubles de dado: aqui o numero certo e ZERO, e zero que
+      # cresce nao e divida herdada — e regressao. Quem cobra e
+      # `tests/test_dado_pessoal_no_redis.py`, que roda na suite rapida; este
+      # passo so imprime a saida legivel quando algo ja falhou.
+      - name: Dado pessoal em chave de Redis (so a saida legivel)
+        if: failure()
+        continue-on-error: true
+        run: python scripts/dados_pessoais_em_chave.py --tudo
+
+      # A terceira, e a unica das tres que e VERMELHO e nao aviso.
+      #
+      # `dubles_de_dado` ja roda como teste (`tests/test_dubles_de_dado.py`) e
+      # continua sendo assim: ali o numero certo e ZERO, e zero que cresce nao
+      # e divida herdada — e regressao. As outras duas sao aviso porque a
+      # divida existe e foi herdada; esta nao existe mais.
+      #
+      # Este passo nao repete o teste: ele so imprime a saida legivel quando
+      # alguem quiser ver o que o teste vermelho esta dizendo.
+      - name: Dubles de dado na suite (so a saida legivel)
+        if: failure()
+        continue-on-error: true
+        run: python scripts/dubles_de_dado.py
+
+      # Escrita, commit e camadas: VERMELHO, e nao aviso — pelo mesmo motivo
+      # dos dubles. As tres metades de camada (repositorio nao commita, nao
+      # levanta, endpoint nao importa repositorio) ja estavam de pe quando o
+      # varredor nasceu, e a de atomicidade tambem: o numero nunca foi outro
+      # senao zero. Zero que cresce aqui e regressao, e nao divida herdada.
+      #
+      # Quem cobra e `tests/test_escrita_e_transacao.py`, na suite rapida. Este
+      # passo so imprime a saida legivel quando algo ja falhou.
+      - name: Escrita, commit e camadas (so a saida legivel)
+        if: failure()
+        continue-on-error: true
+        run: python scripts/escrita_e_transacao.py
 
   print-agent:
     name: Testes do agente de impressão

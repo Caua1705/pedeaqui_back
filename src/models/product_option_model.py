@@ -9,6 +9,39 @@ from sqlalchemy.sql import func
 from src.db.base import Base
 
 
+# A ORDEM DO CARDAPIO, definida uma vez so.
+#
+# Ate 02/09/2026 `option_groups` e `options` eram `relationship(...)` sem
+# `order_by`, e `selectinload` NAO ordena: ele emite um segundo SELECT sem
+# `ORDER BY` nenhum, e o Postgres devolve as linhas na ordem que quiser. O
+# `sort_order` que o painel grava nao chegava na vitrine — e as duas telas
+# podiam mostrar os mesmos adicionais em ordens diferentes, na mesma hora.
+#
+# Sao FUNCOES, e nao listas prontas, por dois motivos que se somam:
+#
+# - `relationship(order_by=...)` aceita callable, entao a query do painel e o
+#   carregamento da vitrine usam LITERALMENTE a mesma expressao. Duas listas
+#   parecidas divergiriam no dia em que alguem ajustasse uma delas — que e o
+#   defeito que esta sendo consertado, so que uma camada acima;
+# - chamadas na definicao da classe, elas rodariam antes de `ProductOption`
+#   existir. O callable so e avaliado quando o mapper e configurado.
+def ordem_dos_grupos() -> list:
+    """Como os grupos de opcao aparecem, em qualquer tela."""
+    return [ProductOptionGroup.sort_order, ProductOptionGroup.name, ProductOptionGroup.id]
+
+
+def ordem_das_opcoes() -> list:
+    """Como as opcoes aparecem dentro do grupo, em qualquer tela.
+
+    O `id` no fim nao e decoracao: `sort_order` nasce 0 para todo mundo
+    (`DEFAULT 0` na coluna), entao ate o lojista arrastar a lista o
+    desempate e QUEM decide a ordem inteira. Sem uma chave unica no fim, duas
+    linhas com o mesmo `sort_order` e o mesmo `name` podem sair trocadas entre
+    duas requisicoes — o cardapio piscando sem nada ter mudado.
+    """
+    return [ProductOption.sort_order, ProductOption.name, ProductOption.id]
+
+
 class ProductOptionGroup(Base):
     __tablename__ = "product_option_groups"
 
@@ -23,7 +56,11 @@ class ProductOptionGroup(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     product = relationship("Product", back_populates="option_groups")
-    options = relationship("ProductOption", back_populates="option_group")
+    options = relationship(
+        "ProductOption",
+        back_populates="option_group",
+        order_by=ordem_das_opcoes,
+    )
 
 
 class ProductOption(Base):

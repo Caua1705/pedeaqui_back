@@ -48,6 +48,8 @@ from src.schemas.admin_printing_schema import (
 )
 from src.services.admin_printing_service import UNASSIGNED_SECTOR_NAME, AdminPrintingService
 from src.services.order_service import OrderService
+from src.models.category_model import Category
+from tests import fabricas
 
 
 RESTAURANT_ID = uuid.uuid4()
@@ -229,7 +231,7 @@ def make_branch(branch_id=BRANCH_ID, **overrides):
 
 def make_scope(branch_id=None):
     return AdminScope(
-        admin_user=SimpleNamespace(id=uuid.uuid4(), email="dono@loja.com", role="owner"),
+        admin_user=fabricas.usuario_do_painel(email="dono@loja.com", role="owner"),
         restaurant_id=RESTAURANT_ID,
         branch_id=branch_id,
     )
@@ -257,8 +259,7 @@ def make_product(
     20260820_0026 produto e setor tem que estar na mesma loja, e a FK
     composta nao deixa gravar o contrario.
     """
-    return SimpleNamespace(
-        id=uuid.uuid4(),
+    return fabricas.produto(
         restaurant_id=restaurant_id,
         branch_id=branch_id,
         category_id=category_id or uuid.uuid4(),
@@ -792,8 +793,8 @@ class SectorCrudTests(unittest.TestCase):
         service = build_service(
             repository,
             branches=[
-                SimpleNamespace(id=BRANCH_ID, restaurant_id=RESTAURANT_ID),
-                SimpleNamespace(id=OTHER_BRANCH_ID, restaurant_id=RESTAURANT_ID),
+                fabricas.filial(id=BRANCH_ID, restaurant_id=RESTAURANT_ID),
+                fabricas.filial(id=OTHER_BRANCH_ID, restaurant_id=RESTAURANT_ID),
             ],
         )
 
@@ -914,7 +915,7 @@ class CategoryBindingTests(unittest.TestCase):
         # E como a configuracao acontece: "toda bebida vai para o Bar".
         # Produto a produto, um cardapio de 200 itens nunca sai do lugar.
         sector = make_sector("Bar")
-        category = SimpleNamespace(id=uuid.uuid4(), restaurant_id=RESTAURANT_ID, branch_id=BRANCH_ID)
+        category = Category(id=uuid.uuid4(), restaurant_id=RESTAURANT_ID, branch_id=BRANCH_ID, name="Bebidas", is_active=True, sort_order=0)
         drinks = [make_product(category_id=category.id) for _ in range(3)]
         other = make_product()
         repository = FakeSectorRepository([sector], drinks + [other])
@@ -934,7 +935,7 @@ class CategoryBindingTests(unittest.TestCase):
         # O restaurante entra no WHERE junto com a categoria: sem ele, um
         # UUID de categoria alheia reescreveria o cardapio de outro dono.
         sector = make_sector()
-        category = SimpleNamespace(id=uuid.uuid4(), restaurant_id=RESTAURANT_ID, branch_id=BRANCH_ID)
+        category = Category(id=uuid.uuid4(), restaurant_id=RESTAURANT_ID, branch_id=BRANCH_ID, name="Bebidas", is_active=True, sort_order=0)
         repository = FakeSectorRepository([sector])
         service = build_service(repository, FakeMenuRepository(categories=[category]))
 
@@ -947,7 +948,7 @@ class CategoryBindingTests(unittest.TestCase):
         self.assertEqual(repository.category_updates, [(category.id, RESTAURANT_ID, sector.id)])
 
     def test_a_category_of_another_restaurant_is_not_found(self):
-        category = SimpleNamespace(id=uuid.uuid4(), restaurant_id=uuid.uuid4(), branch_id=OTHER_BRANCH_ID)
+        category = Category(id=uuid.uuid4(), restaurant_id=uuid.uuid4(), branch_id=OTHER_BRANCH_ID, name="Bebidas", is_active=True, sort_order=0)
         service = build_service(FakeSectorRepository(), FakeMenuRepository(categories=[category]))
 
         with self.assertRaises(HTTPException) as caught:

@@ -2,12 +2,13 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, ForeignKey, Integer, Numeric, Text, TIMESTAMP
+from sqlalchemy import BigInteger, ForeignKey, Integer, Numeric, Text, TIMESTAMP, and_
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, foreign, mapped_column, relationship
 from sqlalchemy.sql import func, text
 
 from src.db.base import Base
+from src.models.courier_model import CourierAssignment
 
 
 class Order(Base):
@@ -113,3 +114,21 @@ class Order(Base):
     status_history = relationship("OrderStatusHistory", back_populates="order")
     coupon = relationship("RestaurantCoupon")
     coupon_redemption = relationship("CouponRedemption", back_populates="order", uselist=False)
+    # A atribuicao ABERTA (`unassigned_at IS NULL`): quem esta com o pedido
+    # agora. `viewonly` porque quem escreve atribuicao e `CourierRepository`,
+    # e uma relacao gravavel aqui seria a segunda porta de escrita. Uma so
+    # por pedido, garantida pelo indice parcial da revisao 0045.
+    #
+    # Existe para a listagem do painel (e o evento do stream, que monta o
+    # mesmo item) carregarem o nome do motoboy com `selectinload` — sem um
+    # SELECT por linha. Em objeto transiente vale `None`, que e o que a
+    # suite rapida e o pedido sem motoboy produzem.
+    courier_assignment = relationship(
+        CourierAssignment,
+        primaryjoin=lambda: and_(
+            Order.id == foreign(CourierAssignment.order_id),
+            CourierAssignment.unassigned_at.is_(None),
+        ),
+        uselist=False,
+        viewonly=True,
+    )

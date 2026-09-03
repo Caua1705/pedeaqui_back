@@ -10,13 +10,14 @@ A regra agora: ou existe faixa que contem o agora, ou esta fechado.
 
 import unittest
 import uuid
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 
 from src.services.branch_hours_service import BranchHoursService
+from tests import fabricas
 
 
 TIMEZONE = ZoneInfo("America/Fortaleza")
@@ -28,7 +29,7 @@ TUESDAY = 1
 
 
 def period(opens_at, closes_at, prep_time_min=20, prep_time_max=30, is_closed=False):
-    return SimpleNamespace(
+    return fabricas.horario(
         opens_at=opens_at,
         closes_at=closes_at,
         prep_time_min=prep_time_min,
@@ -37,11 +38,14 @@ def period(opens_at, closes_at, prep_time_min=20, prep_time_max=30, is_closed=Fa
     )
 
 
-def build_service(periods_by_weekday):
+def build_service(periods_by_weekday, agora=None):
     service = BranchHoursService.__new__(BranchHoursService)
     service.branch_repository = SimpleNamespace(
         list_business_hours_by_weekday=lambda branch_id, weekday: periods_by_weekday.get(weekday, [])
     )
+    # O relogio injetado. Sem ele, `ensure_branch_is_open` le o da maquina —
+    # ver `test_open_branch_returns_the_current_period`.
+    service.clock = lambda: agora or moment(27, 12)
     return service
 
 
@@ -132,12 +136,58 @@ class EnsureOpenTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 400)
 
     def test_open_branch_returns_the_current_period(self):
-        # Dia inteiro aberto para nao depender da hora em que o teste roda.
-        service = build_service({weekday: [period(time(0, 0), time(23, 59), 15, 25)] for weekday in range(7)})
+        """O QUE ESTE TESTE JA ESCONDEU, e por que o relogio agora e injetado.
+
+        Ele dizia "dia inteiro aberto para nao depender da hora em que o teste
+        roda", e a faixa 00:00-23:59 NAO e o dia inteiro:
+        `_period_covers_same_day` compara `current_time <= closes_at`, e
+        `23:59:30 > 23:59:00`. Entre 23:59:01 e 23:59:59 a filial ficava
+        fechada e este teste falhava — 59 segundos por dia, com um vermelho
+        que nao aponta para a hora em lugar nenhum.
+
+        Achado rodando a suite inteira com o relogio congelado em instantes
+        adversariais: foi o UNICO teste que falhou as 23:59:30 e passou as
+        12:00.
+
+        O conserto e o instante injetado — meio-dia, longe de qualquer borda.
+        Esticar a faixa para `23:59:59.999999` trocaria uma borda por outra
+        menor e deixaria o teste dependendo do relogio para nada. O buraco em
+        si nao e defeito e nao foi mexido: ele e o comportamento correto de
+        `_period_covers_same_day`, e esta afirmado no teste seguinte.
+        """
+        service = build_service(
+            {weekday: [period(time(0, 0), time(23, 59), 15, 25)] for weekday in range(7)}
+        )
 
         found = service.ensure_branch_is_open(BRANCH_ID)
 
         self.assertEqual(found.prep_time_max, 25)
+
+    def test_a_faixa_ate_23_59_nao_cobre_23_59_30(self):
+        """O buraco, afirmado — para ninguem "consertar" o teste de cima errado.
+
+        `closes_at` e um `time` com resolucao de minuto no cadastro, e a
+        comparacao e inclusiva nos dois lados. Uma loja que fecha 23:59 esta
+        fechada as 23:59:30, e isso e o certo: o lojista disse ate 23:59.
+
+        NAO ha, hoje, jeito limpo de cadastrar "24 horas". 00:00-00:00 nao
+        serve: `opens_at <= closes_at` e verdadeiro, entao cai no ramo do
+        mesmo dia e cobre exatamente a meia-noite — conferido, e o contrario
+        do que a intuicao diz. O que cobriria e `closes_at` com segundos
+        (`23:59:59`), e nem o painel nem `BusinessHourInput` pedem segundos.
+
+        Nada disso foi mexido: e um buraco de UM MINUTO por dia numa loja que
+        se declara aberta ate 23:59, e o custo de mexer no formato do cadastro
+        e maior que o do buraco. O que este teste garante e que ele nao volte
+        a ser DESCOBERTO por acidente, num vermelho de madrugada.
+        """
+        service = build_service(
+            {weekday: [period(time(0, 0), time(23, 59), 15, 25)] for weekday in range(7)},
+            agora=moment(27, 23, 59) + timedelta(seconds=30),
+        )
+
+        with self.assertRaises(HTTPException):
+            service.ensure_branch_is_open(BRANCH_ID)
 
 
 if __name__ == "__main__":

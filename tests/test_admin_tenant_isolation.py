@@ -13,6 +13,7 @@ diferentes e so a segunda pega um erro de SQL.
 
 import unittest
 import uuid
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -22,6 +23,7 @@ from src.schemas.admin_order_schema import UpdateOrderStatusRequest
 from src.api.dependencies.admin_scope import AdminScope, build_admin_scope
 from src.services.admin_order_service import AdminOrderService
 from src.services.order_service import OrderService
+from tests import fabricas
 
 
 class FakeDb:
@@ -91,7 +93,7 @@ class TenantScopedOrderRepository:
 
 # Lojista autenticado usado nas chamadas de escrita: `changed_by` deixou de
 # vir do corpo e passou a sair do token (AdminOrderService._admin_signature).
-ADMIN_USER = SimpleNamespace(id=uuid.uuid4(), email="lojista@exemplo.com")
+ADMIN_USER = fabricas.usuario_do_painel(email="lojista@exemplo.com")
 
 
 def owner_scope(restaurant_id):
@@ -103,18 +105,14 @@ def branch_scope(restaurant_id, branch_id):
 
 
 def make_order(restaurant_id, branch_id=None):
-    return SimpleNamespace(
-        id=uuid.uuid4(),
+    return fabricas.pedido(
         restaurant_id=restaurant_id,
         branch_id=branch_id or uuid.uuid4(),
-        status="pending",
         payment_status="on_delivery",
         payment_method="cash",
-        order_number=1,
         customer_name_snapshot="Cliente",
-        customer_phone_snapshot="85999999999",
         order_type="delivery",
-        total=10,
+        total=Decimal("10.00"),
         created_at=None,
     )
 
@@ -148,10 +146,24 @@ class ReadIsolationTests(unittest.TestCase):
         self.assertEqual(unknown.exception.detail, foreign.exception.detail)
 
     def test_owner_restaurant_reads_its_own_order(self):
-        with patch.object(OrderService, "to_order_detail_response", return_value="detail"):
+        """O lado positivo do isolamento: o dono do B enxerga o pedido do B.
+
+        A ASSERCAO QUE VALE E A SEGUNDA. `result == "detail"` sozinho nao
+        prova nada — `to_order_detail_response` esta dublado com retorno fixo,
+        entao aquilo so diz que o dublê devolveu o que mandaram ele devolver.
+        O teste passaria com o repositorio ignorando o `restaurant_id` inteiro,
+        que e exatamente o defeito que ele diz cobrir.
+
+        Quem prova e a chamada registrada: o `restaurant_id` do TOKEN chegou ao
+        repositorio junto do `order_id`. E o `WHERE restaurant_id = :r` do SQL
+        real, visto de fora.
+        """
+        with patch.object(OrderService, "to_order_detail_response", return_value="detail") as serializar:
             result = self.service.get_order_detail(self.order_of_b.id, owner_scope(self.restaurant_b))
 
         self.assertEqual(result, "detail")
+        self.assertEqual(self.repository.calls, [(self.order_of_b.id, self.restaurant_b)])
+        self.assertIs(serializar.call_args.args[0], self.order_of_b)
 
     def test_restaurant_id_is_always_forwarded_to_the_repository(self):
         with self.assertRaises(HTTPException):
@@ -287,7 +299,7 @@ class ScopeRuleTests(unittest.TestCase):
 
     def test_owner_ignores_its_branch_and_sees_the_whole_restaurant(self):
         restaurant_id = uuid.uuid4()
-        admin_user = SimpleNamespace(
+        admin_user = fabricas.usuario_do_painel(
             role="owner", restaurant_id=restaurant_id, branch_id=uuid.uuid4()
         )
 
@@ -298,9 +310,7 @@ class ScopeRuleTests(unittest.TestCase):
 
     def test_manager_with_branch_is_restricted_to_it(self):
         branch_id = uuid.uuid4()
-        admin_user = SimpleNamespace(
-            role="manager", restaurant_id=uuid.uuid4(), branch_id=branch_id
-        )
+        admin_user = fabricas.usuario_do_painel(role="manager", branch_id=branch_id)
 
         scope = build_admin_scope(admin_user)
 
@@ -308,9 +318,7 @@ class ScopeRuleTests(unittest.TestCase):
         self.assertFalse(scope.sees_all_branches)
 
     def test_attendant_without_branch_sees_every_branch(self):
-        admin_user = SimpleNamespace(
-            role="attendant", restaurant_id=uuid.uuid4(), branch_id=None
-        )
+        admin_user = fabricas.usuario_do_painel(role="attendant", branch_id=None)
 
         scope = build_admin_scope(admin_user)
 

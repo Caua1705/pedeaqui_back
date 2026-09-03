@@ -165,8 +165,9 @@ Aqui rodam as duas guardas, nesta ordem: `ensure_order_transition_allowed` (o
 grafo) e `ensure_payment_allows_order_status` (o dinheiro). Ver a seção 5.
 
 `PATCH /admin/orders/{id}/cancel` **não** é uma segunda escrita de status, e
-desde 25/08/2026 nem a terceira porta é: as três — o PATCH de status, o cancelamento
-pelo painel e o **cancelamento pelo cliente** — desembocam em
+desde 25/08/2026 nem a terceira porta é: as quatro — o PATCH de status, o cancelamento
+pelo painel, o **cancelamento pelo cliente** e, desde 03/09/2026, o
+**entregador** marcando "saiu" e "entregue" — desembocam em
 `OrderStatusChangeService.apply`, que é o único lugar do sistema que grava
 `orders.status`. Escritas independentes seriam a chance de a máquina de estados
 valer numa e não na outra; com dinheiro em cima (cupom, cashback e estorno saem
@@ -277,6 +278,7 @@ alguém come o prejuízo.*
 |---|---|---|
 | **cliente** (`POST /restaurants/{slug}/orders/track/{token}/cancel`) | `pending`, `accepted` | nada além do `tracking_token`; motivo é opcional |
 | **lojista** (`PATCH .../cancel` e `PATCH .../status`) | qualquer estado não-terminal | motivo obrigatório; **e confirmação explícita a partir de `preparing`** |
+| **entregador** (`POST /courier/{link}/orders/...`) | só `ready → out_for_delivery → completed` | a atribuição aberta com o `courier.id` dele; nem cancela nem volta. Ver [entregadores.md](entregadores.md) |
 
 **`preparing` entra na faixa que exige confirmação**, e a escolha é
 deliberada: "a comida já foi feita" começa quando ela começa a ser feita, não
@@ -397,9 +399,11 @@ um worker o Rapi "esquece" a conversa. Não há caminho de Redis para ele.
 | [modelo-de-dados.md](modelo-de-dados.md) | tabelas, o que cada uma guarda, como se ligam, isolamento entre restaurantes |
 | [pagamentos-e-comissao.md](pagamentos-e-comissao.md) | fluxo de cobrança, Mercado Pago, credencial por restaurante, comissão, o que ficou de fora |
 | [entrega-e-horarios.md](entrega-e-horarios.md) | estimativa, taxa por km, horário de funcionamento, reaproveitamento de estimativa |
-| [autenticacao-e-escopo.md](autenticacao-e-escopo.md) | token de cliente, token de lojista, escopo por restaurante e por filial |
+| [autenticacao-e-escopo.md](autenticacao-e-escopo.md) | token de cliente, token de lojista, escopo por restaurante e por filial, o par do entregador |
+| [entregadores.md](entregadores.md) | cadastro, link + código, atribuição, a taxa que a loja paga por corrida, a tela do motoboy, o que ficou para a fase 2 |
 | [impressao.md](impressao.md) | setores, montagem das comandas, o print-agent |
 | [avaliacao-de-pedido.md](avaliacao-de-pedido.md) | nota do cliente pelo link de acompanhamento, aba do painel, LGPD do texto livre, e por que o QR na comanda ficou para depois |
+| [custo-de-ia.md](custo-de-ia.md) | quanto o assistente custa por restaurante: o que é gravado por chamada, a rota de leitura, e por que ela não é do painel |
 | [operacao.md](operacao.md) | subir local, deploy, migrações, logs, o que fazer quando não sobe |
 | [onboarding-de-restaurante.md](onboarding-de-restaurante.md) | pôr um restaurante novo no ar, do zero ao primeiro pedido pago e impresso; os cinco passos que quebram em silêncio; os fluxos em linguagem de lojista |
 

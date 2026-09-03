@@ -20,7 +20,7 @@ banco sao dublados e a regra de negocio (horario, taxa) roda de verdade.
 
 import unittest
 import uuid
-from datetime import time
+from datetime import datetime, time
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -37,19 +37,23 @@ from src.services.branch_hours_service import BranchHoursService
 from src.services.delivery_estimate_service import DeliveryEstimateService
 from src.services.restaurant_service import RestaurantService
 from src.utils.geo import haversine_km
+from src.services.branch_availability_service import BRANCH_TIMEZONE
+from tests import fabricas
+
+
+# Segunda-feira, 12:00, no fuso da loja. Ver o comentario do `clock` no setUp.
+AGORA = datetime(2026, 7, 27, 12, 0, tzinfo=BRANCH_TIMEZONE)
 
 
 DIA_INTEIRO = (time(0, 0), time(23, 59))
 
 
 def faixa(opens_at=time(0, 0), closes_at=time(23, 59), prep_min=30, prep_max=45):
-    return SimpleNamespace(
-        weekday=0,
+    return fabricas.horario(
         opens_at=opens_at,
         closes_at=closes_at,
         prep_time_min=prep_min,
         prep_time_max=prep_max,
-        is_closed=False,
     )
 
 
@@ -89,54 +93,31 @@ def filial(
     raio="10.00",
     is_open=True,
 ):
-    return SimpleNamespace(
-        id=uuid.uuid4(),
+    # Das seis `address_*` (resto do schema pre-Alembic, que nada escreve) so
+    # `address_number` continua sendo lida: e a unica sem par vivo. As outras
+    # cinco sairam de `_build_address` — ver `test_restaurant_info`.
+    #
+    # A operacao e da filial desde a revisao 20260818_0025. `is_open` e a pausa
+    # manual; os nulos que a fabrica ja poe dizem que esta filial herda os
+    # padroes comerciais do restaurante.
+    return fabricas.filial(
         name=nome,
-        display_name=None,
         slug=nome.lower(),
         address=f"Rua {nome}, 1",
-        address_street=None,
-        address_number=None,
-        address_neighborhood=None,
-        address_city=None,
-        address_state=None,
-        address_zipcode=None,
         neighborhood="Centro",
-        city="Fortaleza",
-        state="CE",
-        zipcode=None,
-        phone=None,
-        whatsapp=None,
         latitude=Decimal(str(latitude)),
         longitude=Decimal(str(longitude)),
         is_main=is_main,
         delivery_base_fee=Decimal("5.00"),
         delivery_fee_per_km=Decimal("1.50"),
-        delivery_min_fee=None,
-        delivery_max_fee=None,
         delivery_max_distance_km=Decimal(raio),
-        # A operacao e da filial desde a revisao 20260818_0025. `is_open` e a
-        # pausa manual; os nulos abaixo dizem que esta filial herda os
-        # padroes comerciais do restaurante.
         is_open=is_open,
-        accepts_delivery=True,
-        accepts_pickup=True,
-        delivery_paused_until=None,
-        delivery_pause_reason=None,
-        min_order_value=None,
-        service_fee_enabled=None,
-        service_fee_amount=None,
-        estimated_delivery_time_min=None,
-        estimated_delivery_time_max=None,
-        default_delivery_fee=None,
-        free_delivery_enabled=None,
-        free_delivery_min_order_value=None,
     )
 
 
 class BranchAvailabilityTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.restaurant = SimpleNamespace(id=uuid.uuid4(), slug="junior-da-picanha")
+        self.restaurant = fabricas.restaurante()
 
         # O cliente esta em (-3,75; -38,55). A Matriz fica perto. A Centro
         # fica 0,10 grau de latitude ao sul (~11,1 km) mais 0,03 de longitude
@@ -169,20 +150,18 @@ class BranchAvailabilityTests(unittest.TestCase):
         delivery.branch_hours_service = hours_service
         delivery.customer_repository = SimpleNamespace(get_address=lambda *_: None)
         menu_repository = SimpleNamespace(
-            get_settings=lambda restaurant_id: SimpleNamespace(
-                min_order_value=None,
-                service_fee_enabled=None,
-                service_fee_amount=None,
-                estimated_delivery_time_min=None,
-                estimated_delivery_time_max=None,
-                default_delivery_fee=None,
-                free_delivery_enabled=None,
-                free_delivery_min_order_value=None,
+            get_settings=lambda restaurant_id: fabricas.configuracoes(
+                min_order_value=None, service_fee_enabled=None, service_fee_amount=None
             )
         )
         delivery.menu_repository = menu_repository
         delivery.maps_client = self.maps
         delivery.cache = FakeCache()
+        # O relogio injetado nos DOIS servicos, e o MESMO instante nos dois:
+        # a lista compara filiais entre si, e dois relogios diferentes
+        # compararia coisas medidas em momentos diferentes. Ver o comentario
+        # em `tests/test_delivery_estimate.py`.
+        delivery.clock = lambda: AGORA
 
         self.service = BranchAvailabilityService.__new__(BranchAvailabilityService)
         self.service.restaurant_service = SimpleNamespace(
@@ -192,6 +171,7 @@ class BranchAvailabilityTests(unittest.TestCase):
         self.service.menu_repository = menu_repository
         self.service.branch_hours_service = hours_service
         self.service.delivery_service = delivery
+        self.service.clock = lambda: AGORA
 
     # -----------------------------------------------------------------
 

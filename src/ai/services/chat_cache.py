@@ -277,9 +277,23 @@ class ChatCache:
         generation = menu_generation.current(restaurant_id)
         teto = "" if max_price is None else f":p{max_price}"
         quantos = "" if top_k is None else f":k{top_k}"
+        # O DIGEST, e nao a mensagem normalizada. Pelo mesmo motivo de
+        # `embedding_key`, e apesar de este cache viver **so em memoria**.
+        #
+        # Hoje `self._retrievals` e um `dict` do processo: a mensagem nao
+        # aparece em `KEYS` nem em dump, e o risco e outra ordem de grandeza.
+        # Mas o cache de embedding tambem era assim, e subir para o Redis foi
+        # uma mudanca de POUCAS LINHAS — feita por um bom motivo, e que teria
+        # levado a mensagem do cliente junto sem ninguem notar.
+        #
+        # O digest nao custa nada aqui (e o mesmo `message_digest` que a outra
+        # chave ja calcula no mesmo turno) e nao muda comportamento nenhum: ele
+        # e deterministico, entao a mesma pergunta continua caindo na mesma
+        # entrada. O que se perde e poder ler a pergunta do cliente olhando a
+        # chave — que e exatamente o ponto.
         return (
             f"{restaurant_id}:{branch_id}:g{generation}{teto}{quantos}"
-            f":{self.normalize_message(message)}"
+            f":{self.message_digest(message)}"
         )
 
     def get_embedding(self, key: str) -> tuple[list[float] | None, str | None]:

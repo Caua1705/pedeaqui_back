@@ -5,6 +5,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from src.core.constants import PAYMENT_STATUSES_WITH_LIVE_CHARGE
+from src.models.courier_model import CourierAssignment
 from src.models.order_item_model import OrderItem
 from src.models.order_item_option_model import OrderItemOption
 from src.models.order_model import Order
@@ -97,6 +98,18 @@ def excluded_order_conditions(
 _ORDER_DETAIL_LOADERS = (
     selectinload(Order.items).selectinload(OrderItem.options),
     selectinload(Order.status_history),
+)
+
+# Quem esta com o pedido, para `AdminOrderService.to_list_item`. Vai nas TRES
+# consultas que alimentam aquele item — a pagina e os dois polls do stream —,
+# porque um item montado sem o loader dispararia dois SELECTs por linha
+# (a atribuicao e o entregador). `tests/test_entregador_na_listagem_db.py`
+# conta as consultas.
+#
+# Tupla, como `_ORDER_DETAIL_LOADERS`: e tabela constante do modulo, e e assim
+# que `scripts/estado_entre_workers.py` a reconhece como inerte.
+_COURIER_LOADERS = (
+    selectinload(Order.courier_assignment).selectinload(CourierAssignment.courier),
 )
 
 
@@ -226,6 +239,7 @@ class OrderRepository:
     ) -> list[Order]:
         stmt = (
             select(Order)
+            .options(*_COURIER_LOADERS)
             .where(*self._admin_list_conditions(
                 restaurant_id=restaurant_id,
                 branch_id=branch_id,
@@ -315,6 +329,7 @@ class OrderRepository:
 
         stmt = (
             select(Order)
+            .options(*_COURIER_LOADERS)
             .where(*conditions)
             .order_by(Order.created_at.asc())
             .limit(limit)
@@ -349,6 +364,7 @@ class OrderRepository:
         stmt = (
             select(OrderStatusHistory, Order)
             .join(Order, Order.id == OrderStatusHistory.order_id)
+            .options(*_COURIER_LOADERS)
             .where(*conditions)
             .order_by(OrderStatusHistory.created_at.asc())
             .limit(limit)

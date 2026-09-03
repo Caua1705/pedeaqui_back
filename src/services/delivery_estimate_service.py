@@ -2,7 +2,7 @@ import hashlib
 import json
 import logging
 import threading
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from time import monotonic, time
@@ -173,8 +173,14 @@ class DeliveryEstimateCache:
         if payload is None:
             return None
         try:
-            return DeliveryEstimateResult(**json.loads(payload))
-        except (TypeError, ValueError):
+            guardado = json.loads(payload)
+        except ValueError:
+            return None
+        try:
+            # As coordenadas voltam NULAS, e quem as recoloca e `estimate`, a
+            # partir do destino que ele ja tem na mao. Ver `set`.
+            return DeliveryEstimateResult(**guardado, latitude=None, longitude=None)
+        except TypeError:
             return None
 
     def set(self, key: str, result: DeliveryEstimateResult) -> None:
@@ -183,7 +189,24 @@ class DeliveryEstimateCache:
             if result.serviceable
             else settings.DELIVERY_ESTIMATE_NEGATIVE_CACHE_TTL_SECONDS
         )
-        payload = json.dumps(asdict(result), separators=(",", ":"))
+        # A COORDENADA DO CLIENTE NAO E GRAVADA (03/09/2026).
+        #
+        # A chave ja deixou de carrega-la (ver `_cache_key`), e sem isto o
+        # valor continuaria carregando: `SETEX chave VALOR` expoe o valor no
+        # `MONITOR` tanto quanto a chave, e um dump guarda os dois.
+        #
+        # Nada se perde. `estimate` resolve `destination` ANTES de consultar o
+        # cache — e dele que a chave e derivada —, entao ele recoloca as duas
+        # na volta. E recolocar e ate mais correto do que devolver o guardado:
+        # a chave agrupa por quatro casas decimais, entao um acerto pode vir de
+        # uma coordenada VIZINHA, e o pedido tem que gravar a do endereco que
+        # ele esta usando, nao a do vizinho que consultou antes.
+        guardado = {
+            campo: valor
+            for campo, valor in asdict(result).items()
+            if campo not in ("latitude", "longitude")
+        }
+        payload = json.dumps(guardado, separators=(",", ":"))
         if self.redis is not None:
             try:
                 self.redis.setex(key, ttl, payload)
@@ -214,6 +237,19 @@ class DeliveryEstimateService:
             routing_preference=settings.GOOGLE_MAPS_ROUTING_PREFERENCE,
         )
         self.cache = cache or DeliveryEstimateCache()
+        # O RELOGIO, INJETAVEL — mesmo desenho de `CouponService.clock`.
+        #
+        # Sem ele, `_resolve_prep_time` lia `datetime.now()` direto e todo
+        # teste de estimativa passava a depender do minuto em que rodasse. Nao
+        # e hipotese: a faixa "dia inteiro" que os testes usam vai de 00:00 a
+        # 23:59, e `_period_covers_same_day` compara `current_time <=
+        # closes_at` — entre 23:59:01 e 23:59:59 a filial estava FECHADA e as
+        # dezenas de testes que dependem dela falhavam. Um minuto por dia.
+        #
+        # Fuso do BRASIL e nao UTC: quem decide se a loja esta aberta e o
+        # relogio da rua, e `weekday()` de um instante UTC vira o dia errado
+        # nas tres primeiras horas da madrugada.
+        self.clock = lambda: datetime.now(DELIVERY_TIMEZONE)
 
     def estimate_and_store(
         self,
@@ -390,6 +426,13 @@ class DeliveryEstimateService:
             )
             cached = self.cache.get(cache_key)
             if cached is not None:
+                # As coordenadas nao vem do cache (ver `DeliveryEstimateCache.set`):
+                # elas voltam do destino que este mesmo metodo acabou de resolver.
+                cached = replace(
+                    cached,
+                    latitude=destination.latitude,
+                    longitude=destination.longitude,
+                )
                 logger.info(
                     "[Delivery estimate] provider=%s cache_hit=true serviceable=%s",
                     cached.provider,
@@ -806,7 +849,7 @@ class DeliveryEstimateService:
         return hashlib.sha256("|".join(partes).encode("utf-8")).hexdigest()[:12]
 
     def _resolve_prep_time(self, branch_id) -> tuple[int | None, int | None, str, int]:
-        now = datetime.now(DELIVERY_TIMEZONE)
+        now = self.clock()
         weekday = now.weekday()
         # A escolha da faixa mudou de lugar: agora e BranchHoursService quem
         # decide, e ela devolve None quando o momento atual nao cai em faixa
@@ -991,25 +1034,77 @@ class DeliveryEstimateService:
         branch,
         bands_fingerprint: str,
     ) -> str:
-        """A chave carrega TUDO que muda o resultado guardado.
+        """A chave carrega TUDO que muda o resultado guardado — em DIGEST.
 
         As faixas de prazo entraram na chave junto com a feature, e nao
         depois: sem elas, editar a faixa no painel continuaria servindo o
         prazo antigo por ate 20 minutos (DELIVERY_ESTIMATE_CACHE_TTL_SECONDS)
         — e o lojista que acabou de corrigir um prazo desonesto veria a
         correcao nao surtir efeito, sem nada no log.
+
+        =====================================================================
+        A COORDENADA DO CLIENTE NAO VAI MAIS EM CLARO (03/09/2026)
+        =====================================================================
+
+        Ate esta data a chave era, literalmente:
+
+            delivery-estimate:v1:{slug}:{branch_id}:{lat:.4f}:{lon:.4f}:...
+
+        **Quatro casas decimais sao ~11 metros.** Isso identifica uma casa, nao
+        um bairro — e ia para o Redis em texto puro, onde aparece em `KEYS`, em
+        `SCAN`, em `MONITOR`, em qualquer dump e no painel de qualquer Redis
+        gerenciado.
+
+        A regra ja estava escrita neste repositorio, tres arquivos ao lado, em
+        `ChatCache.embedding_key`: *"o que o cliente digita nao vai para chave
+        de Redis. E texto de pessoa, aparece em KEYS, em MONITOR, em qualquer
+        dump."* Ninguem desobedeceu de proposito — quem escreveu esta chave nao
+        estava lendo aquele docstring. Por isso a regra passou a ter varredura
+        propria: `scripts/dados_pessoais_em_chave.py`.
+
+        **O digest nao muda o comportamento do cache.** Ele e deterministico,
+        entao a mesma coordenada continua caindo na mesma entrada e o acerto
+        continua igual. O que muda e que a chave deixa de dizer onde a pessoa
+        mora.
+
+        **E outro problema, de graca:** sha-256 nao tem `:`, entao nenhum dos
+        pedacos pode mais empurrar o formato da chave. Era um risco teorico com
+        `Decimal` de fuso estranho e deixou de existir.
+
+        As quatro casas continuam sendo a granularidade — elas entram no digest,
+        nao na chave. Arredondar mais grosso trocaria precisao de cache por uma
+        privacidade que o digest ja da inteira.
+
+        **O `v2` no prefixo e obrigatorio.** Sem ele, as chaves `v1` que estao
+        no Redis agora continuariam sendo lidas por 10 minutos por um codigo que
+        escreve `v2` — inofensivo, mas o contrario tambem vale: quem voltar a
+        imagem antiga leria `v1`. Versionar deixa os dois conjuntos
+        inalcancaveis um pelo outro, que e o que a mudanca de formato pede.
         """
         ttl = max(1, settings.DELIVERY_ESTIMATE_CACHE_TTL_SECONDS)
         bucket = int(time() // ttl)
-        return (
-            f"delivery-estimate:v1:{restaurant_slug}:{branch_id}:"
-            f"{destination.latitude:.4f}:{destination.longitude:.4f}:"
-            f"{prep_time_min or 'none'}:{prep_time_max or 'none'}:"
-            f"{getattr(branch, 'delivery_base_fee', None) or 'none'}:"
-            f"{getattr(branch, 'delivery_fee_per_km', None) or 'none'}:"
-            f"{getattr(branch, 'delivery_min_fee', None) or 'none'}:"
-            f"{getattr(branch, 'delivery_max_fee', None) or 'none'}:"
-            f"{getattr(branch, 'delivery_max_distance_km', None) or 'none'}:"
-            f"{bands_fingerprint}:"
-            f"{bucket}"
+        # Tudo que muda o resultado, junto, e so entao o digest. A ordem e fixa
+        # e o separador e `|` porque o `:` e do formato da chave.
+        material = "|".join(
+            str(pedaco)
+            for pedaco in (
+                restaurant_slug,
+                branch_id,
+                f"{destination.latitude:.4f}",
+                f"{destination.longitude:.4f}",
+                prep_time_min or "none",
+                prep_time_max or "none",
+                getattr(branch, "delivery_base_fee", None) or "none",
+                getattr(branch, "delivery_fee_per_km", None) or "none",
+                getattr(branch, "delivery_min_fee", None) or "none",
+                getattr(branch, "delivery_max_fee", None) or "none",
+                getattr(branch, "delivery_max_distance_km", None) or "none",
+                bands_fingerprint,
+            )
         )
+        digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
+        # `branch_id` FICA em claro, e de proposito: e identificador interno,
+        # nao diz nada sobre a pessoa, e sem ele nao ha como varrer as chaves
+        # de uma filial para depurar cache. O `slug` sai porque nao acrescenta
+        # nada que o `branch_id` nao diga.
+        return f"delivery-estimate:v2:{branch_id}:{digest}:{bucket}"

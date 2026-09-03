@@ -10,7 +10,7 @@ gratis nao entra junto com a taxa que ele desconta.
 
 import unittest
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -19,6 +19,7 @@ from fastapi import HTTPException
 from src.schemas.order_schema import CreateOrderRequest
 from src.services.admin_report_service import AdminReportService
 from src.services.order_service import OrderService
+from tests import fabricas
 
 
 class FakeDb:
@@ -61,9 +62,7 @@ class FakeCouponService:
 
     def __init__(self, discount, discount_type="fixed"):
         self.discount = discount
-        self.coupon = SimpleNamespace(
-            id=uuid.uuid4(), code="SAVE", discount_type=discount_type
-        )
+        self.coupon = fabricas.cupom(code="SAVE", discount_type=discount_type)
 
     def lock_and_validate_for_order(self, **kwargs):
         return self.coupon, self.discount
@@ -79,57 +78,28 @@ def build_service(
     coupon_discount=None,
     coupon_discount_type="fixed",
 ):
-    branch = SimpleNamespace(
-        id=uuid.uuid4(),
-        # As tres chaves da operacao sao da FILIAL desde a revisao
-        # 20260818_0025; os seis campos nulos sao "herda o padrao do
-        # restaurante", que e como toda filial nasce.
-        is_open=True,
-        accepts_delivery=True,
-        accepts_pickup=True,
-        delivery_paused_until=None,
-        delivery_pause_reason=None,
-        min_order_value=None,
-        service_fee_enabled=None,
-        service_fee_amount=None,
-        estimated_delivery_time_min=None,
-        estimated_delivery_time_max=None,
-        default_delivery_fee=None,
-        free_delivery_enabled=None,
-        free_delivery_min_order_value=None,
-    )
-    product_id = uuid.uuid4()
-    product = SimpleNamespace(
-        id=product_id,
-        code="P1",
-        catalog_key=None,
-        name="Picanha",
-        description=None,
-        price=Decimal("50.00"),
-        option_groups=[],
-    )
+    # As tres chaves da operacao sao da FILIAL desde a revisao 20260818_0025;
+    # os campos nulos da fabrica sao "herda o padrao do restaurante", que e
+    # como toda filial nasce.
+    branch = fabricas.filial()
+    product = fabricas.produto(code="P1")
+    product_id = product.id
 
     service = OrderService(FakeDb())
     service.restaurant_service = SimpleNamespace(
-        get_active_restaurant=lambda slug: SimpleNamespace(id=uuid.uuid4())
+        get_active_restaurant=lambda slug: fabricas.restaurante()
     )
     service.branch_repository = SimpleNamespace(
         get_active_by_id_and_restaurant=lambda branch_id, restaurant_id: branch,
         list_enabled_payment_methods=lambda branch_id: [
-            SimpleNamespace(method_type="cash", payment_flow="delivery"),
+            fabricas.forma_de_pagamento(),
         ],
     )
     service.branch_hours_service = SimpleNamespace(ensure_branch_is_open=lambda branch_id: None)
     service.menu_repository = SimpleNamespace(
-        get_settings=lambda restaurant_id: SimpleNamespace(
-            min_order_value=Decimal("0"),
+        get_settings=lambda restaurant_id: fabricas.configuracoes(
             service_fee_enabled=service_fee > 0,
             service_fee_amount=service_fee,
-            estimated_delivery_time_min=None,
-            estimated_delivery_time_max=None,
-            default_delivery_fee=None,
-            free_delivery_enabled=None,
-            free_delivery_min_order_value=None,
             platform_commission_percent=commission_percent,
         )
     )
@@ -187,7 +157,7 @@ class CommissionOnCreationTests(unittest.TestCase):
         # O restaurante recebeu menos; cobrar comissao sobre o desconto
         # seria cobrar sobre dinheiro que ninguem pagou.
         service, payload = build_service(coupon_discount=Decimal("20.00"))
-        customer = SimpleNamespace(id=uuid.uuid4(), name="Ana", phone="85999999999")
+        customer = fabricas.cliente(name="Ana", phone="85999999999")
 
         service.create_order("junior", payload, customer)
 
@@ -208,7 +178,7 @@ class CommissionOnCreationTests(unittest.TestCase):
             coupon_discount=Decimal("8.00"),
             coupon_discount_type="free_delivery",
         )
-        customer = SimpleNamespace(id=uuid.uuid4(), name="Ana", phone="85999999999")
+        customer = fabricas.cliente(name="Ana", phone="85999999999")
 
         service.create_order("junior", payload, customer)
 
@@ -226,7 +196,7 @@ class CommissionOnCreationTests(unittest.TestCase):
             coupon_discount=Decimal("15.00"),
             coupon_discount_type="percent",
         )
-        customer = SimpleNamespace(id=uuid.uuid4(), name="Ana", phone="85999999999")
+        customer = fabricas.cliente(name="Ana", phone="85999999999")
 
         service.create_order("junior", payload, customer)
 
@@ -246,7 +216,7 @@ class CommissionOnCreationTests(unittest.TestCase):
 
     def test_discount_bigger_than_the_subtotal_does_not_make_the_base_negative(self):
         service, payload = build_service(coupon_discount=Decimal("150.00"))
-        customer = SimpleNamespace(id=uuid.uuid4(), name="Ana", phone="85999999999")
+        customer = fabricas.cliente(name="Ana", phone="85999999999")
 
         service.create_order("junior", payload, customer)
 
@@ -299,16 +269,8 @@ class FakeReportRepository:
 
 
 def report_order(commission_amount, base=Decimal("100.00"), percent=Decimal("10.00")):
-    return SimpleNamespace(
-        id=uuid.uuid4(),
-        order_number=1,
-        created_at=datetime(2026, 7, 15, 12, tzinfo=timezone.utc),
+    return fabricas.pedido(
         status="completed",
-        payment_status="paid",
-        payment_method="pix",
-        subtotal=Decimal("100.00"),
-        coupon_discount_amount=Decimal("0.00"),
-        cashback_redeemed_amount=Decimal("0.00"),
         commission_base_amount=base,
         commission_percent=percent,
         commission_amount=commission_amount,

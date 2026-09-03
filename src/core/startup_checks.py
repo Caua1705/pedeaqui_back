@@ -96,7 +96,19 @@ def collect_runtime_warnings(argv: list[str], env: Mapping[str, str]) -> list[st
     warnings: list[str] = []
 
     workers = detect_worker_count(argv, env)
-    if workers > 1:
+    # `REDIS_URL` PASSOU A RESOLVER ESTE CASO em 04/09/2026, e por isso a
+    # condicao ganhou um segundo termo.
+    #
+    # Enquanto o historico do `/chat` era um `dict` de modulo, o aviso valia
+    # sempre que houvesse mais de um worker — e o texto dele dizia, com todas
+    # as letras, que "REDIS_URL NAO resolve este caso". Agora resolve:
+    # `src/ai/services/chat_history.py` escolhe o backend de Redis quando a
+    # variavel existe, e a conversa passa a ser compartilhada.
+    #
+    # Manter o aviso incondicional seria pior que nao te-lo: ele apareceria em
+    # TODO boot de uma configuracao correta, e um aviso que sempre aparece e um
+    # aviso que ninguem le — inclusive no dia em que ele estiver certo.
+    if workers > 1 and not env.get("REDIS_URL"):
         # Sai UMA VEZ POR WORKER, porque o lifespan roda em cada um. E ruido
         # aceitavel: N linhas iguais no boot sao mais faceis de notar que
         # uma, e o numero em cada uma delas ja diz quantos processos ha.
@@ -107,8 +119,9 @@ def collect_runtime_warnings(argv: list[str], env: Mapping[str, str]) -> list[st
             f"encontra o historico se cair no mesmo processo do anterior (1 em "
             f"{workers}). O Rapi responde sem contexto, SEM erro e SEM log: a "
             "pessoa so ve o assistente esquecendo o que ela acabou de dizer. "
-            "REDIS_URL NAO resolve este caso, ao contrario do rate limit e do "
-            "cache de entrega: o historico do chat nao tem caminho de Redis. "
+            "DEFINA REDIS_URL: desde 04/09/2026 o historico do /chat tem "
+            "caminho de Redis (src/ai/services/chat_history.py) e passa a ser "
+            "compartilhado entre os workers. "
             "Preco e cardapio nao sao afetados (saem do banco); o que se perde "
             "e referencia do tipo 'quanto custa esse?'."
         )

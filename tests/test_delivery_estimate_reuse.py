@@ -25,6 +25,7 @@ from src.services.delivery_estimate_service import (
     build_address_fingerprint,
 )
 from src.services.order_service import OrderService
+from tests import fabricas
 
 
 RESTAURANT_ID = uuid.uuid4()
@@ -298,7 +299,7 @@ class GoogleIsNotCalledTests(unittest.TestCase):
 
         def record_call(self, slug, request, customer):
             called.append(slug)
-            return SimpleNamespace(serviceable=True, delivery_fee=9.9, message=None, reason=None)
+            return fabricas.estimativa_de_entrega(delivery_fee=9.9)
 
         with patch.object(DeliveryEstimateService, "estimate", record_call):
             service._estimate_delivery(

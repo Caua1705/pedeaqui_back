@@ -27,14 +27,17 @@ import pytest
 from src.ai.services.greeting import GREETINGS, is_greeting
 from src.models.branch_model import Branch
 from src.services import chat_service as chat_module
-from src.services.chat_service import _SESSION_HISTORY, ChatService
+from src.ai.services.chat_history import historico
+from src.services.chat_service import ChatService
+from src.ai.schemas.chat_response_schema import ChatLLMResponse
+from tests import fabricas
 
 
 @pytest.fixture(autouse=True)
 def sessao_limpa():
-    _SESSION_HISTORY.clear()
+    historico.esquecer_tudo()
     yield
-    _SESSION_HISTORY.clear()
+    historico.esquecer_tudo()
 
 
 class TestReconheceSaudacao:
@@ -99,9 +102,7 @@ class TestPipeline:
     """A decisao chega ao `/chat`: saudacao nao toca no `RetrievalService`."""
 
     def _servico(self, monkeypatch, mensagem: str, buscas: list):
-        restaurante = SimpleNamespace(
-            id=uuid.uuid4(), name="Junior da Picanha", assistant_notes=None
-        )
+        restaurante = fabricas.restaurante(name="Junior da Picanha")
         filial = Branch(
             id=uuid.uuid4(),
             restaurant_id=restaurante.id,
@@ -135,11 +136,11 @@ class TestPipeline:
             chat_module,
             "ChatLLMService",
             lambda: SimpleNamespace(
-                invoke=lambda **kwargs: SimpleNamespace(
+                invoke=lambda **kwargs: ChatLLMResponse(
                     message="Ola! Como posso ajudar?",
                     response_type="text",
-                    selected_product_ids=[],
-                )
+                ),
+                ultimo_uso=None,
             ),
         )
         return service, restaurante, filial

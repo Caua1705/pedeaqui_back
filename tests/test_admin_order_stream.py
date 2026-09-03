@@ -18,6 +18,7 @@ o indice. Isso fica para a Fase 4.
 import json
 import unittest
 import uuid
+from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -26,26 +27,29 @@ from fastapi import HTTPException
 
 from src.api.dependencies.admin_scope import AdminScope
 from src.services import admin_order_stream_service as stream_module
+from src.models.order_status_history_model import OrderStatusHistory
+from src.models.print_agent_model import PrintAgentCommand
+from src.models.printing_sector_model import PrintingSector
 from src.services.admin_order_stream_service import (
     MAX_REPLAY_SECONDS,
     OVERLAP_SECONDS,
     AdminOrderStreamService,
 )
 
+from tests import fabricas
+
 
 def make_order(restaurant_id, branch_id, created_at, status="pending"):
-    return SimpleNamespace(
-        id=uuid.uuid4(),
+    return fabricas.pedido(
         restaurant_id=restaurant_id,
         branch_id=branch_id,
         order_number=42,
         customer_name_snapshot="Cliente",
-        customer_phone_snapshot="85999999999",
         order_type="delivery",
         status=status,
         payment_method="cash",
         payment_status="on_delivery",
-        total=10,
+        total=Decimal("10.00"),
         created_at=created_at,
     )
 
@@ -101,7 +105,7 @@ class FakeSectorRepository:
 
 
 def make_command(created_at, printer_name=None, sector_id=None, branch_id=None):
-    return SimpleNamespace(
+    return PrintAgentCommand(
         id=uuid.uuid4(),
         branch_id=branch_id or uuid.uuid4(),
         command_type="print_test",
@@ -226,8 +230,12 @@ class PollTests(unittest.TestCase):
     def test_status_change_becomes_an_event_keyed_by_the_history_row(self):
         service = build_service()
         order = make_order(uuid.uuid4(), uuid.uuid4(), datetime.now(timezone.utc), "preparing")
-        history = SimpleNamespace(
-            id=uuid.uuid4(), created_at=datetime.now(timezone.utc), note="saiu"
+        history = OrderStatusHistory(
+            id=uuid.uuid4(),
+            order_id=order.id,
+            status="preparing",
+            created_at=datetime.now(timezone.utc),
+            note="saiu",
         )
 
         events, _ = fetch_with(
@@ -245,8 +253,11 @@ class PollTests(unittest.TestCase):
         now = datetime.now(timezone.utc)
         older = make_order(uuid.uuid4(), uuid.uuid4(), now - timedelta(seconds=30))
         newer = make_order(uuid.uuid4(), uuid.uuid4(), now)
-        history = SimpleNamespace(
-            id=uuid.uuid4(), created_at=now - timedelta(seconds=15), note=None
+        history = OrderStatusHistory(
+            id=uuid.uuid4(),
+            order_id=newer.id,
+            status="preparing",
+            created_at=now - timedelta(seconds=15),
         )
 
         events, _ = fetch_with(
@@ -321,16 +332,10 @@ class StreamTicketTests(unittest.TestCase):
     """O ticket que autentica o SSE, ja que EventSource nao manda cabecalho."""
 
     def _admin(self):
-        return SimpleNamespace(
-            id=uuid.uuid4(),
-            restaurant_id=uuid.uuid4(),
-            role="owner",
-            is_active=True,
-            # Nulo = nada revogado. O ticket passa pelo mesmo
-            # `_load_admin_from_token` do token do painel, que le este campo —
-            # trocar a senha derruba a conexao SSE junto.
-            password_changed_at=None,
-        )
+        # `password_changed_at` nulo = nada revogado. O ticket passa pelo
+        # mesmo `_load_admin_from_token` do token do painel, que le este campo
+        # — trocar a senha derruba a conexao SSE junto.
+        return fabricas.usuario_do_painel(role="owner")
 
     def test_ticket_is_short_lived(self):
         from src.services.admin_auth_service import AdminAuthService
@@ -442,7 +447,7 @@ class PrintAgentCommandTests(unittest.TestCase):
         """O agente imprime "TESTE — Cozinha" na bobina; quem esta no balcao
         precisa reconhecer qual botao do painel produziu aquela via."""
         branch_id = uuid.uuid4()
-        sector = SimpleNamespace(id=uuid.uuid4(), name="Cozinha")
+        sector = PrintingSector(id=uuid.uuid4(), branch_id=branch_id, name="Cozinha", is_active=True, sort_order=0)
         service = build_service(branch_id=branch_id)
         agora = datetime.now(timezone.utc)
 

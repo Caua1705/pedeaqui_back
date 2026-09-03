@@ -170,6 +170,20 @@ class WhatsAppContactWindowRepository:
         self.db.execute(stmt)
 
 
+    def is_open(self, *, channel_id: uuid.UUID, phone_e164: str, now: datetime) -> bool:
+        """Ha janela aberta para este telefone neste numero da loja?
+
+        Ausencia de linha e janela FECHADA — que e o estado de quase todo
+        cliente, porque ele pediu pelo app e nunca escreveu para a loja.
+        """
+        stmt = select(WhatsAppContactWindow.id).where(
+            WhatsAppContactWindow.channel_id == channel_id,
+            WhatsAppContactWindow.phone_e164 == phone_e164,
+            WhatsAppContactWindow.window_expires_at > now,
+        )
+        return self.db.scalar(stmt) is not None
+
+
 class WhatsAppMessageRepository:
     def __init__(self, db: Session):
         self.db = db

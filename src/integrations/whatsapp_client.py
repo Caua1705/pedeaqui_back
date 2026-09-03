@@ -44,6 +44,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+import httpx
+
+from src.core.config import settings
+
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -245,3 +249,160 @@ def _header(headers: Mapping[str, str], name: str) -> str | None:
         if key.lower() == name:
             return value
     return None
+
+
+# --- Envio ---------------------------------------------------------------
+#
+# Duas funcoes parecidas em vez de uma generica com um `if` dentro: elas
+# diferem no unico lugar que importa (o corpo), e quem le uma le a chamada
+# inteira sem destrinchar a outra. E, mais importante, a DECISAO entre as
+# duas nao mora aqui — mora no service, que e quem sabe da janela de 24h.
+
+
+class WhatsAppSendError(Exception):
+    """Base do que da errado ao mandar.
+
+    `retryable` sai do TIPO da excecao, NUNCA do codigo de erro da Meta. E a
+    regra da armadilha 49: "repetir a mesma chamada tem chance?" ja tem dono,
+    e deixar um codigo deles responder isso faria a mesma pergunta ter duas
+    respostas em lugares diferentes.
+    """
+
+    retryable = False
+
+    def __init__(self, message: str, *, error_code: str | None = None) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+
+
+class WhatsAppTransportError(WhatsAppSendError):
+    """A chamada nao chegou a ter resposta (timeout, DNS, conexao)."""
+
+    retryable = True
+
+
+class WhatsAppRejectedError(WhatsAppSendError):
+    """A Meta respondeu, e a resposta nao e um envio.
+
+    Inclui o 4xx com codigo (`132001` template inexistente, `131047` janela
+    fechada) e o 200 sem `wamid` — que e resposta, mas nao e mensagem: sem
+    `wamid` o webhook de status nao acha a linha depois, e chamar isso de
+    sucesso gravaria um envio que ninguem consegue acompanhar.
+    """
+
+
+def send_template_message(
+    *,
+    access_token: str,
+    phone_number_id: str,
+    to: str,
+    template_name: str,
+    language: str,
+    parameters: tuple[str, ...],
+) -> str:
+    """Manda um template APROVADO. Devolve o `wamid`.
+
+    Sempre permitido, dentro ou fora da janela de 24h — e por isso e o unico
+    caminho dos avisos de pedido, que chegam a quem nunca escreveu para a
+    loja.
+
+    Os parametros entram na ORDEM em que o template os declara (`{{1}}`,
+    `{{2}}`, ...). A Meta nao os nomeia: trocar dois de lugar manda o numero
+    do pedido onde vai o nome do cliente, sem erro nenhum.
+    """
+    corpo = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": language},
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [{"type": "text", "text": valor} for valor in parameters],
+                }
+            ],
+        },
+    }
+    return _post_message(access_token=access_token, phone_number_id=phone_number_id, corpo=corpo)
+
+
+def send_text_message(
+    *,
+    access_token: str,
+    phone_number_id: str,
+    to: str,
+    body: str,
+) -> str:
+    """Manda texto livre. Devolve o `wamid`.
+
+    So funciona DENTRO da janela de 24h. Quem confere isso e o service, antes
+    de chegar aqui — fora dela a Meta responde `131047`, e descobrir pela
+    resposta significa um cliente nao avisado.
+    """
+    corpo = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "text",
+        "text": {"body": body},
+    }
+    return _post_message(access_token=access_token, phone_number_id=phone_number_id, corpo=corpo)
+
+
+def _post_message(*, access_token: str, phone_number_id: str, corpo: dict) -> str:
+    url = (
+        f"{settings.WHATSAPP_GRAPH_API_BASE_URL.rstrip('/')}"
+        f"/{settings.WHATSAPP_GRAPH_API_VERSION}/{phone_number_id}/messages"
+    )
+    try:
+        with httpx.Client(timeout=settings.WHATSAPP_TIMEOUT_SECONDS) as client:
+            resposta = client.post(
+                url,
+                json=corpo,
+                # O token no cabecalho, nunca na URL: query string entra em
+                # log de proxy e em historico, e este e credencial do lojista.
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise WhatsAppTransportError(f"WhatsApp indisponivel: {exc}") from exc
+
+    return _wamid_da_resposta(resposta)
+
+
+def _wamid_da_resposta(resposta) -> str:
+    try:
+        resposta.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        codigo, mensagem = _erro_da_meta(resposta)
+        raise WhatsAppRejectedError(
+            f"WhatsApp recusou a mensagem: {mensagem}", error_code=codigo
+        ) from exc
+
+    try:
+        payload = resposta.json()
+    except ValueError as exc:
+        raise WhatsAppRejectedError("WhatsApp respondeu algo que nao e JSON.") from exc
+
+    mensagens = payload.get("messages") if isinstance(payload, dict) else None
+    wamid = mensagens[0].get("id") if mensagens else None
+    if not wamid:
+        raise WhatsAppRejectedError("WhatsApp respondeu sem `wamid`: nao ha mensagem a seguir.")
+    return str(wamid)
+
+
+def _erro_da_meta(resposta) -> tuple[str | None, str]:
+    try:
+        payload = resposta.json()
+    except ValueError:
+        return None, f"HTTP {resposta.status_code}"
+
+    erro = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(erro, dict):
+        return None, f"HTTP {resposta.status_code}"
+
+    codigo = erro.get("code")
+    return (
+        str(codigo) if codigo is not None else None,
+        str(erro.get("message") or f"HTTP {resposta.status_code}"),
+    )

@@ -15,7 +15,7 @@ qualquer coisa, e continue do que ele diz — nunca da lembrança.**
 |---|---|---|
 | 0 | O que EU faço no painel da Meta, e o que colo no `.env` | **escrito** (parte II deste arquivo) |
 | 1 | A estrutura: canal por filial, token cifrado | **feito** — 3 tabelas, revisao `0051`, `scripts/register_whatsapp_channel.py` |
-| 2 | O webhook: assinatura da Meta e roteamento pelo `phone_number_id` | pendente |
+| 2 | O webhook: assinatura da Meta e roteamento pelo `phone_number_id` | **feito** — `GET`+`POST /webhooks/whatsapp` |
 | 3 | Mandar mensagem: janela de 24h × template aprovado | pendente |
 | 4 | Os avisos de status do pedido: aceito, saiu, entregue | pendente |
 
@@ -279,6 +279,47 @@ desligado é que a loja pare de mandar.
 cobra que toda tabela do ORM apareça num `erDiagram` de
 `docs/modelo-de-dados.md`. Tabela nova sem desenho é vermelho — foi o único
 vermelho desta etapa que não veio de código meu.
+
+---
+
+## Item 2 — feito. O webhook
+
+| Onde | O que |
+|---|---|
+| `src/integrations/whatsapp_client.py` | assinatura e leitura do corpo (só transporte) |
+| `src/services/whatsapp_webhook_service.py` | roteamento, janela, status |
+| `src/api/endpoints/whatsapp.py` | as duas rotas, registradas em `main.py` |
+| `tests/test_whatsapp_webhook_integracao.py` | assinatura e parser |
+| `tests/test_whatsapp_webhook_db.py` | número desconhecido, janela, status |
+| `tests/test_whatsapp_webhook_rota.py` | o `hub.challenge` e o corpo cru |
+
+**A ordem é o contrário da do pagamento, e isso não é incoerência.** Lá o
+segredo é do RESTAURANTE, então não dá para conferir a assinatura antes de
+descobrir de quem é o pagamento. Aqui é o App Secret do nosso app, um só:
+**nada acontece antes da assinatura** — nem leitura do corpo, nem banco.
+
+**Três coisas apareceram fazendo:**
+
+1. **Um POST pode trazer vários números.** `entry[].changes[]`, cada um com o
+   seu `phone_number_id`. Rotear por requisição creditaria as mensagens de
+   uma loja à outra, sem erro nenhum. O roteamento é por `change`.
+2. **A Meta reenvia fora de ordem.** A janela usa `GREATEST` (um reenvio
+   antigo não encurta a que a mensagem nova abriu) e o status só AVANÇA (um
+   `sent` depois de um `read` faria a linha mentir). Nenhuma das duas estava
+   prevista.
+3. **A Meta tem status que nós não temos** (`deleted`, `warning`). Gravá-los
+   morreria no CHECK e derrubaria o POST inteiro — são ignorados, com log.
+
+**E dois portões acusaram, os dois com razão:**
+`escrita_e_transacao.py` não conhecia o verbo `extend` (entrou no vocabulário
+de escrita), e `filtros_por_exclusao.py` viu a negação sobre
+`WHATSAPP_MESSAGE_STATUSES` (entrou em `ESPERADOS` como *negação de
+permitidos*: status novo é recusado, que é o lado que fecha).
+
+### O que ainda não existe, e por quê
+
+O canal só ROTEIA. Nada é enviado ainda, e a janela de 24h é escrita sem ter
+leitor — ela ganha um no item 3.
 
 ---
 

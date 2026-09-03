@@ -247,3 +247,66 @@ tem dois andares): a conta anonimizada guardaria um ponteiro para o cadastro
 da pessoa dentro do Google — e quem excluísse a conta e voltasse pelo Google
 cairia no caso (a), `sub` conhecido, **logado numa conta `is_active=False`:
 403 para sempre, sem como se recadastrar**. Nenhum teste da suíte falharia.
+
+---
+
+## 3. O cliente do Google (`src/integrations/google_identity_client.py`)
+
+Três conferências, e a segunda é a que separa um token do Google de um token
+**para nós**:
+
+1. **assinatura** RS256 contra a chave pública cujo `kid` está no cabeçalho;
+2. **`aud` ∈ `GOOGLE_OAUTH_CLIENT_IDS`**;
+3. **`iss`** — `accounts.google.com` ou `https://accounts.google.com` (as duas
+   formas são emitidas pelo Google e as duas são válidas).
+
+`exp`/`iat` ficam com o PyJWT, e `audience`/`issuer` vão como **argumento do
+`decode`**, não como `if` depois dele: o argumento fica ao lado da chave, que
+é onde quem lê a chamada olha.
+
+**`email_verified` falso é recusado no cliente, não no service.** Armadilha
+46: deixada no service, a regra seria um `if` que a próxima rota a usar este
+cliente pode esquecer. Aqui não existe caminho que devolva identidade não
+verificada.
+
+### O furo que o `aud` fecha, e a mutação que provou o teste
+
+`test_token_de_outro_aplicativo_e_recusado` é o único teste do arquivo que
+cobre uma falha **silenciosa**: um `id_token` legítimo, assinado pelo Google
+de verdade, `email_verified` verdadeiro — e emitido para outro aplicativo. O
+Google emite milhões por dia. Sem `aud`, quem operasse qualquer um deles
+logaria como qualquer cliente dele aqui dentro.
+
+Mutação dirigida (`audience=` trocado por `options={"verify_aud": False}`):
+**exatamente 1 de 20 testes falhou, e foi esse.** Com o `aud` de volta, 20/20.
+
+### O cache das chaves
+
+`CHAVES_DO_GOOGLE`, TTL de 1 h, **declarado** em
+`scripts/estado_entre_workers.py` — o portão acusou na hora. Com N workers são
+N cópias das mesmas chaves **públicas**, que é o correto: não há o que
+compartilhar.
+
+**A rotação de chave não depende do TTL.** `kid` desconhecido faz uma segunda
+busca imediata; sem isso, uma rotação do Google (que acontece sozinha e sem
+aviso) derrubaria todo login por até uma hora. O teste conta as buscas, que é
+o que separa "o cache funcionou" de "foi buscar de novo".
+
+### Variáveis de ambiente
+
+| Nome | Obrigatória? | O que faz |
+|---|---|---|
+| `GOOGLE_OAUTH_CLIENT_IDS` | não | client ids separados por vírgula, um por plataforma (web, Android, iOS). **Vazia = as rotas de Google respondem 503**, e nada mais muda |
+| `GOOGLE_OAUTH_JWKS_URL` | não | tem padrão |
+| `GOOGLE_OAUTH_TIMEOUT_SECONDS` | não | 5 s |
+| `GOOGLE_OAUTH_TICKET_MINUTES` | não | 15 min |
+
+**Não há `CLIENT_SECRET`, e a ausência é desenho.** O segredo existe no fluxo
+de *código de autorização*, em que o servidor troca um `code` por tokens. Aqui
+o app faz o login no aparelho e chega com o `id_token` pronto: tudo o que
+conferimos é assinatura, `aud` e `iss`, contra chave **pública**. Uma variável
+de segredo sem uso é uma credencial a mais para vazar sem nada em troca.
+
+Opcional e não obrigatória pelo desenho do `PLATFORM_METRICS_KEY`: uma
+variável obrigatória derrubaria o boot de todo mundo por causa de uma forma de
+login que ainda não está configurada.

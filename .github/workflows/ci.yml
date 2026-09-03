@@ -334,6 +334,28 @@ jobs:
         continue-on-error: true
         run: python scripts/dubles_de_dado.py
 
+      # Constante do codigo x CHECK de enum do banco: VERMELHO, e nao aviso.
+      #
+      # E a armadilha 15, mecanizada. Sao duas escritas da mesma lista em
+      # lugares que nao se olham — uma revisao do Alembic e um `.py` —, e o
+      # sintoma nao aparece em nenhum dos dois: valor so no BANCO faz a filial
+      # oferecer a forma de pagamento na tela e o pedido ser recusado na
+      # criacao com 400; valor so no CODIGO morre no INSERT.
+      #
+      # Nunca houve divida herdada: as 23 colunas de enum do banco estao
+      # declaradas em `ESPELHOS`, 12 apontando para o conjunto que as espelha
+      # e 11 dizendo por que nao ha espelho. Coluna nova fora da lista e
+      # regressao.
+      #
+      # Quem cobra e `tests/test_espelhos_de_enum_db.py`, nesta suite. Este
+      # passo so imprime a saida legivel quando algo ja falhou.
+      - name: Constante x CHECK de enum (so a saida legivel)
+        if: failure()
+        continue-on-error: true
+        run: python scripts/espelhos_de_enum.py --url "$TEST_DATABASE_URL" --tudo
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
+
       # Escrita, commit e camadas: VERMELHO, e nao aviso — pelo mesmo motivo
       # dos dubles. As tres metades de camada (repositorio nao commita, nao
       # levanta, endpoint nao importa repositorio) ja estavam de pe quando o

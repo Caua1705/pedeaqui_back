@@ -620,6 +620,35 @@ método nos dois fluxos** (pix pelo gateway e pix na entrega), vale `online` —
 caminho restritivo. Não há campo para o cliente escolher, e errar para o lado
 restritivo não entrega comida de graça.
 
+**Desde 04/09/2026 isto não depende mais de alguém lembrar.**
+`scripts/espelhos_de_enum.py` lê todo `CHECK (col = ANY (ARRAY[...]))` do
+banco de teste — depois do `alembic upgrade head`, então é o schema de
+verdade — e cobra que cada um esteja em `ESPELHOS`, apontando para o conjunto
+do código que o espelha ou dizendo por que não há espelho. Depois compara
+valor a valor, e a mensagem separa os dois estragos, que são diferentes:
+
+| Divergência | O que acontece |
+|---|---|
+| valor só no **banco** | a filial oferece na tela e o pedido é recusado na criação com 400 |
+| valor só no **código** | passa pela validação do schema e morre no INSERT |
+
+Eram **23 colunas de enum no banco e duas** com alguém cobrando a igualdade.
+Hoje 12 têm espelho declarado e 11 dizem `SEM_ESPELHO` com o motivo — os
+valores dessas vivem soltos como literal (`'applied'`, `'online'`,
+`'hero'`), e `SEM_ESPELHO` não é "tudo bem": é a fronteira do portão,
+anotada onde dá para ver.
+
+**Registro explícito e não "procure a constante com os mesmos valores"**, e o
+motivo é o de sempre: casar por igualdade parece mais esperto e é inútil —
+quando as duas listas divergem, que é o único caso que importa, a busca não
+acha nada e o resultado fica indistinguível de "esta coluna não tem espelho".
+
+Achado de brinde da primeira execução: **`admin_users` tem DUAS CHECK
+idênticas** sobre `role` (`admin_users_role_check` e `ck_admin_users_role`),
+as duas validadas em toda escrita. É a armadilha 4 na forma de constraint, e
+`scripts/audit_indexes.py` não olha constraint. Está declarada como duplicata
+em `ESPELHOS`; derrubar a antiga é uma revisão, e ela ainda não foi escrita.
+
 ---
 
 ## 16. `HTTPException` embrulha tudo em `detail` — o OpenAPI precisa dizer isso

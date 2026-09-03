@@ -197,7 +197,7 @@ def _hash_new_password(password: str) -> str:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Senha muito longa") from exc
 
 
-def _is_within_resend_cooldown(code_row) -> bool:
+def is_within_resend_cooldown(code_row) -> bool:
     """Se o ultimo codigo saiu ha menos de `RESEND_COOLDOWN_SECONDS`.
 
     Sem `created_at` nao da para datar o codigo, e a ausencia e tratada como
@@ -376,7 +376,7 @@ class AuthService:
         rota nao muda, e nao ha o que o app faca de diferente.
         """
         latest = self.customer_repository.latest_unused_email_code(customer.email)
-        if _is_within_resend_cooldown(latest):
+        if is_within_resend_cooldown(latest):
             return
         if self._email_codes_in_window(customer.email) >= MAX_RESENDS:
             return
@@ -399,7 +399,7 @@ class AuthService:
             return answer
 
         latest = self.customer_repository.latest_unused_email_code(email)
-        if _is_within_resend_cooldown(latest):
+        if is_within_resend_cooldown(latest):
             return answer
         if self._email_codes_in_window(email) >= MAX_RESENDS:
             return answer
@@ -458,7 +458,7 @@ class AuthService:
         # denuncia quais e-mails existem (armadilha 18).
         customer = self.customer_repository.get_by_email(email)
         latest = self.customer_repository.latest_unused_password_reset_code(email)
-        if _is_within_resend_cooldown(latest):
+        if is_within_resend_cooldown(latest):
             return
 
         if self._reset_codes_in_window(email) >= MAX_RESENDS:

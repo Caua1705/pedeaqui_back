@@ -18,6 +18,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import func, select
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
@@ -30,21 +31,28 @@ from src.core.constants import SOCIAL_PROVIDER_GOOGLE
 from src.models.cashback_transaction_model import CashbackTransaction
 from src.models.coupon_model import CouponTemplate, RestaurantCoupon
 from src.models.coupon_redemption_model import CouponRedemption
-from src.models.customer_model import Customer, EmailVerificationCode
+from src.models.customer_model import (
+    AccountDeletionCode,
+    Customer,
+    EmailVerificationCode,
+)
 from src.models.customer_social_identity_model import CustomerSocialIdentity
 from src.models.delivery_estimate_model import DeliveryEstimate
 from src.models.order_model import Order
 from src.models.order_review_model import OrderReview
 from src.repositories.customer_repository import CustomerRepository
+from src.schemas.customer_schema import DeleteCustomerAccountRequest
 from src.repositories.customer_social_identity_repository import (
     CustomerSocialIdentityRepository,
 )
-from src.services.auth_service import AuthService
+from src.schemas.auth_schema import VerifyEmailCodeRequest
+from src.services.auth_service import AuthService, unusable_password_hash
 from src.services.customer_anonymization_service import (
     ANONYMIZED_NAME,
     CustomerAnonymizationService,
+    anonymized_email,
 )
-from src.utils.security import hash_password
+from src.utils.security import hash_password, hash_verification_code
 from tests.fabricas_db import (
     criar_cliente,
     criar_endereco,
@@ -207,7 +215,9 @@ def cenario(db) -> Cenario:
 
 
 def anonimizar(db, cliente, senha: str = SENHA) -> None:
-    CustomerAnonymizationService(db).anonymize(cliente, senha)
+    CustomerAnonymizationService(db).anonymize(
+        cliente, DeleteCustomerAccountRequest(password=senha)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -880,3 +890,170 @@ def test_a_identidade_de_outra_pessoa_nao_e_tocada(db, cenario):
 
     db.expunge_all()
     assert db.get(CustomerSocialIdentity, id_alheia) is not None
+
+
+# --- Excluir sem senha: o codigo no e-mail no lugar dela ---------------------
+#
+# A conta que entrou so pelo Google nao tem senha para mandar. O codigo prova
+# a mesma coisa que a senha provaria — acesso a caixa de entrada.
+#
+# O que so aparece contra o banco: as TRES tabelas de codigo existem de
+# verdade, e a consulta da exclusao nao enxerga a da verificacao. Na suite
+# rapida isso e um dublê com dois campos; aqui sao dois SELECTs em duas
+# tabelas.
+
+
+class ServicoDeEmailFalso:
+    """Colaborador externo. Guarda o codigo que sairia no e-mail."""
+
+    def __init__(self):
+        self.codigos = []
+
+    def send_account_deletion_code(self, to_email, code):
+        self.codigos.append((to_email, code))
+
+    def send_email_verification_code(self, to_email, code):
+        self.codigos.append((to_email, code))
+
+    def send_password_reset_code(self, to_email, code):
+        self.codigos.append((to_email, code))
+
+
+def _cliente_sem_senha(db, cenario):
+    """A conta do Google: `password_hash` inutilizavel, com o prefixo `!`."""
+    cenario.cliente.password_hash = unusable_password_hash()
+    db.flush()
+    return cenario.cliente
+
+
+def _servico_de_exclusao(db):
+    servico = CustomerAnonymizationService(db)
+    servico.email_service = ServicoDeEmailFalso()
+    return servico
+
+
+def test_a_conta_sem_senha_pede_codigo_e_ele_e_gravado_em_hmac(db, cenario):
+    cliente = _cliente_sem_senha(db, cenario)
+    servico = _servico_de_exclusao(db)
+
+    servico.request_deletion_code(cliente)
+
+    _, codigo = servico.email_service.codigos[-1]
+    linha = db.scalar(
+        select(AccountDeletionCode).where(AccountDeletionCode.customer_id == cliente.id)
+    )
+    assert linha is not None
+    assert linha.code_hash != codigo
+    assert linha.code_hash == hash_verification_code(codigo)
+
+
+def test_o_codigo_certo_apaga_a_conta_sem_senha(db, cenario):
+    cliente = _cliente_sem_senha(db, cenario)
+    servico = _servico_de_exclusao(db)
+    servico.request_deletion_code(cliente)
+    _, codigo = servico.email_service.codigos[-1]
+
+    _servico_de_exclusao(db).anonymize(
+        cliente, DeleteCustomerAccountRequest(email_code=codigo)
+    )
+
+    db.refresh(cliente)
+    assert cliente.anonymized_at is not None
+    assert cliente.email == anonymized_email(cliente.id)
+
+
+def test_a_linha_do_codigo_some_junto_com_a_conta(db, cenario):
+    """Ela guarda o e-mail em TEXTO PURO — e e a linha que autorizou a
+    exclusao. Sobreviver a ela seria deixar o endereco de quem pediu para
+    sumir legivel ao lado."""
+    cliente = _cliente_sem_senha(db, cenario)
+    servico = _servico_de_exclusao(db)
+    servico.request_deletion_code(cliente)
+    _, codigo = servico.email_service.codigos[-1]
+
+    _servico_de_exclusao(db).anonymize(
+        cliente, DeleteCustomerAccountRequest(email_code=codigo)
+    )
+
+    db.expunge_all()
+    quantas = db.scalar(
+        select(func.count())
+        .select_from(AccountDeletionCode)
+        .where(AccountDeletionCode.customer_id == cliente.id)
+    )
+    assert quantas == 0
+
+
+def test_o_codigo_de_verificacao_nao_apaga_a_conta(db, cenario):
+    """A REGRA QUE JA MORDEU, contra o banco de verdade.
+
+    Ha uma linha valida em `email_verification_codes` e NENHUMA em
+    `account_deletion_codes`. O codigo daquela nao serve aqui — e a separacao
+    e o schema, nao um `if`.
+    """
+    cliente = _cliente_sem_senha(db, cenario)
+    codigo = "123456"
+    CustomerRepository(db).create_email_code(
+        customer_id=cliente.id,
+        email=cliente.email,
+        code_hash=hash_verification_code(codigo),
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+        attempts_count=0,
+        resend_count=0,
+    )
+    db.flush()
+
+    with pytest.raises(HTTPException) as erro:
+        _servico_de_exclusao(db).anonymize(
+            cliente, DeleteCustomerAccountRequest(email_code=codigo)
+        )
+
+    assert erro.value.status_code == 401
+    db.refresh(cliente)
+    assert cliente.anonymized_at is None
+
+
+def test_o_codigo_de_exclusao_nao_verifica_o_email(db, cenario):
+    """A outra direcao da mesma regra. `verify_email_code` le a outra tabela e
+    nao enxerga a linha de exclusao."""
+    cliente = _cliente_sem_senha(db, cenario)
+    cliente.email_verified_at = None
+    db.flush()
+    servico = _servico_de_exclusao(db)
+    servico.request_deletion_code(cliente)
+    _, codigo = servico.email_service.codigos[-1]
+
+    auth = AuthService(db)
+    auth.email_service = ServicoDeEmailFalso()
+    with pytest.raises(HTTPException) as erro:
+        auth.verify_email_code(
+            VerifyEmailCodeRequest(email=cliente.email, code=codigo)
+        )
+
+    assert erro.value.status_code == 400
+    db.refresh(cliente)
+    assert cliente.email_verified_at is None
+
+
+def test_a_conta_com_senha_nao_ganha_o_segundo_caminho(db, cenario):
+    """Ela ja tem prova. Emitir codigo abriria uma exclusao a mais onde uma
+    bastava — quem tivesse o token e a caixa de entrada apagaria a conta sem
+    saber a senha."""
+    servico = _servico_de_exclusao(db)
+
+    with pytest.raises(HTTPException) as erro:
+        servico.request_deletion_code(cenario.cliente)
+
+    assert erro.value.status_code == 400
+    assert servico.email_service.codigos == []
+
+
+def test_a_conta_com_senha_recusa_o_codigo_na_exclusao(db, cenario):
+    with pytest.raises(HTTPException) as erro:
+        _servico_de_exclusao(db).anonymize(
+            cenario.cliente, DeleteCustomerAccountRequest(email_code="123456")
+        )
+
+    assert erro.value.status_code == 400
+    db.refresh(cenario.cliente)
+    assert cenario.cliente.anonymized_at is None

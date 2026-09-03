@@ -9,6 +9,7 @@ from src.api.dependencies.database import get_db
 from src.api.rate_limit import (
     CANCEL_ORDER_RATE_LIMIT,
     DELETE_ACCOUNT_RATE_LIMIT,
+    REQUEST_DELETE_CODE_RATE_LIMIT,
     limiter,
 )
 from src.models.customer_model import Customer
@@ -121,22 +122,67 @@ def delete_me(
     O corpo leva a senha atual: `DELETE` com corpo e incomum mas legal, e a
     alternativa a colocaria na querystring, ou seja, no log do proxy.
 
-    ## CONTA QUE ENTROU PELO GOOGLE E NUNCA DEFINIU SENHA
+    ## A PROVA E UMA DAS DUAS, E QUEM ESCOLHE E A CONTA
 
-    Ela nao tem senha para mandar aqui, e esta rota exige uma. **O caminho e
-    definir a senha antes**, e ele ja existe inteiro:
-    `POST /auth/forgot-password` manda um codigo para o e-mail que o Google
-    verificou, `POST /auth/verify-reset-code` devolve o `reset_token` e
-    `POST /auth/reset-password` grava a senha. Depois disso, esta rota
-    funciona como para qualquer conta.
+    `GET /customers/me` responde `password_set`, e e ele que decide qual campo
+    mandar:
 
-    **A tela precisa avisar antes, e nao depois.** `GET /customers/me` traz
-    `password_set`: com `false`, mostre "defina uma senha para excluir a
-    conta" em vez de um campo de senha que so pode receber "Senha incorreta".
-    Sem esse aviso, a pessoa fica sem saida visivel num caminho de LGPD.
+        password_set: true   ->  { "password": "..." }
+        password_set: false  ->  { "email_code": "123456" }
+
+    `password_set: false` e a conta que entrou so pelo Google: ela nao tem
+    senha, e o codigo de seis digitos prova a mesma coisa que a senha provaria
+    — que quem esta pedindo tem acesso ao e-mail da conta. Peca o codigo em
+    `POST /customers/me/delete-code`.
+
+    **Mandar o campo errado e 400**, com a frase dizendo qual mandar. Nao e
+    escolha do app: aceitar o codigo numa conta que TEM senha rebaixaria a
+    exigencia de toda conta com senha para "quem le o e-mail".
+
+    O codigo errado e **401** e conta uma tentativa; cinco erros na mesma linha
+    respondem **429** e ela nao serve mais. Peca outro.
     """
-    CustomerAnonymizationService(db).anonymize(current_customer, payload.password)
+    CustomerAnonymizationService(db).anonymize(current_customer, payload)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/me/delete-code",
+    response_model=MessageResponse,
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "description": "Esta conta tem senha: use `password` ao excluir"
+        },
+        status.HTTP_401_UNAUTHORIZED: {"description": "Nao autenticado"},
+    },
+)
+@limiter.limit(REQUEST_DELETE_CODE_RATE_LIMIT)
+def request_delete_code(
+    request: Request,
+    current_customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    """Manda o codigo que confirma a exclusao da conta. NADA e excluido aqui.
+
+    E o passo anterior a `DELETE /customers/me` para quem tem
+    `password_set: false` — a conta que entrou so pelo Google e nunca definiu
+    senha. O codigo vai para o e-mail da conta e vale **10 minutos**.
+
+    **So para conta sem senha.** A que tem senha recebe **400**: ela ja tem
+    prova, e um segundo caminho de exclusao onde um bastava deixaria quem tem
+    o token e a caixa de entrada apagar a conta sem saber a senha.
+
+    **A resposta e a mesma mesmo quando o codigo nao sai** (cooldown de 60 s,
+    ou tres codigos na janela de 15 minutos). Nao ha nada que o app faca de
+    diferente, e variar a resposta so contaria quantos codigos ja sairam.
+
+    O e-mail diz EXCLUIR com todas as letras: o mesmo formato de codigo serve
+    a tres pedidos neste sistema, e a caixa de entrada e o unico lugar onde a
+    pessoa ve o que esta confirmando. E o codigo daqui **nao serve para mais
+    nada** — ele mora em `account_deletion_codes`, que nem a verificacao de
+    e-mail nem a ligacao com o Google consultam.
+    """
+    return CustomerAnonymizationService(db).request_deletion_code(current_customer)
 
 
 @router.get(

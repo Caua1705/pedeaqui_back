@@ -673,3 +673,82 @@ Nada de client id ou secret está no repositório. O `.env` do CI e o
    do `PLATFORM_METRICS_KEY`. Se você quiser que falte vire erro de boot,
    `startup_checks.py` é o lugar — mas aí todo ambiente sem Google configurado
    para de subir.
+
+---
+
+## 9. Excluir a conta sem senha — decidido e implementado
+
+Quem tem senha continua usando senha. Quem não tem (entrou só pelo Google)
+confirma por **código no e-mail**, que prova a mesma coisa que a senha
+provaria: acesso à caixa de entrada.
+
+### As duas rotas
+
+    POST   /customers/me/delete-code      pede o código (autenticada)
+    DELETE /customers/me                  { password } OU { email_code }
+
+**Quem escolhe qual campo mandar é a CONTA, não quem chama.**
+`_ensure_proof_matches` decide por `password_is_set(customer)`. Deixar o corpo
+decidir faria a conta que **tem** senha poder ser apagada com um código —
+rebaixando a exigência de toda conta com senha para "quem lê o e-mail". Campo
+errado é **400** com a frase dizendo qual mandar; nunca 401, que diria "senha
+incorreta" para quem nunca teve senha.
+
+### A regra que já mordeu: o código não cai no caminho errado
+
+**Não é um `if` — é o schema.** `account_deletion_codes` é tabela própria
+(revisão `20260904_0050`), e `latest_unused_deletion_code` não enxerga
+`email_verification_codes`. Nas duas direções:
+
+- um código pedido para **verificar o e-mail** ou para **ligar o Google** não
+  apaga conta nenhuma;
+- um código de **exclusão** não verifica e-mail nem liga conta.
+
+A alternativa era uma coluna `purpose` na tabela de verificação. Ela obrigaria
+a mexer em `latest_unused_email_code` — o fluxo de e-mail existente, que é
+gatilho de parada — e a defesa viraria um `WHERE` que alguém esquece. O estrago
+tem lado: um código pedido para *entrar* aceito pela exclusão **apagaria a
+conta de quem só queria entrar**, sem desfazer.
+
+E o e-mail diz **EXCLUIR** com todas as letras (`send_account_deletion_code`):
+a caixa de entrada é o único lugar onde a pessoa vê o que está confirmando, e
+"seu código de verificação" para uma exclusão irreversível é como alguém
+digita sem saber o que aceitou.
+
+### Vermelho antes, e depois mutação
+
+O arquivo de teste foi escrito **primeiro** e o vermelho foi
+`ImportError: cannot import name 'AccountDeletionCode'` — a tabela não existia.
+Depois, 7 mutações dirigidas:
+
+| Mutação | Resultado |
+|---|---|
+| **quem chama** escolhe a prova (o corpo decide, não a conta) | 3 falhas |
+| **a exclusão lê a tabela de VERIFICAÇÃO** (a regra que já mordeu) | **7 falhas** |
+| a tentativa errada não é contada | 1 falha |
+| o teto de tentativas não fecha | 1 falha |
+| o código vencido passa | 1 falha |
+| a conta COM senha também pode pedir código | 2 falhas |
+| a linha do código sobrevive à conta | 1 falha |
+
+7 de 7 mortos. Com as 9 da rodada anterior, **16 de 16**.
+
+### O resto que veio junto
+
+- `CustomerRepository.TABELAS_DE_CODIGO` — as três tabelas de código num lugar
+  só, varridas juntas pela retenção diária e pela exclusão de conta. Cada uma
+  guarda o e-mail em texto puro; ficar de fora de um dos dois deixaria dado
+  pessoal legível num canto do mesmo banco;
+- `alcance_da_anonimizacao` cobrou a tabela nova na hora (13 com `customer_id`,
+  15 declaradas, 0 achados);
+- `account_deletion_codes.created_at` nasceu `NOT NULL` **nos dois lados** — o
+  contador de divergências ORM×schema continua em **41**. As duas tabelas de
+  código antigas divergem ali por herança; tabela nova não tem motivo;
+- `_is_within_resend_cooldown` virou `is_within_resend_cooldown` (é usada por
+  dois services agora).
+
+### Suítes
+
+    rápida  2710 passed
+    db       697 passed  (a de exclusão: 42, com 7 novos)
+    leituras_de_coluna_nulavel  206 (era 201; os 5 novos são todos `customer.email`)

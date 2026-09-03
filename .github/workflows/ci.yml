@@ -320,7 +320,13 @@ jobs:
         # `password_is_set` tem `if not customer.password_hash` uma linha
         # acima. O que sobra e `customer.email` nas respostas do Google, que e
         # o MESMO ponto que `customer_service.py` ja tinha na linha de base.
-        run: python scripts/leituras_de_coluna_nulavel.py --url "$TEST_DATABASE_URL" --limite 201
+        #
+        # 201 -> 206 no mesmo dia, com a exclusao de conta por codigo. Os cinco
+        # sao TODOS `customer.email` (pedir o codigo, achar a linha, mandar o
+        # e-mail) — a mesma classe que `auth_service.py` ja tem meia duzia de
+        # vezes aqui. Se `customers.email` fosse nulo, `GET /customers/me`
+        # quebraria muito antes destes cinco pontos.
+        run: python scripts/leituras_de_coluna_nulavel.py --url "$TEST_DATABASE_URL" --limite 206
         env:
           TEST_DATABASE_URL: postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
 

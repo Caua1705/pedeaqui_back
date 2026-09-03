@@ -234,13 +234,31 @@ class ChangeCustomerPasswordRequest(BaseModel):
 
 
 class DeleteCustomerAccountRequest(BaseModel):
-    """A senha atual, e nada mais.
+    """A prova de que quem pede e o dono da conta. UMA das duas.
 
     Corpo em `DELETE` e incomum mas legal. A alternativa — senha na
     querystring — a colocaria no log de todo proxy no caminho.
+
+    **Qual dos dois campos mandar nao e escolha de quem chama: e da conta.**
+    `GET /customers/me` responde `password_set`, e ele decide:
+
+        password_set: true   -> `password`, como sempre foi
+        password_set: false  -> `email_code`, pedido em
+                                POST /customers/me/delete-code
+
+    Os dois sao opcionais NO SCHEMA e obrigatorios no servico, e a assimetria
+    e proposital: um `password: str` obrigatorio deixaria a conta sem senha
+    sem forma de preencher o corpo, e um `Union` de dois schemas faria o app
+    escolher o formato — que e exatamente a decisao que nao pode ser dele.
+    Mandar o campo errado e **400** com a frase que diz qual mandar.
+
+    O e-mail com o codigo diz EXCLUIR, com todas as letras: o mesmo codigo de
+    seis digitos serve a tres pedidos neste sistema, e a caixa de entrada e o
+    unico lugar onde a pessoa ve o que esta confirmando.
     """
 
-    password: str
+    password: str | None = None
+    email_code: str | None = Field(default=None, min_length=6, max_length=6)
 
 
 class OrdersInFlightDetail(BaseModel):

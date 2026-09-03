@@ -15,7 +15,13 @@ from src.models.coupon_claim_model import CouponClaim
 from src.models.coupon_model import CouponTemplate, RestaurantCoupon
 from src.models.coupon_redemption_model import CouponRedemption
 from src.models.courier_model import Courier, CourierAssignment
-from src.models.customer_model import Customer, CustomerAddress, EmailVerificationCode, PasswordResetCode
+from src.models.customer_model import (
+    AccountDeletionCode,
+    Customer,
+    CustomerAddress,
+    EmailVerificationCode,
+    PasswordResetCode,
+)
 from src.models.customer_saved_card_model import CustomerPaymentProfile, CustomerSavedCard
 from src.models.customer_social_identity_model import CustomerSocialIdentity
 # `delivery_estimates` faltava aqui, e o efeito nao era um import quebrado:
@@ -41,6 +47,7 @@ from src.models.restaurant_payment_credential_model import RestaurantPaymentCred
 from src.models.restaurant_setting_model import RestaurantSetting
 
 __all__ = [
+    "AccountDeletionCode",
     "AdminErrorReport",
     "AdminUser",
     "AIFeedback",

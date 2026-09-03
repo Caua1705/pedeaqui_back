@@ -131,6 +131,7 @@ ALCANCE: dict[str, Alcancada | Fora | Indireta] = {
     "delivery_estimates": Alcancada("_delete_delivery_estimates"),
     "email_verification_codes": Alcancada("_delete_verification_codes"),
     "password_reset_codes": Alcancada("_delete_verification_codes"),
+    "account_deletion_codes": Alcancada("_delete_verification_codes"),
     "customer_social_identities": Alcancada("_delete_social_identities"),
     # --- o que a exclusao alcanca por outro caminho -------------------------
     "order_reviews": Indireta("orders", "_clear_review_comments"),

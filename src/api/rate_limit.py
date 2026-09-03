@@ -186,10 +186,20 @@ GOOGLE_SIGN_IN_RATE_LIMIT = "10/minute;60/hour"
 # das duas portas.
 GOOGLE_COMPLETE_SIGNUP_RATE_LIMIT = "5/minute;20/hour"
 
-# Exclusao de conta. A rota exige token E senha, entao nao ha o que enumerar
-# aqui — o limite existe contra o outro lado: quem tem um token roubado
-# martelando senhas contra uma operacao IRREVERSIVEL. Bem mais apertado que a
-# troca de senha porque, ao contrario dela, um acerto nao tem desfazer.
+# O codigo que confirma a exclusao, para a conta que nao tem senha. Cada
+# chamada e um e-mail na caixa de entrada de alguem, e o `AuthService` ja tem
+# cooldown e teto POR E-MAIL; este fecha o que sobra, que e martelar a partir
+# de um IP so. Mesmos numeros do reenvio de codigo de cadastro.
+REQUEST_DELETE_CODE_RATE_LIMIT = "5/minute;20/hour"
+
+# Exclusao de conta. A rota exige token E uma prova (senha, ou o codigo do
+# e-mail para a conta que nao tem senha), entao nao ha o que enumerar aqui — o
+# limite existe contra o outro lado: quem tem um token roubado martelando
+# contra uma operacao IRREVERSIVEL. Bem mais apertado que a troca de senha
+# porque, ao contrario dela, um acerto nao tem desfazer.
+#
+# No caminho do codigo ele nao e a defesa principal: quem defende e o
+# `attempts_count` da linha, que morre em cinco erros e nao depende do IP.
 DELETE_ACCOUNT_RATE_LIMIT = "5/minute;20/hour"
 
 

@@ -27,13 +27,13 @@ de transacao unica. Ela se le melhor sozinha, de cima a baixo.
 import logging
 import secrets
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from src.models.customer_model import Customer
+from src.models.customer_model import AccountDeletionCode, Customer
 from src.models.order_model import Order
 from src.repositories.cashback_repository import CashbackRepository
 from src.repositories.customer_repository import CustomerRepository
@@ -45,13 +45,35 @@ from src.repositories.order_review_repository import OrderReviewRepository
 from src.repositories.delivery_estimate_repository import DeliveryEstimateRepository
 from src.repositories.order_repository import OrderRepository
 from src.integrations.payment_gateway import PaymentGatewayError, delete_saved_card
+from src.schemas.auth_schema import MessageResponse
+from src.schemas.customer_schema import DeleteCustomerAccountRequest
+from src.services.auth_service import (
+    CODE_TTL_MINUTES,
+    MAX_CODE_ATTEMPTS,
+    MAX_RESENDS,
+    RESEND_WINDOW_MINUTES,
+    is_within_resend_cooldown,
+    password_is_set,
+)
+from src.services.email_service import EmailService
 from src.services.order_state_machine import TERMINAL_ORDER_STATUSES
 from src.services.payment_credential_service import PaymentCredentialService
-from src.utils.security import hash_password, utcnow, verify_password
+from src.utils.security import (
+    generate_6_digit_code,
+    hash_password,
+    hash_verification_code,
+    utcnow,
+    verify_password,
+    verify_verification_code,
+)
 
 
 logger = logging.getLogger("uvicorn.error")
 
+
+DELETION_CODE_MESSAGE = (
+    "Enviamos um código para o seu e-mail. Ele confirma a exclusão da conta."
+)
 
 # O nome que sobra na venda e na lista do lojista. E texto, e nao NULL, porque
 # `orders.customer_name_snapshot` e NOT NULL — e porque a tela do painel
@@ -94,16 +116,22 @@ class CustomerAnonymizationService:
         self.saved_card_repository = CustomerSavedCardRepository(db)
         self.social_identity_repository = CustomerSocialIdentityRepository(db)
         self.payment_credential_service = PaymentCredentialService(db)
+        self.email_service = EmailService()
 
-    def anonymize(self, customer: Customer, password: str) -> None:
+    def anonymize(
+        self, customer: Customer, payload: DeleteCustomerAccountRequest
+    ) -> None:
         """Apaga a pessoa e mantem a venda. Uma transacao, um commit.
 
         Nao ha desfazer: quando esta funcao volta, o e-mail e o telefone
         antigos nao existem em lugar nenhum do banco vivo.
 
         A ordem dos passos nao e arbitraria — ver `_anonymize_customer`.
+
+        A PROVA e a senha ou o codigo do e-mail, e QUEM ESCOLHE E A CONTA —
+        nao quem chama. Ver `_ensure_proof_matches`.
         """
-        self._ensure_password_matches(customer, password)
+        self._ensure_proof_matches(customer, payload)
         self._ensure_no_order_in_flight(customer)
 
         # Lido ANTES de anonimizar, e nao depois: e o saldo que a pessoa
@@ -172,18 +200,157 @@ class CustomerAnonymizationService:
             balance,
         )
 
-    def _ensure_password_matches(self, customer: Customer, password: str) -> None:
-        """A mesma exigencia de qualquer operacao irreversivel de conta.
+    def _ensure_proof_matches(
+        self, customer: Customer, payload: DeleteCustomerAccountRequest
+    ) -> None:
+        """A prova de que quem pede e o dono da conta. Uma exigencia, sempre.
 
         Sem ela, um token vazado — ou um celular esquecido destravado — apaga
         a conta de alguem.
+
+        SAO DUAS PROVAS E UMA ESCOLHA, e a escolha e da CONTA:
+
+        - conta com senha -> a senha, como sempre foi;
+        - conta sem senha (entrou so pelo Google) -> o codigo do e-mail, que
+          prova a mesma coisa que a senha provaria: acesso a caixa de entrada.
+
+        **Quem escolhe NAO e quem chama.** Deixar o corpo decidir faria a
+        conta que TEM senha poder ser apagada com um codigo, rebaixando a
+        exigencia de toda conta com senha para "quem le o e-mail". E a
+        armadilha 47 na forma de parametro: a regra que depende de alguem
+        passar o argumento certo e uma recomendacao.
+
+        Mandar a prova errada e **400**, e nao 401: o 401 diria "a senha esta
+        errada" para quem nunca teve senha.
         """
-        if verify_password(password, customer.password_hash):
+        if password_is_set(customer):
+            self._ensure_password_matches(customer, payload)
+            return
+        self._ensure_deletion_code_matches(customer, payload)
+
+    def _ensure_password_matches(
+        self, customer: Customer, payload: DeleteCustomerAccountRequest
+    ) -> None:
+        if payload.password is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Esta conta usa senha: informe `password`.",
+            )
+        if verify_password(payload.password, customer.password_hash):
             return
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Senha incorreta",
         )
+
+    def _ensure_deletion_code_matches(
+        self, customer: Customer, payload: DeleteCustomerAccountRequest
+    ) -> None:
+        """O codigo de EXCLUSAO, da tabela de exclusao. Nunca outro.
+
+        `latest_unused_deletion_code` consulta `account_deletion_codes` e nao
+        enxerga `email_verification_codes`: um codigo pedido para verificar o
+        e-mail ou para ligar a conta do Google **nao apaga conta nenhuma**, e
+        isso e o schema dizendo, nao um `if`.
+
+        E o caminho certo tambem nao desvia: quando o codigo bate, esta funcao
+        volta e quem apaga e o `anonymize` que a chamou. Ela nao cria cliente,
+        nao liga identidade e nao emite token.
+        """
+        if payload.email_code is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Esta conta não tem senha: peça um código em "
+                    "POST /customers/me/delete-code e informe `email_code`."
+                ),
+            )
+
+        code_row = self.customer_repository.latest_unused_deletion_code(customer.email)
+        if code_row is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Código inválido ou expirado"
+            )
+        if code_row.attempts_count >= MAX_CODE_ATTEMPTS:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Muitas tentativas"
+            )
+        if code_row.expires_at < utcnow():
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Código inválido ou expirado"
+            )
+
+        if not verify_verification_code(payload.email_code, code_row.code_hash):
+            self._count_failed_attempt(code_row)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Código inválido ou expirado"
+            )
+
+    def _count_failed_attempt(self, code_row: AccountDeletionCode) -> None:
+        """Commit PROPRIO, e ele e a defesa contra forca bruta.
+
+        Seis digitos sao um milhao de possibilidades e caem em minutos sem
+        contador. A tentativa errada tem que ficar gravada mesmo que a
+        requisicao termine em erro — e por isso ela commita aqui, antes de a
+        excecao subir. E o mesmo desenho de `verify_email_code`.
+
+        Nao ha transacao de exclusao aberta neste ponto: ela so comeca depois
+        que a prova passa.
+        """
+        code_row.attempts_count += 1
+        self.db.add(code_row)
+        self.db.commit()
+
+    def request_deletion_code(self, customer: Customer) -> MessageResponse:
+        """Manda o codigo que confirma a exclusao. SO para conta sem senha.
+
+        A conta que tem senha ja tem prova, e emitir codigo para ela abriria
+        um SEGUNDO caminho de exclusao onde um bastava — quem tivesse o token
+        e a caixa de entrada apagaria a conta sem saber a senha.
+
+        O cooldown e o teto por e-mail sao os mesmos do cadastro
+        (`RESEND_WINDOW_MINUTES`, `MAX_RESENDS`), e existem pelo mesmo motivo:
+        cada chamada e uma mensagem na caixa de entrada de alguem. Bater no
+        teto responde a MESMA frase — nao ha nada que o app faca de diferente,
+        e variar a resposta so contaria quantos codigos ja sairam.
+        """
+        if password_is_set(customer):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Esta conta usa senha: informe `password` ao excluir.",
+            )
+
+        answer = MessageResponse(message=DELETION_CODE_MESSAGE)
+        latest = self.customer_repository.latest_unused_deletion_code(customer.email)
+        if is_within_resend_cooldown(latest):
+            return answer
+        if self._deletion_codes_in_window(customer.email) >= MAX_RESENDS:
+            return answer
+
+        self._create_deletion_code(customer, resend_count=(latest.resend_count + 1) if latest else 0)
+        self.db.commit()
+        return answer
+
+    def _deletion_codes_in_window(self, email: str) -> int:
+        return self.customer_repository.count_deletion_codes_since(
+            email=email,
+            since=utcnow() - timedelta(minutes=RESEND_WINDOW_MINUTES),
+        )
+
+    def _create_deletion_code(self, customer: Customer, resend_count: int) -> None:
+        code = generate_6_digit_code()
+        self.customer_repository.create_deletion_code(
+            customer_id=customer.id,
+            email=customer.email,
+            # HMAC com EMAIL_CODE_SECRET, como os outros dois: seis digitos sao
+            # um milhao de possibilidades, e a chave e o que os torna caros num
+            # dump do banco.
+            code_hash=hash_verification_code(code),
+            expires_at=utcnow() + timedelta(minutes=CODE_TTL_MINUTES),
+            attempts_count=0,
+            resend_count=resend_count,
+        )
+        self.email_service.send_account_deletion_code(customer.email, code)
 
     def _ensure_no_order_in_flight(self, customer: Customer) -> None:
         """Recusa enquanto houver comida a caminho.

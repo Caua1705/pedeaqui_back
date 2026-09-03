@@ -8826,16 +8826,33 @@
         "type": "object"
       },
       "DeleteCustomerAccountRequest": {
-        "description": "A senha atual, e nada mais.\n\nCorpo em `DELETE` e incomum mas legal. A alternativa — senha na\nquerystring — a colocaria no log de todo proxy no caminho.",
+        "description": "A prova de que quem pede e o dono da conta. UMA das duas.\n\nCorpo em `DELETE` e incomum mas legal. A alternativa — senha na\nquerystring — a colocaria no log de todo proxy no caminho.\n\n**Qual dos dois campos mandar nao e escolha de quem chama: e da conta.**\n`GET /customers/me` responde `password_set`, e ele decide:\n\n    password_set: true   -> `password`, como sempre foi\n    password_set: false  -> `email_code`, pedido em\n                            POST /customers/me/delete-code\n\nOs dois sao opcionais NO SCHEMA e obrigatorios no servico, e a assimetria\ne proposital: um `password: str` obrigatorio deixaria a conta sem senha\nsem forma de preencher o corpo, e um `Union` de dois schemas faria o app\nescolher o formato — que e exatamente a decisao que nao pode ser dele.\nMandar o campo errado e **400** com a frase que diz qual mandar.\n\nO e-mail com o codigo diz EXCLUIR, com todas as letras: o mesmo codigo de\nseis digitos serve a tres pedidos neste sistema, e a caixa de entrada e o\nunico lugar onde a pessoa ve o que esta confirmando.",
         "properties": {
+          "email_code": {
+            "anyOf": [
+              {
+                "maxLength": 6,
+                "minLength": 6,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email Code"
+          },
           "password": {
-            "title": "Password",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password"
           }
         },
-        "required": [
-          "password"
-        ],
         "title": "DeleteCustomerAccountRequest",
         "type": "object"
       },
@@ -19903,7 +19920,7 @@
     },
     "/customers/me": {
       "delete": {
-        "description": "Exclusao da conta (LGPD, Art. 18, VI). NAO TEM DESFAZER.\n\nE o par natural de `GET /me/export`, que fica logo acima: **vejo o que\nvoces tem** e **apaguem**.\n\nA conta e ANONIMIZADA, nao apagada — o pedido continua existindo para o\nrestaurante, sem nada da pessoa dentro. O e-mail e o telefone sao\nliberados para recadastro, e o token desta propria chamada morre junto.\nOs campos exatos estao em `CustomerAnonymizationService`.\n\n## O SALDO DE CASHBACK E PERDIDO. Avise antes de chamar esta rota.\n\nO recadastro nasce com **id novo** — e o que libera o e-mail e o telefone\ne justamente a saida deles da tabela. O cashback continua ligado ao id\nvelho, e nao ha caminho de volta: a pessoa volta como desconhecida.\n\n**Chame `GET /customers/me/cashback` na tela de confirmacao** e mostre o\n`balance` — que e o acumulado em TODOS os restaurantes, e e exatamente o\nque se perde aqui. A quebra de `by_restaurant[]` serve para nomear as\nlojas no aviso (\"R$ 40 no Junior da Picanha\"). Nao ha como esta rota\navisar: quando ela responde, a conta ja foi anonimizada, e nao ha\ndesfazer.\n\nDesde que o credito e o resgate existem, o aviso deixou de ser\nhipotetico: o saldo e dinheiro que a pessoa gastaria no proximo pedido.\n\nO saldo NAO vem no corpo da resposta, e nao e esquecimento: um numero\nentregue depois do fato nao evita a perda, e publicar um corpo aqui\ntrocaria o `204` por `200` — mudanca de contrato para um app que ja\nconsome esta rota.\n\nO corpo leva a senha atual: `DELETE` com corpo e incomum mas legal, e a\nalternativa a colocaria na querystring, ou seja, no log do proxy.\n\n## CONTA QUE ENTROU PELO GOOGLE E NUNCA DEFINIU SENHA\n\nEla nao tem senha para mandar aqui, e esta rota exige uma. **O caminho e\ndefinir a senha antes**, e ele ja existe inteiro:\n`POST /auth/forgot-password` manda um codigo para o e-mail que o Google\nverificou, `POST /auth/verify-reset-code` devolve o `reset_token` e\n`POST /auth/reset-password` grava a senha. Depois disso, esta rota\nfunciona como para qualquer conta.\n\n**A tela precisa avisar antes, e nao depois.** `GET /customers/me` traz\n`password_set`: com `false`, mostre \"defina uma senha para excluir a\nconta\" em vez de um campo de senha que so pode receber \"Senha incorreta\".\nSem esse aviso, a pessoa fica sem saida visivel num caminho de LGPD.",
+        "description": "Exclusao da conta (LGPD, Art. 18, VI). NAO TEM DESFAZER.\n\nE o par natural de `GET /me/export`, que fica logo acima: **vejo o que\nvoces tem** e **apaguem**.\n\nA conta e ANONIMIZADA, nao apagada — o pedido continua existindo para o\nrestaurante, sem nada da pessoa dentro. O e-mail e o telefone sao\nliberados para recadastro, e o token desta propria chamada morre junto.\nOs campos exatos estao em `CustomerAnonymizationService`.\n\n## O SALDO DE CASHBACK E PERDIDO. Avise antes de chamar esta rota.\n\nO recadastro nasce com **id novo** — e o que libera o e-mail e o telefone\ne justamente a saida deles da tabela. O cashback continua ligado ao id\nvelho, e nao ha caminho de volta: a pessoa volta como desconhecida.\n\n**Chame `GET /customers/me/cashback` na tela de confirmacao** e mostre o\n`balance` — que e o acumulado em TODOS os restaurantes, e e exatamente o\nque se perde aqui. A quebra de `by_restaurant[]` serve para nomear as\nlojas no aviso (\"R$ 40 no Junior da Picanha\"). Nao ha como esta rota\navisar: quando ela responde, a conta ja foi anonimizada, e nao ha\ndesfazer.\n\nDesde que o credito e o resgate existem, o aviso deixou de ser\nhipotetico: o saldo e dinheiro que a pessoa gastaria no proximo pedido.\n\nO saldo NAO vem no corpo da resposta, e nao e esquecimento: um numero\nentregue depois do fato nao evita a perda, e publicar um corpo aqui\ntrocaria o `204` por `200` — mudanca de contrato para um app que ja\nconsome esta rota.\n\nO corpo leva a senha atual: `DELETE` com corpo e incomum mas legal, e a\nalternativa a colocaria na querystring, ou seja, no log do proxy.\n\n## A PROVA E UMA DAS DUAS, E QUEM ESCOLHE E A CONTA\n\n`GET /customers/me` responde `password_set`, e e ele que decide qual campo\nmandar:\n\n    password_set: true   ->  { \"password\": \"...\" }\n    password_set: false  ->  { \"email_code\": \"123456\" }\n\n`password_set: false` e a conta que entrou so pelo Google: ela nao tem\nsenha, e o codigo de seis digitos prova a mesma coisa que a senha provaria\n— que quem esta pedindo tem acesso ao e-mail da conta. Peca o codigo em\n`POST /customers/me/delete-code`.\n\n**Mandar o campo errado e 400**, com a frase dizendo qual mandar. Nao e\nescolha do app: aceitar o codigo numa conta que TEM senha rebaixaria a\nexigencia de toda conta com senha para \"quem le o e-mail\".\n\nO codigo errado e **401** e conta uma tentativa; cinco erros na mesma linha\nrespondem **429** e ela nao serve mais. Peca outro.",
         "operationId": "delete_me_customers_me_delete",
         "requestBody": {
           "content": {
@@ -20557,6 +20574,39 @@
           }
         ],
         "summary": "List Cashback Transactions",
+        "tags": [
+          "customers"
+        ]
+      }
+    },
+    "/customers/me/delete-code": {
+      "post": {
+        "description": "Manda o codigo que confirma a exclusao da conta. NADA e excluido aqui.\n\nE o passo anterior a `DELETE /customers/me` para quem tem\n`password_set: false` — a conta que entrou so pelo Google e nunca definiu\nsenha. O codigo vai para o e-mail da conta e vale **10 minutos**.\n\n**So para conta sem senha.** A que tem senha recebe **400**: ela ja tem\nprova, e um segundo caminho de exclusao onde um bastava deixaria quem tem\no token e a caixa de entrada apagar a conta sem saber a senha.\n\n**A resposta e a mesma mesmo quando o codigo nao sai** (cooldown de 60 s,\nou tres codigos na janela de 15 minutos). Nao ha nada que o app faca de\ndiferente, e variar a resposta so contaria quantos codigos ja sairam.\n\nO e-mail diz EXCLUIR com todas as letras: o mesmo formato de codigo serve\na tres pedidos neste sistema, e a caixa de entrada e o unico lugar onde a\npessoa ve o que esta confirmando. E o codigo daqui **nao serve para mais\nnada** — ele mora em `account_deletion_codes`, que nem a verificacao de\ne-mail nem a ligacao com o Google consultam.",
+        "operationId": "request_delete_code_customers_me_delete_code_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "description": "Esta conta tem senha: use `password` ao excluir"
+          },
+          "401": {
+            "description": "Nao autenticado"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Request Delete Code",
         "tags": [
           "customers"
         ]

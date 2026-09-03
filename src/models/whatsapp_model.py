@@ -212,7 +212,8 @@ class WhatsAppMessage(Base):
         # distinto de `NULL`, entao varias falhas convivem.
         UniqueConstraint("wamid", name="uq_whatsapp_messages_wamid"),
         CheckConstraint(
-            "kind = ANY (ARRAY['order_accepted'::text, 'order_out_for_delivery'::text, "
+            "kind = ANY (ARRAY['order_accepted'::text, "
+            "'order_ready_for_pickup'::text, 'order_out_for_delivery'::text, "
             "'order_delivered'::text])",
             name="ck_whatsapp_messages_kind",
         ),

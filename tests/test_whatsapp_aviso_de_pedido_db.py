@@ -84,7 +84,7 @@ def avisar(db: Session, pedido, restaurante) -> None:
     WhatsAppOrderNotifier(db).notify(order=pedido, restaurant_id=restaurante.id)
 
 
-class TestOsTresAvisos:
+class TestOsQuatroAvisos:
     def test_aceito_manda_o_template_com_nome_numero_e_loja(
         self, db: Session, envio
     ) -> None:
@@ -113,6 +113,26 @@ class TestOsTresAvisos:
 
         assert envio.call_args.kwargs["template_name"] == "pedido_entregue"
 
+    def test_pronto_para_retirada(self, db: Session, envio) -> None:
+        """`ready` é o estado em que o lojista diz "acabei de fazer".
+
+        Antes deste aviso, quem retirava não recebia NADA depois do
+        aceite: `out_for_delivery` e `completed` não são dele, e a pessoa
+        ficava esperando sem saber que já podia buscar. É o pior caso da
+        frente inteira — o cliente esperando por informação que existe."""
+        restaurante, _, pedido = cenario(db, status="ready", order_type="pickup")
+
+        avisar(db, pedido, restaurante)
+
+        assert (
+            envio.call_args.kwargs["template_name"] == "pedido_pronto_para_retirada"
+        )
+        assert envio.call_args.kwargs["parameters"] == (
+            "Maria",
+            "5471",
+            "Júnior da Picanha",
+        )
+
     def test_o_envio_bem_sucedido_grava_a_linha_com_o_wamid(
         self, db: Session, envio
     ) -> None:
@@ -128,8 +148,8 @@ class TestOsTresAvisos:
 
 
 class TestOQueNaoGeraAviso:
-    @pytest.mark.parametrize("status", ["pending", "preparing", "ready", "cancelled", "rejected"])
-    def test_status_fora_dos_tres(self, db: Session, envio, status: str) -> None:
+    @pytest.mark.parametrize("status", ["pending", "preparing", "cancelled", "rejected"])
+    def test_status_fora_dos_quatro(self, db: Session, envio, status: str) -> None:
         restaurante, _, pedido = cenario(db, status=status)
 
         avisar(db, pedido, restaurante)
@@ -147,8 +167,21 @@ class TestOQueNaoGeraAviso:
 
         assert envio.call_count == 0
 
+    def test_entrega_pronta_nao_recebe_pronto_para_retirada(
+        self, db: Session, envio
+    ) -> None:
+        """A simetria do "foi entregue": cada aviso vale no tipo de pedido
+        em que a FRASE dele é verdadeira. Numa entrega, `ready` significa
+        "pronto para SAIR" — e quem vai buscar é o motoboy. O cliente
+        recebe o "saiu para entrega" no passo seguinte."""
+        restaurante, _, pedido = cenario(db, status="ready", order_type="delivery")
+
+        avisar(db, pedido, restaurante)
+
+        assert envio.call_count == 0
+
     def test_retirada_aceita_recebe_o_aviso_de_aceite(self, db: Session, envio) -> None:
-        """O par do teste acima: só o "entregue" é de entrega."""
+        """O aceite vale nos dois tipos: a frase é verdadeira nos dois."""
         restaurante, _, pedido = cenario(db, status="accepted", order_type="pickup")
 
         avisar(db, pedido, restaurante)
@@ -272,3 +305,47 @@ class TestALigacaoComAEscritaDeStatus:
         resposta = self._aceitar(db, pedido, restaurante)
 
         assert resposta.status == "accepted"
+
+
+class TestONumeroDoRestauranteAtendeAsFiliais:
+    """O cenário do piloto: UM número na linha do restaurante, duas filiais.
+
+    O número novo e dedicado é cadastrado sem `--branch-slug`, então
+    `branch_id` fica nulo e as duas lojas herdam. Isto aqui é o que prova que
+    o aviso de um pedido do Centro sai por ele — sem nenhuma linha de código
+    escrita para esse caso.
+    """
+
+    def test_pedido_de_uma_filial_avisa_pelo_numero_do_restaurante(
+        self, db: Session, envio
+    ) -> None:
+        restaurante = fab.criar_restaurante(db, nome="Júnior da Picanha")
+        centro = fab.criar_filial(db, restaurante, nome="Centro")
+        fab.criar_filial(db, restaurante, nome="Aldeota")
+        db.add(
+            WhatsAppChannel(
+                restaurant_id=restaurante.id,
+                branch_id=None,
+                waba_id="waba-1",
+                phone_number_id="pni-do-restaurante",
+                display_phone_number="+55 85 99999-0000",
+                access_token_encrypted=encrypt_whatsapp_token("EAAG-token"),
+                is_active=True,
+            )
+        )
+        pedido = fab.criar_pedido(
+            db,
+            restaurante,
+            centro,
+            status="accepted",
+            customer_name_snapshot="Maria Aparecida",
+            customer_phone_snapshot="85988887777",
+            order_number=5471,
+        )
+        db.flush()
+
+        avisar(db, pedido, restaurante)
+
+        assert envio.call_count == 1
+        linha = db.query(WhatsAppMessage).one()
+        assert linha.order_id == pedido.id

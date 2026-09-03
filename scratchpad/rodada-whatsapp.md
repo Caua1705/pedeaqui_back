@@ -24,7 +24,7 @@ qualquer coisa, e continue do que ele diz — nunca da lembrança.**
 | # | Item | Estado |
 |---|---|---|
 | 5 | `account_update` / `PARTNER_REMOVED` — o canal desconectado | **feito** |
-| 6 | Aviso de "pronto para retirada" | pendente |
+| 6 | Aviso de "pronto para retirada" | **feito** — dispara em `ready`, só na retirada |
 | 7 | Reenvio de aviso que falhou | pendente |
 | 8 | `docs/whatsapp.md` | pendente |
 
@@ -484,6 +484,54 @@ tela, e é de propósito — o enunciado pediu o dado e o log.
 
 ---
 
+## Item 6 — feito. O aviso de "pronto para retirada"
+
+| Onde | O que |
+|---|---|
+| `alembic/versions/20260905_0053_*` | o quarto valor no CHECK de `kind` |
+| `src/services/whatsapp_notification_service.py` | `_TIPOS_DE_PEDIDO_POR_AVISO` |
+| `tests/test_whatsapp_aviso_de_pedido_db.py` | os dois lados da simetria |
+
+**O estado que dispara é `ready`, e não `completed`.** `ready` é o lojista
+apertando "pronto" no painel — o instante em que a informação passa a existir.
+`completed`, na retirada, é "a pessoa já veio buscar": avisar ali seria contar
+a ela o que ela acabou de fazer.
+
+**Por que era o pior buraco da frente.** Retirada não passa por
+`out_for_delivery` e não recebe "foi entregue" — as duas frases são de
+entrega. Então quem retirava recebia **um aviso só, o do aceite**, e depois
+nada. Nos outros casos o cliente deixa de receber a confirmação de algo que
+ele imagina; aqui ele deixa de receber **a única coisa que não tem como
+saber**.
+
+**A regra virou tabela, e ela substituiu um `if` especial.** Antes havia um
+caso à parte para "entregue"; com o segundo caso, virava dois `if`. Agora:
+
+```
+"order_accepted"          ("delivery", "pickup")
+"order_ready_for_pickup"  ("pickup",)
+"order_out_for_delivery"  ("delivery",)
+"order_delivered"         ("delivery",)
+```
+
+**Cada aviso vale nos tipos de pedido em que a FRASE dele é verdadeira** — e
+as listas são positivas e escritas por extenso, e não `ORDER_TYPES`
+(armadilha 47): tipo de pedido novo cai fora de todas e nasce sem aviso
+nenhum. Um aviso automático com a frase errada é pior que aviso nenhum,
+porque o cliente age com base nele.
+
+**O downgrade da revisão falha se já houver linha `order_ready_for_pickup`** —
+e isso é o certo: o CHECK antigo não consegue descrever aquelas linhas. Quem
+precisar voltar apaga antes, e apagar registro de aviso enviado é uma decisão,
+não um detalhe da migração.
+
+**De passagem, uma trava do cenário do piloto:** um teste novo prova que o
+pedido de uma filial é avisado pelo número da linha do RESTAURANTE. Ele passou
+sem nenhuma linha de código nova — que é o que a decisão de 05/09 supunha e
+agora está conferido.
+
+---
+
 # Parte II — o que EU faço, na ordem
 
 Nada abaixo é código. É o que só eu consigo fazer, e o que o backend espera
@@ -708,9 +756,9 @@ jeito que a credencial do Mercado Pago entra hoje.
     — `messages` pelo `phone_number_id`, `account_update` pelo WABA. Isso
     é problema do backend; na tela é só marcar os dois.
 
-## F. Os três templates
+## F. Os QUATRO templates
 
-*WhatsApp Manager → Modelos de mensagem → Criar modelo.* Nos três:
+*WhatsApp Manager → Modelos de mensagem → Criar modelo.* Nos quatro:
 categoria **Utilidade**, idioma **Português (BR)**, sem cabeçalho e sem
 botão.
 
@@ -720,15 +768,26 @@ botão.
 
 | Nome do modelo | Corpo |
 |---|---|
-| `pedido_aceito` | `Olá, {{1}}! Seu pedido #{{2}} foi aceito e já está sendo preparado pelo {{3}}. Avisamos por aqui quando ele sair para entrega.` |
+| `pedido_aceito` | `Olá, {{1}}! Seu pedido #{{2}} foi aceito e já está sendo preparado pelo {{3}}. Avisamos por aqui quando ele estiver a caminho.` |
+| `pedido_pronto_para_retirada` | `Olá, {{1}}! Seu pedido #{{2}} está pronto e já pode ser retirado no {{3}}.` |
 | `pedido_saiu_para_entrega` | `Olá, {{1}}! Seu pedido #{{2}} saiu para entrega e está a caminho. Qualquer dúvida, fale com o {{3}}.` |
 | `pedido_entregue` | `Olá, {{1}}! Seu pedido #{{2}} foi entregue. Obrigado por pedir no {{3}}!` |
 
 `{{1}}` nome do cliente · `{{2}}` número do pedido · `{{3}}` nome da loja.
 
-**Os três com as mesmas três variáveis, na mesma ordem, de propósito:** um
-caminho de código só monta os três. O formulário pede exemplos para cada
-variável — usar `Maria`, `5471`, `Júnior da Picanha`.
+**`pedido_pronto_para_retirada` só é usado em pedido de RETIRADA**, e os
+outros três só em ENTREGA (menos o aceite, que vale nos dois). Não é
+conservadorismo: são frases diferentes, e a errada faz o cliente agir
+errado — quem pediu entrega não pode receber "já pode ser retirado".
+
+**Se você aprovar só três**, escolha deixar de fora o de retirada: os
+outros três cobrem o fluxo de entrega inteiro, que é o volume. Sem o de
+retirada, quem retira volta a receber só o aceite — que é o buraco que o
+item 6 fechou.
+
+**Os quatro com as mesmas três variáveis, na mesma ordem, de propósito:**
+um caminho de código só monta os quatro. O formulário pede exemplos para
+cada variável — usar `Maria`, `5471`, `Júnior da Picanha`.
 
 A aprovação leva de minutos a horas. Enquanto não aprova, o envio volta
 `132001` (modelo não existe) — o nosso lado loga e não derruba nada.

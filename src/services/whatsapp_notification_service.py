@@ -1,4 +1,7 @@
-"""Os avisos de status do pedido pelo WhatsApp: aceito, saiu, entregue.
+"""Os avisos de status do pedido pelo WhatsApp.
+
+Quatro: aceito, pronto para retirada, saiu para entrega, entregue. E eles
+NAO valem todos para todo pedido — ver `_TIPOS_DE_PEDIDO_POR_AVISO`.
 
 ## Sempre TEMPLATE, e nao por conservadorismo
 
@@ -55,9 +58,11 @@ from src.services.whatsapp_send_service import WhatsAppSendRefused, WhatsAppSend
 
 logger = logging.getLogger("uvicorn.error")
 
-# Status do pedido -> aviso. So estes tres avisam; o resto passa em silencio.
+# Status do pedido -> aviso. So estes quatro avisam; o resto passa em
+# silencio.
 _KIND_POR_STATUS = {
     "accepted": "order_accepted",
+    "ready": "order_ready_for_pickup",
     "out_for_delivery": "order_out_for_delivery",
     "completed": "order_delivered",
 }
@@ -65,19 +70,37 @@ _KIND_POR_STATUS = {
 # Aviso -> nome do template aprovado na Meta.
 _TEMPLATE_POR_KIND = {
     "order_accepted": "pedido_aceito",
+    "order_ready_for_pickup": "pedido_pronto_para_retirada",
     "order_out_for_delivery": "pedido_saiu_para_entrega",
     "order_delivered": "pedido_entregue",
 }
 
 IDIOMA_DO_TEMPLATE = "pt_BR"
 
-KIND_ENTREGUE = "order_delivered"
-
-# Os tipos de pedido em que "foi entregue" e verdade. Lista positiva de
-# proposito (armadilha 47): tipo novo NAO recebe o aviso de entrega ate
-# alguem decidir que recebe, que e o lado que fecha — o texto do template
-# afirma uma coisa que pode nao ter acontecido.
-ORDER_TYPES_QUE_SAO_ENTREGUES = ("delivery",)
+# CADA AVISO VALE NOS TIPOS DE PEDIDO EM QUE A FRASE DELE E VERDADEIRA.
+#
+# Nao e conservadorismo, sao quatro frases diferentes:
+#
+#   "foi aceito"            verdade nos dois
+#   "pronto para retirada"  so na retirada. Na entrega, `ready` significa
+#                           pronto para SAIR, e quem vem buscar e o
+#                           motoboy — mandar isso e mandar a pessoa buscar
+#                           um pedido que vai ate ela
+#   "saiu para entrega"     so na entrega (o estado nem existe na retirada)
+#   "foi entregue"          so na entrega. Na retirada, `completed` e "a
+#                           pessoa veio buscar" — avisar seria contar a ela
+#                           o que ela acabou de fazer
+#
+# LISTAS POSITIVAS, e escritas por extenso em vez de `ORDER_TYPES`
+# (armadilha 47): tipo de pedido novo cai fora de TODAS e nasce sem aviso
+# nenhum, que e o lado que fecha. Um aviso automatico com a frase errada e
+# pior que aviso nenhum: o cliente age com base nele.
+_TIPOS_DE_PEDIDO_POR_AVISO = {
+    "order_accepted": ("delivery", "pickup"),
+    "order_ready_for_pickup": ("pickup",),
+    "order_out_for_delivery": ("delivery",),
+    "order_delivered": ("delivery",),
+}
 
 
 class WhatsAppOrderNotifier:
@@ -96,7 +119,7 @@ class WhatsAppOrderNotifier:
         kind = _KIND_POR_STATUS.get(order.status)
         if kind is None:
             return
-        if kind == KIND_ENTREGUE and order.order_type not in ORDER_TYPES_QUE_SAO_ENTREGUES:
+        if order.order_type not in _TIPOS_DE_PEDIDO_POR_AVISO[kind]:
             return
 
         channel = self.channel_repository.resolve_for_branch(restaurant_id, order.branch_id)

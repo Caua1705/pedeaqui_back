@@ -176,6 +176,7 @@ SOCIAL_PROVIDER_GOOGLE = "google"
 # `WHATSAPP_TEMPLATE_BY_KIND`, no service.
 WHATSAPP_MESSAGE_KINDS = (
     "order_accepted",
+    "order_ready_for_pickup",
     "order_out_for_delivery",
     "order_delivered",
 )

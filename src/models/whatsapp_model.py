@@ -222,9 +222,16 @@ class WhatsAppMessage(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False)
     # O id da mensagem na Meta. Nulo quando nem chegou a existir uma.
     wamid: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # O codigo de erro da Meta, quando houve (`131047` janela fechada,
-    # `132001` template inexistente). Guardado como TEXTO porque e o que se
-    # cita num chamado, e nao numero para contas.
+    # Por que o aviso nao saiu. DOIS vocabularios, e o prefixo separa os dois:
+    #
+    #   `131047`, `132001`   codigo da META — ela respondeu e recusou
+    #   `refused:phone`      NOSSA recusa — o telefone do pedido nao vira
+    #   `refused:window`     E.164 sem chute, ou seria texto livre fora da
+    #                        janela de 24h
+    #
+    # Sem o prefixo, um `132001` e um "telefone torto" pareceriam o mesmo
+    # tipo de problema — e sao: um pede mexer na Meta, o outro no cadastro do
+    # cliente. TEXTO e nao numero porque e o que se cita num chamado.
     error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()

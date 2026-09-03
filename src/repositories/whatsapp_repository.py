@@ -190,3 +190,16 @@ class WhatsAppMessageRepository:
 
     def get_by_wamid(self, wamid: str) -> WhatsAppMessage | None:
         return self.db.scalar(select(WhatsAppMessage).where(WhatsAppMessage.wamid == wamid))
+
+    def exists_for(self, *, order_id: uuid.UUID, kind: str) -> bool:
+        """Este aviso deste pedido ja saiu?
+
+        Nao e redundante com `uq_whatsapp_messages_order_kind`: o UNIQUE barra
+        a LINHA, e nesse ponto a mensagem ja foi entregue ao cliente. Ele
+        protege a tabela; isto aqui protege o cliente de receber duas.
+        """
+        stmt = select(WhatsAppMessage.id).where(
+            WhatsAppMessage.order_id == order_id,
+            WhatsAppMessage.kind == kind,
+        )
+        return self.db.scalar(stmt) is not None

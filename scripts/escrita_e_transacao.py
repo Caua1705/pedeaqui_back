@@ -67,7 +67,8 @@ PREFIXOS_DE_ESCRITA = (
 # Prefixos que LEEM. Listados, e nao deduzidos por exclusao: e a exclusao que
 # transforma um nome novo em leitura por acidente.
 PREFIXOS_DE_LEITURA = (
-    "get", "list", "count", "find", "exists", "has", "is_", "search", "latest",
+    "get", "list", "count", "find", "exists", "has", "is_", "resolve", "search",
+    "latest",
     "lock", "active_", "product_ids_", "claimed_", "customer_has_",
     "last_order_", "segment_of_", "sales_", "totals_", "top_", "custo_",
     "cancellation", "rating_", "problem_tag_", "available_",

@@ -16,7 +16,7 @@ qualquer coisa, e continue do que ele diz — nunca da lembrança.**
 | 0 | O que EU faço no painel da Meta, e o que colo no `.env` | **escrito** (parte II deste arquivo) |
 | 1 | A estrutura: canal por filial, token cifrado | **feito** — 3 tabelas, revisao `0051`, `scripts/register_whatsapp_channel.py` |
 | 2 | O webhook: assinatura da Meta e roteamento pelo `phone_number_id` | **feito** — `GET`+`POST /webhooks/whatsapp` |
-| 3 | Mandar mensagem: janela de 24h × template aprovado | pendente |
+| 3 | Mandar mensagem: janela de 24h × template aprovado | **feito** — `WhatsAppSender` |
 | 4 | Os avisos de status do pedido: aceito, saiu, entregue | pendente |
 
 ---
@@ -320,6 +320,37 @@ permitidos*: status novo é recusado, que é o lado que fecha).
 
 O canal só ROTEIA. Nada é enviado ainda, e a janela de 24h é escrita sem ter
 leitor — ela ganha um no item 3.
+
+---
+
+## Item 3 — feito. O envio
+
+| Onde | O que |
+|---|---|
+| `src/integrations/whatsapp_client.py` | `send_template_message` e `send_text_message` |
+| `src/services/whatsapp_send_service.py` | `WhatsAppSender` e `to_whatsapp_phone` |
+| `tests/test_whatsapp_envio.py` | telefone e a chamada ao Graph (transporte dublado) |
+| `tests/test_whatsapp_envio_db.py` | a janela decide, e a Meta nem é chamada |
+
+**A decisão mora no envio, não em quem chama.** `send_text` recusa fora da
+janela ANTES de existir chamada. Tentar e falhar custaria um `131047` da Meta
+e o mesmo cliente não avisado, com o motivo escondido na resposta deles.
+
+**Conferido por mutação:** com `is_open` respondendo sempre `True`, os três
+testes da janela ficam vermelhos e a chamada acontece. A trava é real.
+
+**Duas decisões que o enunciado não trazia:**
+
+1. **A conversão para E.164 recusa o que não dá para afirmar.** 10 ou 11
+   dígitos ganham o `55`; 12 ou 13 começando com `55` passam; **o resto não é
+   enviado**. É a armadilha 27 pelo lado da saída: chutar um DDI é mandar a
+   mensagem de um cliente para o telefone de outra pessoa.
+2. **200 sem `wamid` conta como recusa.** Sem ele o webhook de status não
+   acha a linha depois — chamar aquilo de sucesso gravaria um envio que
+   ninguém consegue acompanhar.
+
+**Portão, de novo:** `escrita_e_transacao.py` não conhecia o prefixo `is_`.
+Entrou no vocabulário de LEITURA, ao lado de `has` e `exists`.
 
 ---
 

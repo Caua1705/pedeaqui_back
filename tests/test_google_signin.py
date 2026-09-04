@@ -278,9 +278,26 @@ class TestOCasoB(unittest.TestCase):
 
     def test_manda_o_codigo_para_o_email(self) -> None:
         self._entrar()
-        enviados = self.servico.auth_service.email_service.verification_codes
+        enviados = self.servico.auth_service.email_service.google_link_codes
         self.assertEqual(len(enviados), 1)
         self.assertEqual(enviados[0][0], EMAIL)
+
+    def test_o_email_e_o_de_LIGAR_e_nao_o_de_entrar(self) -> None:
+        """O texto e a unica coisa que separa os dois pedidos na cabeca de quem le.
+
+        A maquinaria e a mesma de proposito (mesma tabela, mesmo teto), entao
+        nada no banco distingue este codigo do de entrar. O que distingue e o
+        e-mail — e ate 04/09/2026 ele era o MESMO, com as palavras do cadastro.
+
+        Quem pediu um codigo para entrar e recebe uma tela pedindo confirmacao
+        clica em confirmar por habito; o e-mail dizendo "para LIGAR sua conta
+        do Google" e a chance de reparar que sao coisas diferentes.
+        """
+        self._entrar()
+        email_service = self.servico.auth_service.email_service
+
+        self.assertEqual(len(email_service.google_link_codes), 1)
+        self.assertEqual(email_service.verification_codes, [])
 
     def test_devolve_um_ticket_para_a_conta_certa(self) -> None:
         resposta = self._entrar()
@@ -303,7 +320,7 @@ class TestOCasoB(unittest.TestCase):
         resposta = servico.sign_in(servico.pedido)
 
         self.assertEqual(resposta.status, GOOGLE_LINK_CONFIRMATION_REQUIRED)
-        self.assertEqual(servico.auth_service.email_service.verification_codes, [])
+        self.assertEqual(servico.auth_service.email_service.google_link_codes, [])
 
     def test_a_resposta_nao_muda_quando_o_teto_fecha(self) -> None:
         """Silenciosa de proposito, como `resend_email_code`: nao ha nada que o

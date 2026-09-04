@@ -367,6 +367,14 @@ class AuthService:
         um segundo tipo de codigo, e nao deve haver: dois seriam duas janelas,
         dois tetos e duas retencoes para envelhecer separado.
 
+        **O E-MAIL, ESSE, E OUTRO.** Ate 04/09/2026 este caminho mandava o
+        texto do cadastro ("Seu codigo de verificacao"), e a pessoa que pediu
+        um codigo para ENTRAR recebia, com as mesmas palavras, o codigo que
+        LIGA outra conta a dela. Quem le a tela ja esta convencido; o e-mail
+        era a unica chance de reparar que sao coisas diferentes, e ele nao
+        dizia nada. Ver o docstring de `EmailService`, inclusive para o residuo
+        que a maquinaria unica deixa.
+
         **O cooldown e o teto sao o que impede esta rota de virar uma metralhadora
         de e-mail.** Quem tem uma conta do Google com o e-mail de alguem pode
         chamar `POST /auth/google` em laco; sem estes dois, cada chamada seria
@@ -382,10 +390,32 @@ class AuthService:
             return
 
         resend_count = (latest.resend_count + 1) if latest else 0
-        self._create_email_verification_code(customer, resend_count=resend_count)
+        self._create_google_link_code(customer, resend_count=resend_count)
         self.db.commit()
 
     def resend_email_code(self, payload: ResendEmailCodeRequest) -> MessageResponse:
+        """Reenvia o codigo do CADASTRO. Sempre com o texto de entrar.
+
+        **E aqui mora o residuo da separacao de textos de 04/09/2026**, escrito
+        no lugar em que alguem vai tropecar nele:
+
+        A linha de `email_verification_codes` nao guarda para que ela foi
+        emitida — de proposito, porque uma coluna de proposito seria o comeco
+        do segundo tipo de codigo que `send_link_confirmation_code` recusa. Sem
+        ela, este reenvio nao tem como saber se o codigo pendente era o de
+        entrar ou o de ligar a conta do Google, e manda o texto de entrar.
+
+        **O estrago real e pequeno, e vale saber por que.** A conta que chega
+        na confirmacao do Google normalmente ja tem `email_verified_at`, e o
+        `return` logo abaixo faz este metodo nao mandar NADA nesse caso — o
+        texto errado nao sai; sai silencio, e quem clicou em "reenviar" na tela
+        do Google nao recebe. A janela em que o texto errado sai de fato e
+        estreita: conta cadastrada por e-mail, NUNCA confirmada, que entra com
+        o Google e pede reenvio.
+
+        Fechar as duas pontas custa uma coluna e uma revisao. Nao foi feito
+        porque nao foi decidido, e nao porque nao valha.
+        """
         # A MESMA resposta em todo caminho, inclusive e-mail inexistente:
         # variar a mensagem transformaria o reenvio numa sonda de quais
         # e-mails estao cadastrados (armadilha 18).
@@ -575,7 +605,20 @@ class AuthService:
             conflitos.append("Telefone")
         return conflitos
 
-    def _create_email_verification_code(self, customer: Customer, resend_count: int = 0) -> None:
+    def _gravar_codigo_de_email(self, customer: Customer, resend_count: int) -> str:
+        """Grava a linha e devolve o codigo em claro. NAO manda e-mail nenhum.
+
+        A maquinaria e UMA — mesma tabela, mesmo HMAC, mesmo TTL, mesmo
+        cooldown e mesmo teto — e o que muda entre entrar e ligar o Google e so
+        o texto que sai. Esta funcao e essa maquinaria, escrita uma vez.
+
+        Quem manda o e-mail sao as duas funcoes abaixo, e elas existem
+        separadas em vez de um parametro dizendo qual texto usar. A diferenca
+        importa: com um parametro (ainda mais com default), um caminho novo que
+        esquecesse de passa-lo mandaria o e-mail errado sem erro nenhum — a
+        mesma familia do `require_public` da armadilha 47. Duas funcoes com
+        nome nao tem como ser esquecidas: quem chama escolhe uma.
+        """
         code = generate_6_digit_code()
         self.customer_repository.create_email_code(
             customer_id=customer.id,
@@ -585,7 +628,17 @@ class AuthService:
             attempts_count=0,
             resend_count=resend_count,
         )
+        return code
+
+    def _create_email_verification_code(self, customer: Customer, resend_count: int = 0) -> None:
+        """Codigo do cadastro por e-mail. O texto diz ENTRAR."""
+        code = self._gravar_codigo_de_email(customer, resend_count)
         self.email_service.send_email_verification_code(customer.email, code)
+
+    def _create_google_link_code(self, customer: Customer, resend_count: int = 0) -> None:
+        """Codigo do caso (b) do "entrar com Google". O texto diz LIGAR."""
+        code = self._gravar_codigo_de_email(customer, resend_count)
+        self.email_service.send_google_link_code(customer.email, code)
 
     def _create_password_reset_code(self, customer: Customer) -> None:
         code = generate_6_digit_code()

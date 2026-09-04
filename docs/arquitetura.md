@@ -402,6 +402,7 @@ um worker o Rapi "esquece" a conversa. Não há caminho de Redis para ele.
 | [autenticacao-e-escopo.md](autenticacao-e-escopo.md) | token de cliente, token de lojista, escopo por restaurante e por filial, o par do entregador |
 | [entregadores.md](entregadores.md) | cadastro, link + código, atribuição, a taxa que a loja paga por corrida, a tela do motoboy, o que ficou para a fase 2 |
 | [impressao.md](impressao.md) | setores, montagem das comandas, o print-agent |
+| [whatsapp.md](whatsapp.md) | o número por filial, o webhook único, os quatro avisos de status, o reenvio do que falhou, e o que é ignorado de propósito |
 | [avaliacao-de-pedido.md](avaliacao-de-pedido.md) | nota do cliente pelo link de acompanhamento, aba do painel, LGPD do texto livre, e por que o QR na comanda ficou para depois |
 | [custo-de-ia.md](custo-de-ia.md) | quanto o assistente custa por restaurante: o que é gravado por chamada, a rota de leitura, e por que ela não é do painel |
 | [operacao.md](operacao.md) | subir local, deploy, migrações, logs, o que fazer quando não sobe |

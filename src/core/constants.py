@@ -164,3 +164,37 @@ SOCIAL_AUTH_PROVIDERS = ("google",)
 
 # O provedor, para quem precisa nomea-lo sem repetir a string.
 SOCIAL_PROVIDER_GOOGLE = "google"
+
+
+# Os avisos de pedido que saem pelo WhatsApp. ESPELHA o CHECK
+# `ck_whatsapp_messages_kind` (revisao 20260904_0051) e muda JUNTO com ele —
+# armadilha 15.
+#
+# O valor NAO e o nome do template aprovado na Meta, e a diferenca importa: o
+# template pode ser renomeado, reaprovado ou trocado por outro idioma sem que
+# o aviso deixe de ser "o pedido foi aceito". Quem liga um no outro e
+# `WHATSAPP_TEMPLATE_BY_KIND`, no service.
+WHATSAPP_MESSAGE_KINDS = (
+    "order_accepted",
+    "order_ready_for_pickup",
+    "order_out_for_delivery",
+    "order_delivered",
+)
+
+# O ciclo de vida de uma mensagem enviada. ESPELHA o CHECK
+# `ck_whatsapp_messages_status`.
+#
+# As quatro palavras sao as DA META, e nao nossas: `sent`, `delivered` e
+# `read` chegam prontos no `statuses[]` do webhook, e traduzi-los criaria uma
+# tabela de-para para manter em duas pontas. `failed` e o unico que tambem
+# nascemos escrevendo — quando a chamada nem chegou a ser aceita.
+#
+# Nao ha estado "enfileirado": a linha nasce depois da resposta da Meta, e uma
+# linha antes dela seria um estado que nenhum webhook resolve.
+WHATSAPP_MESSAGE_STATUSES = ("sent", "delivered", "read", "failed")
+
+# Quanto dura a janela de atendimento depois de uma mensagem do cliente. E um
+# numero DELES, nao nosso: dentro dela cabe texto livre, fora dela so template
+# aprovado. Constante e nao variavel de ambiente justamente por isso —
+# configuravel, ela vira um numero nosso que diverge do deles em silencio.
+WHATSAPP_CUSTOMER_WINDOW_HOURS = 24

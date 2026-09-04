@@ -26,6 +26,7 @@ from src.api.endpoints import (
     admin_reviews,
     admin_settings,
     admin_users,
+    admin_whatsapp,
     auth,
     branches,
     coupons,
@@ -37,6 +38,7 @@ from src.api.endpoints import (
     orders,
     payments,
     restaurants,
+    whatsapp,
 )
 from src.core.config import GIT_SHA_NAO_CARIMBADO, settings
 from src.core.startup_checks import validate_settings
@@ -167,6 +169,9 @@ app.include_router(customers.router)
 app.include_router(delivery.router)
 app.include_router(orders.router)
 app.include_router(payments.router)
+# O webhook da Meta: UM endereco para a aplicacao inteira, roteado pelo
+# `phone_number_id` do corpo. Nao ha versao por restaurante de proposito.
+app.include_router(whatsapp.router)
 app.include_router(coupons.router)
 app.include_router(coupons.admin_router)
 app.include_router(coupons.template_router)
@@ -183,6 +188,7 @@ app.include_router(admin_customers.router)
 app.include_router(admin_reports.router)
 app.include_router(admin_reviews.router)
 app.include_router(admin_error_reports.router)
+app.include_router(admin_whatsapp.router)
 app.include_router(internal_metrics.router)
 app.include_router(chat.router)
 

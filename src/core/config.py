@@ -393,6 +393,44 @@ class Settings(BaseSettings):
     # recadastro em maos, nunca de surpresa.
     PAYMENT_CREDENTIALS_ENCRYPTION_KEY: str | None = None
 
+    # --- WhatsApp pela Cloud API oficial da Meta ---
+    #
+    # O APP DA META E UM SO PARA A PLATAFORMA INTEIRA, e e dele que sai o
+    # `WHATSAPP_APP_SECRET`: ele assina o `X-Hub-Signature-256` de TODO
+    # webhook, venha do numero que vier. Isso inverte a ordem do webhook em
+    # relacao a do pagamento — la o segredo e do restaurante, entao a
+    # assinatura so pode ser conferida depois de descobrir de quem e o
+    # pagamento; aqui ela e a PRIMEIRA coisa, antes de qualquer roteamento.
+    #
+    # VAZIO = o webhook responde 503. Nao existe modo "aceita sem verificar":
+    # e a mesma regra de PAYMENT_WEBHOOK_SECRET, e por um motivo mais forte —
+    # um POST forjado aceito aqui manda mensagem no numero do lojista.
+    WHATSAPP_APP_SECRET: str | None = None
+    # O que a Meta devolve no GET de verificacao do webhook (`hub.verify_token`).
+    # Nao vem deles: e uma string que EU invento e colo nos dois lados. Vazia,
+    # o GET responde 503 — e o painel da Meta so diz que nao conseguiu validar,
+    # entao ela precisa estar no ambiente ANTES do clique.
+    WHATSAPP_WEBHOOK_VERIFY_TOKEN: str | None = None
+    # Chave Fernet do access token de cada canal (whatsapp_channels). SEPARADA
+    # da do pagamento de proposito, e sem queda de uma para a outra — ver o
+    # cabecalho de src/utils/crypto.py e a armadilha 32.
+    WHATSAPP_TOKEN_ENCRYPTION_KEY: str | None = None
+    # O freio que NAO depende de escrita no banco. Nasce falso pelo mesmo
+    # desenho de `cashback_rules.enabled` (armadilha 26): quem liga um envio
+    # para telefone de cliente de verdade liga de proposito. E, no dia do
+    # aviso duplicado, desligar e uma variavel e um restart — nao um UPDATE
+    # de madrugada em cada restaurante.
+    WHATSAPP_NOTIFICATIONS_ENABLED: bool = False
+    WHATSAPP_GRAPH_API_BASE_URL: str = "https://graph.facebook.com"
+    # A versao entra na URL do Graph. Fixa e nao "a mais recente" porque a
+    # Meta muda formato de payload entre versoes, e a hora de descobrir isso
+    # nao e no meio do almoco.
+    WHATSAPP_GRAPH_API_VERSION: str = "v21.0"
+    # Curto de proposito: o envio acontece DEPOIS do commit da mudanca de
+    # status, e o lojista esta esperando a resposta do clique. Timeout longo
+    # aqui e o painel travando por causa da Meta.
+    WHATSAPP_TIMEOUT_SECONDS: float = 10
+
     # --- Classificacao RFV da listagem de clientes do painel ---
     #
     # A cadencia NAO e um numero por restaurante: e o intervalo medio do

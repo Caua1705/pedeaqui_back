@@ -1,6 +1,6 @@
-"""Remove chaves, estimativas, codigos, feedback, comentario e relato.
+"""Remove chaves, estimativas, codigos, feedback, comentario, relato e janela.
 
-O nome do arquivo ficou para tras: ele cuida de SEIS tabelas hoje, nao so
+O nome do arquivo ficou para tras: ele cuida de SETE tabelas hoje, nao so
 de `idempotency_keys`. Nao foi renomeado de proposito — o nome aparece no
 `command` do container `limpeza` em `docker-compose.yml`, na secao "Uso"
 abaixo e em `docs/`, e trocar tres referencias para ganhar um nome melhor nao
@@ -38,7 +38,14 @@ nao tem `customer_id` — nenhuma exclusao de conta vai alcanca-la, hoje ou
 nunca. Quem sabe ate quando e
 `admin_error_report_service.error_report_retention_cutoff`.
 
-As seis apagam poucas linhas por execucao — dezenas ou centenas —, entao
+`whatsapp_contact_windows` e a SETIMA, e o prazo dela nao e um numero de
+dias escolhido a parte: e a PROPRIA janela de 24h da Meta. Passada a hora,
+a linha nao responde mais nenhuma pergunta — e o que ela guarda e o
+TELEFONE de quem escreveu para a loja, numa tabela que nao pende de
+`customers`. Mesmo motivo do `ai_feedback`, com um prazo que ja vinha
+escrito na linha.
+
+As sete apagam poucas linhas por execucao — dezenas ou centenas —, entao
 todas cabem numa transacao so, com um commit no fim. Foi a sexta tabela
 (`menu_events`, do funil do cardapio) que exigia expurgo EM LOTES, e ela saiu
 junto com a frente inteira de funil e origem: se algum dia entrar aqui uma
@@ -77,12 +84,14 @@ from src.models.customer_model import EmailVerificationCode, PasswordResetCode
 from src.models.delivery_estimate_model import DeliveryEstimate
 from src.models.order_review_model import OrderReview
 from src.models.idempotency_key_model import IdempotencyKey
+from src.models.whatsapp_model import WhatsAppContactWindow
 from src.repositories.admin_error_report_repository import AdminErrorReportRepository
 from src.repositories.ai_feedback_repository import AIFeedbackRepository
 from src.repositories.delivery_estimate_repository import DeliveryEstimateRepository
 from src.repositories.customer_repository import CustomerRepository
 from src.repositories.idempotency_repository import IdempotencyRepository
 from src.repositories.order_review_repository import OrderReviewRepository
+from src.repositories.whatsapp_repository import WhatsAppContactWindowRepository
 from src.services.admin_error_report_service import error_report_retention_cutoff
 from src.services.auth_service import codes_retention_cutoff
 from src.services.chat_service import feedback_retention_cutoff
@@ -180,7 +189,10 @@ def conferir_despejo_do_redis(redis_client=None) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Remove chaves, estimativas, codigos, feedback, comentarios e relatos vencidos."
+        description=(
+            "Remove chaves, estimativas, codigos, feedback, comentarios, "
+            "relatos e janelas de WhatsApp vencidos."
+        )
     )
     parser.add_argument(
         "--dry-run",
@@ -230,11 +242,16 @@ def main() -> int:
                 .select_from(AdminErrorReport)
                 .where(AdminErrorReport.created_at < relato_cutoff)
             )
+            janelas = db.scalar(
+                select(func.count())
+                .select_from(WhatsAppContactWindow)
+                .where(WhatsAppContactWindow.window_expires_at <= now)
+            )
             print(
                 f"[dry-run] {keys} chave(s), {estimates} estimativa(s), "
-                f"{codes} codigo(s), {feedback} feedback(s) e {relatos} relato(s) "
-                f"seriam removidos e {comentarios} comentario(s) de avaliacao "
-                f"seriam limpos."
+                f"{codes} codigo(s), {feedback} feedback(s), {relatos} relato(s) "
+                f"e {janelas} janela(s) de WhatsApp seriam removidos e "
+                f"{comentarios} comentario(s) de avaliacao seriam limpos."
             )
             # Tambem no dry-run: ler o INFO do Redis nao muda nada, e quem
             # chama o dry-run a mao costuma estar justamente investigando.
@@ -247,13 +264,15 @@ def main() -> int:
         removed_feedback = AIFeedbackRepository(db).delete_created_before(feedback_cutoff)
         cleared_comments = OrderReviewRepository(db).clear_comments_created_before(review_cutoff)
         removed_reports = AdminErrorReportRepository(db).delete_created_before(relato_cutoff)
+        removed_windows = WhatsAppContactWindowRepository(db).delete_expired(now)
         db.commit()
 
         print(
             f"{removed_keys} chave(s), {removed_estimates} estimativa(s), "
-            f"{removed_codes} codigo(s), {removed_feedback} feedback(s) e "
-            f"{removed_reports} relato(s) removidos; {cleared_comments} "
-            f"comentario(s) de avaliacao limpos."
+            f"{removed_codes} codigo(s), {removed_feedback} feedback(s), "
+            f"{removed_reports} relato(s) e {removed_windows} janela(s) de "
+            f"WhatsApp removidos; {cleared_comments} comentario(s) de "
+            f"avaliacao limpos."
         )
 
     # DEPOIS do commit, e fora do `with`: e diagnostico, nao expurgo, e nao

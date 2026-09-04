@@ -165,6 +165,28 @@ class TestALinhaSemData:
     O nulo nao vem do ORM — a coluna tem `DEFAULT now()` e o model sempre a
     omite, deixando o banco preencher. Ele vem de INSERT feito por fora, que e
     a mesma origem de todas as 15 (armadilha 33).
+
+    **O NULO NOVO NAO ENTRA MAIS, E AGORA O ANTIGO TAMBEM NAO EXISTE.** Este
+    teste ja mudou duas vezes por causa disso, e as duas mudancas contam a
+    historia do alinhamento:
+
+    - com a etapa 1 (`20260905_0055`), `ck_ai_feedback_created_at_nao_nula`
+      passou a recusar toda linha NOVA — inclusive o INSERT cru daqui. O teste
+      encenava a linha legada derrubando a CHECK, inserindo e recriando
+      `NOT VALID`;
+    - com a etapa 2 (`20260905_0056`), a coluna virou `NOT NULL` de verdade e a
+      CHECK foi derrubada. A encenacao passou a ser `DROP NOT NULL`.
+
+    **E isso torna o `OR created_at IS NULL` do expurgo inalcancavel em
+    producao — depois que a etapa 2 for aplicada la.** Ele fica, e a decisao e
+    deliberada: custa nada, e quem manda no que existe no banco e o banco, nao
+    a nossa lembranca de qual revisao ja subiu. Enquanto producao estiver entre
+    as duas etapas — ou se um dia alguem soltar o `NOT NULL` — ele e o que
+    apaga a linha.
+
+    O que este teste guarda, entao, deixou de ser "isto acontece hoje" e passou
+    a ser "isto continua funcionando se acontecer". A linha encenada e
+    exatamente a que existia em producao antes do alinhamento.
     """
 
     def _criar_sem_data(self, db, restaurante):
@@ -180,6 +202,10 @@ class TestALinhaSemData:
         ORM** — SQL manual no Supabase, script de importacao, correcao a mao.
         E por isso o teste tem que escrever do mesmo jeito que ela nasceu.
         """
+        # Depois da etapa 2 (`20260905_0056`) a coluna e `NOT NULL`, entao a
+        # linha legada so existe se o `NOT NULL` sair primeiro. O DDL volta com
+        # o rollback da transacao do teste, como o resto.
+        db.execute(text("ALTER TABLE ai_feedback ALTER COLUMN created_at DROP NOT NULL"))
         db.execute(
             text(
                 """

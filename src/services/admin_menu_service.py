@@ -31,6 +31,7 @@ import uuid
 
 from fastapi import HTTPException, status
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.admin_scope import AdminScope
@@ -68,6 +69,7 @@ from src.schemas.admin_menu_schema import (
 )
 from src.repositories.restaurant_repository import RestaurantRepository
 from src.services.menu_rules import blocking_required_group
+from src.services.unique_conflict import conflito, traduzir
 from src.utils.images import IMAGE_CONTENT_TYPES, detect_image_extension
 from src.utils.money import money_to_float, quantize_money
 from src.utils.normalization import slugify
@@ -625,10 +627,7 @@ class AdminMenuService:
 
     def _ensure_category_slug_is_free(self, slug: str, branch_id: uuid.UUID) -> None:
         if self.repository.get_category_by_slug(slug, branch_id) is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Já existe uma categoria com esse nome nesta filial",
-            )
+            raise conflito("uq_categories_branch_slug")
 
     def _ensure_product_slug_is_free(self, slug: str, branch_id: uuid.UUID) -> None:
         # O slug e a chave da URL publica do produto e a busca do cardapio
@@ -640,10 +639,7 @@ class AdminMenuService:
         # a URL, e `picanha-2` contaria ao cliente que ele esta na "segunda"
         # loja.
         if self.repository.get_product_by_slug(slug, branch_id) is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Já existe um produto com esse nome nesta filial",
-            )
+            raise conflito("uq_products_branch_slug")
 
     def _ensure_catalog_key_is_free(
         self,
@@ -668,10 +664,7 @@ class AdminMenuService:
         existing = self.repository.get_product_by_catalog_key(catalog_key, branch_id)
         if existing is None or existing.id == product_id:
             return
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Já existe um produto com essa chave de catálogo nesta filial",
-        )
+        raise conflito("uq_products_branch_catalog_key")
 
     def _commit(self, before_commit=None) -> None:
         """Grava, com rollback em qualquer falha.
@@ -685,6 +678,12 @@ class AdminMenuService:
             if before_commit is not None:
                 before_commit()
             self.db.commit()
+        except IntegrityError as erro:
+            # A corrida do clique duplo: a conferencia passou nas DUAS
+            # requisicoes, e o indice pegou a segunda. Sem esta traducao o
+            # lojista recebia 500 e nao sabia se o produto foi criado.
+            self.db.rollback()
+            raise (traduzir(erro) or erro) from erro
         except Exception:
             self.db.rollback()
             raise

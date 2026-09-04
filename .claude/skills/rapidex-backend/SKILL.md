@@ -685,6 +685,18 @@ Correlato: códigos de erro que o frontend precisa distinguir vão como `str, En
 (`PaymentErrorCode`), não como constantes soltas — só assim a **lista** sai no
 documento.
 
+**E desde 05/09/2026 isto não depende mais da rota do pagamento.**
+`TodoErroDeclaradoEUmEnvelopeTests` varre o `/openapi.json` gerado, acha todo
+`model` declarado num 4xx/5xx e cobra que o schema tenha **um campo `detail` e
+só**. O `PaymentErrorContractTests` trava aquela rota; este trava as próximas —
+que era o buraco, porque as três declarações de hoje (`PaymentErrorResponse`,
+`CancelOrderErrorResponse`, `OrdersInFlightResponse`) estão certas e nada
+impedia a quarta de nascer errada.
+
+O varredor tem um teste próprio provando que ele ENXERGA as três: sem isso, uma
+mudança no caminho `responses[código].content.schema.$ref` o deixaria verde sem
+ver rota nenhuma.
+
 ---
 
 ## 17. `platform_commission_percent` não aparece em nenhum schema do painel
@@ -1293,15 +1305,57 @@ tipo diferente em rotas diferentes. Foi o que aconteceu uma vez — o
 seguida (`bffca0e`), porque deixava `discount_total` como número em
 `/customers/me/orders` e como string em `/orders/{token}`.
 
-### O que fica pendente
+### DECIDIDO em 05/09/2026: mantido, com trava
 
-**Uma decisão única, sobre a API inteira, tomada junto com o app do cliente:**
-ou todo dinheiro sai como número, ou todo dinheiro sai como string com duas
-casas. Meia API de cada jeito é pior que qualquer uma das duas.
+**Isto deixou de ser pendência.** A decisão foi tomada e é esta:
 
-Enquanto essa decisão não é tomada, **não converta um schema isolado** — nem
-para "arrumar de passagem" enquanto mexe em outra coisa. É a regra que este
-item existe para registrar.
+> **float × Decimal — mantido, com trava. Reavaliar só se aparecer defeito
+> real.**
+
+Os dois motivos, e eles são de peso oposto ao da conversão:
+
+- **não há defeito acontecendo hoje.** Nenhum cliente vê valor errado, nenhuma
+  conta fecha diferente. O que existe é um contrato feio de consumir, e feio
+  não é quebrado;
+- **converter mexeria em dinheiro que o front JÁ LÊ.** As três respostas
+  misturadas são as do pedido — as mais consumidas da API. O risco da mudança é
+  maior que o custo de conviver com ela.
+
+**"Reavaliar só se aparecer defeito real"** é a condição de reabertura, e ela é
+estreita de propósito: alguém somando `total + discount_total` e tomando um
+`TypeError` **não** é defeito real — é o contrato feio funcionando como
+documentado. Defeito real é valor errado na tela de alguém, ou uma rota que não
+dá para consumir.
+
+Enquanto isso, **não converta um schema isolado** — nem para "arrumar de
+passagem" enquanto mexe em outra coisa. Não é mais espera por decisão: é a
+decisão. E a trava abaixo a executa.
+
+### E desde 05/09/2026 a dívida está medida e congelada
+
+`scripts/formato_do_dinheiro.py` lê o `/openapi.json` **gerado** (e não os
+`.py`, porque é o documento que o front consome) e conta: **68 campos de
+dinheiro como número, 47 como string.**
+
+O achado que muda a conversa: **a divisão não é aleatória, é quase inteira por
+ÁREA.** Relatório do painel é string sempre; cardápio, cashback, entregador e
+os valores do pedido são número sempre. O problema não é "metade da API de cada
+jeito" — é que **três respostas misturam os dois no MESMO objeto**, e são
+exatamente as três da tabela acima: `CreateOrderResponse`,
+`CustomerOrderHistoryItem` e `OrderDetailResponse`, com a mesma divisão nas três
+(quatro valores do pedido como número, três descontos como string).
+
+`tests/test_formato_do_dinheiro.py` congela essa lista **nos dois sentidos**, e
+o segundo é o que ninguém vigiava:
+
+- **não pode crescer** — schema novo misturando os dois nasce vermelho. Era o
+  lado desprotegido: a regra escrita só cobria converter um schema isolado;
+- **não pode encolher por acidente** — um schema que sai da lista foi
+  convertido sozinho, que é o que já foi revertido uma vez (`bffca0e`). Se a
+  conversão for a decisão da API inteira, a lista sai junto.
+
+E o terceiro teste cobra que as três dividam **os mesmos campos**: é isso que
+torna a conversão uma decisão só. No dia em que divergirem, viram três.
 
 ---
 

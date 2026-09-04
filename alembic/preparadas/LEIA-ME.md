@@ -1,10 +1,16 @@
 # Revisões escritas e **não aplicadas**
 
+**Hoje este diretório está vazio.** As duas que moravam aqui — as etapas do
+alinhamento ORM × schema — foram para `versions/` em 04/09/2026, como
+`20260905_0055` e `20260905_0056`. O diretório fica porque o mecanismo fica.
+
 Este diretório não é `alembic/versions/`, e isso é o ponto: o Alembic só
 enxerga `versions/` (`script_location = alembic` no `alembic.ini`), então nada
 daqui entra em `alembic upgrade head` — nem no CI, nem na suíte `db`, nem no
-container. `tests/test_revisoes_preparadas.py` cobra essa propriedade a cada
-execução.
+container. `tests/test_alinhamento_orm_schema.py::test_nada_em_preparadas_esta_na_cadeia`
+cobra essa propriedade a cada execução — e, com o diretório vazio, ele passa
+sem afirmar nada. Quem escrever a próxima preparada ganha a guarda de volta no
+mesmo commit.
 
 O que mora aqui é migração **escrita, revisada e esperando uma decisão que não
 é de código**. Sair daqui é um ato deliberado, em três passos:
@@ -16,11 +22,11 @@ O que mora aqui é migração **escrita, revisada e esperando uma decisão que n
 
 ## O que está aqui hoje
 
-| Arquivo | Espera |
-|---|---|
-| `alinhamento_orm_schema_etapa_1.py` | a contagem de nulos em produção dar zero |
-| `alinhamento_orm_schema_etapa_2.py` | a etapa 1 estar aplicada e assada |
+Nada. As duas últimas saíram em 04/09/2026, quando o dono decidiu aplicar o
+alinhamento inteiro na mesma janela: `20260905_0055` e `20260905_0056`.
 
-As duas são as etapas do roteiro de `docs/alinhamento-orm-schema.md`. **Elas
-não podem ir juntas para o mesmo `alembic upgrade`** — o motivo está lá, e é o
-único detalhe deste conjunto que não é óbvio.
+**O que elas deixaram de lição, e vale para a próxima:** duas revisões que não
+podem ir no mesmo `alembic upgrade` continuam sendo duas execuções depois de
+entrarem na cadeia. O que as separa então não é mais o diretório — é
+`ALEMBIC_TARGET`, e ele é a única parte do roteiro que não avisa quando é
+esquecida. Está em `docs/alinhamento-orm-schema.md`.

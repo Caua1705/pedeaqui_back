@@ -47,6 +47,7 @@ from src.services.order_state_machine import (
     ensure_payment_allows_order_status,
 )
 from src.services.payment_refund_service import PaymentRefundService
+from src.services.whatsapp_notification_service import WhatsAppOrderNotifier
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -162,7 +163,34 @@ class OrderStatusChangeService:
             self._refund_terminal_order(order_id, restaurant_id)
             order = self.order_repository.get_order_detail(order_id, restaurant_id)
 
+        # Mesmo lugar e mesmo motivo do estorno: falar com a Meta nao pode
+        # fazer parte da transacao do pedido. E aqui esta a razao de o aviso
+        # morar NESTE metodo e nao em cada porta: sao quatro portas de escrita
+        # de status (painel, cancelamento, cliente, entregador), e quatro
+        # copias seriam tres chances de o cliente deixar de ser avisado.
+        self._notify_customer_on_whatsapp(order, restaurant_id)
+
         return OrderService.to_order_detail_response(order)
+
+    def _notify_customer_on_whatsapp(self, order, restaurant_id: UUID) -> None:
+        """Avisa o cliente do status novo, sem poder derrubar a resposta.
+
+        O `except` largo e o mesmo do estorno, e pelo mesmo motivo: a mudanca
+        de status **ja esta gravada**, e transformar uma falha daqui em 500
+        diria ao lojista que o aceite nao aconteceu — e ele clicaria de novo.
+
+        O que e falha PREVISTA (a Meta recusando, o telefone que nao vira
+        E.164) nao chega aqui: vira uma linha `failed` em `whatsapp_messages`,
+        que e onde "o cliente nao foi avisado" fica visivel depois. Este
+        `except` e para o que nao esta previsto.
+        """
+        try:
+            WhatsAppOrderNotifier(self.db).notify(order=order, restaurant_id=restaurant_id)
+        except Exception:
+            logger.exception(
+                "[WhatsApp] falha inesperada ao avisar o cliente pedido=#%s",
+                order.order_number,
+            )
 
     def _refund_terminal_order(self, order_id: UUID, restaurant_id: UUID) -> None:
         """Devolve o dinheiro do pedido recem-cancelado, sem poder derrubar

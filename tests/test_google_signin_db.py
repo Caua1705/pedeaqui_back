@@ -55,16 +55,28 @@ SENHA = "senha-forte-123"
 
 
 class EmailServiceFalso:
-    """Colaborador externo. Guarda o codigo que sairia no e-mail."""
+    """Colaborador externo. Guarda o codigo que sairia no e-mail.
+
+    `codigos` junta os tres porque a maioria dos testes daqui so quer o codigo
+    para digitar em seguida. `propositos` guarda QUAL e-mail saiu, e e o que
+    permite afirmar que a confirmacao do Google nao manda o texto de entrar.
+    """
 
     def __init__(self) -> None:
         self.codigos: list[tuple[str, str]] = []
+        self.propositos: list[str] = []
 
     def send_email_verification_code(self, to_email: str, code: str) -> None:
         self.codigos.append((to_email, code))
+        self.propositos.append("entrar")
+
+    def send_google_link_code(self, to_email: str, code: str) -> None:
+        self.codigos.append((to_email, code))
+        self.propositos.append("ligar_google")
 
     def send_password_reset_code(self, to_email: str, code: str) -> None:
         self.codigos.append((to_email, code))
+        self.propositos.append("redefinir_senha")
 
 
 class IdentityClientFalso:

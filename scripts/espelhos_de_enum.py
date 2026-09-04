@@ -108,6 +108,8 @@ ESPELHOS: dict[str, str | tuple[None, str]] = {
     "restaurant_coupons_discount_type_valid": "src/schemas/coupon_schema.py:DiscountType",
     "ai_feedback_feedback_check": "src/schemas/ai_feedback_schema.py:AIFeedbackRequest.feedback",
     "ck_customer_social_identities_provider": "src/core/constants.py:SOCIAL_AUTH_PROVIDERS",
+    "ck_whatsapp_messages_kind": "src/core/constants.py:WHATSAPP_MESSAGE_KINDS",
+    "ck_whatsapp_messages_status": "src/core/constants.py:WHATSAPP_MESSAGE_STATUSES",
     # --- as colunas cujos valores so existem soltos -------------------------
     "ck_orders_payment_flow": (
         SEM_ESPELHO,

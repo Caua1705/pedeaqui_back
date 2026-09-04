@@ -61,13 +61,14 @@ from scripts.escopo_das_rotas import _Indice, _classe_do_receptor
 PREFIXOS_DE_ESCRITA = (
     "add", "create", "delete", "update", "save", "insert", "replace",
     "attach", "assign", "mark", "unset", "clear", "invalidate", "reverse",
-    "complete", "reserve", "bump", "set_", "remove",
+    "complete", "reserve", "bump", "set_", "remove", "extend", "upsert",
 )
 
 # Prefixos que LEEM. Listados, e nao deduzidos por exclusao: e a exclusao que
 # transforma um nome novo em leitura por acidente.
 PREFIXOS_DE_LEITURA = (
-    "get", "list", "count", "find", "exists", "has", "search", "latest",
+    "get", "list", "count", "find", "exists", "has", "is_", "resolve", "search",
+    "latest",
     "lock", "active_", "product_ids_", "claimed_", "customer_has_",
     "last_order_", "segment_of_", "sales_", "totals_", "top_", "custo_",
     "cancellation", "rating_", "problem_tag_", "available_",

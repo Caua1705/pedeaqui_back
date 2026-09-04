@@ -83,13 +83,24 @@ class FakeDb:
 
 
 class FakeEmailService:
+    """Colaborador externo. UMA lista por proposito, e nao uma so.
+
+    As listas separadas sao o que faz um teste conseguir dizer "saiu o e-mail
+    de ENTRAR" em vez de "saiu um e-mail" — que era tudo o que dava para
+    afirmar quando os dois propositos chamavam o mesmo metodo.
+    """
+
     def __init__(self):
         self.verification_codes = []
+        self.google_link_codes = []
         self.reset_codes = []
         self.deletion_codes = []
 
     def send_email_verification_code(self, email, code):
         self.verification_codes.append((email, code))
+
+    def send_google_link_code(self, email, code):
+        self.google_link_codes.append((email, code))
 
     def send_password_reset_code(self, email, code):
         self.reset_codes.append((email, code))

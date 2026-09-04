@@ -30,6 +30,14 @@ class AIProductEmbedding(Base):
     embedding_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB)
     # Stored as a PostgreSQL pgvector/vector value.
     embedding: Mapped[Any] = mapped_column(Vector(), nullable=False)
+    # NULAVEL no banco, ao contrario das outras cinco desta rodada. Sem
+    # `onupdate`, e sem tocar no `updated_at` ao lado: aquele NAO e "a hora em
+    # que indexou", e sim A VERSAO DO PRODUTO QUE INDEXOU (ver
+    # `docs/arquitetura.md`) — uma edicao salva durante a geracao do vetor se
+    # perderia em silencio se ele virasse carimbo de relogio.
+    created_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
     updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
     restaurant = relationship("Restaurant")

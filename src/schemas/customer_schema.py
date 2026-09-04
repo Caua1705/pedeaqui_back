@@ -330,6 +330,28 @@ class CustomerOrderHistoryItem(BaseModel):
     restaurant_name: str
     branch_name: str
     status: str
+    # O QUE O `status` SOZINHO NAO SEPARA, e o cliente precisa saber.
+    #
+    # `orders.status = 'pending'` e o mesmo valor para tres situacoes que pedem
+    # coisas diferentes dele:
+    #
+    #     payment_status  o que aconteceu           o que ele faz
+    #     ---------------------------------------------------------------
+    #     paid            pago, esperando a loja    espera
+    #     on_delivery     paga na entrega           espera
+    #     failed          cobranca recusada         **tenta outro cartao**
+    #     pending         nunca chegou a pagar      **finaliza o pagamento**
+    #
+    # As duas ultimas ele resolve SOZINHO, e sem este campo ele nao sabe que
+    # pode — ficava esperando uma cozinha que nunca recebeu o pedido.
+    #
+    # Campo NOVO e opcional, e nao um status novo em `ORDER_STATUSES`: um valor
+    # a mais naquele conjunto atravessaria o CHECK espelhado (armadilha 15), a
+    # maquina de estados, o faturamento e as quatro portas de escrita — para
+    # dizer o que a coluna ao lado ja diz. E `OrderDetailResponse`, na rota do
+    # link de acompanhamento, JA entrega `payment_status`: as duas superficies
+    # do mesmo pedido e que discordavam sobre o que da para saber dele.
+    payment_status: str | None = None
     order_type: str
     subtotal: float
     delivery_fee: float

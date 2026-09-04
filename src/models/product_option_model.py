@@ -1,7 +1,8 @@
 import uuid
+from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, Text
+from sqlalchemy import TIMESTAMP, Boolean, ForeignKey, Integer, Numeric, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -54,6 +55,20 @@ class ProductOptionGroup(Base):
     is_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     sort_order: Mapped[int | None] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # NOT NULL no banco, com `DEFAULT now()` — e sem trigger de `updated_at`
+    # nestas tabelas (conferido no `information_schema`), ao contrario de
+    # `orders`. Entao quem move o `updated_at` e o `onupdate` daqui: sem ele a
+    # coluna ficaria igual ao `created_at` para sempre, que e o que acontecia
+    # enquanto o ORM nao a mapeava.
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
     product = relationship("Product", back_populates="option_groups")
     options = relationship(
@@ -77,5 +92,19 @@ class ProductOption(Base):
     additional_price: Mapped[Decimal] = mapped_column(Numeric, nullable=False, default=0)
     sort_order: Mapped[int | None] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # NOT NULL no banco, com `DEFAULT now()` — e sem trigger de `updated_at`
+    # nestas tabelas (conferido no `information_schema`), ao contrario de
+    # `orders`. Entao quem move o `updated_at` e o `onupdate` daqui: sem ele a
+    # coluna ficaria igual ao `created_at` para sempre, que e o que acontecia
+    # enquanto o ORM nao a mapeava.
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
     option_group = relationship("ProductOptionGroup", back_populates="options")

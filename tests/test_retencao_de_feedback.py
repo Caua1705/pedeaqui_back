@@ -165,7 +165,22 @@ class TestALinhaSemData:
     O nulo nao vem do ORM — a coluna tem `DEFAULT now()` e o model sempre a
     omite, deixando o banco preencher. Ele vem de INSERT feito por fora, que e
     a mesma origem de todas as 15 (armadilha 33).
+
+    **DESDE 05/09/2026 O NULO NOVO NAO ENTRA MAIS**, e este teste teve que
+    mudar por causa disso. A revisao `20260905_0055` (etapa 1 do alinhamento)
+    criou `ck_ai_feedback_created_at_nao_nula` como `CHECK ... NOT VALID`: ela
+    nao reparou as linhas antigas, mas recusa toda linha nova — inclusive o
+    INSERT cru deste teste.
+
+    Entao o teste passou a ENCENAR a linha legada, derrubando a restricao,
+    inserindo e recriando `NOT VALID` (recriar funciona sobre a linha nula, que
+    e a metade menos obvia do que `NOT VALID` significa). O que ele guarda
+    continua valendo e continua importando: o `OR created_at IS NULL` do
+    expurgo existe para as linhas que JA ESTAO em producao, e elas so somem
+    quando a etapa 2 rodar ou quando a retencao as alcancar.
     """
+
+    RESTRICAO = "ck_ai_feedback_created_at_nao_nula"
 
     def _criar_sem_data(self, db, restaurante):
         """INSERT CRU, e a razao disso e o achado deste teste.
@@ -180,6 +195,11 @@ class TestALinhaSemData:
         ORM** — SQL manual no Supabase, script de importacao, correcao a mao.
         E por isso o teste tem que escrever do mesmo jeito que ela nasceu.
         """
+        # A etapa 1 do alinhamento (revisao `20260905_0055`) recusa este
+        # INSERT. Derrubar e recriar `NOT VALID` deixa o banco no MESMO estado
+        # em que producao esta hoje: a restricao existe, e a linha antiga que
+        # a contradiz continua la.
+        db.execute(text(f'ALTER TABLE ai_feedback DROP CONSTRAINT "{self.RESTRICAO}"'))
         db.execute(
             text(
                 """
@@ -198,6 +218,12 @@ class TestALinhaSemData:
                 "user_message": "moro na rua das Flores, 200",
                 "assistant_message": "Temos entrega para essa regiao!",
             },
+        )
+        db.execute(
+            text(
+                f'ALTER TABLE ai_feedback ADD CONSTRAINT "{self.RESTRICAO}" '
+                'CHECK ("created_at" IS NOT NULL) NOT VALID'
+            )
         )
         db.flush()
         return db.scalar(

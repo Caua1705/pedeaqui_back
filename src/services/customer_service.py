@@ -287,6 +287,7 @@ class CustomerService:
             restaurant_name=restaurant_name,
             branch_name=branch_name,
             status=order.status,
+            payment_status=order.payment_status,
             order_type=order.order_type,
             subtotal=money_to_float(order.subtotal),
             delivery_fee=money_to_float(order.delivery_fee),

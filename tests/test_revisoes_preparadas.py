@@ -33,6 +33,16 @@ from scripts.divergencias_orm_schema import comparar
 RAIZ = Path(__file__).resolve().parent.parent
 PREPARADAS = RAIZ / "alembic" / "preparadas"
 
+# A ETAPA 1 SAIU DE `preparadas/` EM 05/09/2026 e esta na cadeia como
+# `20260905_0055`. A etapa 2 continua preparada.
+#
+# Os caminhos ficam em constantes porque as duas etapas passaram a morar em
+# diretorios diferentes, e e exatamente essa a situacao que este arquivo
+# precisa cobrir: uma aplicada, a outra esperando — com as duas ainda obrigadas
+# a descrever as MESMAS colunas.
+ETAPA_1 = RAIZ / "alembic" / "versions" / "20260905_0055_alinhamento_orm_schema_etapa_1.py"
+ETAPA_2 = PREPARADAS / "alinhamento_orm_schema_etapa_2.py"
+
 
 def _valor_do_modulo(caminho: Path, nome: str):
     """Le uma constante do arquivo sem importa-lo.
@@ -98,8 +108,8 @@ def test_as_duas_etapas_descrevem_as_mesmas_colunas():
     revisao e modulo carregado por caminho, e o import quebraria na hora do
     `git mv`). O preco da duplicacao e este teste.
     """
-    etapa_1 = _valor_do_modulo(PREPARADAS / "alinhamento_orm_schema_etapa_1.py", "COLUNAS")
-    etapa_2 = _valor_do_modulo(PREPARADAS / "alinhamento_orm_schema_etapa_2.py", "COLUNAS")
+    etapa_1 = _valor_do_modulo(ETAPA_1, "COLUNAS")
+    etapa_2 = _valor_do_modulo(ETAPA_2, "COLUNAS")
 
     assert etapa_1 == etapa_2, (
         "As duas etapas do alinhamento listam colunas diferentes.\n"
@@ -120,9 +130,7 @@ def test_a_lista_preparada_ainda_descreve_o_schema_de_hoje(engine_de_teste):
     """
     esperadas = [
         tuple(coluna)
-        for coluna in _valor_do_modulo(
-            PREPARADAS / "alinhamento_orm_schema_etapa_1.py", "COLUNAS"
-        )
+        for coluna in _valor_do_modulo(ETAPA_1, "COLUNAS")
     ]
 
     reais = sorted(comparar(inspect(engine_de_teste)).orm_mais_estrito)
@@ -170,14 +178,27 @@ def test_as_duas_etapas_rodam_e_desfazem_no_postgres_de_verdade(engine_de_teste)
     from alembic.migration import MigrationContext
     from alembic.operations import Operations
 
-    etapa_1 = _carregar_revisao(PREPARADAS / "alinhamento_orm_schema_etapa_1.py")
-    etapa_2 = _carregar_revisao(PREPARADAS / "alinhamento_orm_schema_etapa_2.py")
+    etapa_1 = _carregar_revisao(ETAPA_1)
+    etapa_2 = _carregar_revisao(ETAPA_2)
 
     conexao = engine_de_teste.connect()
     transacao = conexao.begin()
     try:
+        # A etapa 1 NAO e aplicada aqui: ela esta na cadeia desde 05/09/2026, e
+        # o schema de sessao ja veio com as 15 restricoes do `upgrade head`.
+        # Conferir isso e metade do teste — se elas nao estivessem, a etapa 2
+        # falharia com "constraint does not exist" e o motivo nao seria obvio.
+        faltando = [
+            f"{tabela}.{coluna}"
+            for tabela, coluna in etapa_1.COLUNAS
+            if not _restricao_existe(conexao, etapa_1.nome_da_restricao(tabela, coluna))
+        ]
+        assert not faltando, (
+            "a etapa 1 esta na cadeia, mas estas restricoes nao existem no "
+            f"schema: {faltando}"
+        )
+
         with Operations.context(MigrationContext.configure(conexao)):
-            etapa_1.upgrade()
             etapa_2.upgrade()
 
             ainda_nulavel = [
@@ -190,8 +211,9 @@ def test_as_duas_etapas_rodam_e_desfazem_no_postgres_de_verdade(engine_de_teste)
                 f"NULL: {ainda_nulavel}"
             )
 
+            # So a etapa 2 desfaz: o downgrade dela recria as `NOT VALID`, que
+            # e exatamente o estado em que a etapa 1 deixa o banco.
             etapa_2.downgrade()
-            etapa_1.downgrade()
 
             nao_voltou = [
                 f"{tabela}.{coluna}"
@@ -306,8 +328,7 @@ def test_as_duas_etapas_passam_com_a_tabela_CHEIA(engine_de_teste):
     from alembic.migration import MigrationContext
     from alembic.operations import Operations
 
-    etapa_1 = _carregar_revisao(PREPARADAS / "alinhamento_orm_schema_etapa_1.py")
-    etapa_2 = _carregar_revisao(PREPARADAS / "alinhamento_orm_schema_etapa_2.py")
+    etapa_2 = _carregar_revisao(ETAPA_2)
 
     conexao = engine_de_teste.connect()
     transacao = conexao.begin()
@@ -316,8 +337,8 @@ def test_as_duas_etapas_passam_com_a_tabela_CHEIA(engine_de_teste):
         for _ in range(5):
             _feedback(conexao, restaurante, user_message="quanto custa a picanha?")
 
+        # Sem `etapa_1.upgrade()`: ela ja esta na cadeia e no schema.
         with Operations.context(MigrationContext.configure(conexao)):
-            etapa_1.upgrade()
             etapa_2.upgrade()
 
         assert not _aceita_nulo(conexao, "ai_feedback", "user_message")
@@ -340,22 +361,18 @@ def test_depois_da_etapa_1_o_nulo_NOVO_ja_e_recusado(engine_de_teste):
     sem ter validado as antigas — e essa e a metade menos obvia do que
     `NOT VALID` significa.
     """
-    from alembic.migration import MigrationContext
-    from alembic.operations import Operations
     from sqlalchemy.exc import IntegrityError
-
-    etapa_1 = _carregar_revisao(PREPARADAS / "alinhamento_orm_schema_etapa_1.py")
 
     conexao = engine_de_teste.connect()
     transacao = conexao.begin()
     try:
         restaurante = _um_restaurante(conexao)
-        # ANTES da etapa 1, o nulo entra sem reclamacao. E o estado de hoje.
-        _feedback(conexao, restaurante, user_message=None)
 
-        with Operations.context(MigrationContext.configure(conexao)):
-            etapa_1.upgrade()
-
+        # Nada e aplicado aqui. Desde 05/09/2026 a etapa 1 esta na cadeia, e
+        # esta e a propriedade do schema DE PRODUCAO — nao mais de uma revisao
+        # rodada dentro do teste. O teste ficou menor porque a garantia subiu
+        # de lugar.
+        #
         # SAVEPOINT, e o `rollback()` explicito depois. O `with begin_nested()`
         # nao serve aqui: o `pytest.raises` engole a excecao dentro dele, o
         # SQLAlchemy conclui que deu tudo certo e tenta `RELEASE SAVEPOINT`
@@ -393,18 +410,32 @@ def test_a_etapa_2_falha_no_VALIDATE_quando_sobra_nulo_antigo(engine_de_teste):
     from alembic.operations import Operations
     from sqlalchemy.exc import IntegrityError
 
-    etapa_1 = _carregar_revisao(PREPARADAS / "alinhamento_orm_schema_etapa_1.py")
-    etapa_2 = _carregar_revisao(PREPARADAS / "alinhamento_orm_schema_etapa_2.py")
+    etapa_1 = _carregar_revisao(ETAPA_1)
+    etapa_2 = _carregar_revisao(ETAPA_2)
 
     conexao = engine_de_teste.connect()
     transacao = conexao.begin()
     try:
         restaurante = _um_restaurante(conexao)
+
+        # ENCENAR O NULO ANTIGO, agora que a etapa 1 esta aplicada.
+        #
+        # Nao da mais para inserir o nulo e so depois criar a restricao: ela ja
+        # existe e recusa o INSERT (e o teste acima prova isso). O caminho e
+        # derrubar, inserir e recriar `NOT VALID` — e recriar FUNCIONA sobre a
+        # linha nula, que e a metade menos obvia do que `NOT VALID` significa e
+        # e exatamente o estado que producao teria se sobrasse um nulo.
+        restricao = etapa_1.nome_da_restricao("ai_feedback", "user_message")
+        conexao.execute(text(f'ALTER TABLE ai_feedback DROP CONSTRAINT "{restricao}"'))
         _feedback(conexao, restaurante, user_message=None)
+        conexao.execute(
+            text(
+                f'ALTER TABLE ai_feedback ADD CONSTRAINT "{restricao}" '
+                'CHECK ("user_message" IS NOT NULL) NOT VALID'
+            )
+        )
 
         with Operations.context(MigrationContext.configure(conexao)):
-            etapa_1.upgrade()
-
             with pytest.raises(IntegrityError) as erro:
                 etapa_2.upgrade()
 
@@ -424,7 +455,9 @@ def test_a_etapa_2_falha_no_VALIDATE_quando_sobra_nulo_antigo(engine_de_teste):
     # exatamente o que uma refatoracao distraida remove.
     with engine_de_teste.connect() as limpa:
         assert _aceita_nulo(limpa, "ai_feedback", "user_message")
-        assert not _restricao_existe(limpa, "ck_ai_feedback_user_message_nao_nula")
+        # A restricao da etapa 1 continua la, intacta: o DROP e o ADD do
+        # encenamento voltaram junto com o resto.
+        assert _restricao_existe(limpa, "ck_ai_feedback_user_message_nao_nula")
 
 
 def _restricao_existe(conexao, nome: str) -> bool:

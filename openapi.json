@@ -4309,6 +4309,233 @@
         "title": "AdminUserUpdate",
         "type": "object"
       },
+      "AdminWhatsAppBranchView": {
+        "description": "Por qual numero ESTA filial fala, agora.",
+        "properties": {
+          "branch_id": {
+            "format": "uuid",
+            "title": "Branch Id",
+            "type": "string"
+          },
+          "branch_name": {
+            "title": "Branch Name",
+            "type": "string"
+          },
+          "can_send": {
+            "title": "Can Send",
+            "type": "boolean"
+          },
+          "channel_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel Id"
+          },
+          "display_phone_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Phone Number"
+          },
+          "source": {
+            "$ref": "#/components/schemas/WhatsAppBranchSource"
+          }
+        },
+        "required": [
+          "branch_id",
+          "branch_name",
+          "source",
+          "can_send"
+        ],
+        "title": "AdminWhatsAppBranchView",
+        "type": "object"
+      },
+      "AdminWhatsAppChannelCreate": {
+        "description": "Conectar um numero.\n\n`branch_id` nulo e deliberado e significa **a linha do restaurante**: o\nnumero que toda filial sem o seu proprio herda. Restaurante de uma loja so\nusa essa forma.",
+        "properties": {
+          "access_token": {
+            "minLength": 1,
+            "title": "Access Token",
+            "type": "string"
+          },
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "display_phone_number": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Display Phone Number",
+            "type": "string"
+          },
+          "phone_number_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Phone Number Id",
+            "type": "string"
+          },
+          "waba_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Waba Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "waba_id",
+          "phone_number_id",
+          "display_phone_number",
+          "access_token"
+        ],
+        "title": "AdminWhatsAppChannelCreate",
+        "type": "object"
+      },
+      "AdminWhatsAppChannelView": {
+        "description": "Uma linha de `whatsapp_channels`, sem nada que seja credencial.",
+        "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "branch_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Name"
+          },
+          "connected_at": {
+            "format": "date-time",
+            "title": "Connected At",
+            "type": "string"
+          },
+          "disconnect_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disconnect Reason"
+          },
+          "disconnected_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disconnected At"
+          },
+          "display_phone_number": {
+            "title": "Display Phone Number",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "phone_number_id": {
+            "title": "Phone Number Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WhatsAppChannelStatus"
+          },
+          "status_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Action"
+          },
+          "status_label": {
+            "title": "Status Label",
+            "type": "string"
+          },
+          "waba_id_masked": {
+            "title": "Waba Id Masked",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "display_phone_number",
+          "phone_number_id",
+          "waba_id_masked",
+          "status",
+          "status_label",
+          "connected_at"
+        ],
+        "title": "AdminWhatsAppChannelView",
+        "type": "object"
+      },
+      "AdminWhatsAppChannelsResponse": {
+        "description": "As linhas que existem, e a heranca resolvida loja a loja.",
+        "properties": {
+          "branches": {
+            "items": {
+              "$ref": "#/components/schemas/AdminWhatsAppBranchView"
+            },
+            "title": "Branches",
+            "type": "array"
+          },
+          "channels": {
+            "items": {
+              "$ref": "#/components/schemas/AdminWhatsAppChannelView"
+            },
+            "title": "Channels",
+            "type": "array"
+          }
+        },
+        "required": [
+          "channels",
+          "branches"
+        ],
+        "title": "AdminWhatsAppChannelsResponse",
+        "type": "object"
+      },
       "AssignmentErrorCode": {
         "description": "Por que um pedido do lote NAO foi atribuido. Enum para a lista sair\nno /openapi.json (armadilha 16): o painel escreve a mensagem por codigo,\nnao pelo texto.",
         "enum": [
@@ -7479,6 +7706,40 @@
           "customer_phone": {
             "title": "Customer Phone",
             "type": "string"
+          },
+          "delivery_due_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Due At"
+          },
+          "delivery_eta_max": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Eta Max"
+          },
+          "delivery_eta_min": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Eta Min"
           },
           "delivery_latitude": {
             "anyOf": [
@@ -13468,6 +13729,26 @@
         "title": "VerifyResetCodeResponse",
         "type": "object"
       },
+      "WhatsAppBranchSource": {
+        "description": "De onde vem o numero desta filial.\n\n`NONE` e \"esta loja nao fala por numero nenhum\" — e nao \"nunca conectou\".\nA distincao entre nunca-conectou e conectou-e-caiu esta no `status` do\ncanal: sem canal nenhum, `channel_id` e nulo e `source` e `NONE`; com canal\ncaido, `channel_id` aponta para a linha e o `status` dela diz o que houve.",
+        "enum": [
+          "branch",
+          "restaurant",
+          "none"
+        ],
+        "title": "WhatsAppBranchSource",
+        "type": "string"
+      },
+      "WhatsAppChannelStatus": {
+        "description": "Em que estado esta o numero.\n\n`str, Enum` e nao literal solto para a LISTA sair no `/openapi.json`\n(armadilha 16): o painel precisa distinguir os tres, e o unico jeito de\nele saber quais existem e o documento.\n\nOs tres pedem acoes diferentes, e e por isso que sao tres:\n\n    connected             nada a fazer\n    disabled              NOS desligamos. Religar e conosco\n    disconnected_by_meta  o LOJISTA tirou o acesso pelo aplicativo dele.\n                          Religar exige ele reconectar na Meta primeiro —\n                          nao ha botao nosso que resolva",
+        "enum": [
+          "connected",
+          "disabled",
+          "disconnected_by_meta"
+        ],
+        "title": "WhatsAppChannelStatus",
+        "type": "string"
+      },
       "WhatsAppWebhookResponse": {
         "description": "O que a Meta recebe de volta.\n\nCurto e sem dado nenhum do restaurante: e resposta para maquina, e\nqualquer coisa a mais seria informacao entregue a quem so tem o endereco\ndo webhook — que e publico.\n\n`reason` existe para o LOG de quem opera, e nao para a Meta decidir nada:\nela trata 200 como sucesso, seja qual for o corpo.",
         "properties": {
@@ -19166,6 +19447,161 @@
         "summary": "Reset Admin User Password",
         "tags": [
           "admin users"
+        ]
+      }
+    },
+    "/admin/whatsapp/channels": {
+      "get": {
+        "description": "Os numeros conectados, e por qual deles cada loja fala.\n\n**`branches` nao e um resumo de `channels`.** Uma filial sem linha propria\naparece em `channels` como ausencia — e pode estar herdando o numero do\nrestaurante e funcionando. `source` diz de onde vem o numero de cada loja\n(`branch`, `restaurant`, `none`) e `can_send` diz se um aviso sairia por\nela neste minuto.\n\n`status` separa os tres motivos de um numero estar fora, e `status_label` /\n`status_action` dizem o que aconteceu e o que fazer — a tela nao monta a\nfrase a partir do enum. `disabled` religa aqui; `disconnected_by_meta` exige\nque o lojista reconecte a Cloud API no aplicativo dele antes, e e o unico\ndos tres cujo conserto nao e nosso.\n\n**`branch_id` so RESTRINGE, nunca amplia.** Com ele, `channels` traz o canal\ndaquela loja **e a linha do restaurante** — sem a queda na lista, a tela\ndiria \"voce herda um numero\" sem ter o numero para mostrar.",
+        "operationId": "list_channels_admin_whatsapp_channels_get",
+        "parameters": [
+          {
+            "description": "Restringe a uma filial. Sem ele vem a rede inteira, que é a forma principal: o dono precisa do mapa, não de uma loja por vez.",
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Restringe a uma filial. Sem ele vem a rede inteira, que é a forma principal: o dono precisa do mapa, não de uma loja por vez.",
+              "title": "Branch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminWhatsAppChannelsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Channels",
+        "tags": [
+          "admin whatsapp"
+        ]
+      },
+      "post": {
+        "description": "Conecta um numero. `branch_id` nulo e a linha do RESTAURANTE.\n\n**Conectar o mesmo `phone_number_id` de novo e RECONECTAR**: troca o token,\nreliga o canal e limpa a desconexao. E o caminho da rotacao de token e o da\nvolta depois de um `DELETE` — sem ele, desconectar seria irreversivel pelo\npainel.\n\n**As tres colisoes respondem 409 com FRASE, e nao com erro de banco.** O\nschema ja as impede (`UNIQUE (phone_number_id)`, `UNIQUE (branch_id)` e o\nindice unico parcial da queda), mas as tres pedem coisas diferentes do\nlojista, e um `IntegrityError` nao diz qual e nem o que fazer:\n\n- **numero de outro restaurante** — a frase nao diz de quem ele e;\n- **numero que ja e de outra filial SUA** — a frase nomeia a filial;\n- **lugar ocupado** (a filial, ou a queda do restaurante) — a frase diz por\n  qual numero aquele lugar fala hoje.",
+        "operationId": "connect_channel_admin_whatsapp_channels_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminWhatsAppChannelCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminWhatsAppChannelView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "O número, a filial ou a linha do restaurante já ocupados"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Connect Channel",
+        "tags": [
+          "admin whatsapp"
+        ]
+      }
+    },
+    "/admin/whatsapp/channels/{channel_id}": {
+      "delete": {
+        "description": "Desliga o canal. **A linha NAO e apagada**, e por isso devolve 200 com o\ncanal — nao 204.\n\nE a regra do cardapio, com o motivo mais forte que ela tem neste schema:\n`whatsapp_messages.channel_id` e FK **sem `ON DELETE`**, de proposito.\nApagar o canal apagaria o registro de que o cliente foi avisado — o unico\nlugar onde isso e visivel depois. O banco recusaria o DELETE de qualquer\njeito assim que houvesse uma mensagem.\n\n**As janelas de 24h ficam**, e vencem sozinhas no expurgo do `limpeza` em\nate 24h. O prazo delas ja E o mecanismo de exclusao; apaga-las aqui seria\num segundo mecanismo para a mesma coisa.\n\n**O que muda na hora:** `resolve_for_branch` deixa de escolher este canal,\nentao nenhum aviso sai por ele a partir do commit. E a filial que falava\npor um numero PROPRIO desligado **nao cai** no do restaurante — o que se\nespera de um numero desligado e que aquela loja pare de mandar.",
+        "operationId": "disconnect_channel_admin_whatsapp_channels__channel_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminWhatsAppChannelView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Disconnect Channel",
+        "tags": [
+          "admin whatsapp"
         ]
       }
     },

@@ -1,15 +1,13 @@
 """alinhamento ORM x schema, ETAPA 1: a promessa, ainda sem cobranca
 
-Revision ID: PREPARADA_alinhamento_etapa_1
-Revises: PREENCHER_COM_O_HEAD_DO_DIA
-Create Date: (ainda nao criada)
+Revision ID: 20260905_0055
+Revises: 20260905_0054
+Create Date: 2026-09-05
 
-**ESTA REVISAO NAO ESTA APLICADA E NAO ESTA NA CADEIA.** Ela mora em
-`alembic/preparadas/`, que o Alembic nao le. Antes de move-la para
-`alembic/versions/`, leia `docs/alinhamento-orm-schema.md` inteiro e rode a
-conferencia da secao "Etapa 0". O `down_revision` acima e um marcador de
-proposito: mover sem acertar o head do dia quebra a cadeia, e e melhor quebrar
-alto.
+**ESTA REVISAO ENTROU NA CADEIA EM 05/09/2026** — ela morava em
+`alembic/preparadas/` e foi movida deliberadamente, para entrar no proximo
+deploy com quem faz o deploy olhando. A ETAPA 2 continua em `preparadas/`, e a
+diferenca entre as duas esta na secao "O custo desta etapa" abaixo.
 
 ## O que esta etapa faz, e o que ela nao faz
 
@@ -51,9 +49,22 @@ aplicar sozinha. Se houver nulo, ela e aceita do mesmo jeito, a restricao fica
 `NOT VALID` para sempre, e quem falha e a etapa 2. Por isso a etapa 0 (contar)
 vem antes: nao para esta etapa passar, mas para voce saber se a proxima vai.
 
+## O custo desta etapa, para quem esta olhando o deploy
+
+**A trava NAO depende do tamanho da tabela.** `ADD CONSTRAINT ... NOT VALID` e
+uma escrita no catalogo: o `ACCESS EXCLUSIVE` dura o tempo de gravar uma linha
+em `pg_constraint`, e nao o tempo de ler `customers` ou `order_item_options`.
+Sao 15 dessas, em sequencia, dentro da transacao unica que o `env.py` abre —
+ordem de grandeza de milissegundos no total, com ou sem um milhao de linhas.
+
+O que ela PODE esperar e o lock: `ACCESS EXCLUSIVE` nao convive com nenhuma
+outra transacao tocando aquela tabela, entao uma consulta longa em curso segura
+o `ALTER` na fila — e, enquanto ele espera, segura todo mundo atras dele. E o
+motivo de rodar fora do movimento, e nao o tamanho da tabela.
+
 ## O downgrade
 
-Derruba as 16 restricoes. Volta exatamente ao estado anterior — nenhum dado foi
+Derruba as 15 restricoes. Volta exatamente ao estado anterior — nenhum dado foi
 tocado, nenhuma coluna mudou de tipo. E o unico downgrade das duas etapas que e
 completo de verdade.
 """
@@ -61,8 +72,8 @@ completo de verdade.
 from alembic import op
 
 
-revision = "PREPARADA_alinhamento_etapa_1"
-down_revision = "PREENCHER_COM_O_HEAD_DO_DIA"
+revision = "20260905_0055"
+down_revision = "20260905_0054"
 branch_labels = None
 depends_on = None
 

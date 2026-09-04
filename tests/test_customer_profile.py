@@ -717,8 +717,20 @@ class TestAddressFingerprint:
 
 
 def make_order_row(order_number=1042, itens=(), **overrides):
-    valores = {
-        "id": uuid.uuid4(),
+    """A tupla que `list_orders_by_customer` devolve, com um `Order` DE VERDADE.
+
+    Era `SimpleNamespace` ate 05/09/2026, e o custo apareceu no dia em que
+    `payment_status` entrou no `CustomerOrderHistoryItem`: quatro testes
+    quebraram com `AttributeError`, porque o dublê só tinha os atributos que
+    alguém tinha lembrado de escrever. É a armadilha do `serves_people`, de
+    novo, e a regra do CLAUDE.md existe por causa dela — **coluna nova não
+    passada vale `None`** num model transiente, em vez de estourar.
+
+    `fabricas.pedido` monta o `Order` transiente (sem sessão e sem banco); os
+    campos abaixo são os que ESTES testes descrevem, e o resto vem do padrão
+    da fábrica.
+    """
+    campos = {
         "order_number": order_number,
         "status": "completed",
         "order_type": "delivery",
@@ -731,10 +743,11 @@ def make_order_row(order_number=1042, itens=(), **overrides):
         "discount_total": Decimal("0.00"),
         "total": Decimal("131.00"),
         "created_at": datetime(2026, 8, 11, 20, 41, tzinfo=timezone.utc),
-        "items": list(itens),
     }
-    valores.update(overrides)
-    return (SimpleNamespace(**valores), "Pizzaria do Ze", "Aldeota")
+    campos.update(overrides)
+    pedido = fabricas.pedido(**campos)
+    pedido.items = list(itens)
+    return (pedido, "Pizzaria do Ze", "Aldeota")
 
 
 def make_order_item(name="Pizza Calabresa", unit_price="45.00", quantity=1):

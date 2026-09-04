@@ -237,6 +237,8 @@ achar a filial: **não existe UNIQUE que atravesse duas tabelas.**
 o mecanismo de exclusão (§38), e aqui ele já vem escrito na linha — é a
 própria janela de 24h da Meta.
 
+Desenho inteiro em [whatsapp.md](whatsapp.md).
+
 ---
 
 ## 2. As tabelas principais

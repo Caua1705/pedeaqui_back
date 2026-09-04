@@ -26,7 +26,7 @@ qualquer coisa, e continue do que ele diz — nunca da lembrança.**
 | 5 | `account_update` / `PARTNER_REMOVED` — o canal desconectado | **feito** |
 | 6 | Aviso de "pronto para retirada" | **feito** — dispara em `ready`, só na retirada |
 | 7 | Reenvio de aviso que falhou | **feito** — `next_attempt_at`, e o container de 2 min |
-| 8 | `docs/whatsapp.md` | pendente |
+| 8 | `docs/whatsapp.md` | **feito** — e a rodada acabou |
 
 ---
 
@@ -577,6 +577,33 @@ mudou entre a falha e agora:
    que não existe mais. A queda no número do restaurante **não** acontece: o
    número da filial desligado significa que aquela loja para de mandar.
 
+---
+
+## Item 8 — feito. `docs/whatsapp.md`
+
+A frente virou rotina, então o desenho saiu do registro de rodada e virou
+documentação: `docs/whatsapp.md`, ligado a partir do índice de
+`docs/arquitetura.md` §8 e de `docs/modelo-de-dados.md`.
+
+**O que é do doc e o que continua sendo deste arquivo.** O doc descreve o
+sistema como ele É — as três tabelas, o webhook, os quatro avisos, o reenvio,
+a operação, e o que não existe. Este scratchpad continua sendo o registro da
+RODADA: a ordem em que as coisas foram decididas, o que foi tentado, e a
+parte II — o roteiro do painel da Meta, que é meu e não do backend.
+
+**A §10 do doc é a que envelhece mais devagar e vale mais.** Ela lista o que
+NÃO existe com o motivo: painel do lojista, chatbot, coexistência, reserva de
+linha na varredura, e as duas falhas que de propósito não são retentadas.
+Sem ela, cada uma dessas ausências vira "esqueceram" na leitura de quem
+chegar depois.
+
+**Uma coisa que só apareceu ao escrever o doc**, e ficou registrada lá: falha
+reportada pelo WEBHOOK de status (a linha saiu `sent` e depois virou `failed`)
+não é retentada, porque nasce com `next_attempt_at` nulo. Não é descuido — ali
+a Meta aceitou a chamada, e o que falhou foi a entrega ao aparelho; repetir o
+mesmo template não é obviamente o remédio. Mas é uma decisão, e agora ela está
+escrita em vez de ser um efeito colateral.
+
 **As três moram no service, e não na varredura.** São regra de domínio; a
 varredura é agendamento. Se morassem lá, um segundo chamador — um botão de
 "reenviar" no painel, um dia — teria que lembrar de repeti-las, que é a
@@ -952,9 +979,6 @@ que abriram, não que ficou boa — isso se vê no celular.
   com trava (`tests/test_whatsapp_coexistencia.py`). Se um dia o eco do
   atendente precisar aparecer em algum lugar nosso, ele entra como dado
   pessoal com prazo, e não como mais uma coluna.
-- **`docs/whatsapp.md` não existe.** O desenho está neste scratchpad, que é
-  registro de rodada e não documentação. Quando a frente virar rotina, ele
-  vira doc — como `docs/cupons.md` e `docs/entregadores.md`.
 - **O opt-in no checkout do app.** É do lado do app, e é meu: uma linha
   dizendo que vamos avisar pelo WhatsApp. Sem ela o risco é a qualidade do
   número cair por denúncia, que é o que derruba o canal do Júnior.

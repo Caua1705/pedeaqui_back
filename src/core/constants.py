@@ -198,3 +198,26 @@ WHATSAPP_MESSAGE_STATUSES = ("sent", "delivered", "read", "failed")
 # aprovado. Constante e nao variavel de ambiente justamente por isso —
 # configuravel, ela vira um numero nosso que diverge do deles em silencio.
 WHATSAPP_CUSTOMER_WINDOW_HOURS = 24
+
+# A convencao de dia da semana, escrita onde o CONSUMIDOR le.
+#
+# `0 = segunda` e o `datetime.weekday()` do Python, e e o numero que esta no
+# CHECK do banco, nos schemas e em BranchHoursService. O `getDay()` do
+# JavaScript devolve `0 = domingo`, e os dois nao conversam sozinhos.
+#
+# O sintoma de errar isso e mudo: o lojista configura segunda no painel e a
+# loja abre no DOMINGO — ou fica fechada na segunda, sem erro em lugar nenhum,
+# porque a tela mostra de volta o numero que ele digitou. Nenhum teste deste
+# repositorio pega, e nao tem como pegar: do lado de ca o numero e consistente.
+#
+# Ele vivia so nos docstrings dos dois schemas de ESCRITA. Quem ESCREVE copia
+# o exemplo e acerta; quem LE um `weekday: 3` e o entrega a `new Date()` erra —
+# e ler e exatamente o lado do sintoma. Por isso a frase vai no CAMPO, nos dois
+# sentidos, e `tests/test_convencao_de_weekday.py` cobra que ela esteja em todo
+# campo de dia da semana do `/openapi.json` GERADO (armadilha 16: o painel
+# consome aquele documento, nao este arquivo).
+DESCRICAO_DE_WEEKDAY = (
+    "Dia da semana com 0 = SEGUNDA e 6 = domingo (`datetime.weekday()` do "
+    "Python). NAO e o `getDay()` do JavaScript, que usa 0 = domingo: converter "
+    "e obrigatorio dos dois lados."
+)

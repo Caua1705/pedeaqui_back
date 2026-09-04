@@ -14,6 +14,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from src.core.constants import DESCRICAO_DE_WEEKDAY
 from src.schemas.admin_printing_schema import (
     MAX_FOOTER_MESSAGE_LENGTH,
     clean_footer_message,
@@ -523,7 +524,7 @@ class BusinessHourInput(BaseModel):
     quem le (ver `_period_covers_after_midnight`).
     """
 
-    weekday: int = Field(ge=0, le=6)
+    weekday: int = Field(ge=0, le=6, description=DESCRICAO_DE_WEEKDAY)
     opens_at: time | None = None
     closes_at: time | None = None
     prep_time_min: int | None = Field(default=None, ge=0, le=MAX_PREP_TIME_MINUTES)
@@ -565,7 +566,7 @@ class BusinessHoursReplaceRequest(BaseModel):
 
 class BusinessHourResponse(BaseResponse):
     id: UUID
-    weekday: int
+    weekday: int = Field(description=DESCRICAO_DE_WEEKDAY)
     opens_at: time | None = None
     closes_at: time | None = None
     prep_time_min: int | None = None

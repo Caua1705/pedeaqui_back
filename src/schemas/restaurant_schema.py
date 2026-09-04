@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from src.core.constants import DESCRICAO_DE_WEEKDAY
 from src.schemas.common_schema import BaseResponse
 
 
@@ -212,7 +213,7 @@ class BusinessHourPeriodResponse(BaseModel):
 
 
 class BusinessHourDayResponse(BaseModel):
-    weekday: int
+    weekday: int = Field(description=DESCRICAO_DE_WEEKDAY)
     day_label: str
     periods: list[BusinessHourPeriodResponse]
     is_closed: bool
@@ -246,5 +247,5 @@ class RestaurantInfoResponse(BaseModel):
     business_hours: list[BusinessHourDayResponse]
     payment_methods: PaymentMethodsResponse
     timezone: Literal["America/Fortaleza"] = "America/Fortaleza"
-    current_weekday: int
+    current_weekday: int = Field(description=DESCRICAO_DE_WEEKDAY)
     current_day_label: str

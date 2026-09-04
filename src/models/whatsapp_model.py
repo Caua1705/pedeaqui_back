@@ -44,6 +44,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Text,
@@ -80,6 +81,27 @@ class WhatsAppChannel(Base):
             unique=True,
             postgresql_where=text("branch_id IS NULL"),
         ),
+        # A FK COMPOSTA, declarada aqui porque e ela que existe no banco.
+        #
+        # Ate 05/09/2026 este model declarava, na coluna, uma FK de UMA coluna
+        # (`branches.id`) que o banco NAO tem, e nao declarava esta, que o
+        # banco TEM (`fk_whatsapp_channels_branch`, criada pela revisao
+        # `0051`). Duas divergencias em sentidos opostos, na mesma coluna.
+        #
+        # Nao houve DDL para consertar: o banco ja estava certo e mais estrito
+        # que o model — o inverso da armadilha 50, onde o model promete e o
+        # banco nao cumpre. Aqui quem mentia era a anotacao.
+        #
+        # O idioma e o de `cashback_rule_model` (conferido contra o banco: la
+        # as DUAS FKs existem, e o model declara as duas). A diferenca e que
+        # `whatsapp_channels` nasceu so com a composta, entao declarar a de uma
+        # coluna aqui seria inventar uma restricao que ninguem cobra.
+        ForeignKeyConstraint(
+            ["restaurant_id", "branch_id"],
+            ["branches.restaurant_id", "branches.id"],
+            name="fk_whatsapp_channels_branch",
+            ondelete="CASCADE",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -92,14 +114,18 @@ class WhatsAppChannel(Base):
     # seu. E o regime da armadilha 35, e vale a mesma regra: `NULL` significa
     # "herda", e so `NULL`.
     #
-    # No banco esta coluna entra numa FK COMPOSTA
-    # `(restaurant_id, branch_id) -> branches (restaurant_id, id)`, o mesmo
-    # cinto do cardapio por filial (armadilha 36): sem ela daria para pendurar
-    # a filial de um restaurante debaixo de outro. Com `branch_id` nulo a FK
-    # composta nao e conferida (`MATCH SIMPLE`), que e exatamente o que a
-    # linha de restaurante precisa.
+    # A FK COMPOSTA que amarra esta coluna ao restaurante esta em
+    # `__table_args__`, e nao aqui: `(restaurant_id, branch_id) -> branches
+    # (restaurant_id, id)`, o mesmo cinto do cardapio por filial (armadilha
+    # 36) — sem ela daria para pendurar a filial de um restaurante debaixo de
+    # outro. Com `branch_id` nulo ela nao e conferida (`MATCH SIMPLE`), que e
+    # exatamente o que a linha de restaurante precisa.
+    #
+    # SEM `ForeignKey` NESTA LINHA, de proposito: a de uma coluna so nao
+    # existe no banco desta tabela, e declara-la aqui punha no model uma
+    # restricao que ninguem cobra.
     branch_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("branches.id", ondelete="CASCADE"), nullable=True
+        UUID(as_uuid=True), nullable=True
     )
     waba_id: Mapped[str] = mapped_column(Text, nullable=False)
     # O `phone_number_id` da Meta. E ele que vem no `metadata` de todo webhook

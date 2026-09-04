@@ -202,7 +202,7 @@ Confira também que a API subiu — `docker logs` sem loop de restart, e uma
 requisição de verdade:
 
 ```bash
-curl -fsS https://<host>/health && echo OK
+curl -fsS https://<host>/health
 ```
 
 **Quanto esperar antes da etapa 2.** O roteiro original pedia um dia inteiro de
@@ -236,13 +236,21 @@ docker exec pedeaqui-api python scripts/nulos_nas_colunas_em_desacordo.py
 
 sed -i '/^ALEMBIC_TARGET=/d' .env
 grep ALEMBIC_TARGET .env                     # não pode sobrar NADA
-GIT_SHA=$(git rev-parse --short HEAD) docker compose up -d
+GIT_SHA=$(git rev-parse --short HEAD) docker compose up -d --force-recreate pedeaqui-api
 docker logs -f pedeaqui-api
 #   esperado: [entrypoint] alembic upgrade head   e NENHUM "ATENCAO".
 ```
 
-O `docker compose up -d` sem `--build` é de propósito: a imagem é a mesma da
-execução anterior, e reconstruir aqui trocaria duas coisas ao mesmo tempo.
+Dois detalhes dessa linha que não são estilo:
+
+- **`--force-recreate`.** O `alembic` roda no *entrypoint*, então a etapa 2 só
+  acontece se o container for recriado. A única coisa que mudou foi o `.env`, e
+  o `docker compose` nem sempre recria por causa disso — dependendo da versão
+  ele responde `Container pedeaqui-api is up-to-date` e **não migra nada**. O
+  sintoma seria o pior possível: nenhum erro, e o banco parado na etapa 1.
+- **sem `--build`.** A imagem é a mesma da execução anterior; reconstruir aqui
+  trocaria duas coisas ao mesmo tempo. Confirme que é a mesma pelo `git_sha` que
+  o `/health` devolve.
 
 ### Se a etapa 2 falhar: NÃO reverta
 
@@ -259,7 +267,7 @@ primeira coisa a fazer não é consertar o dado — é pôr a API de pé:
 ```bash
 echo "ALEMBIC_TARGET=20260905_0055" >> .env    # volta a parar na etapa 1
 docker compose up -d
-curl -fsS https://<host>/health && echo OK
+curl -fsS https://<host>/health
 ```
 
 Com a API no ar, o resto é sem pressa. **Deixe as CHECK `NOT VALID` onde

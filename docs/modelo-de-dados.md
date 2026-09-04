@@ -616,3 +616,92 @@ Duas coisas para quem for decidir:
 - **A varredura acima é a forma de conferir de novo.** Ela é uma consulta ao
   `pg_constraint`, roda em segundos, e é mais confiável que a memória de quem
   levantou — inclusive a de quem levantou hoje.
+
+### O portão, desde 05/09/2026
+
+`scripts/on_delete_das_fks.py` cobra que **toda FK `CASCADE` ou `SET NULL`
+esteja declarada**, dizendo para onde vai a linha filha quando o pai morre.
+São as 43 que agem sozinhas; as 41 que barram ficam de fora, e a assimetria é
+o desenho inteiro:
+
+    NO ACTION / RESTRICT   o DELETE do pai FALHA         -> ALTO
+    CASCADE / SET NULL      o filho some, ou esvazia      -> CALADO
+
+**Um mecanismo cobre os dois estragos.** Tabela nova com `CASCADE` nasce fora
+da lista. E barreira derrubada — trocar `order_items.product_id` por `CASCADE`
+porque "o produto está sendo apagado de qualquer jeito" — vira uma destrutiva
+que também não está na lista, e cai no mesmo achado. Não há uma segunda lista
+de barreiras para alguém esquecer de atualizar.
+
+`tests/test_on_delete_das_fks.py` prova que o varredor enxerga (as duas formas
+acusadas, as duas que passam, e o falso positivo do fecho); o `_db` trava o
+zero, as quatro contagens e as cinco barreiras de histórico **pelo nome**, para
+que derrubar uma delas falhe dizendo qual.
+
+### O que um `DELETE` levaria junto, hoje
+
+`--fechamento` calcula o fecho transitivo pelas arestas `CASCADE`. É o terceiro
+degrau que some numa leitura FK a FK — apagar o restaurante apaga a categoria,
+que apaga o produto, que apaga o grupo de adicionais:
+
+| `DELETE` em | apaga junto | anula coluna | **barra hoje** |
+|---|---|---|---|
+| `restaurants` | 20 tabelas | 5 | 25 |
+| `branches` | 7 | 2 | 11 |
+| `customers` | 7 | 1 | 6 |
+| `orders` | 5 | 2 | 2 |
+
+Três leituras que a tabela de contagens não dava, e que a decisão pendente
+precisa:
+
+- **nenhuma das quatro raízes é apagável hoje**, e quem impede não são as
+  declarações de `CASCADE`: é um punhado de FKs `NO ACTION` rio abaixo. O
+  restaurante esbarra em 25 delas, a começar por `orders.restaurant_id`;
+- **`cashback_transactions` está no fecho de `customers`** — a única cascata do
+  cliente que leva dinheiro. Ela não roda porque `orders.customer_id` barra
+  antes, e é essa FK que impede alguém de trocar anonimização por `DELETE` sem
+  perceber;
+- **`cashback_transactions.restaurant_id` é `SET NULL`**, e é a única das oito
+  que mudaria um número na tela. Ver a decisão pendente logo abaixo.
+
+### PENDENTE: o saldo que aparece e não gasta
+
+**Registrada em 05/09/2026. Não construir antes de precisar** — a decisão tem
+gatilho, e o gatilho não chegou.
+
+`cashback_transactions.restaurant_id` é `ON DELETE SET NULL`. Uma linha com
+`restaurant_id` nulo:
+
+- **continua somando** em `get_available_balance`, que é o `balance` de
+  `GET /customers/me/cashback` — o **acumulado** que o app mostra;
+- **some** de `get_available_balance_for_restaurant`, que é o que o resgate
+  usa — o que dá para **gastar**.
+
+O cliente passa a ver um saldo que nenhuma loja aceita. Sem erro, sem log, e
+sem tela onde ele confira por quê.
+
+**Por que fica pendente e não vira conserto agora.** Isso só acontece se um
+restaurante for apagado, e hoje **não dá**: o `DELETE` esbarra em 25 FKs
+`NO ACTION`, a primeira delas `orders.restaurant_id`, no primeiro pedido que
+aquele restaurante já tiver recebido. O defeito é real e o alcance dele é
+vazio — por circunstância, não por desenho, que é exatamente o tipo de coisa
+que precisa estar escrita em vez de lembrada.
+
+**O gatilho:** o dia em que for preciso apagar um restaurante de verdade
+(cliente que saiu, cadastro de teste, fim de contrato). **Esta é a primeira
+coisa a decidir naquele dia**, antes de derrubar qualquer barreira — porque a
+ordem natural é derrubar as 25 para conseguir apagar, e a 26ª consequência é
+esta, que não barra nada e não avisa.
+
+As três saídas, para não recomeçar a conversa:
+
+| Saída | O que custa |
+|---|---|
+| `ON DELETE CASCADE` | apaga o razão junto com o restaurante. É dinheiro de cliente sumindo por uma decisão administrativa, e é irreversível |
+| manter `SET NULL` e ensinar `get_available_balance` a ignorar nulo | o acumulado deixa de bater com a soma das parcelas, e a diferença não tem onde ser explicada na tela |
+| liquidar antes de apagar | um passo explícito (zerar o saldo daquele restaurante, com linha no razão) que roda **antes** do `DELETE`. Mais trabalho, e é o único em que o cliente não perde nem vê número errado |
+
+A terceira é a que combina com o resto do sistema — exclusão de conta aqui já
+é anonimização e não `DELETE` —, e é por isso que ela está escrita e não
+implementada: implementar antes do gatilho é escrever um caminho que ninguém
+vai exercitar até o dia em que ele precisar estar certo.

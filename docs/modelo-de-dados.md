@@ -568,3 +568,51 @@ de duas etapas da `0016`/`0017`, para um defeito que ainda não deu sintoma.
 O que este documento faz é tirar a lista do escuro. **A anotação do model não é
 autoridade sobre o schema** — quando a resposta importar, a autoridade é
 `alembic/versions/` e, em último caso, o banco.
+
+## 7. `ON DELETE`: o levantamento, e a decisão que ele pede
+
+**Levantado em 05/09/2026**, contra o Postgres de teste depois de
+`alembic upgrade head` — que para este fim é o schema real. **Não é um achado
+anterior**: é uma varredura feita agora, para a decisão ficar registrada com
+número em vez de impressão.
+
+| `ON DELETE` | FKs |
+|---|---|
+| **NO ACTION** (o default, quando não se escreve nada) | **39** |
+| `CASCADE` | 35 |
+| `SET NULL` | 8 |
+| `RESTRICT` | 2 |
+
+### O que as 39 significam, e por que a maioria está certa
+
+`NO ACTION` quer dizer *"o `DELETE` do pai falha enquanto houver filho"*. Num
+sistema em que **nada é apagado** — cardápio se desativa (`is_active`), canal de
+WhatsApp se desativa, pedido nunca some —, esse é o comportamento desejado na
+maior parte dos casos, e não uma omissão.
+
+As que são **deliberadas e já têm o motivo escrito no código**:
+
+- `whatsapp_messages.channel_id` — apagar o canal apagaria o registro de que o
+  cliente foi avisado, que é o único lugar onde isso é visível depois;
+- `order_items.product_id`, `order_item_options.option_id` /
+  `.option_group_id` — o histórico que o cliente ainda consulta;
+- `orders.customer_id` — exclusão de conta neste sistema é **anonimização**
+  (`customer_anonymization_service`), não `DELETE`. A FK que barra o `DELETE`
+  é o que impede alguém de trocar um mecanismo pelo outro sem perceber.
+
+### A decisão que sobra, e é de produto
+
+Não é "consertar 39". É responder, para as poucas em que o `DELETE` do pai é um
+caminho real de operação, se o certo é falhar (hoje), levar os filhos junto
+(`CASCADE`) ou soltá-los (`SET NULL`). As candidatas são as tabelas
+**operacionais e descartáveis**, não as de histórico — `delivery_estimates`,
+`ai_product_embeddings`, `print_agent_*`, `ai_usage_events`.
+
+Duas coisas para quem for decidir:
+
+- **`CASCADE` numa tabela de histórico é irreversível e silencioso.** É o
+  oposto do que este schema faz em todo lugar, e o dia em que doer é o dia em
+  que já apagou.
+- **A varredura acima é a forma de conferir de novo.** Ela é uma consulta ao
+  `pg_constraint`, roda em segundos, e é mais confiável que a memória de quem
+  levantou — inclusive a de quem levantou hoje.

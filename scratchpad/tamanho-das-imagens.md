@@ -1,5 +1,52 @@
 # De quem é a transformação de imagem — levantamento para decidir
 
+> ## ⛔ SUSPENSO EM 05/09/2026 — A PREMISSA NÃO EXISTE NO PLANO ATUAL
+>
+> O painel do Supabase responde, na linha de Storage:
+>
+>     Storage Image Transformations: Unavailable in plan
+>
+> **O plano Free não tem transformação de imagem.** Os três caminhos deste
+> arquivo — A (backend devolve a URL transformada), B (o front continua dono) e
+> C (teto no backend, refinamento no front) — pressupõem, todos, um endpoint
+> `/render/image/` que este projeto **não contrata hoje**. Nenhum deles é
+> implementável, e o mérito de qual é o melhor não está decidido: está
+> **adiado**, até haver plano que o suporte.
+>
+> **Não construa nada deste arquivo.** Ele fica porque o levantamento (quem
+> emite, quem transforma, quem não transforma) continua valendo e é o que se lê
+> no dia em que o plano mudar. A escolha entre A, B e C, não.
+>
+> ### A pergunta que isso abre, e ela é a próxima
+>
+> `scripts/utils/image-cdn.js` do front reescreve `/object/public/` para
+> `/render/image/...?width=` **hoje**, em 8 sítios. Se a transformação não está
+> contratada, ou essas URLs falham, ou elas servem outra coisa. As duas leituras
+> levam a lugares diferentes:
+>
+> - **falham** → quem está pintando a tela é o `src` com o **original**, pela
+>   rede de segurança que o cabeçalho do `image-cdn.js` descreve ("o `src`
+>   continua apontando para o ORIGINAL de propósito: se a transformação falhar
+>   [...] nada no cardápio fica sem foto"). Nesse caso a decisão de manter o
+>   original em `src` é o que está segurando o app de pé agora — e o `srcset`
+>   inteiro é trabalho que não rende byte nenhum;
+> - **servem o original** → o `/render/image/` está devolvendo o arquivo cheio,
+>   e os 174 KB são exatamente isso.
+>
+> **Em nenhuma das duas o backend tem o que fazer**, e nas duas os 174 KB → 12 KB
+> não estão disponíveis a nenhum preço de código. O que separa uma da outra é
+> barato de olhar nos logs que já existem: o **status** e o **content-length**
+> das requisições `/render/image/` contra as `/object/public/`. Vale saber qual
+> é antes de mexer em qualquer coisa no front — inclusive antes de "limpar" o
+> `srcset`, que na primeira leitura é o que sobra e na segunda é o que já
+> funciona.
+>
+> E fica registrado o que sobra de economia real sem transformação nenhuma:
+> subir imagem **já no tamanho certo** (o `tools/optimize-images.mjs` do front
+> existe para isso) e a validação de tamanho no upload
+> (`POST /admin/products/{id}/image`), que é do backend. Esse caminho não
+> depende de plano — e é outra frente, para outro dia.
+
 Escrito em 04/09/2026, depois do levantamento do laço de egress. **Não é
 proposta de implementação: é o mapa e a conta, para escolher onde mexer.**
 

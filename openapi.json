@@ -8945,6 +8945,17 @@
             "title": "Order Type",
             "type": "string"
           },
+          "payment_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Status"
+          },
           "restaurant_name": {
             "title": "Restaurant Name",
             "type": "string"

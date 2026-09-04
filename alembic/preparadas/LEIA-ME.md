@@ -18,9 +18,11 @@ O que mora aqui é migração **escrita, revisada e esperando uma decisão que n
 
 | Arquivo | Espera |
 |---|---|
-| `alinhamento_orm_schema_etapa_1.py` | a contagem de nulos em produção dar zero |
-| `alinhamento_orm_schema_etapa_2.py` | a etapa 1 estar aplicada e assada |
+| `alinhamento_orm_schema_etapa_2.py` | a etapa 1 estar aplicada em produção e assada |
 
-As duas são as etapas do roteiro de `docs/alinhamento-orm-schema.md`. **Elas
-não podem ir juntas para o mesmo `alembic upgrade`** — o motivo está lá, e é o
-único detalhe deste conjunto que não é óbvio.
+**A etapa 1 saiu daqui em 04/09/2026** e é `alembic/versions/20260905_0055` —
+na cadeia, ainda não aplicada em produção. Ela e a etapa 2 são as duas etapas do
+roteiro de `docs/alinhamento-orm-schema.md`, e **não podem ir juntas para o
+mesmo `alembic upgrade`**: o motivo está lá, e é o único detalhe deste conjunto
+que não é óbvio. Quando a etapa 2 entrar na cadeia com a 1 ainda não aplicada, é
+`ALEMBIC_TARGET` que separa as duas execuções.

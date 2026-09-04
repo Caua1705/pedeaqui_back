@@ -88,6 +88,58 @@ class WhatsAppChannelRepository:
             return da_filial if canal_utilizavel(da_filial) else None
         return self._get_restaurant_default(restaurant_id)
 
+    def list_by_restaurant(self, restaurant_id: uuid.UUID) -> list[WhatsAppChannel]:
+        """Todas as linhas do restaurante — inclusive as desligadas.
+
+        A pergunta do PAINEL, e ela e a terceira, diferente das duas de cima:
+        o webhook quer o canal utilizavel e o envio tambem, mas a tela precisa
+        justamente do que NAO esta utilizavel — um numero desconectado que nao
+        aparecesse na lista seria indistinguivel de um numero que nunca
+        existiu, e as duas situacoes pedem coisas opostas do dono.
+
+        A linha do restaurante primeiro: e a queda, e ler a lista de cima para
+        baixo fica na mesma ordem em que a heranca e resolvida.
+        """
+        stmt = (
+            select(WhatsAppChannel)
+            .where(WhatsAppChannel.restaurant_id == restaurant_id)
+            .order_by(WhatsAppChannel.branch_id.is_not(None), WhatsAppChannel.created_at)
+        )
+        return list(self.db.scalars(stmt))
+
+    def get_any_by_phone_number_id(self, phone_number_id: str) -> WhatsAppChannel | None:
+        """A linha daquele numero, ATIVA OU NAO, de qualquer restaurante.
+
+        Existe separada de `get_by_phone_number_id` porque as duas perguntam
+        coisas opostas. Aquela e do webhook: "por qual canal atendo isto?", e
+        um canal desligado nao atende. Esta e do cadastro: "este numero ja esta
+        em uso?", e ai o desligado conta — o `UNIQUE` e sobre a linha, nao
+        sobre o estado dela.
+
+        Sem filtro de restaurante de proposito: o `UNIQUE (phone_number_id)` e
+        global, e quem cadastra precisa saber que o numero colide mesmo quando
+        a colisao e com outra loja. O que a resposta da rota NAO pode dizer e
+        de quem e a outra linha.
+        """
+        stmt = select(WhatsAppChannel).where(
+            WhatsAppChannel.phone_number_id == phone_number_id
+        )
+        return self.db.scalar(stmt)
+
+    def get_by_branch(
+        self, restaurant_id: uuid.UUID, branch_id: uuid.UUID | None
+    ) -> WhatsAppChannel | None:
+        """A linha daquele lugar — a da filial, ou a do restaurante.
+
+        `branch_id` nulo pergunta pela QUEDA, e nao por "qualquer filial". E a
+        mesma distincao da armadilha 35, agora do lado da escrita: o cadastro
+        precisa saber se o lugar de destino ja esta ocupado antes de tentar o
+        INSERT, para explicar em vez de deixar o indice recusar.
+        """
+        if branch_id is None:
+            return self._get_restaurant_line(restaurant_id)
+        return self._get_by_branch(restaurant_id, branch_id)
+
     def upsert(
         self,
         *,
@@ -170,6 +222,21 @@ class WhatsAppChannelRepository:
         stmt = select(WhatsAppChannel).where(
             WhatsAppChannel.restaurant_id == restaurant_id,
             WhatsAppChannel.branch_id == branch_id,
+        )
+        return self.db.scalar(stmt)
+
+    def _get_restaurant_line(self, restaurant_id: uuid.UUID) -> WhatsAppChannel | None:
+        """A linha de queda do restaurante, EM QUALQUER ESTADO.
+
+        Irma de `_get_restaurant_default` e separada dela de proposito: aquela
+        responde ao envio ("da para mandar por aqui?") e por isso filtra pelo
+        canal utilizavel; esta responde ao cadastro ("o lugar esta ocupado?"),
+        e o indice unico parcial nao pergunta se a linha esta ligada. Juntar as
+        duas faria o cadastro achar o lugar vazio e o banco recusar o INSERT.
+        """
+        stmt = select(WhatsAppChannel).where(
+            WhatsAppChannel.restaurant_id == restaurant_id,
+            WhatsAppChannel.branch_id.is_(None),
         )
         return self.db.scalar(stmt)
 

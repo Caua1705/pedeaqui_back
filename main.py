@@ -26,6 +26,7 @@ from src.api.endpoints import (
     admin_reviews,
     admin_settings,
     admin_users,
+    admin_whatsapp,
     auth,
     branches,
     coupons,
@@ -187,6 +188,7 @@ app.include_router(admin_customers.router)
 app.include_router(admin_reports.router)
 app.include_router(admin_reviews.router)
 app.include_router(admin_error_reports.router)
+app.include_router(admin_whatsapp.router)
 app.include_router(internal_metrics.router)
 app.include_router(chat.router)
 

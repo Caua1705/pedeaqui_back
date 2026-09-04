@@ -1,0 +1,513 @@
+"""As rotas de WhatsApp do painel: listar, conectar, desconectar.
+
+O que estes testes travam, e cada um fecha uma porta que a tela não consegue
+fechar sozinha:
+
+- **a herança aparece explicitamente.** Uma filial sem número próprio herda o
+  do restaurante e funciona. Sem `source`/`can_send` na resposta, ela apareceria
+  como "sem WhatsApp" e o dono desligaria uma campanha que estava no ar;
+- **"nunca conectou" e "conectou e caiu" são estados diferentes.** O primeiro é
+  ausência de linha; o segundo é linha com `status` dizendo o quê. Colapsar os
+  dois manda o dono conectar um número que já está conectado;
+- **as três colisões respondem com FRASE.** O índice cobre, mas `IntegrityError`
+  não diz ao lojista qual das três aconteceu nem o que fazer;
+- **o token não sai por lugar nenhum**, e o `waba_id` sai mascarado;
+- **desconectar NÃO apaga** — nem a linha, nem as mensagens gravadas. A FK sem
+  `ON DELETE` existe para isso, e um DELETE de verdade nem passaria.
+"""
+
+import uuid
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
+from main import app
+from src.api.dependencies.database import get_db
+from src.core.config import settings
+from src.models.admin_user_model import AdminUser
+from src.models.whatsapp_model import WhatsAppChannel, WhatsAppMessage
+from src.services.admin_auth_service import AdminAuthService
+from src.utils.crypto import encrypt_whatsapp_token
+from src.utils.security import utcnow
+from tests import fabricas_db as fab
+
+
+pytestmark = pytest.mark.db
+
+
+@pytest.fixture(autouse=True)
+def chave_de_cifra(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setattr(
+        settings, "WHATSAPP_TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode()
+    )
+
+
+@pytest.fixture
+def cliente_http(db: Session):
+    app.dependency_overrides[get_db] = lambda: db
+    with TestClient(app) as client:
+        yield client
+    app.dependency_overrides.clear()
+
+
+def criar_admin(db: Session, restaurante, role: str = "owner", filial=None) -> AdminUser:
+    admin = AdminUser(
+        restaurant_id=restaurante.id,
+        branch_id=None if filial is None else filial.id,
+        name=f"Pessoa {role}",
+        email=f"{uuid.uuid4().hex[:10]}@exemplo.com",
+        password_hash="$2b$12$" + "x" * 53,
+        role=role,
+        is_active=True,
+    )
+    db.add(admin)
+    db.flush()
+    return admin
+
+
+def auth(db: Session, admin: AdminUser) -> dict:
+    token = AdminAuthService(db).create_access_token(admin)
+    return {"Authorization": f"Bearer {token}"}
+
+
+def canal(db: Session, restaurante, filial=None, **sobrescritas) -> WhatsAppChannel:
+    campos = {
+        "restaurant_id": restaurante.id,
+        "branch_id": None if filial is None else filial.id,
+        "waba_id": "1234567890",
+        "phone_number_id": f"pni-{uuid.uuid4().hex[:8]}",
+        "display_phone_number": "+55 85 99999-0000",
+        "access_token_encrypted": encrypt_whatsapp_token("EAAG-token"),
+        "is_active": True,
+    }
+    campos.update(sobrescritas)
+    linha = WhatsAppChannel(**campos)
+    db.add(linha)
+    db.flush()
+    return linha
+
+
+@pytest.fixture
+def rede(db: Session):
+    """O cenário do piloto: um restaurante, duas filiais."""
+    restaurante = fab.criar_restaurante(db, nome="Júnior da Picanha")
+    centro = fab.criar_filial(db, restaurante, nome="Centro")
+    aldeota = fab.criar_filial(db, restaurante, nome="Aldeota")
+    db.flush()
+    return restaurante, centro, aldeota
+
+
+class TestAListagemMostraAHeranca:
+    def test_a_linha_do_restaurante_atende_as_duas_filiais(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """O que a tela precisa e uma lista de canais não diz.
+
+        Um número, `branch_id` nulo, duas lojas. Sem `source`, as duas
+        apareceriam como "sem WhatsApp"."""
+        restaurante, centro, aldeota = rede
+        canal(db, restaurante, display_phone_number="+55 85 91111-0000")
+        dono = criar_admin(db, restaurante)
+
+        resposta = cliente_http.get(
+            "/admin/whatsapp/channels", headers=auth(db, dono)
+        )
+
+        assert resposta.status_code == 200
+        corpo = resposta.json()
+        assert len(corpo["channels"]) == 1
+        assert corpo["channels"][0]["branch_id"] is None
+        por_filial = {b["branch_id"]: b for b in corpo["branches"]}
+        for filial in (centro, aldeota):
+            vista = por_filial[str(filial.id)]
+            assert vista["source"] == "restaurant"
+            assert vista["display_phone_number"] == "+55 85 91111-0000"
+            assert vista["can_send"] is True
+
+    def test_a_filial_com_numero_proprio_nao_herda(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        restaurante, centro, aldeota = rede
+        canal(db, restaurante, display_phone_number="+55 85 91111-0000")
+        canal(db, restaurante, centro, display_phone_number="+55 85 92222-0000")
+        dono = criar_admin(db, restaurante)
+
+        corpo = cliente_http.get(
+            "/admin/whatsapp/channels", headers=auth(db, dono)
+        ).json()
+
+        por_filial = {b["branch_id"]: b for b in corpo["branches"]}
+        assert por_filial[str(centro.id)]["source"] == "branch"
+        assert por_filial[str(centro.id)]["display_phone_number"] == "+55 85 92222-0000"
+        assert por_filial[str(aldeota.id)]["source"] == "restaurant"
+
+    def test_nunca_conectou_e_none_e_nao_um_canal_caido(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        restaurante, centro, _ = rede
+        dono = criar_admin(db, restaurante)
+
+        corpo = cliente_http.get(
+            "/admin/whatsapp/channels", headers=auth(db, dono)
+        ).json()
+
+        assert corpo["channels"] == []
+        vista = {b["branch_id"]: b for b in corpo["branches"]}[str(centro.id)]
+        assert vista["source"] == "none"
+        assert vista["channel_id"] is None
+        assert vista["can_send"] is False
+
+    def test_conectou_e_caiu_continua_na_lista_com_o_motivo(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """A distinção que o dono precisa fazer. Um canal derrubado pela Meta
+        que sumisse da lista seria indistinguível de um que nunca existiu — e
+        as duas situações pedem coisas opostas dele."""
+        restaurante, centro, _ = rede
+        canal(
+            db,
+            restaurante,
+            centro,
+            disconnected_at=utcnow(),
+            disconnect_reason="PARTNER_REMOVED",
+        )
+        dono = criar_admin(db, restaurante)
+
+        corpo = cliente_http.get(
+            "/admin/whatsapp/channels", headers=auth(db, dono)
+        ).json()
+
+        assert corpo["channels"][0]["status"] == "disconnected_by_meta"
+        assert corpo["channels"][0]["disconnect_reason"] == "PARTNER_REMOVED"
+        vista = {b["branch_id"]: b for b in corpo["branches"]}[str(centro.id)]
+        # A filial TEM canal próprio, e ele não funciona. E ela não cai no do
+        # restaurante: número desligado significa que a loja para de mandar.
+        assert vista["source"] == "branch"
+        assert vista["can_send"] is False
+
+    def test_o_desligado_por_nos_e_um_estado_diferente(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """`disabled` religa aqui; `disconnected_by_meta` exige o lojista
+        reconectar na Meta antes. São dois consertos, e só um depende de
+        outra pessoa."""
+        restaurante, centro, _ = rede
+        canal(db, restaurante, centro, is_active=False)
+        dono = criar_admin(db, restaurante)
+
+        corpo = cliente_http.get(
+            "/admin/whatsapp/channels", headers=auth(db, dono)
+        ).json()
+
+        assert corpo["channels"][0]["status"] == "disabled"
+
+    def test_nem_o_token_nem_o_waba_saem_em_claro(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        restaurante, centro, _ = rede
+        canal(db, restaurante, centro, waba_id="1234567890")
+        dono = criar_admin(db, restaurante)
+
+        resposta = cliente_http.get(
+            "/admin/whatsapp/channels", headers=auth(db, dono)
+        )
+
+        assert "EAAG" not in resposta.text
+        assert "access_token" not in resposta.text
+        assert "1234567890" not in resposta.text
+        assert resposta.json()["channels"][0]["waba_id_masked"].endswith("7890")
+
+    def test_o_gerente_le_e_o_atendente_nao(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        restaurante, _, _ = rede
+        gerente = criar_admin(db, restaurante, role="manager")
+        atendente = criar_admin(db, restaurante, role="attendant")
+
+        assert (
+            cliente_http.get(
+                "/admin/whatsapp/channels", headers=auth(db, gerente)
+            ).status_code
+            == 200
+        )
+        assert (
+            cliente_http.get(
+                "/admin/whatsapp/channels", headers=auth(db, atendente)
+            ).status_code
+            == 403
+        )
+
+
+class TestConectar:
+    def _corpo(self, filial=None, **sobrescritas) -> dict:
+        corpo = {
+            "branch_id": None if filial is None else str(filial.id),
+            "waba_id": "1234567890",
+            "phone_number_id": "pni-novo",
+            "display_phone_number": "+55 85 93333-0000",
+            "access_token": "EAAG-token-do-lojista",
+        }
+        corpo.update(sobrescritas)
+        return corpo
+
+    def test_o_dono_conecta_e_o_token_vai_cifrado(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        restaurante, centro, _ = rede
+        dono = criar_admin(db, restaurante)
+
+        resposta = cliente_http.post(
+            "/admin/whatsapp/channels",
+            json=self._corpo(centro),
+            headers=auth(db, dono),
+        )
+
+        assert resposta.status_code == 200
+        assert resposta.json()["status"] == "connected"
+        linha = db.query(WhatsAppChannel).one()
+        assert linha.access_token_encrypted != "EAAG-token-do-lojista"
+        assert "EAAG" not in resposta.text
+
+    def test_o_gerente_nao_conecta(self, db: Session, cliente_http, rede) -> None:
+        restaurante, centro, _ = rede
+        gerente = criar_admin(db, restaurante, role="manager")
+
+        resposta = cliente_http.post(
+            "/admin/whatsapp/channels",
+            json=self._corpo(centro),
+            headers=auth(db, gerente),
+        )
+
+        assert resposta.status_code == 403
+
+    def test_a_filial_que_ja_tem_numero_recusa_com_frase(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        restaurante, centro, _ = rede
+        canal(db, restaurante, centro, display_phone_number="+55 85 92222-0000")
+        dono = criar_admin(db, restaurante)
+
+        resposta = cliente_http.post(
+            "/admin/whatsapp/channels",
+            json=self._corpo(centro),
+            headers=auth(db, dono),
+        )
+
+        assert resposta.status_code == 409
+        detalhe = resposta.json()["detail"]
+        assert "Centro" in detalhe
+        assert "+55 85 92222-0000" in detalhe
+
+    def test_a_segunda_linha_de_restaurante_recusa_dizendo_da_heranca(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """A frase precisa explicar a herança: o dono que tenta conectar um
+        segundo número "do restaurante" não sabe que o primeiro já atende as
+        filiais sem número próprio."""
+        restaurante, _, _ = rede
+        canal(db, restaurante, display_phone_number="+55 85 91111-0000")
+        dono = criar_admin(db, restaurante)
+
+        resposta = cliente_http.post(
+            "/admin/whatsapp/channels", json=self._corpo(), headers=auth(db, dono)
+        )
+
+        assert resposta.status_code == 409
+        assert "herdam" in resposta.json()["detail"]
+
+    def test_numero_de_outro_restaurante_recusa_sem_dizer_de_quem_e(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """Quem chegou aqui já tinha o `phone_number_id` em mãos, então a
+        existência da linha não é novidade. De quem ela é, seria."""
+        restaurante, centro, _ = rede
+        outro = fab.criar_restaurante(db, nome="Concorrente")
+        canal(db, outro, phone_number_id="pni-novo")
+        dono = criar_admin(db, restaurante)
+
+        resposta = cliente_http.post(
+            "/admin/whatsapp/channels",
+            json=self._corpo(centro),
+            headers=auth(db, dono),
+        )
+
+        assert resposta.status_code == 409
+        assert "Concorrente" not in resposta.text
+
+    def test_o_mesmo_numero_de_novo_e_RECONEXAO_e_troca_o_token(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """Sem este caminho, desconectar seria irreversível pelo painel:
+        conectar responderia "já cadastrado" sobre a própria linha do dono,
+        para sempre."""
+        restaurante, centro, _ = rede
+        linha = canal(
+            db,
+            restaurante,
+            centro,
+            phone_number_id="pni-novo",
+            is_active=False,
+            disconnected_at=utcnow(),
+            disconnect_reason="PARTNER_REMOVED",
+        )
+        antigo = linha.access_token_encrypted
+        dono = criar_admin(db, restaurante)
+
+        resposta = cliente_http.post(
+            "/admin/whatsapp/channels",
+            json=self._corpo(centro, access_token="EAAG-token-NOVO"),
+            headers=auth(db, dono),
+        )
+
+        assert resposta.status_code == 200
+        assert resposta.json()["status"] == "connected"
+        assert db.query(WhatsAppChannel).count() == 1
+        db.refresh(linha)
+        assert linha.access_token_encrypted != antigo
+        assert linha.disconnected_at is None
+
+    def test_o_numero_que_ja_e_de_outra_filial_sua_nomeia_a_filial(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """Dentro do escopo, nomear não vaza nada — e é o que o dono precisa
+        para saber onde desconectar."""
+        restaurante, centro, aldeota = rede
+        canal(db, restaurante, aldeota, phone_number_id="pni-novo")
+        dono = criar_admin(db, restaurante)
+
+        resposta = cliente_http.post(
+            "/admin/whatsapp/channels",
+            json=self._corpo(centro),
+            headers=auth(db, dono),
+        )
+
+        assert resposta.status_code == 409
+        assert "Aldeota" in resposta.json()["detail"]
+
+    def test_filial_de_outro_restaurante_e_404(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        restaurante, _, _ = rede
+        outro = fab.criar_restaurante(db, nome="Concorrente")
+        filial_alheia = fab.criar_filial(db, outro, nome="Alheia")
+        db.flush()
+        dono = criar_admin(db, restaurante)
+
+        resposta = cliente_http.post(
+            "/admin/whatsapp/channels",
+            json=self._corpo(filial_alheia),
+            headers=auth(db, dono),
+        )
+
+        assert resposta.status_code == 404
+
+
+class TestDesconectar:
+    def test_desativa_a_linha_e_NAO_apaga_as_mensagens(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """A FK de `whatsapp_messages` é sem `ON DELETE` de propósito: apagar
+        o canal apagaria o registro de que o cliente foi avisado."""
+        restaurante, centro, _ = rede
+        linha = canal(db, restaurante, centro)
+        pedido = fab.criar_pedido(db, restaurante, centro, status="accepted")
+        db.add(
+            WhatsAppMessage(
+                order_id=pedido.id,
+                channel_id=linha.id,
+                kind="order_accepted",
+                status="sent",
+                wamid="wamid.ENVIADA",
+            )
+        )
+        db.flush()
+        dono = criar_admin(db, restaurante)
+
+        resposta = cliente_http.delete(
+            f"/admin/whatsapp/channels/{linha.id}", headers=auth(db, dono)
+        )
+
+        assert resposta.status_code == 200
+        assert resposta.json()["status"] == "disabled"
+        assert db.query(WhatsAppChannel).count() == 1
+        assert db.query(WhatsAppMessage).count() == 1
+
+    def test_a_filial_para_de_poder_mandar_e_nao_cai_no_do_restaurante(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """O que se espera de um número desligado é que aquela loja pare de
+        mandar — e não que ela passe a falar por outro número sem ninguém ter
+        pedido."""
+        restaurante, centro, aldeota = rede
+        canal(db, restaurante, display_phone_number="+55 85 91111-0000")
+        da_filial = canal(db, restaurante, centro)
+        dono = criar_admin(db, restaurante)
+
+        cliente_http.delete(
+            f"/admin/whatsapp/channels/{da_filial.id}", headers=auth(db, dono)
+        )
+        corpo = cliente_http.get(
+            "/admin/whatsapp/channels", headers=auth(db, dono)
+        ).json()
+
+        por_filial = {b["branch_id"]: b for b in corpo["branches"]}
+        assert por_filial[str(centro.id)]["can_send"] is False
+        assert por_filial[str(centro.id)]["source"] == "branch"
+        # A outra loja, que herdava, continua intacta.
+        assert por_filial[str(aldeota.id)]["can_send"] is True
+
+    def test_canal_de_outro_restaurante_e_404(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        restaurante, _, _ = rede
+        outro = fab.criar_restaurante(db, nome="Concorrente")
+        alheio = canal(db, outro)
+        dono = criar_admin(db, restaurante)
+
+        resposta = cliente_http.delete(
+            f"/admin/whatsapp/channels/{alheio.id}", headers=auth(db, dono)
+        )
+
+        assert resposta.status_code == 404
+        assert db.query(WhatsAppChannel).filter_by(id=alheio.id).one().is_active
+
+
+class TestOLojistaPresoAUmaFilial:
+    def test_nao_ve_as_outras_lojas_da_rede(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        restaurante, centro, aldeota = rede
+        canal(db, restaurante)
+        gerente = criar_admin(db, restaurante, role="manager", filial=centro)
+
+        corpo = cliente_http.get(
+            "/admin/whatsapp/channels", headers=auth(db, gerente)
+        ).json()
+
+        assert [b["branch_id"] for b in corpo["branches"]] == [str(centro.id)]
+
+    def test_nao_desconecta_nada_porque_desconectar_e_do_DONO(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """Quem para o gerente de filial aqui é o PAPEL, e não o escopo.
+
+        Vale escrever porque o reflexo é o contrário: a guarda "esta queda
+        atende lojas que você não enxerga" parece necessária e seria um ramo
+        que nenhum dado alcança — `build_admin_scope` deixa o dono SEM filial
+        (`UNRESTRICTED_ROLE`), então todo mundo que passa do 403 enxerga a rede
+        inteira. Este teste é o que denuncia se `SOMENTE_DONO` virar
+        `GERENCIA` um dia: ele fica vermelho pedindo a decisão que hoje não
+        precisa existir."""
+        restaurante, centro, _ = rede
+        queda = canal(db, restaurante)
+        gerente_da_loja = criar_admin(db, restaurante, role="manager", filial=centro)
+
+        resposta = cliente_http.delete(
+            f"/admin/whatsapp/channels/{queda.id}", headers=auth(db, gerente_da_loja)
+        )
+
+        assert resposta.status_code == 403
+        assert db.query(WhatsAppChannel).filter_by(id=queda.id).one().is_active

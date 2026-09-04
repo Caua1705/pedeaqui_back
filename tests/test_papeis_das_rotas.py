@@ -207,6 +207,22 @@ PAPEL_ESPERADO = {
     # contado por quem nao viu. A rota so escreve, so no proprio restaurante
     # (que sai do token) e nao le nada.
     ("POST", "/admin/error-reports"): PESSOAS,
+    # --- whatsapp: ler e da gerencia, conectar e desconectar sao do dono
+    #
+    # LER carrega o numero comercial e o `phone_number_id` de cada loja da
+    # rede. O gerente precisa porque e ele quem responde ao cliente que diz
+    # nao ter recebido o aviso; a senha do balcao e a que mais circula.
+    ("GET", "/admin/whatsapp/channels"): GERENCIA,
+    # CONECTAR cola no nosso banco uma credencial da Business Manager DO
+    # LOJISTA — a mesma natureza do access token do Mercado Pago, que nunca
+    # teve tela. E o que ela habilita nao e uma tela: e a plataforma mandando
+    # mensagem no WhatsApp da loja, para telefone de cliente, em nome dele.
+    ("POST", "/admin/whatsapp/channels"): SOMENTE_DONO,
+    # DESCONECTAR e o outro lado da mesma moeda: com o canal fora, o cliente
+    # para de ser avisado e NADA quebra — nenhum erro, nenhuma tela vermelha,
+    # so pedido seguindo em silencio. Estrago silencioso pede a senha que menos
+    # circula.
+    ("DELETE", "/admin/whatsapp/channels/{channel_id}"): SOMENTE_DONO,
 }
 
 # Rotas /admin SEM `exigir_papel`, cada uma com o motivo. Toda rota que nao

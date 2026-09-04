@@ -84,6 +84,19 @@ class AdminWhatsAppChannelView(BaseModel):
     phone_number_id: str
     waba_id_masked: str
     status: WhatsAppChannelStatus
+    # O QUE ACONTECEU e O QUE FAZER, escritos aqui e nao na tela.
+    #
+    # O `status` sozinho nao e mensagem — e a mesma regra do
+    # `provider_error_code` do pagamento (armadilha 49): o codigo serve para o
+    # painel DECIDIR, e a frase serve para a pessoa LER. Deixar a tela montar
+    # a frase a partir do enum e deixa-la adivinhar, e no dia em que entrar um
+    # quarto estado ela cai no `default` do `switch` — que e onde a mensagem
+    # errada mora.
+    #
+    # `status_action` e NULO quando nao ha o que fazer, e isso e informacao:
+    # nulo quer dizer "esta certo", e nao "nao sei o que dizer".
+    status_label: str
+    status_action: str | None = None
     # Quando o canal foi cadastrado. Reconectar reescreve, porque o que a tela
     # pergunta e "desde quando este numero esta no ar", e um numero religado
     # depois de uma semana fora nao esta no ar desde a primeira vez.

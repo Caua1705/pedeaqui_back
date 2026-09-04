@@ -27,7 +27,9 @@ from src.api.dependencies.database import get_db
 from src.core.config import settings
 from src.models.admin_user_model import AdminUser
 from src.models.whatsapp_model import WhatsAppChannel, WhatsAppMessage
+from src.schemas.admin_whatsapp_schema import WhatsAppChannelStatus
 from src.services.admin_auth_service import AdminAuthService
+from src.services.admin_whatsapp_service import _ESTADO_DO_CANAL
 from src.utils.crypto import encrypt_whatsapp_token
 from src.utils.security import utcnow
 from tests import fabricas_db as fab
@@ -239,6 +241,161 @@ class TestAListagemMostraAHeranca:
             ).status_code
             == 403
         )
+
+
+class TestATabelaDeEstados:
+    """O `status` sozinho não é mensagem — é a mesma regra do
+    `provider_error_code` do pagamento (armadilha 49). A tela que monta a frase
+    a partir do enum está adivinhando, e adivinha errado no dia em que entrar
+    um quarto estado: ele cai no `default` do `switch` dela."""
+
+    def test_conectado_nao_tem_acao(self, db: Session, cliente_http, rede) -> None:
+        """`null` na ação é informação: quer dizer "está certo", e não "não sei
+        o que dizer"."""
+        restaurante, centro, _ = rede
+        canal(db, restaurante, centro)
+        dono = criar_admin(db, restaurante)
+
+        linha = cliente_http.get(
+            "/admin/whatsapp/channels", headers=auth(db, dono)
+        ).json()["channels"][0]
+
+        assert linha["status"] == "connected"
+        assert linha["status_label"] == "Conectado"
+        assert linha["status_action"] is None
+
+    def test_desligado_por_nos_diz_para_reconectar_aqui(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        restaurante, centro, _ = rede
+        canal(db, restaurante, centro, is_active=False)
+        dono = criar_admin(db, restaurante)
+
+        linha = cliente_http.get(
+            "/admin/whatsapp/channels", headers=auth(db, dono)
+        ).json()["channels"][0]
+
+        assert linha["status"] == "disabled"
+        assert linha["status_action"] is not None
+
+    def test_desconectado_pela_meta_manda_reconectar_LA_primeiro(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """O que precisa gritar. É o único dos três em que o conserto NÃO é
+        nosso: confundi-lo com `disabled` faz o dono clicar em "conectar" aqui
+        e continuar sem receber nada, sem entender por quê."""
+        restaurante, centro, _ = rede
+        canal(
+            db,
+            restaurante,
+            centro,
+            disconnected_at=utcnow(),
+            disconnect_reason="PARTNER_REMOVED",
+        )
+        dono = criar_admin(db, restaurante)
+
+        linha = cliente_http.get(
+            "/admin/whatsapp/channels", headers=auth(db, dono)
+        ).json()["channels"][0]
+
+        assert linha["status"] == "disconnected_by_meta"
+        assert "WhatsApp da loja" in linha["status_action"]
+        # E a frase NAO e a do `disabled`: se as duas fossem iguais, o enum
+        # teria tres valores e a tela continuaria com uma instrução só.
+        assert linha["status_action"] != _ESTADO_DO_CANAL[
+            WhatsAppChannelStatus.DISABLED
+        ][1]
+
+    def test_todo_estado_tem_linha_na_tabela(self) -> None:
+        """A trava que faz um quarto estado nascer vermelho aqui, e não como
+        `KeyError` na primeira listagem depois do deploy."""
+        assert set(_ESTADO_DO_CANAL) == set(WhatsAppChannelStatus)
+
+
+class TestOFiltroPorFilial:
+    def test_sem_filtro_vem_a_rede_inteira(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """A forma principal. Trocar de filial para descobrir se cada uma tem
+        WhatsApp é o oposto do que a tela existe para fazer."""
+        restaurante, centro, aldeota = rede
+        dono = criar_admin(db, restaurante)
+
+        corpo = cliente_http.get(
+            "/admin/whatsapp/channels", headers=auth(db, dono)
+        ).json()
+
+        assert {b["branch_id"] for b in corpo["branches"]} == {
+            str(centro.id),
+            str(aldeota.id),
+        }
+
+    def test_com_filtro_vem_so_aquela_loja(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        restaurante, centro, aldeota = rede
+        canal(db, restaurante, centro, display_phone_number="+55 85 92222-0000")
+        canal(db, restaurante, aldeota, display_phone_number="+55 85 93333-0000")
+        dono = criar_admin(db, restaurante)
+
+        corpo = cliente_http.get(
+            f"/admin/whatsapp/channels?branch_id={centro.id}", headers=auth(db, dono)
+        ).json()
+
+        assert [b["branch_id"] for b in corpo["branches"]] == [str(centro.id)]
+        assert [c["display_phone_number"] for c in corpo["channels"]] == [
+            "+55 85 92222-0000"
+        ]
+
+    def test_o_filtro_MANTEM_a_linha_do_restaurante(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """Sem a queda na lista, a tela de uma loja diria "você herda um
+        número" sem ter o número para mostrar — a mesma adivinhação que o
+        filtro deveria evitar."""
+        restaurante, centro, aldeota = rede
+        canal(db, restaurante, display_phone_number="+55 85 91111-0000")
+        canal(db, restaurante, aldeota, display_phone_number="+55 85 93333-0000")
+        dono = criar_admin(db, restaurante)
+
+        corpo = cliente_http.get(
+            f"/admin/whatsapp/channels?branch_id={centro.id}", headers=auth(db, dono)
+        ).json()
+
+        assert [c["display_phone_number"] for c in corpo["channels"]] == [
+            "+55 85 91111-0000"
+        ]
+        assert corpo["branches"][0]["source"] == "restaurant"
+
+    def test_o_filtro_so_restringe_e_nunca_amplia(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """Lojista preso a uma filial que pede outra recebe 404, e não a lista
+        alheia."""
+        restaurante, centro, aldeota = rede
+        gerente_do_centro = criar_admin(db, restaurante, role="manager", filial=centro)
+
+        resposta = cliente_http.get(
+            f"/admin/whatsapp/channels?branch_id={aldeota.id}",
+            headers=auth(db, gerente_do_centro),
+        )
+
+        assert resposta.status_code == 404
+
+    def test_filial_de_outro_restaurante_nao_vaza(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        restaurante, _, _ = rede
+        outro = fab.criar_restaurante(db, nome="Concorrente")
+        alheia = fab.criar_filial(db, outro, nome="Alheia")
+        db.flush()
+        dono = criar_admin(db, restaurante)
+
+        corpo = cliente_http.get(
+            f"/admin/whatsapp/channels?branch_id={alheia.id}", headers=auth(db, dono)
+        ).json()
+
+        assert corpo["branches"] == []
 
 
 class TestConectar:

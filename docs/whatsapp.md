@@ -3,15 +3,16 @@
 Cobre `integrations/whatsapp_client.py`, `services/whatsapp_webhook_service.py`,
 `services/whatsapp_send_service.py`, `services/whatsapp_notification_service.py`,
 `repositories/whatsapp_repository.py`, `api/endpoints/whatsapp.py`,
-`scripts/register_whatsapp_channel.py`, `scripts/reenvia_avisos_de_whatsapp.py`
+`scripts/register_whatsapp_channel.py`, `scripts/reenvia_avisos_de_whatsapp.py`,
+`api/endpoints/admin_whatsapp.py`, `services/admin_whatsapp_service.py`
 e as revisões `20260904_0051` a `20260905_0054`.
 
 O que existe: **o cliente recebe aviso do próprio pedido pelo WhatsApp da
 loja**, pela Cloud API oficial da Meta. Quatro avisos, sempre por template
 aprovado, com registro do que saiu e reenvio do que falhou por algo que passa.
 
-O que não existe: chatbot, atendimento, resposta a mensagem recebida, e
-qualquer tela de painel. Ver §10.
+O painel conecta, lista e desconecta canal (§9.3). O que não existe: chatbot,
+atendimento, resposta a mensagem recebida, e tela de aviso por pedido. Ver §10.
 
 ---
 
@@ -408,7 +409,67 @@ no dia seguinte, sem nada errado do nosso lado.
 `phone_number_id`, e recadastrar é a rotação de token. Trocar o NÚMERO de uma
 loja é outra coisa: apague a linha antiga antes.
 
-### 9.3 Os containers
+### 9.3 Conectar pelo painel
+
+`/admin/whatsapp/channels` faz pelo lojista o que a §9.2 faz por script. Ler é
+`GERENCIA`; conectar e desconectar são `SOMENTE_DONO` — conectar cola no nosso
+banco uma credencial da Business Manager **dele**, e desconectar cala os avisos
+sem que nada quebre visivelmente.
+
+**`GET` devolve duas listas, e a segunda é a razão de a rota existir.**
+`channels` são as linhas; `branches` responde *"por qual número ESTA loja
+fala?"*, com `source` (`branch` / `restaurant` / `none`) e `can_send`. Sem ela,
+a filial que **herda** o número do restaurante apareceria como "sem WhatsApp", e
+o dono desligaria uma campanha que estava no ar. `can_send` sai de
+`resolve_for_branch` — a mesma consulta do envio, nunca um `if` equivalente
+(§54).
+
+`?branch_id=` restringe a uma loja, e **nunca amplia**: passa por
+`resolve_branch_filter`, então quem está preso a uma filial e pedir outra recebe
+404. Filtrado, `channels` mantém a linha do restaurante — sem ela a tela diria
+"você herda um número" sem ter o número para mostrar.
+
+**A tabela de estados, e ela mora no backend.** O `status` é o código que o
+painel usa para decidir; `status_label` e `status_action` são a frase que a
+pessoa lê. É a divisão da §49: código não é mensagem, e tela que monta a frase a
+partir do enum cai no `default` do `switch` no dia em que entrar um quarto
+estado.
+
+| `status` | `status_label` | `status_action` | quem conserta |
+|---|---|---|---|
+| `connected` | Conectado | `null` | ninguém — `null` quer dizer "está certo" |
+| `disabled` | Desligado no painel | conecte o número de novo | **nós**, aqui mesmo |
+| `disconnected_by_meta` | Desconectado pela Meta | reconecte no WhatsApp da loja **primeiro**, depois aqui | **o lojista**, fora daqui |
+
+O terceiro é o que precisa gritar: é o único cujo conserto não é nosso, e
+confundi-lo com `disabled` faz o dono clicar em "conectar" e continuar sem
+receber nada. `disconnect_reason` leva o texto cru da Meta (`PARTNER_REMOVED`),
+que é o que se cita num chamado com o suporte deles.
+
+**`POST` com o mesmo `phone_number_id` é RECONECTAR** — troca o token, religa e
+limpa a desconexão. É a rotação de token e a volta depois de um `DELETE`; sem
+ele, desconectar seria irreversível pelo painel. As colisões respondem **409 com
+frase** (número de outro restaurante, sem dizer de quem é; número de outra
+filial sua, nomeando-a; lugar ocupado, dizendo por qual número). O índice cobre;
+a rota explica.
+
+**`DELETE` desativa e devolve 200 com o canal** — ver §9.6.
+
+### 9.4 Desconectar, e o que fica
+
+`DELETE /admin/whatsapp/channels/{id}` põe `is_active = false`. **A linha não é
+apagada**, e não é escrúpulo: `whatsapp_messages.channel_id` é FK **sem
+`ON DELETE`**, então o banco recusaria o DELETE assim que houvesse uma mensagem
+— e apagá-la seria apagar o registro de que o cliente foi avisado.
+
+As janelas de 24h ficam, e vencem sozinhas no expurgo do `limpeza`. O prazo
+delas já **é** o mecanismo de exclusão (§38); apagá-las aqui seria um segundo
+mecanismo para a mesma coisa.
+
+O que muda no commit: `resolve_for_branch` para de escolher o canal. E a filial
+que falava por um número **próprio** desligado **não cai** no do restaurante.
+
+### 9.5 Os containers
 
 | Container | Cadência | O que faz |
 |---|---|---|
@@ -429,7 +490,7 @@ Código diferente de 0 significa banco fora do ar.
 
 `--dry-run` lista o que seria reenviado sem mandar nada.
 
-### 9.4 Conferir que funcionou
+### 9.6 Conferir que funcionou
 
 Na ordem, e cada passo responde o que o anterior não responde:
 
@@ -451,10 +512,13 @@ abriram, não que ficou boa.
 
 ## 10. O que NÃO existe
 
-- **Painel do lojista.** Nenhuma tela: nem para cadastrar número, nem para ver
-  aviso que não saiu, nem para reenviar à mão. O cadastro é script e a leitura é
-  `SELECT`. O dia em que o lojista perguntar "o cliente recebeu?" é o dia em que
-  isto vira item.
+- **A tela do aviso por pedido.** O painel conecta e desconecta canal (§9.5),
+  mas "o cliente recebeu?" continua só em `SELECT` sobre `whatsapp_messages`.
+  É o próximo item natural.
+- **Token vencido não aparece em lugar nenhum.** O `status` diz `connected` até
+  o primeiro envio falhar, e aí o sintoma é `error_code` na tabela de mensagens
+  — não a tela de canais. Conferir isso exigiria uma chamada ao Graph que hoje
+  não existe.
 - **Chatbot / atendimento.** Quem escrever para o número não recebe nada. E
   isso é deliberado: o plano é ligar o assistente a esse número depois, e uma
   resposta automática de "ninguém atende aqui" seria construir para jogar fora.

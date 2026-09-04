@@ -28,7 +28,7 @@ senha temporaria do lojista.
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.admin_scope import (
@@ -60,6 +60,13 @@ router = APIRouter(prefix="/admin/whatsapp", tags=["admin whatsapp"])
     dependencies=[Depends(exigir_papel(GERENCIA))],
 )
 def list_channels(
+    branch_id: UUID | None = Query(
+        default=None,
+        description=(
+            "Restringe a uma filial. Sem ele vem a rede inteira, que é a forma "
+            "principal: o dono precisa do mapa, não de uma loja por vez."
+        ),
+    ),
     scope: AdminScope = Depends(get_admin_scope),
     db: Session = Depends(get_db),
 ) -> AdminWhatsAppChannelsResponse:
@@ -71,11 +78,17 @@ def list_channels(
     (`branch`, `restaurant`, `none`) e `can_send` diz se um aviso sairia por
     ela neste minuto.
 
-    `status` separa os tres motivos de um numero estar fora, porque eles pedem
-    coisas diferentes: `disabled` religa aqui; `disconnected_by_meta` exige que
-    o lojista reconecte a Cloud API no aplicativo dele antes.
+    `status` separa os tres motivos de um numero estar fora, e `status_label` /
+    `status_action` dizem o que aconteceu e o que fazer — a tela nao monta a
+    frase a partir do enum. `disabled` religa aqui; `disconnected_by_meta` exige
+    que o lojista reconecte a Cloud API no aplicativo dele antes, e e o unico
+    dos tres cujo conserto nao e nosso.
+
+    **`branch_id` so RESTRINGE, nunca amplia.** Com ele, `channels` traz o canal
+    daquela loja **e a linha do restaurante** — sem a queda na lista, a tela
+    diria "voce herda um numero" sem ter o numero para mostrar.
     """
-    return AdminWhatsAppService(db).list_channels(scope)
+    return AdminWhatsAppService(db).list_channels(scope, branch_id)
 
 
 @router.post(

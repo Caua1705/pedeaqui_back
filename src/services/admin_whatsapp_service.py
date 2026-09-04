@@ -56,6 +56,36 @@ from src.utils.crypto import encrypt_whatsapp_token
 # publicar o identificador inteiro no OpenAPI do painel.
 DIGITOS_VISIVEIS_DO_WABA = 4
 
+# A TABELA DE ESTADOS DO CANAL: o que aconteceu, e o que fazer.
+#
+# Uma linha por valor de `WhatsAppChannelStatus`, e ela mora AQUI e nao na
+# tela pelo motivo da armadilha 49: o codigo serve para o painel decidir, a
+# frase serve para a pessoa ler, e sao coisas diferentes. Uma tela que monta a
+# frase a partir do enum esta adivinhando — e adivinha errado no dia em que
+# entrar um quarto estado, porque ele cai no `default` do `switch` dela.
+#
+# **`disconnected_by_meta` e o que precisa gritar.** Ele e o unico dos tres em
+# que o conserto NAO e nosso: o lojista tirou o acesso pelo aplicativo dele, e
+# nenhum botao do painel religa isso. Confundi-lo com `disabled` faz o dono
+# clicar em "conectar" aqui e continuar sem receber nada, sem entender por que.
+#
+# `None` na acao e informacao, e nao lacuna: quer dizer "esta certo".
+_ESTADO_DO_CANAL = {
+    WhatsAppChannelStatus.CONNECTED: (
+        "Conectado",
+        None,
+    ),
+    WhatsAppChannelStatus.DISABLED: (
+        "Desligado no painel",
+        "Conecte o número de novo para voltar a avisar os clientes.",
+    ),
+    WhatsAppChannelStatus.DISCONNECTED_BY_META: (
+        "Desconectado pela Meta",
+        "O acesso da Cloud API foi removido no WhatsApp da loja. Reconecte "
+        "por lá primeiro e depois conecte o número de novo aqui.",
+    ),
+}
+
 NUMERO_JA_CADASTRADO = (
     "Este número já está conectado. Se ele é da sua loja, desconecte o "
     "cadastro atual antes de conectar de novo."
@@ -82,27 +112,47 @@ class AdminWhatsAppService:
 
     # --- Ler ------------------------------------------------------------------
 
-    def list_channels(self, scope: AdminScope) -> AdminWhatsAppChannelsResponse:
-        canais = self.channel_repository.list_by_restaurant(scope.restaurant_id)
-        filiais = self.branch_repository.list_active_by_restaurant(scope.restaurant_id)
-        nomes = {filial.id: filial.name for filial in filiais}
+    def list_channels(
+        self, scope: AdminScope, branch_id: uuid.UUID | None = None
+    ) -> AdminWhatsAppChannelsResponse:
+        """O mapa da rede, ou de uma loja so.
 
+        **Sem filtro, vem a rede inteira**, e essa e a forma principal: trocar
+        de filial para descobrir se cada uma tem WhatsApp e o oposto do que a
+        tela existe para fazer.
+
+        O filtro so RESTRINGE, nunca amplia — quem passa por
+        `resolve_branch_filter` e o escopo, entao um lojista preso a uma filial
+        que pedir outra recebe 404 em vez da lista alheia, e um que nao pedir
+        nada continua vendo so a dele.
+        """
+        filtro = scope.resolve_branch_filter(branch_id)
+        todas = self.branch_repository.list_active_by_restaurant(scope.restaurant_id)
+        nomes = {filial.id: filial.name for filial in todas}
+        filiais = [f for f in todas if filtro is None or f.id == filtro]
+
+        canais = self.channel_repository.list_by_restaurant(scope.restaurant_id)
         return AdminWhatsAppChannelsResponse(
-            channels=[self._channel_view(canal, nomes) for canal in canais],
-            branches=[self._branch_view(scope, filial) for filial in self._visiveis(scope, filiais)],
+            channels=[
+                self._channel_view(canal, nomes)
+                for canal in canais
+                if self._interessa(canal, filtro)
+            ],
+            branches=[self._branch_view(scope, filial) for filial in filiais],
         )
 
-    def _visiveis(self, scope: AdminScope, filiais: list) -> list:
-        """As filiais que ESTE lojista enxerga.
+    @staticmethod
+    def _interessa(canal: WhatsAppChannel, filtro: uuid.UUID | None) -> bool:
+        """Filtrado por filial, quais canais ainda importam.
 
-        Quem esta preso a uma filial nao ve a lista das outras — nem para
-        saber por qual numero elas falam. E a mesma regra de
-        `resolve_branch_filter`, aplicada a uma listagem que nao tem
-        querystring de filial.
+        O da filial, e **a linha do restaurante** — porque e ela que explica um
+        `source: "restaurant"`. Sem a queda na lista, a tela de uma loja diria
+        "voce herda um numero" sem ter o numero para mostrar, que e a mesma
+        adivinhacao que o filtro deveria evitar.
         """
-        if scope.sees_all_branches:
-            return filiais
-        return [filial for filial in filiais if filial.id == scope.branch_id]
+        if filtro is None:
+            return True
+        return canal.branch_id in (filtro, None)
 
     def _branch_view(self, scope: AdminScope, filial) -> AdminWhatsAppBranchView:
         propria = self.channel_repository.get_by_branch(scope.restaurant_id, filial.id)
@@ -141,6 +191,8 @@ class AdminWhatsAppService:
     def _channel_view(
         self, canal: WhatsAppChannel, nomes: dict
     ) -> AdminWhatsAppChannelView:
+        estado = status_do_canal(canal)
+        rotulo, acao = _ESTADO_DO_CANAL[estado]
         return AdminWhatsAppChannelView(
             id=canal.id,
             branch_id=canal.branch_id,
@@ -148,7 +200,9 @@ class AdminWhatsAppService:
             display_phone_number=canal.display_phone_number,
             phone_number_id=canal.phone_number_id,
             waba_id_masked=mascarar_waba(canal.waba_id),
-            status=status_do_canal(canal),
+            status=estado,
+            status_label=rotulo,
+            status_action=acao,
             connected_at=canal.updated_at or canal.created_at,
             disconnected_at=canal.disconnected_at,
             disconnect_reason=canal.disconnect_reason,

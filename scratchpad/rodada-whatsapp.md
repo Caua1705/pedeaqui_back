@@ -1001,3 +1001,77 @@ que abriram, não que ficou boa — isso se vê no celular.
   culpa de um nome de template errado no nosso lado, corrigir o código não
   ressuscita os avisos que já falharam: eles não ficaram marcados. É o preço
   de não retentar recusa da Meta, e o remédio é manual.
+
+# Parte IV — a 0057 que não existiu
+
+**05/09/2026, depois do deploy.** Fica registrado porque o episódio se repetiu
+três vezes na mesma sessão, de formas diferentes, e a lição não é sobre
+WhatsApp.
+
+## O que aconteceu
+
+Pedi uma revisão `0057` para "consertar" o `UNIQUE` de
+`whatsapp_channels.branch_id`, com a premissa de que ele era **global em vez de
+por restaurante** e que, por isso, a segunda filial de qualquer restaurante novo
+levaria 500.
+
+**A premissa era minha e estava invertida.** Na resposta anterior o relatório
+dizia o contrário, com todas as letras — que fui conferir e *não existe*
+problema. Eu li o relatório ao avesso e devolvi a conclusão trocada como se
+fosse dele.
+
+A recusa foi a resposta certa, e o motivo importa mais que o caso:
+
+- **`branch_id` É o UUID de `branches`**, já único globalmente. `UNIQUE
+  (branch_id)` diz "no máximo um canal POR FILIAL", que é a regra que se quer.
+- **`(restaurant_id, branch_id)` não seria mais forte — seria redundante.** A FK
+  composta já amarra a filial ao restaurante dela; a segunda coluna não
+  distingue nada.
+- **O conserto pedido era um `DROP`**, e é a armadilha 15: `DROP` na constraint
+  errada não dá erro nenhum no dia em que roda.
+
+## E a 0057 NÃO nasceu por outro motivo
+
+É a parte que eu quis registrar errado, e por isso ela está escrita aqui.
+Escrevendo o teste, o que apareceu foi o **oposto** de um defeito: os quatro
+casos passaram na primeira execução, contra o Postgres 17 de verdade. Não houve
+índice novo, não houve DDL, não houve migração — e o deploy do teste não trava
+tabela nenhuma porque não toca em schema.
+
+**O teste não achou bug. Ele achou a ausência de bug, e a prendeu.** É um
+resultado diferente e vale menos manchete e mais atenção: o que existia antes
+era "conferi duas vezes e está certo", e conferência não sobrevive a uma
+sessão. O que existe agora é vermelho automático no dia em que alguém mexer.
+
+## O que o teste pegou que a conferência não pegava
+
+**O risco real é o INVERSO do que eu temia**, e mora no terceiro índice:
+
+    ux_whatsapp_channels_restaurant_default
+        UNIQUE (restaurant_id) WHERE branch_id IS NULL
+
+Quem o escrevesse sem o `restaurant_id` — pensando "só pode haver uma queda" —
+deixaria a plataforma inteira com UMA queda, e o **segundo cliente não
+cadastraria a dele**.
+
+E o motivo de isso ter sobrevivido a duas conferências está no cenário, não no
+raciocínio: **com um restaurante só, os três índices passam iguais.** A produção
+de hoje é o Júnior, com uma linha de `branch_id` nulo — ela exercita um dos
+três. Por isso o teste monta DUAS redes de DUAS filiais, e por isso o nome dele
+diz isso.
+
+Os dois `pytest.raises` vieram com o par positivo ao lado (armadilha 52): sem
+ele, os dois passariam também com um índice que recusa DEMAIS — que é
+exatamente a metade que ninguém testa.
+
+## A lição, que não é sobre índice
+
+**O teste vem antes da certeza** — mas o que ele substitui não é o bug: é a
+memória de que se conferiu. As três premissas trocadas desta sessão (a
+unicidade, um número de segundos que ninguém mediu, e esta revisão que nunca
+existiu) têm a mesma forma: uma conclusão lembrada com o sinal invertido, dita
+com convicção, sobre um trabalho que de fato aconteceu.
+
+Nenhuma delas teria sobrevivido a um arquivo de teste com o nome da propriedade
+dentro. É mais barato escrever o teste do que confiar na lembrança de quem
+conferiu — inclusive quando quem conferiu foi você mesmo, ontem.

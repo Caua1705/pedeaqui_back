@@ -1,12 +1,12 @@
-"""Dinheiro em dois formatos: a dívida não pode crescer enquanto a decisão não vem.
+"""Dinheiro em dois formatos: decidido manter, e a trava é o que executa a decisão.
 
-A armadilha 34 registra o estado e registra **por que ele não foi consertado**:
-as duas direções mudam o formato de fio, o app do cliente consome essas
-respostas, e JSON não tem número com casa decimal fixa — duas casas só existem
-como string. A decisão é uma só, sobre a API inteira, tomada junto com o app.
+**Decidido em 05/09/2026: mantido, com trava. Reavaliar só se aparecer defeito
+real.** Não há defeito acontecendo hoje — nenhum cliente vê valor errado —, e
+converter mexeria em dinheiro que o front já lê, nas três respostas mais
+consumidas da API. O contrato é feio de consumir, e feio não é quebrado.
 
-O que faltava não era a decisão. Era **alguém cobrando que ela não fosse tomada
-pela metade**, e nos dois sentidos:
+Este arquivo é o que executa a decisão. Ele não espera conversão nenhuma: ele
+impede que o estado congelado mude por acidente, nos dois sentidos:
 
 - **converter um schema isolado** já foi tentado e revertido (`bffca0e`): o
   `CustomerOrderHistoryItem` virou tudo `float` e deixou `discount_total` como
@@ -47,9 +47,9 @@ class OsQueMisturamOsDoisFormatosTests(unittest.TestCase):
             novos,
             [],
             f"schema(s) novo(s) entregando dinheiro nos DOIS formatos no mesmo "
-            f"objeto: {novos}. Enquanto a decisão da armadilha 34 não é tomada, "
-            f"a dívida é a que já existe — e não uma a mais. Escolha um formato "
-            f"para os campos novos, o mesmo dos vizinhos dentro daquela resposta.",
+            f"objeto: {novos}. A decisão de 05/09/2026 foi manter as TRÊS que já "
+            f"existem — e não abrir uma quarta. Escolha um formato para os campos "
+            f"novos, o mesmo dos vizinhos dentro daquela resposta.",
         )
 
     def test_a_lista_congelada_nao_encolheu_por_acidente(self):
@@ -57,8 +57,9 @@ class OsQueMisturamOsDoisFormatosTests(unittest.TestCase):
 
         Um schema que sai da lista foi convertido — e converter um isolado é
         exatamente o que a armadilha 34 proíbe, porque deixa o mesmo campo com
-        tipos diferentes em rotas diferentes. Se a conversão foi deliberada e
-        vale para a API inteira, a lista sai daqui junto."""
+        tipos diferentes em rotas diferentes. A decisão de 05/09/2026 foi
+        MANTER; se ela for reaberta por um defeito real, a lista sai daqui
+        junto com a conversão inteira."""
         sumidos = sorted(ESQUEMAS_QUE_MISTURAM - esquemas_que_misturam(self.spec))
 
         self.assertEqual(

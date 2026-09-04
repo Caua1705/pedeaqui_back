@@ -1305,15 +1305,31 @@ tipo diferente em rotas diferentes. Foi o que aconteceu uma vez — o
 seguida (`bffca0e`), porque deixava `discount_total` como número em
 `/customers/me/orders` e como string em `/orders/{token}`.
 
-### O que fica pendente
+### DECIDIDO em 05/09/2026: mantido, com trava
 
-**Uma decisão única, sobre a API inteira, tomada junto com o app do cliente:**
-ou todo dinheiro sai como número, ou todo dinheiro sai como string com duas
-casas. Meia API de cada jeito é pior que qualquer uma das duas.
+**Isto deixou de ser pendência.** A decisão foi tomada e é esta:
 
-Enquanto essa decisão não é tomada, **não converta um schema isolado** — nem
-para "arrumar de passagem" enquanto mexe em outra coisa. É a regra que este
-item existe para registrar.
+> **float × Decimal — mantido, com trava. Reavaliar só se aparecer defeito
+> real.**
+
+Os dois motivos, e eles são de peso oposto ao da conversão:
+
+- **não há defeito acontecendo hoje.** Nenhum cliente vê valor errado, nenhuma
+  conta fecha diferente. O que existe é um contrato feio de consumir, e feio
+  não é quebrado;
+- **converter mexeria em dinheiro que o front JÁ LÊ.** As três respostas
+  misturadas são as do pedido — as mais consumidas da API. O risco da mudança é
+  maior que o custo de conviver com ela.
+
+**"Reavaliar só se aparecer defeito real"** é a condição de reabertura, e ela é
+estreita de propósito: alguém somando `total + discount_total` e tomando um
+`TypeError` **não** é defeito real — é o contrato feio funcionando como
+documentado. Defeito real é valor errado na tela de alguém, ou uma rota que não
+dá para consumir.
+
+Enquanto isso, **não converta um schema isolado** — nem para "arrumar de
+passagem" enquanto mexe em outra coisa. Não é mais espera por decisão: é a
+decisão. E a trava abaixo a executa.
 
 ### E desde 05/09/2026 a dívida está medida e congelada
 

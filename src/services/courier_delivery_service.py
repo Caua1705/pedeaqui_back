@@ -42,6 +42,7 @@ from src.schemas.courier_schema import (
     CourierStatusErrorCode,
     CourierStatusResultItem,
 )
+from src.services.order_deadline import prazo_prometido
 from src.services.order_state_machine import (
     COURIER_TRANSITIONS,
     TERMINAL_ORDER_STATUSES,
@@ -379,6 +380,9 @@ class CourierDeliveryService:
             ),
             assigned_at=assignment.assigned_at,
             created_at=order.created_at,
+            delivery_due_at=prazo_prometido(order),
+            delivery_eta_min=order.delivery_eta_min,
+            delivery_eta_max=order.delivery_eta_max,
         )
 
     @staticmethod

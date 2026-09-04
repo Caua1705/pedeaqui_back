@@ -268,6 +268,26 @@ class CourierOrderResponse(BaseModel):
     courier_fee: float | None = None
     assigned_at: datetime | None = None
     created_at: datetime | None = None
+    # O PRAZO PROMETIDO AO CLIENTE, e nao o prazo do motoboy.
+    #
+    # `delivery_due_at` e o teto da janela: `delivery_estimated_at` (o instante
+    # do checkout, quando a promessa foi feita) mais `delivery_eta_max`. E
+    # contra ele que a tela conta "+5" (dentro) ou "-5" (passou).
+    #
+    # A soma e feita AQUI e nao na tela por dois motivos: `delivery_eta_max` e
+    # minuto e `delivery_estimated_at` e instante, e somar os dois em cada
+    # cliente e a mesma conta escrita em varios lugares (armadilha 54); e
+    # `delivery_estimated_at` tem nome de "instante prometido" sem ser — quem
+    # o lesse assim mostraria um prazo vencido em todo pedido.
+    #
+    # NULO quando nao ha promessa (pedido antigo, sem estimativa gravada). A
+    # tela nao mostra nada nesse caso — nunca "0 min", que seria "chegou a
+    # hora" para um pedido sem prazo nenhum.
+    delivery_due_at: datetime | None = None
+    # A janela em MINUTOS, como foi prometida: "40 a 55 min". Vem junto do
+    # `delivery_due_at` — os tres sao gravados numa escrita so.
+    delivery_eta_min: int | None = None
+    delivery_eta_max: int | None = None
 
 
 # Teto do lote de "saiu para entrega". O motoboy leva meia duzia por

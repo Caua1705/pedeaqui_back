@@ -53,6 +53,7 @@ import logging
 import uuid
 
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.admin_scope import AdminScope
@@ -82,6 +83,7 @@ from src.schemas.order_schema import OrderDetailResponse, OrderItemResponse
 from src.services.admin_order_service import AdminOrderService
 from src.services.branch_operation import resolve_receipt_footer
 from src.services.order_state_machine import PAYMENT_STATUSES_THAT_RELEASE_ORDER
+from src.services.unique_conflict import conflito, traduzir
 from src.services.print_layout import (
     PRODUCTION_WIDTH,
     RECEIPT_WIDTH,
@@ -616,10 +618,7 @@ class AdminPrintingService:
         cardapio.
         """
         if self.repository.get_by_name(name, branch_id) is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Já existe um setor com esse nome nesta filial",
-            )
+            raise conflito("uq_printing_sectors_branch_name")
 
     def _commit(self, before_commit=None) -> None:
         """Grava, com rollback em qualquer falha.
@@ -632,6 +631,12 @@ class AdminPrintingService:
             if before_commit is not None:
                 before_commit()
             self.db.commit()
+        except IntegrityError as erro:
+            # A corrida do clique duplo, igual a de `AdminMenuService._commit`:
+            # a conferencia passou nas duas requisicoes e o indice pegou a
+            # segunda. A frase sai da MESMA tabela da conferencia.
+            self.db.rollback()
+            raise (traduzir(erro) or erro) from erro
         except Exception:
             self.db.rollback()
             raise

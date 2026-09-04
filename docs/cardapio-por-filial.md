@@ -217,6 +217,8 @@ item na outra loja **cria um lá com a mesma `catalog_key`**.
 Cadastrar "Picanha" na segunda loja **não** colide mais com a "Picanha" da
 primeira. Colide só com outra "Picanha" da mesma loja.
 
+E o 409 sai igual venha da conferência ou do índice — ver §4.9.
+
 ### 4.4 `catalog_key`: a mesma picanha nas duas lojas
 
 Campo **opcional** em produto, texto livre, único dentro da filial.
@@ -299,6 +301,45 @@ O seletor de filial deixa de ser da tela de operação e passa a ser **do painel
 inteiro**: cardápio, relatórios e impressão dependem dele. Quem está preso a
 uma filial vê um seletor de um item só — a mesma tela serve para os dois casos
 sem a interface conhecer a regra de escopo.
+
+---
+
+### 4.9 A colisão de nome responde 409, venha da conferência ou do índice
+
+O cardápio usa **confere-depois-insere**: uma consulta pergunta se o nome já
+existe e responde 409 com frase, e o índice único segura o resto. As duas
+metades são necessárias — a trava protege a tabela, a conferência explica ao
+lojista.
+
+Entre as duas não há nada segurando a linha. **Dois cliques no mesmo botão
+passam os dois pela consulta antes de qualquer commit**, o segundo `INSERT` bate
+no índice, e até 05/09/2026 não havia um único `except IntegrityError` na
+aplicação: o lojista recebia **500** sem saber se o produto tinha sido criado.
+Clicava de novo e aí recebia o 409, que era a resposta certa desde o primeiro
+clique. Os dados nunca correram risco — o índice fez o trabalho dele. O que
+estava quebrado era a frase.
+
+Hoje `src/services/unique_conflict.py` traduz, e **a frase mora lá**, lida
+pelas duas pontas. Escritas separadas elas divergiriam, e a mesma colisão
+passaria a ter dois textos dependendo de qual metade pegou — uma diferença que
+o lojista não tem como enxergar, porque depende de uma corrida.
+
+| Restrição | Frase |
+|---|---|
+| `uq_categories_branch_slug` | Já existe uma categoria com esse nome nesta filial |
+| `uq_products_branch_slug` | Já existe um produto com esse nome nesta filial |
+| `uq_products_branch_catalog_key` | Já existe um produto com essa chave de catálogo nesta filial |
+| `uq_printing_sectors_branch_name` | Já existe um setor com esse nome nesta filial |
+
+**Restrição fora da tabela NÃO vira 409**, e isso é o ponto: uma FK violada é
+defeito nosso, e chegar ao lojista como "já existe um produto com esse nome" o
+manda procurar um produto que não existe. O 500 é feio e é honesto; o 409 errado
+é mentira.
+
+`tests/test_conflito_de_unicidade_db.py` cobra que os quatro nomes existam no
+banco. É a trava que a corrida não dá: ela não acontece na suíte, então uma
+revisão que renomeasse um índice deixaria a tradução muda e tudo continuaria
+verde.
 
 ---
 
@@ -491,6 +532,23 @@ O que muda de fato é o `total_usage_limit` compartilhado — ver §2.2.
   depois sem recadastrar nada — que é o critério que decidiu o `catalog_key`
   para o outro lado.
 - **Não remove `settings_branch_id`** do `/menu`. Ver §3.1.
+- **Não apaga produto, e não vai apagar.** `order_items` referencia `products`
+  por FK: apagar quebra o histórico que o cliente ainda consulta pelo link de
+  acompanhamento. Uma rota que apagasse o produto nunca vendido e recusasse o
+  já vendido seria pior que nenhuma — o lojista aprenderia "às vezes some", e o
+  dia em que recusasse pareceria bug. Sumir do cardápio é `is_active` e
+  `PATCH .../availability`.
+- **Não usa `Idempotency-Key` na criação, e não precisa.** A chave natural
+  existe e é o nome: `uq_products_branch_slug` já impede a segunda linha, e
+  desde 05/09/2026 a colisão responde 409 mesmo quando é o índice que pega
+  (§4.9). O mecanismo do cabeçalho ganha quando NÃO há chave natural — é o caso
+  do pedido, onde dois pedidos idênticos do mesmo cliente são legítimos.
+
+**Anotado como candidato, e não como pedido:** filtrar ou ordenar a listagem do
+painel para o produto desativado parar de poluir a lista do lojista. Levantado
+em 05/09/2026 a partir de uma suposição errada (a de que duas linhas podiam
+nascer no cardápio, que o índice já impede), e sem lojista pedindo. Fica aqui
+para quando houver um.
 
 ---
 

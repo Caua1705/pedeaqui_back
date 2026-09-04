@@ -982,11 +982,21 @@ que abriram, não que ficou boa — isso se vê no celular.
 - **O opt-in no checkout do app.** É do lado do app, e é meu: uma linha
   dizendo que vamos avisar pelo WhatsApp. Sem ela o risco é a qualidade do
   número cair por denúncia, que é o que derruba o canal do Júnior.
-- **Painel do lojista para o WhatsApp.** Não há tela nenhuma: nem para
-  cadastrar número, nem para ver aviso que não saiu, nem para reenviar à mão.
-  O cadastro é `scripts/register_whatsapp_channel.py` e a leitura é `SELECT`.
-  É de propósito nesta rodada — mas o dia em que o Júnior perguntar "o cliente
-  recebeu?" é o dia em que isto vira item.
+- **Painel do lojista para o WhatsApp.** ~~Não há tela nenhuma~~ — **metade
+  virou item e foi feita** (05/09/2026): `/admin/whatsapp/channels` conecta,
+  lista e desconecta, com o mapa da rede numa página só (`branches`, com
+  `source_label` dizendo "usa o WhatsApp do restaurante" na filial que herda) e
+  a origem dos quatro valores da Meta escrita no `description` de cada campo,
+  que é o que chega ao formulário pelo `/openapi.json`. Escrita é
+  `SOMENTE_DONO`, leitura é `GERENCIA`.
+
+  **O que continua sem tela: o aviso.** Não há como ver o que não saiu, nem
+  reenviar à mão — a leitura de `whatsapp_messages` ainda é `SELECT`. O dia em
+  que o Júnior perguntar "o cliente recebeu?" é o dia em que isto vira item, e
+  agora ele tem onde morar.
+
+  `scripts/register_whatsapp_channel.py` fica: é o caminho de quem tem o
+  servidor e não tem painel.
 - **A retentativa não sobrevive a uma troca de template.** Se o `132001` for
   culpa de um nome de template errado no nosso lado, corrigir o código não
   ressuscita os avisos que já falharam: eles não ficaram marcados. É o preço

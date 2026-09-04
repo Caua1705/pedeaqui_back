@@ -86,6 +86,30 @@ _ESTADO_DO_CANAL = {
     ),
 }
 
+# AS QUATRO FAIXAS DA LISTA POR FILIAL.
+#
+# Constantes de modulo como as recusas logo abaixo, e nao uma tabela indexada
+# por `(source, can_send)`: das seis combinacoes possiveis, duas nao existem
+# (herdar e nao poder mandar, nao ter numero e poder mandar) e escrever uma
+# frase para elas seria inventar texto para um estado que nenhum dado alcanca
+# — ruina que parece protecao (armadilha 13). Aqui as quatro que existem se
+# leem juntas, e `_branch_view` escolhe cada uma no ramo que ja sabe qual e.
+#
+# **A que carrega a tela e a terceira.** Filial sem numero proprio esta
+# COBERTA pelo do restaurante, e o dono de duas lojas com um numero so precisa
+# ler isso — "sem WhatsApp" ali faria ele achar que metade da rede nunca
+# esteve no ar.
+#
+# E a segunda existe porque numero proprio DESLIGADO nao cai no do
+# restaurante, de proposito (ver `disconnect`): a loja para de mandar, e a
+# faixa nao pode sugerir cobertura que nao ha. O que fazer para religar mora
+# no `status_action` do canal, que `channel_id` aponta — e nao aqui, senao a
+# mesma pergunta teria duas respostas em dois lugares.
+FAIXA_NUMERO_PROPRIO = "Número próprio"
+FAIXA_NUMERO_PROPRIO_FORA_DO_AR = "Número próprio, fora do ar"
+FAIXA_HERDA_DO_RESTAURANTE = "Usa o WhatsApp do restaurante"
+FAIXA_SEM_NUMERO = "Sem WhatsApp"
+
 NUMERO_JA_CADASTRADO = (
     "Este número já está conectado. Se ele é da sua loja, desconecte o "
     "cadastro atual antes de conectar de novo."
@@ -162,13 +186,17 @@ class AdminWhatsAppService:
         utilizavel = self.channel_repository.resolve_for_branch(scope.restaurant_id, filial.id)
 
         if propria is not None:
+            no_ar = utilizavel is not None
             return AdminWhatsAppBranchView(
                 branch_id=filial.id,
                 branch_name=filial.name,
                 source=WhatsAppBranchSource.BRANCH,
+                source_label=(
+                    FAIXA_NUMERO_PROPRIO if no_ar else FAIXA_NUMERO_PROPRIO_FORA_DO_AR
+                ),
                 channel_id=propria.id,
                 display_phone_number=propria.display_phone_number,
-                can_send=utilizavel is not None,
+                can_send=no_ar,
             )
 
         if utilizavel is not None:
@@ -176,6 +204,7 @@ class AdminWhatsAppService:
                 branch_id=filial.id,
                 branch_name=filial.name,
                 source=WhatsAppBranchSource.RESTAURANT,
+                source_label=FAIXA_HERDA_DO_RESTAURANTE,
                 channel_id=utilizavel.id,
                 display_phone_number=utilizavel.display_phone_number,
                 can_send=True,
@@ -185,6 +214,7 @@ class AdminWhatsAppService:
             branch_id=filial.id,
             branch_name=filial.name,
             source=WhatsAppBranchSource.NONE,
+            source_label=FAIXA_SEM_NUMERO,
             can_send=False,
         )
 

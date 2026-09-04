@@ -29,7 +29,13 @@ from src.models.admin_user_model import AdminUser
 from src.models.whatsapp_model import WhatsAppChannel, WhatsAppMessage
 from src.schemas.admin_whatsapp_schema import WhatsAppChannelStatus
 from src.services.admin_auth_service import AdminAuthService
-from src.services.admin_whatsapp_service import _ESTADO_DO_CANAL
+from src.services.admin_whatsapp_service import (
+    _ESTADO_DO_CANAL,
+    FAIXA_HERDA_DO_RESTAURANTE,
+    FAIXA_NUMERO_PROPRIO,
+    FAIXA_NUMERO_PROPRIO_FORA_DO_AR,
+    FAIXA_SEM_NUMERO,
+)
 from src.utils.crypto import encrypt_whatsapp_token
 from src.utils.security import utcnow
 from tests import fabricas_db as fab
@@ -310,6 +316,121 @@ class TestATabelaDeEstados:
         """A trava que faz um quarto estado nascer vermelho aqui, e não como
         `KeyError` na primeira listagem depois do deploy."""
         assert set(_ESTADO_DO_CANAL) == set(WhatsAppChannelStatus)
+
+
+class TestAFaixaDaFilialTemFrase:
+    """A faixa de cada loja vem escrita, e não montada pela tela a partir do
+    `source`.
+
+    É a mesma regra do `status_label` do canal, e aqui ela é o ponto inteiro
+    da tela: o dono com duas filiais e um número só precisa entender que as
+    duas estão cobertas. `source: "restaurant"` traduzido na tela vira "sem
+    WhatsApp" no primeiro `switch` que esquecer o terceiro valor — e aí ele
+    desliga uma campanha que estava no ar."""
+
+    def test_a_filial_que_herda_diz_que_USA_o_do_restaurante(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        restaurante, centro, aldeota = rede
+        canal(db, restaurante, display_phone_number="+55 85 91111-0000")
+        dono = criar_admin(db, restaurante)
+
+        corpo = cliente_http.get(
+            "/admin/whatsapp/channels", headers=auth(db, dono)
+        ).json()
+
+        por_filial = {b["branch_id"]: b for b in corpo["branches"]}
+        for filial in (centro, aldeota):
+            vista = por_filial[str(filial.id)]
+            assert vista["source_label"] == FAIXA_HERDA_DO_RESTAURANTE
+            assert vista["source_label"] != FAIXA_SEM_NUMERO
+            # A frase e o numero andam juntos: dizer "usa o do restaurante"
+            # sem mostrar qual e mandaria o dono procurar.
+            assert vista["display_phone_number"] == "+55 85 91111-0000"
+
+    def test_so_quem_nao_tem_numero_nenhum_le_sem_whatsapp(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """A discriminação que a tela precisa e o enum sozinho não dá: a loja
+        sem linha própria e a loja sem cobertura nenhuma são a mesma ausência
+        na lista de canais, e faixas opostas aqui."""
+        restaurante, centro, _ = rede
+        dono = criar_admin(db, restaurante)
+
+        corpo = cliente_http.get(
+            "/admin/whatsapp/channels", headers=auth(db, dono)
+        ).json()
+
+        vista = {b["branch_id"]: b for b in corpo["branches"]}[str(centro.id)]
+        assert vista["source"] == "none"
+        assert vista["source_label"] == FAIXA_SEM_NUMERO
+        assert vista["can_send"] is False
+
+    def test_numero_proprio_no_ar_e_fora_do_ar_sao_faixas_DIFERENTES(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """As duas são `source: "branch"`, e é `can_send` que as separa. Uma
+        faixa só para as duas diria que a loja está mandando quando ela
+        parou."""
+        restaurante, centro, aldeota = rede
+        canal(db, restaurante, centro, display_phone_number="+55 85 92222-0000")
+        canal(
+            db,
+            restaurante,
+            aldeota,
+            display_phone_number="+55 85 93333-0000",
+            is_active=False,
+        )
+        dono = criar_admin(db, restaurante)
+
+        corpo = cliente_http.get(
+            "/admin/whatsapp/channels", headers=auth(db, dono)
+        ).json()
+
+        por_filial = {b["branch_id"]: b for b in corpo["branches"]}
+        assert por_filial[str(centro.id)]["source_label"] == FAIXA_NUMERO_PROPRIO
+        assert por_filial[str(centro.id)]["can_send"] is True
+
+        caida = por_filial[str(aldeota.id)]
+        assert caida["source"] == "branch"
+        assert caida["source_label"] == FAIXA_NUMERO_PROPRIO_FORA_DO_AR
+        assert caida["can_send"] is False
+        # E ela NAO herda: a faixa nao pode sugerir cobertura que nao ha.
+        assert caida["source_label"] != FAIXA_HERDA_DO_RESTAURANTE
+
+    def test_a_filial_com_numero_DESLIGADO_nao_le_a_frase_da_heranca(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """O caso que junta os dois regimes, e o único em que a frase errada
+        seria plausível: existe número de restaurante, a filial tem o dela, e
+        o dela está desligado. Ela para de mandar e NÃO cai no do restaurante
+        (ver `disconnect`) — dizer "usa o WhatsApp do restaurante" aqui seria
+        a tela afirmando um envio que não acontece."""
+        restaurante, centro, _ = rede
+        canal(db, restaurante, display_phone_number="+55 85 91111-0000")
+        canal(db, restaurante, centro, is_active=False)
+        dono = criar_admin(db, restaurante)
+
+        corpo = cliente_http.get(
+            "/admin/whatsapp/channels", headers=auth(db, dono)
+        ).json()
+
+        vista = {b["branch_id"]: b for b in corpo["branches"]}[str(centro.id)]
+        assert vista["source_label"] == FAIXA_NUMERO_PROPRIO_FORA_DO_AR
+        assert vista["can_send"] is False
+
+    def test_as_quatro_faixas_sao_frases_distintas(self) -> None:
+        """A trava que faz duas faixas iguais nascerem vermelhas aqui. Frases
+        repetidas passariam em todos os testes acima — cada um olha a sua — e
+        colapsariam dois estados na tela, que é o defeito que esta lista
+        inteira existe para impedir."""
+        frases = (
+            FAIXA_NUMERO_PROPRIO,
+            FAIXA_NUMERO_PROPRIO_FORA_DO_AR,
+            FAIXA_HERDA_DO_RESTAURANTE,
+            FAIXA_SEM_NUMERO,
+        )
+        assert len(set(frases)) == len(frases)
 
 
 class TestOFiltroPorFilial:

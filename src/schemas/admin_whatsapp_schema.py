@@ -114,6 +114,23 @@ class AdminWhatsAppBranchView(BaseModel):
     branch_id: uuid.UUID
     branch_name: str
     source: WhatsAppBranchSource
+    # A FRASE da faixa, escrita aqui e nao na tela — o mesmo que
+    # `status_label` faz com o estado do canal, pelo mesmo motivo (armadilha
+    # 49): o enum serve para o painel DECIDIR, a frase serve para a pessoa
+    # LER.
+    #
+    # E aqui ela e o ponto inteiro da tela. `source: "restaurant"` deixado
+    # para a tela traduzir vira "sem WhatsApp" no primeiro `switch` que
+    # esquecer o terceiro valor — e a filial que herda o numero do
+    # restaurante esta COBERTA. O dono com duas lojas e um numero so
+    # desligaria a campanha achando que ela nunca esteve no ar, que e
+    # exatamente o engano que a lista `branches` existe para desfazer.
+    #
+    # `source` sozinho tambem nao basta para escrever a frase: numero proprio
+    # NO AR e numero proprio FORA DO AR sao o mesmo `source` e faixas
+    # opostas. Quem separa os dois e `can_send`, e por isso a frase sai do
+    # par — nunca do enum sozinho.
+    source_label: str
     channel_id: uuid.UUID | None = None
     display_phone_number: str | None = None
     # A resposta de "um aviso sairia por esta loja neste minuto?". Sai da MESMA
@@ -137,12 +154,67 @@ class AdminWhatsAppChannelCreate(BaseModel):
     `branch_id` nulo e deliberado e significa **a linha do restaurante**: o
     numero que toda filial sem o seu proprio herda. Restaurante de uma loja so
     usa essa forma.
+
+    ## As descricoes dizem DE ONDE sai cada valor, e isso e a tela
+
+    Quem cola os quatro valores e quem conecta o restaurante na mao —
+    enquanto nao formos Tech Provider, nao ha Embedded Signup e nao ha de onde
+    eles virem sozinhos. Entao o painel da Meta tem que estar escrito onde a
+    pessoa esta olhando na hora de colar, e nao num documento que ela vai
+    procurar tres meses depois.
+
+    O lugar certo para isso e o `description` de cada campo: o painel consome
+    o `/openapi.json` (armadilha 16), entao o que esta aqui chega ao
+    formulario. Escrito no docstring da rota, nao chegaria.
+
+    **A do `access_token` e a unica que fala do caminho ERRADO**, e ela e a
+    linha mais importante das quatro: o token que a tela de Configuracao da
+    API oferece primeiro, ja preenchido e com botao de copiar, e temporario.
+    Com ele os avisos funcionam na demonstracao e param sozinhos no dia
+    seguinte — sem nada errado deste lado para achar.
     """
 
-    branch_id: uuid.UUID | None = None
-    waba_id: str = Field(min_length=1, max_length=64)
-    phone_number_id: str = Field(min_length=1, max_length=64)
-    display_phone_number: str = Field(min_length=1, max_length=32)
+    branch_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "A filial deste número. VAZIO significa o número do restaurante: "
+            "toda filial que não tiver o seu próprio passa a falar por ele."
+        ),
+    )
+    waba_id: str = Field(
+        min_length=1,
+        max_length=64,
+        description=(
+            "Meta → WhatsApp → Configuração da API, com o número escolhido no "
+            "seletor: o campo “ID da conta do WhatsApp Business”."
+        ),
+    )
+    phone_number_id: str = Field(
+        min_length=1,
+        max_length=64,
+        description=(
+            "Mesma tela do waba_id (WhatsApp → Configuração da API): o campo "
+            "“ID do número de telefone”. Não é o número em si."
+        ),
+    )
+    display_phone_number: str = Field(
+        min_length=1,
+        max_length=32,
+        description=(
+            "O número como se lê, na mesma tela: “+55 85 99999-0000”. É só "
+            "para a tela — quem roteia o webhook é o phone_number_id."
+        ),
+    )
     # Vai no CORPO e nunca no path nem na querystring: querystring aparece no
     # log do proxy e no historico do navegador, e isto e credencial do lojista.
-    access_token: str = Field(min_length=1)
+    access_token: str = Field(
+        min_length=1,
+        description=(
+            "Token PERMANENTE: Configurações do Negócio → Usuários → Usuários "
+            "do sistema → o usuário com o app e o WABA atribuídos → Gerar novo "
+            "token, validade “Nunca expira”, com whatsapp_business_messaging e "
+            "whatsapp_business_management marcadas. NÃO use o token da tela de "
+            "Configuração da API: ele vence em 24h e os avisos param sozinhos "
+            "no dia seguinte."
+        ),
+    )

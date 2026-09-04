@@ -308,9 +308,18 @@ jobs:
       # de atributo, e `email` ou `created_at` sao colunas de meia duzia de
       # tabelas. Ele responde "entrou leitura nova?" — e essa pergunta so tem
       # valor se o numero nao crescer calado.
-      - name: Leituras de coluna nulavel (aviso)
+      # VERMELHO desde 05/09/2026, e nao mais aviso.
+      #
+      # Era aviso pela regra certa — portao vermelho contra divida herdada e
+      # portao que se aprende a ignorar. A divida foi paga: a classe que
+      # alimenta este varredor ("ORM diz NOT NULL, banco aceita NULL") foi a
+      # zero com as revisoes de alinhamento, e o teto caiu de 208 para 0.
+      #
+      # Aviso sobre zero nao vigia nada. O que ele faria e deixar entrar a
+      # PRIMEIRA leitura arriscada da proxima divergencia — e o custo dela e
+      # 500 na serializacao, que derruba a resposta INTEIRA e nao so o item.
+      - name: Leituras de coluna nulavel
         if: always()
-        continue-on-error: true
         # 182 -> 201 em 04/09/2026, com o "entrar com Google". Os 19 pontos
         # novos foram olhados um a um e nenhum e defeito — sao a colisao por
         # NOME que o proprio script avisa: `identity.email` e `ticket.email`
@@ -333,7 +342,22 @@ jobs:
         # de `verify_password` e a UNICA das 16 divergencias com defesa ja
         # escrita — a funcao declara `str | None` e devolve False (armadilha
         # 50). O casamento e por atributo, e o script avisa disso na saida.
-        run: python scripts/leituras_de_coluna_nulavel.py --url "$TEST_DATABASE_URL" --limite 208
+        #
+        # 208 -> 0 em 05/09/2026, e NAO porque alguem consertou 208 leituras:
+        # porque a ENTRADA do varredor esvaziou. A classe "ORM diz NOT NULL,
+        # banco aceita NULL" foi a zero com as revisoes de alinhamento (etapas
+        # 1 e 2), e e dela que sai a lista de colunas — sem coluna nulavel
+        # divergente, nao ha leitura arriscada a apontar.
+        #
+        # O teto de 208 sobre uma entrada vazia eram 208 pontos de folga: a
+        # classe voltando, qualquer numero abaixo de 208 continuaria verde. O
+        # zero so e seguro porque a entrada e travada em outro lugar —
+        # test_alinhamento_orm_schema.py::test_a_primeira_classe_de_divergencia_foi_a_zero.
+        #
+        # O passo continua `continue-on-error`. Virar vermelho e decisao com
+        # dono, e o argumento mudou de lado agora que a divida foi paga: um
+        # portao vermelho sobre zero nao e portao contra divida herdada.
+        run: python scripts/leituras_de_coluna_nulavel.py --url "$TEST_DATABASE_URL" --limite 0
         env:
           TEST_DATABASE_URL: postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
 

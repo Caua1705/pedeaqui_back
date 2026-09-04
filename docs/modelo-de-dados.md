@@ -616,3 +616,54 @@ Duas coisas para quem for decidir:
 - **A varredura acima é a forma de conferir de novo.** Ela é uma consulta ao
   `pg_constraint`, roda em segundos, e é mais confiável que a memória de quem
   levantou — inclusive a de quem levantou hoje.
+
+### O portão, desde 05/09/2026
+
+`scripts/on_delete_das_fks.py` cobra que **toda FK `CASCADE` ou `SET NULL`
+esteja declarada**, dizendo para onde vai a linha filha quando o pai morre.
+São as 43 que agem sozinhas; as 41 que barram ficam de fora, e a assimetria é
+o desenho inteiro:
+
+    NO ACTION / RESTRICT   o DELETE do pai FALHA         -> ALTO
+    CASCADE / SET NULL      o filho some, ou esvazia      -> CALADO
+
+**Um mecanismo cobre os dois estragos.** Tabela nova com `CASCADE` nasce fora
+da lista. E barreira derrubada — trocar `order_items.product_id` por `CASCADE`
+porque "o produto está sendo apagado de qualquer jeito" — vira uma destrutiva
+que também não está na lista, e cai no mesmo achado. Não há uma segunda lista
+de barreiras para alguém esquecer de atualizar.
+
+`tests/test_on_delete_das_fks.py` prova que o varredor enxerga (as duas formas
+acusadas, as duas que passam, e o falso positivo do fecho); o `_db` trava o
+zero, as quatro contagens e as cinco barreiras de histórico **pelo nome**, para
+que derrubar uma delas falhe dizendo qual.
+
+### O que um `DELETE` levaria junto, hoje
+
+`--fechamento` calcula o fecho transitivo pelas arestas `CASCADE`. É o terceiro
+degrau que some numa leitura FK a FK — apagar o restaurante apaga a categoria,
+que apaga o produto, que apaga o grupo de adicionais:
+
+| `DELETE` em | apaga junto | anula coluna | **barra hoje** |
+|---|---|---|---|
+| `restaurants` | 20 tabelas | 5 | 25 |
+| `branches` | 7 | 2 | 11 |
+| `customers` | 7 | 1 | 6 |
+| `orders` | 5 | 2 | 2 |
+
+Três leituras que a tabela de contagens não dava, e que a decisão pendente
+precisa:
+
+- **nenhuma das quatro raízes é apagável hoje**, e quem impede não são as
+  declarações de `CASCADE`: é um punhado de FKs `NO ACTION` rio abaixo. O
+  restaurante esbarra em 25 delas, a começar por `orders.restaurant_id`;
+- **`cashback_transactions` está no fecho de `customers`** — a única cascata do
+  cliente que leva dinheiro. Ela não roda porque `orders.customer_id` barra
+  antes, e é essa FK que impede alguém de trocar anonimização por `DELETE` sem
+  perceber;
+- **`cashback_transactions.restaurant_id` é `SET NULL`**, e é a única das oito
+  que mudaria um número na tela. Linha com `restaurant_id` nulo continua
+  somando em `get_available_balance` (o acumulado que o app mostra) e some de
+  `get_available_balance_for_restaurant` (o que dá para gastar): vira saldo que
+  aparece e não gasta. Não acontece hoje, e é o que precisaria de decisão antes
+  de qualquer limpeza de restaurante.

@@ -333,7 +333,22 @@ jobs:
         # de `verify_password` e a UNICA das 16 divergencias com defesa ja
         # escrita — a funcao declara `str | None` e devolve False (armadilha
         # 50). O casamento e por atributo, e o script avisa disso na saida.
-        run: python scripts/leituras_de_coluna_nulavel.py --url "$TEST_DATABASE_URL" --limite 208
+        #
+        # 208 -> 0 em 05/09/2026, e NAO porque alguem consertou 208 leituras:
+        # porque a ENTRADA do varredor esvaziou. A classe "ORM diz NOT NULL,
+        # banco aceita NULL" foi a zero com as revisoes de alinhamento (etapas
+        # 1 e 2), e e dela que sai a lista de colunas — sem coluna nulavel
+        # divergente, nao ha leitura arriscada a apontar.
+        #
+        # O teto de 208 sobre uma entrada vazia eram 208 pontos de folga: a
+        # classe voltando, qualquer numero abaixo de 208 continuaria verde. O
+        # zero so e seguro porque a entrada e travada em outro lugar —
+        # test_alinhamento_orm_schema.py::test_a_primeira_classe_de_divergencia_foi_a_zero.
+        #
+        # O passo continua `continue-on-error`. Virar vermelho e decisao com
+        # dono, e o argumento mudou de lado agora que a divida foi paga: um
+        # portao vermelho sobre zero nao e portao contra divida herdada.
+        run: python scripts/leituras_de_coluna_nulavel.py --url "$TEST_DATABASE_URL" --limite 0
         env:
           TEST_DATABASE_URL: postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
 

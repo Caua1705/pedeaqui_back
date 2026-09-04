@@ -1,51 +1,50 @@
 # De quem é a transformação de imagem — levantamento para decidir
 
-> ## ⛔ SUSPENSO EM 05/09/2026 — A PREMISSA NÃO EXISTE NO PLANO ATUAL
+> ## ✅ A TRANSFORMAÇÃO FUNCIONA — MEDIDO EM 05/09/2026
 >
-> O painel do Supabase responde, na linha de Storage:
+> **Este arquivo esteve suspenso por algumas horas, e a suspensão estava
+> errada.** Fica registrado porque a armadilha é do PAINEL, e quem abrir aquela
+> tela amanhã vai ler a mesma linha:
 >
 >     Storage Image Transformations: Unavailable in plan
 >
-> **O plano Free não tem transformação de imagem.** Os três caminhos deste
-> arquivo — A (backend devolve a URL transformada), B (o front continua dono) e
-> C (teto no backend, refinamento no front) — pressupõem, todos, um endpoint
-> `/render/image/` que este projeto **não contrata hoje**. Nenhum deles é
-> implementável, e o mérito de qual é o melhor não está decidido: está
-> **adiado**, até haver plano que o suporte.
+> **Essa linha descreve o item COBRÁVEL do recurso, não uma rota bloqueada.** O
+> endpoint responde normalmente. Medido com `curl` contra o bucket de produção:
 >
-> **Não construa nada deste arquivo.** Ele fica porque o levantamento (quem
-> emite, quem transforma, quem não transforma) continua valendo e é o que se lê
-> no dia em que o plano mudar. A escolha entre A, B e C, não.
+> | Objeto | Original | Transformado | Razão |
+> |---|---|---|---|
+> | `brand/logo.webp` | 22.742 B | 1.241 B | **18×** |
+> | uma foto de picanha | 104.074 B | 3.992 B | **26×** |
 >
-> ### A pergunta que isso abre, e ela é a próxima
+> `200`, com corpo transformado de verdade — o endpoint chega a devolver **jpeg
+> no lugar do webp** de origem, o que também quer dizer que a derivada não é só
+> menor: ela pode ser de outro formato que o original.
 >
-> `scripts/utils/image-cdn.js` do front reescreve `/object/public/` para
-> `/render/image/...?width=` **hoje**, em 8 sítios. Se a transformação não está
-> contratada, ou essas URLs falham, ou elas servem outra coisa. As duas leituras
-> levam a lugares diferentes:
+> E a checagem que fecha a leitura sem precisar de mais nenhuma medição: se a
+> rota estivesse bloqueada, **os 14,19 GB de Cached Egress teriam sido erro, e
+> não imagem.** Eles foram imagem.
 >
-> - **falham** → quem está pintando a tela é o `src` com o **original**, pela
->   rede de segurança que o cabeçalho do `image-cdn.js` descreve ("o `src`
->   continua apontando para o ORIGINAL de propósito: se a transformação falhar
->   [...] nada no cardápio fica sem foto"). Nesse caso a decisão de manter o
->   original em `src` é o que está segurando o app de pé agora — e o `srcset`
->   inteiro é trabalho que não rende byte nenhum;
-> - **servem o original** → o `/render/image/` está devolvendo o arquivo cheio,
->   e os 174 KB são exatamente isso.
+> ### A pergunta que a suspensão abriu está respondida
 >
-> **Em nenhuma das duas o backend tem o que fazer**, e nas duas os 174 KB → 12 KB
-> não estão disponíveis a nenhum preço de código. O que separa uma da outra é
-> barato de olhar nos logs que já existem: o **status** e o **content-length**
-> das requisições `/render/image/` contra as `/object/public/`. Vale saber qual
-> é antes de mexer em qualquer coisa no front — inclusive antes de "limpar" o
-> `srcset`, que na primeira leitura é o que sobra e na segunda é o que já
-> funciona.
+> Ela era: os 8 sítios do front que reescrevem para `/render/image/` servem
+> transformado, ou o navegador está caindo no `src` com o original?
 >
-> E fica registrado o que sobra de economia real sem transformação nenhuma:
-> subir imagem **já no tamanho certo** (o `tools/optimize-images.mjs` do front
-> existe para isso) e a validação de tamanho no upload
-> (`POST /admin/products/{id}/image`), que é do backend. Esse caminho não
-> depende de plano — e é outra frente, para outro dia.
+> **Servem transformado.** O `srcset` é o que já funciona — e não é novo: o
+> herói, os destaques e as fotos do cardápio usam isso há muito tempo. Duas
+> consequências para quem for mexer:
+>
+> - **não "limpe" o `srcset`.** Ele é a economia que já está acontecendo;
+> - **o desperdício está exatamente onde este levantamento diz que está** — nos
+>   7 sítios do app e nos 4 do painel que **não** transformam (tabela na seção
+>   1). Não é uma suspeita distribuída: é uma lista de 11 linhas.
+>
+> **A, B e C voltam a ser escolhas válidas**, e a ordem front → backend da
+> seção 2 continua valendo pelo motivo dela, que nunca teve a ver com plano.
+>
+> O que fica em aberto da ressalva antiga é só isto, e agora é pergunta de
+> fatura e não de viabilidade: **se a linha é cobrável e o plano não a inclui,
+> como as transformações que estão acontecendo entram na conta?** Não bloqueia
+> escolher A, B ou C; entra na conta de quanto cada uma economiza de fato.
 
 Escrito em 04/09/2026, depois do levantamento do laço de egress. **Não é
 proposta de implementação: é o mapa e a conta, para escolher onde mexer.**
@@ -263,13 +262,13 @@ Três coisas que me fazem parar antes de recomendar A puro:
    derivada vira o único caminho, e uma falha do endpoint de render é cardápio
    sem foto. Se A for escolhido, esse é o custo a aceitar de olhos abertos, e
    ele não aparece em nenhuma conta de KB.
-2. **A conta pode não ser a que parece.** As transformações do Supabase são
-   cobradas e limitadas por plano, e cada largura distinta é um objeto novo no
-   cache. Multiplicar tetos e larguras pode trocar egress por transformação sem
-   que ninguém tenha olhado a segunda coluna da fatura. **Confirmar no painel
-   do Supabase, antes de escolher**, o que o plano atual inclui de Image
-   Transformations e como elas entram na cota — hoje vocês estão no Free e
-   estourados, que é o pior momento possível para descobrir isso.
+2. **A conta pode não ser a que parece** — e esta ressalva **encolheu, mas não
+   morreu** (ver a caixa no topo). O painel diz `Unavailable in plan` e a rota
+   funciona: viabilidade está respondida, cobrança não. Cada largura distinta
+   continua sendo um objeto novo no cache, então multiplicar tetos e larguras
+   troca egress por transformação — e essa é a segunda coluna da fatura, que
+   ninguém olhou ainda. Vale para dimensionar quanto A, B ou C economizam de
+   fato; não vale mais como impedimento.
 3. **`174 KB → 12 KB` é a economia do sítio medido, não a da rota.** Vale a
    pena refazer a conta separando o painel (161 fotos numa lista) do app (8
    imagens na Home): são ordens de grandeza diferentes e podem querer respostas

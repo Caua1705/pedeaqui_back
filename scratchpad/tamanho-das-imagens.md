@@ -109,26 +109,51 @@ Onde ela é aplicada (8 sítios):
 | `screens/product-screen.js:55` (herói do produto) | `fluid` |
 | `screens/coupon-detail-screen.js:121` (arte grande) | `fluid` |
 
-Onde ela **não** é aplicada, e o original inteiro vai para a rede (7 sítios):
+Onde ela **não** era aplicada, e o original inteiro ia para a rede — **os 7
+estão FECHADOS** desde `2ff2d85` do `pedeaqui_front` ("os 10 sítios que pediam
+o ORIGINAL passam a pedir a largura da caixa"). Conferido aqui, sítio a sítio,
+em 05/09/2026:
 
-| Sítio | O que serve cru |
-|---|---|
-| `restaurant-assistant.js:673` | foto de produto no resultado do Rapi |
-| `restaurant-assistant.js:1015` | foto no detalhe de produto do Rapi |
-| `restaurant-club.js:193` | arte de cupom no clube |
-| `restaurant-page.js:1393` | logo do restaurante |
-| `screens/profile-screen.js:321` | foto do item no detalhe do pedido |
-| `screens/profile-screen.js:582` | logo do restaurante no pedido |
-| `screens/product-screen.js:64` | herói do produto **sem `preview`** — cai em `productImage()` sem `box` nem `fluid`, e `responsiveImageAttrs` devolve string vazia |
+| Sítio (posição de hoje) | O que serve | Fechado por |
+|---|---|---|
+| `restaurant-assistant.js:681` | foto de produto no resultado do Rapi | `ASSISTANT_FLUID` |
+| `restaurant-assistant.js:1054` | foto no detalhe de produto do Rapi | `RapidexImageCdn.apply(..., ASSISTANT_FLUID)` |
+| `restaurant-club.js:204` | arte de cupom no clube | `CLUB_COUPON_FLUID` |
+| `restaurant-page.js:1449` | logo do restaurante | `box: LOGO_BOX.ajuda` |
+| `screens/profile-screen.js:327` | foto do item no detalhe do pedido | `box: PEDIDO_BOX` |
+| `screens/profile-screen.js:588` | logo do restaurante no pedido | `box: PEDIDO_BOX` |
 
-O último é o mais instrutivo: **o mesmo herói tem os dois comportamentos**,
-conforme o caminho pelo qual a tela foi aberta. Ninguém decidiu isso.
+**Eram 6, e não 7. O sétimo desta lista era erro meu**, e vale ficar escrito
+porque é o tipo de leitura que se repete: eu tinha anotado
+`screens/product-screen.js:64` — `productImage()` sem `box` nem `fluid` — como
+"o mesmo herói com dois comportamentos, conforme o caminho pelo qual a tela foi
+aberta". Não é. A condição ali é `if (image)`, não `if (preview)`: aquele
+`else` só roda quando **não há imagem nenhuma**, e o que ele devolve é o
+quadrado com as iniciais. Nunca houve `<img>` de Storage por ali.
 
-### `rapidex-admin` — zero transformação
+Li o `else` e assumi que ele era o par do `preview` que aparece duas linhas
+acima, dentro do `if`. Uma condição a dois níveis de distância, lida de
+memória — a mesma forma das três premissas invertidas da rodada do WhatsApp.
+
+O front achou **10** onde eu tinha listado 7: os quatro a mais são sítios que a
+minha varredura por `<img` não alcançava (`src` montado em JS, e imagens fora
+do `scripts/pages/`).
+
+### `rapidex-admin` — zero transformação (os 4 que restam)
 
 Quatro sítios, todos com o original:
 `coupons/CouponsPage.tsx:437`, `coupons/ArtePicker.tsx:106`,
 `menu/ProductRow.tsx:187`, `menu/ProductImageField.tsx:216,277`.
+
+**São os únicos que sobraram da lista de 11**, e estão em prompt no painel em
+05/09/2026 — **não conferidos aqui**. Quando ele empurrar, a checagem é a mesma
+que fechou os do app: `grep -rn "<img" src/` e ver se cada `src` de Storage vem
+com pedido de largura ao lado.
+
+O `ProductRow` é o de maior peso dos quatro por uma diferença de escala que a
+lista não mostra: a tela de produtos do Júnior tem **161 linhas**, cada uma com
+uma miniatura. Um único carregamento de `/admin/products` serve o cardápio de
+fotos inteiro em tamanho de upload.
 
 E há uma decisão escrita que fecha essa porta de propósito, em
 `rapidex-admin/src/api/types.ts:454`:

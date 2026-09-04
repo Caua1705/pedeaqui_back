@@ -17,8 +17,9 @@ from datetime import time
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from src.core.constants import DESCRICAO_DE_WEEKDAY
 from src.schemas.delivery_schema import DeliveryAddressInput
 from src.schemas.restaurant_schema import BranchAddressResponse
 
@@ -74,7 +75,7 @@ class BranchOpenPeriodResponse(BaseModel):
     e o dia de hoje. Quem decide se a filial atende e `is_open_now`, sempre.
     """
 
-    weekday: int
+    weekday: int = Field(description=DESCRICAO_DE_WEEKDAY)
     opens_at: time
     closes_at: time
 

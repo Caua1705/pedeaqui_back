@@ -37,6 +37,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from src.core.constants import DESCRICAO_DE_WEEKDAY
 from src.schemas.common_schema import BaseResponse
 
 
@@ -59,12 +60,12 @@ class CashbackWeekdayInput(BaseModel):
     omiti-lo faz o dia herdar `default_percent`.
     """
 
-    weekday: int = Field(ge=0, le=6)
+    weekday: int = Field(ge=0, le=6, description=DESCRICAO_DE_WEEKDAY)
     percent: Decimal = Field(ge=0, le=100)
 
 
 class CashbackWeekdayResponse(BaseResponse):
-    weekday: int
+    weekday: int = Field(description=DESCRICAO_DE_WEEKDAY)
     percent: Decimal
 
 

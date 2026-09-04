@@ -5034,6 +5034,7 @@
             "type": "string"
           },
           "weekday": {
+            "description": "Dia da semana com 0 = SEGUNDA e 6 = domingo (`datetime.weekday()` do Python). NAO e o `getDay()` do JavaScript, que usa 0 = domingo: converter e obrigatorio dos dois lados.",
             "title": "Weekday",
             "type": "integer"
           }
@@ -5435,6 +5436,7 @@
             "type": "array"
           },
           "weekday": {
+            "description": "Dia da semana com 0 = SEGUNDA e 6 = domingo (`datetime.weekday()` do Python). NAO e o `getDay()` do JavaScript, que usa 0 = domingo: converter e obrigatorio dos dois lados.",
             "title": "Weekday",
             "type": "integer"
           }
@@ -5507,6 +5509,7 @@
             "title": "Prep Time Min"
           },
           "weekday": {
+            "description": "Dia da semana com 0 = SEGUNDA e 6 = domingo (`datetime.weekday()` do Python). NAO e o `getDay()` do JavaScript, que usa 0 = domingo: converter e obrigatorio dos dois lados.",
             "maximum": 6.0,
             "minimum": 0.0,
             "title": "Weekday",
@@ -5599,6 +5602,7 @@
             "type": "integer"
           },
           "weekday": {
+            "description": "Dia da semana com 0 = SEGUNDA e 6 = domingo (`datetime.weekday()` do Python). NAO e o `getDay()` do JavaScript, que usa 0 = domingo: converter e obrigatorio dos dois lados.",
             "title": "Weekday",
             "type": "integer"
           }
@@ -6044,6 +6048,7 @@
             "title": "Percent"
           },
           "weekday": {
+            "description": "Dia da semana com 0 = SEGUNDA e 6 = domingo (`datetime.weekday()` do Python). NAO e o `getDay()` do JavaScript, que usa 0 = domingo: converter e obrigatorio dos dois lados.",
             "maximum": 6.0,
             "minimum": 0.0,
             "title": "Weekday",
@@ -6065,6 +6070,7 @@
             "type": "string"
           },
           "weekday": {
+            "description": "Dia da semana com 0 = SEGUNDA e 6 = domingo (`datetime.weekday()` do Python). NAO e o `getDay()` do JavaScript, que usa 0 = domingo: converter e obrigatorio dos dois lados.",
             "title": "Weekday",
             "type": "integer"
           }
@@ -12494,6 +12500,7 @@
             "type": "string"
           },
           "current_weekday": {
+            "description": "Dia da semana com 0 = SEGUNDA e 6 = domingo (`datetime.weekday()` do Python). NAO e o `getDay()` do JavaScript, que usa 0 = domingo: converter e obrigatorio dos dois lados.",
             "title": "Current Weekday",
             "type": "integer"
           },

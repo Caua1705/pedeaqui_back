@@ -6,8 +6,13 @@ Create Date: 2026-09-05
 
 **ESTA REVISAO ENTROU NA CADEIA EM 05/09/2026** — ela morava em
 `alembic/preparadas/` e foi movida deliberadamente, para entrar no proximo
-deploy com quem faz o deploy olhando. A ETAPA 2 continua em `preparadas/`, e a
-diferenca entre as duas esta na secao "O custo desta etapa" abaixo.
+deploy com quem faz o deploy olhando.
+
+**A ETAPA 2 (`20260905_0056`) tambem esta na cadeia**, desde 04/09/2026: o dono
+decidiu aplicar as duas na mesma janela, em sequencia, acompanhando. Elas
+continuam sendo DUAS EXECUCOES — `ALEMBIC_TARGET=20260905_0055` para na
+primeira, e so entao o segundo `upgrade` vai a head. O motivo esta na revisao
+seguinte, e o roteiro em `docs/alinhamento-orm-schema.md`.
 
 ## O que esta etapa faz, e o que ela nao faz
 
@@ -34,7 +39,7 @@ que ja existe e a etapa 2.
 inteira** para provar que nao ha nulo. `ACCESS EXCLUSIVE` bloqueia `SELECT`
 tambem (armadilha registrada no plano do `tracking_token`), e `orders` /
 `customers` sao as tabelas que a operacao inteira le. Fazer isso em uma tacada
-significa a plataforma parada pelo tempo de 16 varreduras.
+significa a plataforma parada pelo tempo de 15 varreduras.
 
 O caminho `NOT VALID` -> `VALIDATE` -> `SET NOT NULL` troca a varredura
 bloqueante por uma varredura que **nao bloqueia leitura nem escrita**
@@ -91,7 +96,7 @@ depends_on = None
 # excecao da lista: nas outras o banco estava frouxo e o model certo; naquela o
 # banco ja permitia a campanha sem prazo e o model e que mentia. Alinha-la
 # apagaria uma possibilidade de produto. Quem cobrou a saida foi
-# `tests/test_revisoes_preparadas.py`, comparando a lista com a divergencia
+# `tests/test_alinhamento_orm_schema.py`, comparando a lista com a divergencia
 # real do schema — foi para isso que ele existe.
 COLUNAS = [
     ("admin_users", "is_active"),

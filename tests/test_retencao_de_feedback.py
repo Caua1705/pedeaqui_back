@@ -166,21 +166,28 @@ class TestALinhaSemData:
     omite, deixando o banco preencher. Ele vem de INSERT feito por fora, que e
     a mesma origem de todas as 15 (armadilha 33).
 
-    **DESDE 05/09/2026 O NULO NOVO NAO ENTRA MAIS**, e este teste teve que
-    mudar por causa disso. A revisao `20260905_0055` (etapa 1 do alinhamento)
-    criou `ck_ai_feedback_created_at_nao_nula` como `CHECK ... NOT VALID`: ela
-    nao reparou as linhas antigas, mas recusa toda linha nova — inclusive o
-    INSERT cru deste teste.
+    **O NULO NOVO NAO ENTRA MAIS, E AGORA O ANTIGO TAMBEM NAO EXISTE.** Este
+    teste ja mudou duas vezes por causa disso, e as duas mudancas contam a
+    historia do alinhamento:
 
-    Entao o teste passou a ENCENAR a linha legada, derrubando a restricao,
-    inserindo e recriando `NOT VALID` (recriar funciona sobre a linha nula, que
-    e a metade menos obvia do que `NOT VALID` significa). O que ele guarda
-    continua valendo e continua importando: o `OR created_at IS NULL` do
-    expurgo existe para as linhas que JA ESTAO em producao, e elas so somem
-    quando a etapa 2 rodar ou quando a retencao as alcancar.
+    - com a etapa 1 (`20260905_0055`), `ck_ai_feedback_created_at_nao_nula`
+      passou a recusar toda linha NOVA — inclusive o INSERT cru daqui. O teste
+      encenava a linha legada derrubando a CHECK, inserindo e recriando
+      `NOT VALID`;
+    - com a etapa 2 (`20260905_0056`), a coluna virou `NOT NULL` de verdade e a
+      CHECK foi derrubada. A encenacao passou a ser `DROP NOT NULL`.
+
+    **E isso torna o `OR created_at IS NULL` do expurgo inalcancavel em
+    producao — depois que a etapa 2 for aplicada la.** Ele fica, e a decisao e
+    deliberada: custa nada, e quem manda no que existe no banco e o banco, nao
+    a nossa lembranca de qual revisao ja subiu. Enquanto producao estiver entre
+    as duas etapas — ou se um dia alguem soltar o `NOT NULL` — ele e o que
+    apaga a linha.
+
+    O que este teste guarda, entao, deixou de ser "isto acontece hoje" e passou
+    a ser "isto continua funcionando se acontecer". A linha encenada e
+    exatamente a que existia em producao antes do alinhamento.
     """
-
-    RESTRICAO = "ck_ai_feedback_created_at_nao_nula"
 
     def _criar_sem_data(self, db, restaurante):
         """INSERT CRU, e a razao disso e o achado deste teste.
@@ -195,11 +202,10 @@ class TestALinhaSemData:
         ORM** — SQL manual no Supabase, script de importacao, correcao a mao.
         E por isso o teste tem que escrever do mesmo jeito que ela nasceu.
         """
-        # A etapa 1 do alinhamento (revisao `20260905_0055`) recusa este
-        # INSERT. Derrubar e recriar `NOT VALID` deixa o banco no MESMO estado
-        # em que producao esta hoje: a restricao existe, e a linha antiga que
-        # a contradiz continua la.
-        db.execute(text(f'ALTER TABLE ai_feedback DROP CONSTRAINT "{self.RESTRICAO}"'))
+        # Depois da etapa 2 (`20260905_0056`) a coluna e `NOT NULL`, entao a
+        # linha legada so existe se o `NOT NULL` sair primeiro. O DDL volta com
+        # o rollback da transacao do teste, como o resto.
+        db.execute(text("ALTER TABLE ai_feedback ALTER COLUMN created_at DROP NOT NULL"))
         db.execute(
             text(
                 """
@@ -218,12 +224,6 @@ class TestALinhaSemData:
                 "user_message": "moro na rua das Flores, 200",
                 "assistant_message": "Temos entrega para essa regiao!",
             },
-        )
-        db.execute(
-            text(
-                f'ALTER TABLE ai_feedback ADD CONSTRAINT "{self.RESTRICAO}" '
-                'CHECK ("created_at" IS NOT NULL) NOT VALID'
-            )
         )
         db.flush()
         return db.scalar(

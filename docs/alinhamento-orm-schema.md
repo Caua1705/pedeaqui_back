@@ -1,12 +1,16 @@
 # Alinhar o schema ao ORM: o roteiro, e onde ele está hoje
 
-**Estado em 04/09/2026.** A **etapa 1 está na cadeia**, como
-`alembic/versions/20260905_0055_alinhamento_orm_schema_etapa_1.py`: ela saiu de
-`preparadas/` deliberadamente e entra no próximo `docker compose up`. A **etapa
-2 continua em `alembic/preparadas/`**, que o Alembic não lê.
+**Estado em 04/09/2026.** As **duas etapas estão na cadeia** —
+`20260905_0055` e `20260905_0056` — e vão para produção na **mesma janela, em
+duas execuções seguidas**, com o dono acompanhando. `alembic/preparadas/` está
+vazio.
 
-**Nada aqui escreveu em produção ainda** — ela está em `20260904_0050`, cinco
+**Nada aqui escreveu em produção ainda** — ela está em `20260904_0050`, seis
 revisões atrás do código. O que já rodou contra ela é só leitura: a etapa 0.
+
+**E é por isso que `ALEMBIC_TARGET` deixou de ser opcional.** Com as duas na
+cadeia, um `alembic upgrade head` distraído roda as duas na MESMA transação, e
+a separação inteira evapora. O roteiro abaixo é a versão para colar.
 
 O problema que ele resolve está em `docs/modelo-de-dados.md`, §6, e em
 `scripts/divergencias_orm_schema.py`: em **15 colunas**, o model declara
@@ -53,7 +57,7 @@ válida como prova e pula o scan. Produção é Supabase PG 17.
 **E há um ganho que não é de lock: a etapa 1 já cobra a regra das linhas
 novas.** Do commit dela em diante o buraco para de crescer, mesmo que a etapa 2
 demore semanas. Isso não é dedução do manual: está afirmado em
-`tests/test_revisoes_preparadas.py::test_depois_da_etapa_1_o_nulo_NOVO_ja_e_recusado`,
+`tests/test_alinhamento_orm_schema.py::test_no_estado_do_fim_da_etapa_1_o_nulo_NOVO_ja_e_recusado`,
 contra o Postgres de verdade.
 
 ### As duas etapas NÃO podem ir no mesmo `alembic upgrade`
@@ -86,7 +90,7 @@ importa junto é o tamanho: a maior das oito tabelas envolvidas é
 `ai_product_embeddings`, com **272 linhas**; `order_item_options` e
 `coupon_redemptions` estão **vazias**, `customers` tem 3 e `admin_users`, 4.
 
-Isso não dispensa refazer a contagem imediatamente antes da etapa 2 — o número
+Isso não dispensa refazer a contagem entre as duas execuções — o número
 envelhece, e impedir que ele cresça é justamente o que a etapa 1 faz. O que ele
 decide é outra coisa: **em nenhuma das duas etapas o custo de lock é mensurável
 hoje.** O desenho em duas etapas continua certo, e a razão dele deixou de ser o
@@ -135,58 +139,52 @@ alinhe o schema.**
 
 ---
 
-## Etapa 0b — mover as revisões para a cadeia
+## Etapa 0b — mover as revisões para a cadeia: FEITO
 
-Enquanto o arquivo estiver em `alembic/preparadas/`, nada acontece — é o que
-`tests/test_revisoes_preparadas.py` garante.
+As duas já estão em `alembic/versions/`, e não há nada a fazer aqui:
 
-**A etapa 1 já foi movida**, em 04/09/2026 (commit `cb1db8f`): ela é
-`20260905_0055`, com `down_revision = "20260905_0054"`. Não há nada a fazer por
-ela aqui.
+| Etapa | Revisão | `down_revision` | Quando entrou |
+|---|---|---|---|
+| 1 | `20260905_0055` | `20260905_0054` | 04/09/2026, commit `cb1db8f` |
+| 2 | `20260905_0056` | `20260905_0055` | 04/09/2026 |
 
-Para a etapa 2, quando for a hora:
+`alembic/preparadas/` ficou vazio, e o `tests/test_revisoes_preparadas.py` que
+cobrava "elas NÃO estão na cadeia" foi substituído por
+`tests/test_alinhamento_orm_schema.py`, que cobra o que passou a valer: que as
+duas descrevem as mesmas colunas, que a etapa 2 vem logo depois da 1, que o
+schema construído pelo repositório não tem mais divergência da primeira classe,
+e — com linha de verdade na mesa — que a etapa 2 passa, que o downgrade dela
+devolve exatamente o fim da etapa 1, e que ela falha no `VALIDATE` quando sobra
+nulo antigo.
 
-```bash
-git mv alembic/preparadas/alinhamento_orm_schema_etapa_2.py \
-       alembic/versions/<data>_<n>_alinhamento_etapa_2.py
-```
-
-E então, **no arquivo**, trocar os marcadores: `revision = "<data>_<n>"` e
-`down_revision = "<head do dia>"` — que sai de `alembic heads`, e **não** é
-necessariamente `20260905_0055`: outras revisões podem ter entrado no meio. Os
-marcadores `PREPARADA_...` são propositalmente inválidos: mover sem trocá-los
-quebra alto, na coleta, em vez de baixo.
-
-`tests/test_revisoes_preparadas.py` sai junto nesse commit — o diretório fica
-vazio e o próprio arquivo diz isso.
+O diretório e o `LEIA-ME.md` continuam, porque o mecanismo continua.
 
 ---
 
 ## Etapa 1 — a promessa
 
-**Ela não vai sozinha.** Produção está em `20260904_0050` e a etapa 1 é
-`20260905_0055`: o `alembic upgrade` aplica **cinco** revisões nesta subida. As
-quatro da frente são a rodada do WhatsApp — `0051` cria as três tabelas do
-canal, `0052` e `0054` acrescentam coluna a elas, `0053` troca uma CHECK. Todas
-tocam **apenas** tabelas `whatsapp_*`, que nascem nesta mesma leva e portanto
-estão vazias: nenhuma varre nada, nenhuma trava tabela em uso.
+**Ela não vai sozinha.** Produção está em `20260904_0050`: esta primeira
+execução aplica **cinco** revisões. As quatro da frente são a rodada do
+WhatsApp — `0051` cria as três tabelas do canal, `0052` e `0054` acrescentam
+coluna a elas, `0053` troca uma CHECK. Todas tocam **apenas** tabelas
+`whatsapp_*`, que nascem nesta mesma leva e portanto estão vazias: nenhuma
+varre nada, nenhuma trava tabela em uso.
 
-Como a etapa 1 **é** o head de hoje, `ALEMBIC_TARGET` não é necessário — ele
-existe para parar ANTES do head, e aqui não há nada depois dela. Deixe o `.env`
-sem a variável:
+**O `ALEMBIC_TARGET` é o passo mais importante do roteiro inteiro**, e é o
+único que não avisa quando é esquecido: sem ele o `upgrade` vai direto a head e
+leva a etapa 2 junto, na mesma transação.
 
 ```bash
 cd /caminho/do/projeto
-grep ALEMBIC_TARGET .env                     # não pode sobrar nada
+echo "ALEMBIC_TARGET=20260905_0055" >> .env
+grep ALEMBIC_TARGET .env                     # tem que imprimir a linha
 
 GIT_SHA=$(git rev-parse --short HEAD) docker compose up -d --build
 docker logs -f pedeaqui-api
-#   esperado: [entrypoint] alembic upgrade head   e NENHUM "ATENCAO".
+#   esperado: [entrypoint] alembic upgrade 20260905_0055
+#             [entrypoint] ATENCAO: ALEMBIC_TARGET=... — o banco NAO esta em head.
+#   o ATENCAO e ESPERADO nesta etapa: e ele confirmando que parou onde devia.
 ```
-
-`ALEMBIC_TARGET=<a etapa 1>` volta a ser obrigatório **no dia em que a etapa 2
-entrar na cadeia** e as duas ainda não tiverem sido aplicadas — é o que impede
-o mesmo `upgrade` de rodar as duas, e o motivo está logo acima.
 
 **Conferência** — as 15 restrições existem e estão `NOT VALID`:
 
@@ -197,12 +195,31 @@ SELECT conrelid::regclass AS tabela, conname, convalidated
  ORDER BY 1, 2;
 ```
 
-Espere `convalidated = false` nas 15. É o estado correto no fim desta etapa.
+Espere `convalidated = false` nas 15. É o estado correto no fim desta etapa, e
+`15` é o número: menos que isso significa que uma revisão não rodou.
 
-**Deixe assar.** Um dia inteiro de operação normal, no mínimo. O que se ganha
-com a espera: a etapa 1 já recusa nulo novo, então quando o `VALIDATE` rodar
-não há corrida com escrita concorrente — se ele falhar, é por linha que já
-existia, e não por algo que entrou no meio.
+Confira também que a API subiu — `docker logs` sem loop de restart, e uma
+requisição de verdade:
+
+```bash
+curl -fsS https://<host>/health && echo OK
+```
+
+**Quanto esperar antes da etapa 2.** O roteiro original pedia um dia inteiro de
+operação normal. Com as duas na mesma janela isso não acontece, e é uma escolha
+consciente do dono — o que a espera compra é margem, não correção:
+
+- a etapa 1 já recusa nulo novo desde o commit dela, então **não há corrida com
+  escrita concorrente** em nenhum dos dois casos;
+- a etapa 0 acabou de dar zero, e entre uma execução e outra passam minutos com
+  a API praticamente sem tráfego;
+- o que a espera de um dia daria é tempo de um defeito da etapa 1 aparecer em
+  uso real antes de a etapa 2 tornar o estado mais difícil de voltar. Com
+  produção pré-lançamento e 3 clientes, esse tempo não compra quase nada.
+
+**Refaça a etapa 0 entre as duas execuções.** É barato, é só leitura, e é a
+única coisa que separa "a etapa 2 vai passar" de "a etapa 2 provavelmente vai
+passar".
 
 **Rollback da etapa 1: completo e barato.** `alembic downgrade` derruba as 15
 restrições. Nenhum dado foi tocado, nenhuma coluna mudou. É o raro downgrade
@@ -213,20 +230,47 @@ vazia.
 
 ## Etapa 2 — a cobrança
 
-Refaça a etapa 0 imediatamente antes. Depois:
-
 ```bash
+docker exec pedeaqui-api python scripts/nulos_nas_colunas_em_desacordo.py
+#   tem que terminar em "Nenhuma linha nula" e sair com codigo 0.
+
 sed -i '/^ALEMBIC_TARGET=/d' .env
-grep ALEMBIC_TARGET .env                     # não pode sobrar nada
+grep ALEMBIC_TARGET .env                     # não pode sobrar NADA
 GIT_SHA=$(git rev-parse --short HEAD) docker compose up -d
 docker logs -f pedeaqui-api
 #   esperado: [entrypoint] alembic upgrade head   e NENHUM "ATENCAO".
 ```
 
-**Se o `VALIDATE` falhar**, a transação inteira volta: nenhuma das 15 colunas
-fica alterada e as restrições `NOT VALID` continuam no lugar, cobrando as
-linhas novas. Não existe estado pela metade. O erro nomeia a restrição, e o
-nome dela é `ck_<tabela>_<coluna>_nao_nula` — a coluna está no nome.
+O `docker compose up -d` sem `--build` é de propósito: a imagem é a mesma da
+execução anterior, e reconstruir aqui trocaria duas coisas ao mesmo tempo.
+
+### Se a etapa 2 falhar: NÃO reverta
+
+**Não existe "no meio".** `alembic/env.py` roda o upgrade inteiro numa
+transação só, então ou as 15 colunas viram `NOT NULL`, ou nenhuma. A transação
+volta sozinha, as `NOT VALID` da etapa 1 continuam no lugar cobrando as linhas
+novas, e o banco fica exatamente no estado do fim da etapa 1.
+
+**O que quebra não é o banco — é a API.** `docker-entrypoint.sh` tem `set -e`
+sem `|| true`: o alembic falha, o container morre, o `restart: always` tenta de
+novo, e a API entra em loop de restart sem nunca atender (armadilha 5). A
+primeira coisa a fazer não é consertar o dado — é pôr a API de pé:
+
+```bash
+echo "ALEMBIC_TARGET=20260905_0055" >> .env    # volta a parar na etapa 1
+docker compose up -d
+curl -fsS https://<host>/health && echo OK
+```
+
+Com a API no ar, o resto é sem pressa. **Deixe as CHECK `NOT VALID` onde
+estão.** Elas não custam nada (uma comparação por INSERT), estão impedindo o
+buraco de crescer, e derrubá-las com `alembic downgrade 20260905_0054` só
+devolveria o problema. Reverter aqui não conserta nada e desfaz o que já deu
+certo.
+
+O erro nomeia a restrição, e o nome é `ck_<tabela>_<coluna>_nao_nula` — a
+coluna está no nome. Ache a linha, decida o dado (as três saídas estão na etapa
+0), e refaça a etapa 2 tirando o `ALEMBIC_TARGET`. Pode ser no dia seguinte.
 
 **Isto também está demonstrado, e não apenas descrito:**
 `test_a_etapa_2_falha_no_VALIDATE_quando_sobra_nulo_antigo` planta uma linha

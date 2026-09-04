@@ -1,11 +1,18 @@
 """alinhamento ORM x schema, ETAPA 2: a cobranca, e o NOT NULL de verdade
 
-Revision ID: PREPARADA_alinhamento_etapa_2
-Revises: PREPARADA_alinhamento_etapa_1
-Create Date: (ainda nao criada)
+Revision ID: 20260905_0056
+Revises: 20260905_0055
+Create Date: 2026-09-05
 
-**ESTA REVISAO NAO ESTA APLICADA E NAO ESTA NA CADEIA.** Ver
-`alembic/preparadas/LEIA-ME.md` e `docs/alinhamento-orm-schema.md`.
+**ESTA REVISAO ENTROU NA CADEIA EM 04/09/2026** — ela morava em
+`alembic/preparadas/` e foi movida a pedido do dono, que decidiu aplicar as
+duas etapas na MESMA janela, em sequencia, acompanhando.
+
+**E POR ISSO `ALEMBIC_TARGET` DEIXOU DE SER OPCIONAL.** Com as duas na cadeia,
+um `alembic upgrade head` distraido roda a etapa 1 e a etapa 2 na MESMA
+transacao — e e exatamente o que a secao seguinte explica que nao pode
+acontecer. O roteiro do deploy, com os dois comandos na ordem, esta em
+`docs/alinhamento-orm-schema.md`.
 
 ## A ordem, e por que cada passo esta onde esta
 
@@ -29,7 +36,7 @@ Por coluna, tres comandos:
 vez, o `VALIDATE` da etapa 2 rodaria na mesma transacao que ainda segura o
 `ACCESS EXCLUSIVE` do `ADD CONSTRAINT` da etapa 1 — e o ganho de lock, que e a
 razao de existir do desenho, evaporaria. A plataforma ficaria parada pelo tempo
-das 16 varreduras, exatamente como no `SET NOT NULL` ingenuo.
+das 15 varreduras, exatamente como no `SET NOT NULL` ingenuo.
 
 As duas etapas sao **duas execucoes separadas**, com `ALEMBIC_TARGET` na
 primeira. O roteiro esta em `docs/alinhamento-orm-schema.md`.
@@ -59,8 +66,8 @@ Ela e a rara migracao cujo downgrade e honesto — ao contrario da `0017` do
 from alembic import op
 
 
-revision = "PREPARADA_alinhamento_etapa_2"
-down_revision = "PREPARADA_alinhamento_etapa_1"
+revision = "20260905_0056"
+down_revision = "20260905_0055"
 branch_labels = None
 depends_on = None
 
@@ -74,7 +81,7 @@ depends_on = None
 # revisao aplicada tem que continuar descrevendo o que ela fez mesmo depois
 # de a outra ser editada.
 #
-# Quem cobra que as duas nao divirjam e `tests/test_revisoes_preparadas.py`.
+# Quem cobra que as duas nao divirjam e `tests/test_alinhamento_orm_schema.py`.
 # As 15 colunas da primeira classe de `scripts/divergencias_orm_schema.py`:
 # o ORM diz NOT NULL e o banco aceita NULL.
 #
@@ -88,7 +95,7 @@ depends_on = None
 # excecao da lista: nas outras o banco estava frouxo e o model certo; naquela o
 # banco ja permitia a campanha sem prazo e o model e que mentia. Alinha-la
 # apagaria uma possibilidade de produto. Quem cobrou a saida foi
-# `tests/test_revisoes_preparadas.py`, comparando a lista com a divergencia
+# `tests/test_alinhamento_orm_schema.py`, comparando a lista com a divergencia
 # real do schema — foi para isso que ele existe.
 COLUNAS = [
     ("admin_users", "is_active"),

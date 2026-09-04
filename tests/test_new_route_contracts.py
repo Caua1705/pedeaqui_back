@@ -74,6 +74,79 @@ class PaymentErrorContractTests(unittest.TestCase):
         self.assertIn("PaymentErrorCode", json.dumps(detail["properties"]["code"]))
 
 
+class TodoErroDeclaradoEUmEnvelopeTests(unittest.TestCase):
+    """A armadilha 16, generalizada: nao so o 502 do pagamento.
+
+    `HTTPException` entrega `{"detail": {...}}`. Uma rota que anuncia o detail
+    na RAIZ publica no `/openapi.json` um formato que ela nunca devolve — e o
+    painel, que escreve o parser a partir do documento, o escreve contra o
+    formato errado. Foi o que aconteceu com o 502 da cobranca.
+
+    O `PaymentErrorContractTests` acima trava aquela rota. Este trava as
+    PROXIMAS: ele nao conhece rota nenhuma, varre o documento gerado e cobra
+    que todo `model` declarado num 4xx/5xx seja o envelope.
+
+    E o teste que faltava. Hoje as tres declaracoes existentes estao certas —
+    e nada impedia a quarta de nascer errada.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.spec = app.openapi()
+
+    def _modelos_de_erro(self):
+        """(rota, metodo, codigo, nome do schema) de todo 4xx/5xx com `model`."""
+        for rota, metodos in self.spec["paths"].items():
+            for metodo, operacao in metodos.items():
+                for codigo, resposta in (operacao.get("responses") or {}).items():
+                    if not codigo.isdigit() or int(codigo) < 400:
+                        continue
+                    esquema = (
+                        (resposta.get("content") or {})
+                        .get("application/json", {})
+                        .get("schema", {})
+                    )
+                    referencia = esquema.get("$ref")
+                    if referencia:
+                        yield rota, metodo, codigo, referencia.rsplit("/", 1)[-1]
+
+    def test_todo_modelo_de_erro_declara_o_envelope_detail(self):
+        fora_do_envelope = []
+        for rota, metodo, codigo, nome in self._modelos_de_erro():
+            # O 422 do proprio FastAPI ja e o envelope dele, e nao e nosso.
+            if nome == "HTTPValidationError":
+                continue
+            propriedades = self.spec["components"]["schemas"][nome].get("properties", {})
+            if list(propriedades) != ["detail"]:
+                fora_do_envelope.append(
+                    f"{metodo.upper()} {rota} {codigo} -> {nome} "
+                    f"(campos: {sorted(propriedades)})"
+                )
+
+        self.assertEqual(
+            fora_do_envelope,
+            [],
+            "modelo de erro anunciado na RAIZ em vez do envelope `detail`: "
+            f"{fora_do_envelope}. `HTTPException` entrega "
+            '`{"detail": {...}}`, e o painel escreve o parser a partir do '
+            "documento — ele leria um formato que a rota nunca devolve. "
+            "Declare um schema com um campo `detail` so, como "
+            "`PaymentErrorResponse`.",
+        )
+
+    def test_o_varredor_enxerga_os_modelos_que_existem(self):
+        """Varredor visto so respondendo "nenhum" nao provou nada.
+
+        Se o caminho ate `responses[codigo].content.schema.$ref` mudar de forma,
+        o teste acima fica verde por vacuidade — sem enxergar rota nenhuma.
+        """
+        encontrados = {nome for _, _, _, nome in self._modelos_de_erro()}
+
+        self.assertIn("PaymentErrorResponse", encontrados)
+        self.assertIn("CancelOrderErrorResponse", encontrados)
+        self.assertIn("OrdersInFlightResponse", encontrados)
+
+
 class DeliveryContractTests(unittest.TestCase):
     def test_accepts_address_id_and_empty_branch_id(self):
         address_id = uuid.uuid4()

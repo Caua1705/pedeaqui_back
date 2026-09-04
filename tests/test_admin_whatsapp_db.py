@@ -20,6 +20,7 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from main import app
@@ -27,6 +28,7 @@ from src.api.dependencies.database import get_db
 from src.core.config import settings
 from src.models.admin_user_model import AdminUser
 from src.models.whatsapp_model import WhatsAppChannel, WhatsAppMessage
+from src.repositories.whatsapp_repository import WhatsAppChannelRepository
 from src.schemas.admin_whatsapp_schema import WhatsAppChannelStatus
 from src.services.admin_auth_service import AdminAuthService
 from src.services.admin_whatsapp_service import (
@@ -789,3 +791,150 @@ class TestOLojistaPresoAUmaFilial:
 
         assert resposta.status_code == 403
         assert db.query(WhatsAppChannel).filter_by(id=queda.id).one().is_active
+
+
+class TestOsIndicesDeUnicidade:
+    """O que cada índice de `whatsapp_channels` permite e o que ele recusa.
+
+    ESTA CLASSE EXISTE PORQUE A LEITURA DELES ENGANA, e enganou. Em
+    05/09/2026 o desenho foi lido como se `UNIQUE (branch_id)` fosse "um canal
+    por restaurante" — o que faria a segunda filial de qualquer rede colidir —
+    e quase virou uma revisão trocando a coluna por `(restaurant_id,
+    branch_id)`.
+
+    Não é: **`branch_id` é o UUID de `branches`, já único globalmente**, então
+    a restrição diz "no máximo um canal POR FILIAL", que é a regra que se quer.
+    E o par não seria mais forte, seria REDUNDANTE — a FK composta
+    `(restaurant_id, branch_id) -> branches (restaurant_id, id)` já amarra a
+    filial ao restaurante dela, então a segunda coluna não distingue nada que a
+    primeira não distinga.
+
+    O conserto proposto era um `DROP`, e é a armadilha 15: um `DROP` na
+    constraint errada não dá erro nenhum no dia em que roda. O que fecha essa
+    porta não é a conferência (que já foi feita duas vezes e se perdeu as
+    duas): é este arquivo ficar vermelho.
+
+    **O risco REAL fica no terceiro índice, e é o inverso do que se temia.**
+    `ux_whatsapp_channels_restaurant_default` é
+    `UNIQUE (restaurant_id) WHERE branch_id IS NULL`. Quem o escrevesse sem o
+    `restaurant_id` — pensando "só pode haver uma queda" — deixaria a
+    plataforma inteira com UMA queda, e o SEGUNDO restaurante não conseguiria
+    cadastrar a dele. É o primeiro teste abaixo que pega isso, e ele só pega
+    porque usa DOIS restaurantes: com um só, os três índices passam iguais.
+    """
+
+    @pytest.fixture
+    def duas_redes(self, db: Session):
+        """Duas redes de duas lojas. O cenário que hoje não existe em produção.
+
+        O Júnior é o único restaurante, e a linha dele tem `branch_id` nulo —
+        ou seja, a produção de hoje exercita UM dos três índices. O segundo
+        cliente é que estreia os outros dois, e estrear em produção é o que
+        este fixture existe para evitar.
+        """
+        primeira = fab.criar_restaurante(db, nome="Júnior da Picanha")
+        segunda = fab.criar_restaurante(db, nome="Outro Restaurante")
+        lojas = {
+            primeira.id: (
+                fab.criar_filial(db, primeira, nome="Centro"),
+                fab.criar_filial(db, primeira, nome="Aldeota"),
+            ),
+            segunda.id: (
+                fab.criar_filial(db, segunda, nome="Praia"),
+                fab.criar_filial(db, segunda, nome="Bezerra"),
+            ),
+        }
+        db.flush()
+        return primeira, segunda, lojas
+
+    def test_dois_restaurantes_com_duas_filiais_cada_convivem(
+        self, db: Session, duas_redes
+    ) -> None:
+        """SEIS canais: duas quedas e quatro números de filial.
+
+        É a afirmação inteira desta classe, e ela é positiva de propósito — o
+        modo de falha que importa não é uma escrita indevida passar, é uma
+        escrita LEGÍTIMA ser recusada quando o segundo cliente chegar.
+        """
+        primeira, segunda, lojas = duas_redes
+
+        for restaurante in (primeira, segunda):
+            canal(db, restaurante)
+            for filial in lojas[restaurante.id]:
+                canal(db, restaurante, filial)
+
+        db.flush()
+
+        assert db.query(WhatsAppChannel).count() == 6
+        for restaurante in (primeira, segunda):
+            canais = (
+                db.query(WhatsAppChannel).filter_by(restaurant_id=restaurante.id).all()
+            )
+            assert len(canais) == 3
+            assert sum(1 for item in canais if item.branch_id is None) == 1
+
+    def test_cada_rede_resolve_para_a_PROPRIA_queda(
+        self, db: Session, duas_redes
+    ) -> None:
+        """A pergunta que o índice sozinho não responde.
+
+        Índice recusa escrita; ele não impede a LEITURA de atravessar o
+        restaurante. E aqui atravessar significa o segundo cliente mandando
+        mensagem pelo número do primeiro — em nome dele, para o cliente dele.
+
+        Sai de `resolve_for_branch`, que é a consulta do envio (armadilha 54),
+        e não de um `filter` escrito aqui: duas formas da mesma pergunta
+        divergem no dia em que alguém mexe numa.
+        """
+        primeira, segunda, lojas = duas_redes
+        queda_da_primeira = canal(db, primeira, display_phone_number="+55 85 91111-0000")
+        queda_da_segunda = canal(db, segunda, display_phone_number="+55 85 92222-0000")
+        db.flush()
+
+        repositorio = WhatsAppChannelRepository(db)
+        for restaurante, esperado in (
+            (primeira, queda_da_primeira),
+            (segunda, queda_da_segunda),
+        ):
+            for filial in lojas[restaurante.id]:
+                escolhido = repositorio.resolve_for_branch(restaurante.id, filial.id)
+                assert escolhido is not None
+                assert escolhido.id == esperado.id
+
+    def test_a_segunda_queda_do_MESMO_restaurante_e_recusada(
+        self, db: Session, duas_redes
+    ) -> None:
+        """`ux_whatsapp_channels_restaurant_default`, a trava que o `UNIQUE`
+        não dá: no Postgres `NULL` é distinto de `NULL`, então sem o índice
+        parcial o mesmo restaurante teria duas quedas — e `resolve_for_branch`
+        escolheria uma das duas sem critério.
+
+        O par positivo é o primeiro teste desta classe: a queda da SEGUNDA rede
+        entra normal, e é ela que prova que a recusa aqui é do restaurante
+        repetido e não da segunda linha nula da tabela.
+        """
+        primeira, _, _ = duas_redes
+        canal(db, primeira)
+
+        with pytest.raises(IntegrityError):
+            canal(db, primeira)
+
+    def test_o_segundo_canal_da_MESMA_filial_e_recusado(
+        self, db: Session, duas_redes
+    ) -> None:
+        """`uq_whatsapp_channels_branch_id`, lido pelo que ele de fato faz.
+
+        Duas linhas para a mesma loja fariam `resolve_for_branch` devolver uma
+        das duas sem critério — a filial falaria por um número em cada
+        requisição, e o cliente receberia o aviso de um número que nunca viu.
+
+        O par positivo é o primeiro teste: as quatro filiais das duas redes têm
+        canal próprio ao mesmo tempo. Se a recusa daqui fosse "um canal por
+        restaurante", aquele seria vermelho.
+        """
+        primeira, _, lojas = duas_redes
+        centro, _aldeota = lojas[primeira.id]
+        canal(db, primeira, centro)
+
+        with pytest.raises(IntegrityError):
+            canal(db, primeira, centro)

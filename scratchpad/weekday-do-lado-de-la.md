@@ -115,9 +115,19 @@ recomendação.
 > E uma observação de desenho, para decidir e não para consertar: o painel
 > calcula "que dia é hoje" sozinho (`weekdayDaOperacao`), e o backend também
 > responde isso em `RestaurantInfoResponse.current_weekday`. **São duas fontes
-> para a mesma pergunta.** A do painel é defensável — `/info` é rota pública e
-> ele não a consome —, mas as duas podem discordar na virada da meia-noite. Se
-> um dia divergirem, o `current_weekday` é o que a loja considera oficial.
+> para a mesma pergunta.**
+>
+> **Onde elas podem divergir NÃO é o fuso do aparelho** — `weekdayDaOperacao`
+> já converte para `OPERATION_TIMEZONE` antes de numerar, e é justamente por
+> isso que ele existe. É que `OPERATION_TIMEZONE` é uma constante chumbada em
+> `src/orders/format.ts:10` (`'America/Fortaleza'`), e o backend tem a dele.
+> São duas cópias do mesmo fato, e o fato é do backend: hoje elas concordam
+> porque há uma operação só. **A primeira loja em outro fuso faz as duas
+> discordarem, e o sintoma é o painel lendo a linha de horário do dia errado.**
+>
+> Se um dia divergirem, o `current_weekday` é o oficial — o backend é dono do
+> fuso da operação, o painel tem uma cópia dele. Não é para trocar agora: é
+> para saber de que lado cair.
 
 ---
 

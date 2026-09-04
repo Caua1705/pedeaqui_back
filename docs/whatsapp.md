@@ -541,3 +541,22 @@ abriram, não que ficou boa.
 - **O opt-in no checkout do app.** A Meta exige que o cliente tenha consentido
   em receber mensagem. É uma linha no app, não no backend — e sem ela o risco é
   a qualidade do número cair por denúncia, que é o que derruba o canal.
+- **Um número servindo DOIS restaurantes.** `uq_whatsapp_channels_phone_number_id`
+  é `UNIQUE (phone_number_id)` na tabela inteira, então um número aponta para um
+  canal e portanto para um restaurante só. Conectar o mesmo número num segundo
+  restaurante responde **409 com frase**, e há teste (`test_numero_de_outro_
+  restaurante_recusa_sem_dizer_de_quem_e`).
+
+  **Registrado como conhecido em 05/09/2026, e NÃO construído** — mas o motivo
+  não é falta de vontade: **não é trocar uma restrição, é redesenhar o
+  roteamento.** O webhook acha o destino pelo `phone_number_id` do payload, e
+  esse é o único discriminador que a Meta manda. Com o mesmo número em dois
+  restaurantes, uma mensagem que chega **não tem como ser atribuída** a um dos
+  dois — nem por telefone do cliente (ele pode ser cliente dos dois), nem por
+  pedido (a mensagem que abre a janela costuma vir antes do pedido). O `UNIQUE`
+  não é a causa da limitação: é a forma honesta dela.
+
+  Hoje isso é cenário controlado — quem conecta cada restaurante à mão sou eu,
+  e o número é dedicado por loja. O dia em que deixar de ser (revenda, número
+  de rede compartilhado, Tech Provider conectando sozinho) o trabalho começa no
+  webhook, não no índice.

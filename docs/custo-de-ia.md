@@ -196,3 +196,160 @@ assistente cala? responde sem busca? o lojista paga o excedente?).
 
 O que já existe e não foi tocado: a **cota** de voz por cliente e por
 restaurante (`VOICE_QUOTA_*`), que é controle de emissão e não de custo.
+
+---
+
+## 7. A terceira superfície: indexação do cardápio
+
+> **Estado em 05/09/2026: revisão escrita e NÃO aplicada.** O arquivo é
+> `alembic/preparadas/20260905_0057_indexacao_do_cardapio_no_custo_de_ia.py`,
+> e o Alembic não o lê (armadilha 53). Nada abaixo está no ar.
+
+### 7.1 Por que a indexação entra, se a busca não entrou
+
+A seção 5 diz que embedding não é medido, e o argumento é o tamanho:
+`text-embedding-3-small` custa **US$ 0,02 por milhão** de tokens. Ele continua
+verdadeiro para a **busca** — um embedding por pergunta de cliente, no caminho
+quente — e é falso para a **indexação**, por um motivo que não é o preço por
+token:
+
+**mexer na formatação de `build_product_content` invalida todo `content_hash`
+gravado e reindexa o cardápio inteiro.** Está escrito lá, com todas as letras,
+como consequência esperada. No Júnior da Picanha são 161 produtos de uma vez, e
+hoje isso não aparece em conta nenhuma: não há onde ver que uma linha de código
+comprou 161 embeddings.
+
+Essa é a diferença que interessa a "a comissão de 4% paga a conta?": o custo da
+conversa varia com o movimento, e o da indexação varia com **o que a gente
+faz**. Somados num número só, o segundo é invisível dentro do primeiro.
+
+### 7.2 O que a revisão faz
+
+Uma CHECK, um valor a mais: `surface` passa a aceitar `indexing`.
+
+Nenhuma coluna nova. `restaurant_id`, `branch_id`, `model`, `input_tokens`,
+`output_tokens` e `cost_usd` já são exatamente o que uma chamada de embedding
+grava — sem saída (o embedding é um vetor, não tokens cobrados) e sem cache.
+
+A outra CHECK (`(surface = 'voice') = (voice_session_id IS NOT NULL)`) e o
+índice de leitura `(restaurant_id, created_at)` **não mudam**, e o cabeçalho da
+revisão explica por quê em cada caso.
+
+### 7.3 A ordem NÃO é livre, e o portão a torna verificável
+
+`AI_SURFACES` (`src/models/ai_usage_event_model.py`) é o espelho declarado desta
+CHECK em `scripts/espelhos_de_enum.py` (armadilha 15), e ele compara valor a
+valor:
+
+| Ordem | O que acontece |
+|---|---|
+| código antes do schema | valor só no **código**: o INSERT morre na CHECK, e o portão fica vermelho até a revisão entrar |
+| schema antes do código | valor só no **banco**: o portão fica vermelho até o código entrar |
+| **os dois no mesmo commit** | verde |
+
+É por isso que a revisão está parada sozinha, sem o código do lado: enquanto ela
+está em `preparadas/`, o banco de teste (baseline + `upgrade head`) não a tem, e
+um `AI_SURFACES` com três valores deixaria o portão vermelho em **todo commit**
+até a noite da aplicação. Portão vermelho por semanas é portão que se aprende a
+ignorar — a mesma razão pela qual `divergencias_orm_schema.py` é aviso e não
+portão.
+
+### 7.4 O plano — o que vai junto com a revisão
+
+Um commit só, nesta ordem de escrita (a ordem de *execução* é a do
+`upgrade`):
+
+**1. `git mv` da revisão para `alembic/versions/`**, acertando `down_revision`
+para o head do dia (o valor lá é marcador).
+
+**2. `src/models/ai_usage_event_model.py`** — `SURFACE_INDEXING = "indexing"`,
+acrescentado a `AI_SURFACES`. É o que fecha o portão do espelho.
+
+**3. `src/ai/custo.py`** — a terceira tabela de preços e a terceira função.
+Conferir os valores em `developers.openai.com/api/docs/pricing` **no dia**, e
+carimbar a data no comentário como as outras duas:
+
+```python
+PRECOS_DE_EMBEDDING: dict[str, Decimal] = {   # USD por milhão de tokens
+    "text-embedding-3-small": Decimal("0.02"),
+    "text-embedding-3-large": Decimal("0.13"),
+}
+
+def custo_de_embedding(modelo: str, entrada: int) -> Decimal | None: ...
+```
+
+Uma função de um argumento e não uma terceira variação de `custo_de_texto`:
+embedding não tem saída nem cache, e passar dois zeros em toda chamada
+convidaria a pergunta "este campo vale aqui?" que a seção "por que duas funções"
+já responde.
+
+**Modelo fora da tabela custa `None`, nunca zero** — o mesmo critério das outras
+duas, e ele importa mais aqui: `EMBEDDING_MODEL` sai do `.env`.
+
+**4. De onde vem a contagem de tokens.** A resposta é **`usage.prompt_tokens` da
+própria OpenAI**, e não `tiktoken`:
+
+- é o número que ela cobra, e não a nossa estimativa dele;
+- não depende do cache de BPE do `tiktoken` (que baixa na primeira chamada);
+- em teste, dubla-se o transporte e a conta continua sendo a de verdade
+  (armadilha 42).
+
+O `OpenAIEmbeddings` do LangChain **descarta** o `usage`, então a indexação
+passa a chamar `client.embeddings.create` direto. É aceitável **só porque a
+indexação não é o caminho quente**: a busca continua no LangChain, com o cliente
+compartilhado cuja medição está no cabeçalho de `embedding_service.py` (654 ms →
+340 ms). Trocar os dois de uma vez arriscaria aquele número por nada.
+
+Consequência a escrever no código: a chamada crua **não fatia texto longo**, e o
+`OpenAIEmbeddings` fatia. Conteúdo de produto tem dezenas de tokens contra um
+teto de 8191, então não há caso hoje — e é exatamente o tipo de diferença que
+some do radar se ninguém a anotar.
+
+**5. `src/ai/services/product_indexing.py`** — `index_product` ganha
+`usage_service: AIUsageService | None = None`. Grava **só quando gerou
+embedding**: o desfecho `touched` não paga nada, e uma linha de custo zero ali
+inventaria uma chamada que não houve (o mesmo critério de `registrar_voz` com
+sessão sem número).
+
+Parâmetro opcional e não obrigatório porque os dois testes que já chamam
+`index_product` com dublê de `EmbeddingService` continuam valendo sem mudança.
+
+**6. `AIUsageService.registrar_indexacao`** — **não commita**, como
+`registrar_voz`: os dois varredores já são "um produto, uma transação" e o
+commit deles é logo abaixo da chamada. Engole falha e loga
+`custo_nao_gravado=true`, como as outras duas.
+
+**7. Os dois varredores** — `scripts/reindex_ai.py` e
+`scripts/reindex_worker.py` passam o service.
+
+**8. A leitura** — `AIUsageRepository.custo_por_restaurante` ganha
+`indexing_calls` e `indexing_cost_usd` ao lado dos de texto e voz, e
+`AIUsageByRestaurant` os publica.
+
+### 7.5 Como conferir depois de aplicar
+
+```bash
+docker exec pedeaqui-api alembic current          # tem que citar a 0057
+docker exec pedeaqui-api python scripts/espelhos_de_enum.py   # verde
+```
+
+E provocar uma indexação de verdade — editar a descrição de um produto no painel
+— e ver a linha aparecer:
+
+```bash
+curl -s -H "X-Internal-Key: $PLATFORM_METRICS_KEY" \
+  "https://api.pederapidex.com/internal/ai-usage?restaurant_id=<id>" | python -m json.tool
+```
+
+`indexing_calls` maior que zero e `calls_without_price` igual a zero. O segundo é
+o que denuncia `EMBEDDING_MODEL` fora da tabela de preços.
+
+### 7.6 Rollback
+
+`alembic downgrade -1`. Ele **apaga as linhas de indexação**, e é deliberado:
+`ADD CONSTRAINT ... CHECK` valida a tabela inteira, então recriar a CHECK antiga
+com uma linha `indexing` gravada falharia no meio e deixaria a tabela sem CHECK
+nenhuma. O que se perde é medição — nenhuma linha desta tabela é pedido,
+comissão ou saldo de cliente.
+
+O código tem que voltar junto, pelo mesmo motivo da seção 7.3.

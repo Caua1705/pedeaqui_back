@@ -18,23 +18,39 @@ O que mora aqui é migração **escrita, revisada e esperando uma decisão que n
 
 ## O que está aqui hoje
 
-**`20260905_0057` — a indexação do cardápio entra em `ai_usage_events`.** Uma
-CHECK, um valor a mais: `surface` passa a aceitar `indexing` ao lado de `text`
-e `voice`. O plano de aplicação, com os passos de código que vão **junto**,
-está em [`docs/custo-de-ia.md`](../../docs/custo-de-ia.md), seção 7.
+São **três**, e as três esperam a mesma coisa: uma decisão que não é de código.
 
-**O que ela tem de diferente das duas anteriores, e é o que vale saber:** as
-etapas do alinhamento eram schema puro — nenhuma linha de código mudava com
-elas. Esta tem **código acoplado**, e o acoplamento é verificável em vez de
-lembrado: `AI_SURFACES` é o espelho declarado desta CHECK em
-`scripts/espelhos_de_enum.py`, e o portão compara valor a valor. Código antes
-do schema deixa o portão vermelho; schema antes do código também. Os dois no
-mesmo commit é a única ordem verde — e é por isso que a revisão está aqui
-sozinha, sem o código do lado.
+| Revisão | O que faz | Plano | Recomendação |
+|---|---|---|---|
+| `20260905_0057` | `ai_usage_events.surface` passa a aceitar `indexing`, ao lado de `text` e `voice` | [`docs/custo-de-ia.md`](../../docs/custo-de-ia.md), seção 7 | **decidir** — mede o custo de indexar o cardápio |
+| `20260905_0058` | `branches` perde as 5 colunas de endereço mortas | [`docs/modelo-de-dados.md`](../../docs/modelo-de-dados.md), "PENDENTE: quebrar a tabela `branches`" | **fazer** — não move dado, não muda comportamento |
+| `20260905_0059` | a tarifa de entrega sai de `branches` para uma tabela 1:1 opcional | idem | **decidir** — é a única das quatro divisões candidatas que paga |
 
-`tests/test_revisao_preparada_da_indexacao.py` cobra as três coisas da
-armadilha 53: o Alembic não a conhece, ela ainda descreve o schema real, e ela
-**roda** (contra o Postgres de teste, numa transação que volta).
+**As três têm CÓDIGO ACOPLADO, e é por isso que estão aqui sozinhas** — sem o
+código do lado. É o que elas têm de diferente das duas anteriores, que eram
+schema puro:
+
+- na `0057`, `AI_SURFACES` é o espelho declarado daquela CHECK em
+  `scripts/espelhos_de_enum.py`, e o portão compara valor a valor. Código antes
+  do schema o deixa vermelho; schema antes do código também. **Os dois no mesmo
+  commit é a única ordem verde**;
+- na `0058` e na `0059`, com as colunas fora do banco e
+  `src/models/branch_model.py` ainda mapeando, **todo `SELECT` de filial
+  quebra**.
+
+Em qualquer uma delas, o `git mv` e as linhas do model vão no mesmo commit.
+
+O `Revises` das três é **marcador**: é o head do dia em que cada uma foi
+escrita. A `0058` aponta para `20260905_0056` e não para a `0057` justamente por
+isso — as duas frentes foram escritas em paralelo, e quem tirar a primeira do
+diretório acerta o valor no passo 2 acima.
+
+`tests/test_revisao_preparada_da_indexacao.py` e
+`tests/test_revisoes_preparadas_de_branches.py` cobram as três coisas da
+armadilha 53 em cada uma: o Alembic não as conhece, elas ainda descrevem o
+schema real, e elas **rodam** (contra o Postgres de teste, numa transação que
+volta). A `0059` é exercitada **com linha na mesa** — um `INSERT ... SELECT`
+sobre tabela vazia é no-op, e provar só ele seria não provar nada.
 
 ## O que as anteriores deixaram de lição
 

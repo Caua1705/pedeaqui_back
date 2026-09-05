@@ -8,7 +8,7 @@ from typing import Any
 import jwt
 from passlib.context import CryptContext
 
-from src.core.config import settings
+from src.core.config import Settings, settings
 
 
 _PASSWORD_ITERATIONS = 390_000
@@ -285,8 +285,22 @@ def decode_signed_token(token: str, purpose: str, secret: str | None = None) -> 
     return payload
 
 
-def _customer_auth_secret() -> str:
-    secret = settings.CUSTOMER_AUTH_SECRET or settings.CUSTOMER_JWT_SECRET
+def resolve_customer_auth_secret(configuracao: Settings) -> str:
+    """O segredo com que os tokens de CLIENTE sao de fato assinados.
+
+    Recebe a configuracao em vez de ler o singleton porque `startup_checks`
+    precisa chamar ESTA funcao para conferir os dois publicos. A trava da
+    armadilha 32 comparava `settings.CUSTOMER_AUTH_SECRET` diretamente, e por
+    isso ficava cega a qualquer resolucao que nao fosse a leitura crua do
+    campo: com `CUSTOMER_AUTH_SECRET` vazia e o antigo `CUSTOMER_JWT_SECRET`
+    preenchido com o mesmo valor de `ADMIN_AUTH_SECRET`, os dois publicos
+    assinavam com a mesma chave e a comparacao nao via nada.
+
+    Nao ha mais fallback nenhum — mas a funcao continua sendo o unico lugar
+    que responde "qual segredo assina o token do cliente", e e ela que a
+    trava consulta. Fallback novo entra aqui e a trava o enxerga de graca.
+    """
+    secret = configuracao.CUSTOMER_AUTH_SECRET
     if not secret:
         raise AuthSecretMissingError(
             "CUSTOMER_AUTH_SECRET nao esta configurada. Nenhum cliente "
@@ -295,15 +309,22 @@ def _customer_auth_secret() -> str:
     return secret
 
 
-def admin_auth_secret() -> str:
-    """Segredo dos tokens de lojista.
+def resolve_admin_auth_secret(configuracao: Settings) -> str:
+    """O segredo com que os tokens de LOJISTA sao de fato assinados.
 
     Sem fallback para o segredo de cliente, de proposito: sao dois publicos
     diferentes e uma chave compartilhada faz o comprometimento de um alcancar
-    o outro. `ADMIN_AUTH_SECRET` e obrigatoria na configuracao, entao aqui
-    nao ha caminho de ausencia a tratar.
+    o outro.
     """
-    return settings.ADMIN_AUTH_SECRET
+    return configuracao.ADMIN_AUTH_SECRET
+
+
+def _customer_auth_secret() -> str:
+    return resolve_customer_auth_secret(settings)
+
+
+def admin_auth_secret() -> str:
+    return resolve_admin_auth_secret(settings)
 
 
 def token_was_issued_before_password_change(

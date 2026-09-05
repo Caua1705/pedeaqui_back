@@ -299,10 +299,23 @@ class TestAuthSecrets:
         """
         monkeypatch.setattr(settings, "ADMIN_AUTH_SECRET", None)
         monkeypatch.setattr(settings, "CUSTOMER_AUTH_SECRET", None)
-        monkeypatch.setattr(settings, "CUSTOMER_JWT_SECRET", None)
 
         with pytest.raises(AuthSecretMissingError):
             _customer_auth_secret()
+
+    def test_nao_ha_mais_fallback_de_segredo_de_cliente(self, monkeypatch):
+        """`CUSTOMER_JWT_SECRET` saiu em 05/09/2026, e o que fica e a ausencia
+        de QUALQUER fallback: com o campo vazio, a resolucao levanta em vez de
+        procurar um segundo lugar de onde tirar chave.
+
+        Um fallback aqui e o desenho da armadilha 32 — foi assim que o token
+        de lojista passou a ser assinado com o segredo do cliente."""
+        monkeypatch.setattr(settings, "CUSTOMER_AUTH_SECRET", "")
+
+        with pytest.raises(AuthSecretMissingError):
+            _customer_auth_secret()
+
+        assert not hasattr(settings, "CUSTOMER_JWT_SECRET")
 
     def test_the_dependency_does_not_turn_it_into_a_401(self, monkeypatch):
         """A separacao so vale se quem responde 401 NAO pegar esta excecao.

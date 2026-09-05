@@ -66,8 +66,17 @@ class Settings(BaseSettings):
     # o boot de todo mundo por causa de um relatorio que uma pessoa le.
     PLATFORM_METRICS_KEY: str | None = None
 
+    # Segredo dos tokens de cliente. Sem default, e `startup_checks` recusa o
+    # valor VAZIO: a pydantic aceita `CUSTOMER_AUTH_SECRET=` porque o tipo e
+    # `str` e vazia e uma string, e o boot passaria assinando todo token de
+    # cliente com "". Ver `_erros_dos_segredos_de_assinatura`.
+    #
+    # Houve aqui um `CUSTOMER_JWT_SECRET` opcional, para o qual
+    # `_customer_auth_secret()` caia quando esta ficava vazia. Removido em
+    # 05/09/2026: a VPS nunca o teve definido, entao o fallback era codigo
+    # morto — e fallback de segredo e o desenho exato da armadilha 32, que fez
+    # token de lojista e de cliente compartilharem chave.
     CUSTOMER_AUTH_SECRET: str
-    CUSTOMER_JWT_SECRET: str | None = None
     CUSTOMER_ACCESS_TOKEN_MINUTES: int = 10080
     PASSWORD_RESET_TOKEN_MINUTES: int = 15
 

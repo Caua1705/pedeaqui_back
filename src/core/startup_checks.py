@@ -256,6 +256,8 @@ def collect_configuration_warnings(settings: Settings) -> list[str]:
             "nenhuma rota a utiliza. Pode ser removida do .env."
         )
 
+    warnings.extend(_avisos_do_whatsapp(settings))
+
     if settings.PAYMENT_PROVIDER == "sandbox" and not (settings.PAYMENT_WEBHOOK_SECRET or "").strip():
         # Warning e nao erro: hoje ha restaurante sem nenhuma forma de
         # pagamento online, e derrubar o boot deles por causa de uma
@@ -303,6 +305,78 @@ def collect_configuration_warnings(settings: Settings) -> list[str]:
 
     return warnings
 
+
+def _whatsapp_esta_em_uso(settings: Settings) -> bool:
+    """Este ambiente usa WhatsApp?
+
+    Ele NAO tem como olhar `whatsapp_channels` — `collect_configuration_warnings`
+    recebe as configuracoes e nao o banco, e e o que a mantem chamavel no boot
+    e num teste sem Postgres. O proxy sao as duas variaveis que so alguem
+    montando a frente define:
+
+    - `WHATSAPP_NOTIFICATIONS_ENABLED` ligada e a intencao declarada de mandar;
+    - `WHATSAPP_TOKEN_ENCRYPTION_KEY` preenchida quer dizer que um canal foi
+      (ou vai ser) cadastrado — sem ela o cadastro nem roda, entao ninguem a
+      define por acaso.
+
+    Nenhuma das duas, nenhum aviso: o ambiente simplesmente nao usa WhatsApp,
+    e tres linhas de boot sobre uma frente desligada sao o tipo de ruido que
+    se aprende a ignorar junto com o resto.
+    """
+    if settings.WHATSAPP_NOTIFICATIONS_ENABLED:
+        return True
+    return bool((settings.WHATSAPP_TOKEN_ENCRYPTION_KEY or "").strip())
+
+
+def _avisos_do_whatsapp(settings: Settings) -> list[str]:
+    """As tres variaveis do WhatsApp, cada uma com o SEU sintoma.
+
+    Elas nao derrubam o boot de proposito — a frente e opcional e nenhum
+    pedido depende dela —, e ate 05/09/2026 tambem nao avisavam nada. O
+    resultado era o pior desenho possivel: **com canal cadastrado e chave
+    faltando, o sintoma so aparecia no primeiro envio REAL**, como uma linha
+    `failed` em `whatsapp_messages` que alguem precisa estar lendo. Nenhuma
+    tela, nenhum log de boot, nenhum 500.
+
+    Tres avisos e nao um, pelo mesmo criterio dos tres do `REDIS_URL`: cada
+    uma tem um dono, um sintoma e um momento diferentes de morder, e juntar
+    as tres numa frase faria quem procura a sua ler as outras duas.
+    """
+    if not _whatsapp_esta_em_uso(settings):
+        return []
+
+    avisos = []
+
+    if not (settings.WHATSAPP_TOKEN_ENCRYPTION_KEY or "").strip():
+        # A primeira porque e a mais total: sem ela o token do lojista nao
+        # decifra, e NENHUM aviso sai — nem o cadastro de canal novo roda.
+        avisos.append(
+            "WHATSAPP_TOKEN_ENCRYPTION_KEY nao definida com os avisos "
+            "LIGADOS: o access_token de cada canal nao pode ser decifrado, "
+            "entao nenhum aviso de pedido sai e o cadastro de canal novo "
+            "falha. Gere com "
+            '`python -c "from cryptography.fernet import Fernet; '
+            'print(Fernet.generate_key().decode())"`.'
+        )
+
+    if not (settings.WHATSAPP_APP_SECRET or "").strip():
+        avisos.append(
+            "WHATSAPP_APP_SECRET nao definida: POST /webhooks/whatsapp "
+            "responde 503 para TODO restaurante. Os avisos ate saem, mas "
+            "'entregue' e 'lido' nunca voltam para whatsapp_messages e a "
+            "janela de 24h nunca abre. Nao existe modo 'aceita sem "
+            "verificar'."
+        )
+
+    if not (settings.WHATSAPP_WEBHOOK_VERIFY_TOKEN or "").strip():
+        avisos.append(
+            "WHATSAPP_WEBHOOK_VERIFY_TOKEN nao definida: o GET de "
+            "verificacao responde 503 e o painel da Meta so diz que nao "
+            "validou, sem dizer por que. Ela precisa estar no ambiente "
+            "ANTES de clicar em 'Verificar e salvar' la."
+        )
+
+    return avisos
 
 def validate_settings(settings: Settings) -> None:
     # A unica linha impura das checagens: ler o processo. O que decide fica

@@ -373,3 +373,144 @@ class TestOAvisoDoEntrarComGoogle:
         warnings = collect_configuration_warnings(settings)
 
         assert not any("GOOGLE_OAUTH_CLIENT_IDS" in warning for warning in warnings)
+
+
+class TestOsAvisosDoWhatsApp:
+    """As tres variaveis que nao avisavam nada ate 05/09/2026.
+
+    O sintoma era o pior possivel: **com canal cadastrado e chave faltando,
+    o erro so aparecia no primeiro envio REAL**, como uma linha `failed` em
+    `whatsapp_messages` que alguem precisa estar lendo. Nenhuma tela, nenhum
+    log de boot, nenhum 500 — e quem monta o canal e quem le o boot sao a
+    mesma pessoa, no mesmo deploy.
+
+    Elas continuam nao derrubando o boot, e isso e desenho: a frente e
+    opcional e nenhum pedido depende dela. O que mudou e ter voz.
+    """
+
+    def _sem_whatsapp(self, monkeypatch):
+        return _settings_with(
+            monkeypatch,
+            WHATSAPP_NOTIFICATIONS_ENABLED=False,
+            WHATSAPP_TOKEN_ENCRYPTION_KEY=None,
+            WHATSAPP_APP_SECRET=None,
+            WHATSAPP_WEBHOOK_VERIFY_TOKEN=None,
+        )
+
+    def test_ambiente_que_nao_usa_whatsapp_nao_avisa_nada(self, monkeypatch):
+        """Tres linhas de boot sobre uma frente desligada sao o tipo de
+        ruido que se aprende a ignorar junto com o resto."""
+        self._sem_whatsapp(monkeypatch)
+
+        avisos = collect_configuration_warnings(settings)
+
+        assert not [aviso for aviso in avisos if "WHATSAPP" in aviso]
+
+    def test_avisos_ligados_sem_chave_de_cifra_avisa(self, monkeypatch):
+        self._sem_whatsapp(monkeypatch)
+        _settings_with(monkeypatch, WHATSAPP_NOTIFICATIONS_ENABLED=True)
+
+        avisos = collect_configuration_warnings(settings)
+
+        assert any("WHATSAPP_TOKEN_ENCRYPTION_KEY" in aviso for aviso in avisos)
+
+    def test_a_chave_de_cifra_preenchida_ja_liga_a_conferencia(self, monkeypatch):
+        """E o proxy de "ha canal cadastrado", e o unico disponivel no boot.
+
+        `collect_configuration_warnings` recebe as configuracoes e nao o
+        banco — e e o que a mantem chamavel num teste sem Postgres. Ninguem
+        define esta chave por acaso: sem ela o cadastro de canal nem roda."""
+        self._sem_whatsapp(monkeypatch)
+        _settings_with(monkeypatch, WHATSAPP_TOKEN_ENCRYPTION_KEY="chave-fernet")
+
+        avisos = collect_configuration_warnings(settings)
+
+        assert any("WHATSAPP_APP_SECRET" in aviso for aviso in avisos)
+        assert any("WHATSAPP_WEBHOOK_VERIFY_TOKEN" in aviso for aviso in avisos)
+
+    def test_as_tres_saem_em_avisos_SEPARADOS(self, monkeypatch):
+        """Uma frente, tres donos e tres sintomas — o mesmo criterio dos tres
+        avisos do `REDIS_URL`. Juntar numa frase faria quem procura o seu ler
+        os outros dois."""
+        self._sem_whatsapp(monkeypatch)
+        _settings_with(monkeypatch, WHATSAPP_NOTIFICATIONS_ENABLED=True)
+
+        avisos = [
+            aviso
+            for aviso in collect_configuration_warnings(settings)
+            if "WHATSAPP" in aviso
+        ]
+
+        assert len(avisos) == 3
+
+    def test_cada_aviso_diz_o_SINTOMA_e_nao_so_o_nome_da_variavel(self, monkeypatch):
+        """O nome sozinho manda procurar; o sintoma faz reconhecer o
+        problema que ja esta acontecendo."""
+        self._sem_whatsapp(monkeypatch)
+        _settings_with(monkeypatch, WHATSAPP_NOTIFICATIONS_ENABLED=True)
+
+        por_variavel = {
+            "WHATSAPP_TOKEN_ENCRYPTION_KEY": "nenhum aviso de pedido sai",
+            "WHATSAPP_APP_SECRET": "responde 503",
+            "WHATSAPP_WEBHOOK_VERIFY_TOKEN": "Verificar e salvar",
+        }
+        avisos = collect_configuration_warnings(settings)
+
+        for variavel, sintoma in por_variavel.items():
+            aviso = next(a for a in avisos if variavel in a)
+            assert sintoma in aviso
+
+    def test_com_as_tres_preenchidas_nenhum_aviso_sobra(self, monkeypatch):
+        _settings_with(
+            monkeypatch,
+            WHATSAPP_NOTIFICATIONS_ENABLED=True,
+            WHATSAPP_TOKEN_ENCRYPTION_KEY="chave-fernet",
+            WHATSAPP_APP_SECRET="segredo-do-app",
+            WHATSAPP_WEBHOOK_VERIFY_TOKEN="token-de-verificacao",
+        )
+
+        avisos = collect_configuration_warnings(settings)
+
+        assert not [aviso for aviso in avisos if "WHATSAPP" in aviso]
+
+    def test_espaco_em_branco_nao_conta_como_preenchida(self, monkeypatch):
+        """`.strip()` nos tres. Uma linha `WHATSAPP_APP_SECRET= ` no `.env`
+        e uma variavel vazia com cara de preenchida."""
+        _settings_with(
+            monkeypatch,
+            WHATSAPP_NOTIFICATIONS_ENABLED=True,
+            WHATSAPP_TOKEN_ENCRYPTION_KEY="chave-fernet",
+            WHATSAPP_APP_SECRET="   ",
+            WHATSAPP_WEBHOOK_VERIFY_TOKEN="token",
+        )
+
+        avisos = collect_configuration_warnings(settings)
+
+        assert any("WHATSAPP_APP_SECRET" in aviso for aviso in avisos)
+
+    def test_nenhuma_das_tres_derruba_o_boot(self, monkeypatch):
+        """Sao AVISOS. A frente e opcional, e nenhum pedido depende dela —
+        derrubar a API de quem nao usa WhatsApp seria trocar um aviso que
+        falta por um servico fora do ar."""
+        self._sem_whatsapp(monkeypatch)
+        _settings_with(monkeypatch, WHATSAPP_NOTIFICATIONS_ENABLED=True)
+
+        erros = collect_configuration_errors(settings)
+
+        assert not [erro for erro in erros if "WHATSAPP" in erro]
+
+    def test_os_avisos_saem_no_log_do_boot(self, monkeypatch, caplog):
+        """Sem esta linha, os avisos existiriam so para quem chamasse a
+        funcao — e quem precisa deles esta lendo `docker logs`."""
+        _settings_with(
+            monkeypatch,
+            WHATSAPP_NOTIFICATIONS_ENABLED=True,
+            WHATSAPP_TOKEN_ENCRYPTION_KEY=None,
+            WHATSAPP_APP_SECRET=None,
+            WHATSAPP_WEBHOOK_VERIFY_TOKEN=None,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            validate_settings(settings)
+
+        assert "WHATSAPP_APP_SECRET" in caplog.text

@@ -4,18 +4,22 @@ Revision ID: 20260905_0058
 Revises: 20260905_0056
 Create Date: 2026-09-05
 
-`Revises` aqui e MARCADOR, e nao uma revisao de verdade: e o head do dia em que
-esta foi escrita. Quem tirar do `preparadas/` acerta o valor para o head daquele
-momento (passo 2 do `LEIA-ME.md`) — e a `20260905_0057`, que tambem esta
-esperando decisao, pode muito bem estar na frente ate la.
+**SAIU de `alembic/preparadas/` em 05/09/2026 e entrou na cadeia.** O passo 2
+do `LEIA-ME.md` pedia acertar o `down_revision` para o head do dia: ele ja era
+`20260905_0056`, que continuava sendo o head, entao o marcador coincidiu com a
+revisao de verdade e nada mudou nessa linha.
 
-**ESCRITA E NAO APLICADA.** Mora em `alembic/preparadas/`, que o Alembic nao le.
-Ver `alembic/preparadas/LEIA-ME.md` e a armadilha 53. O plano esta em
-`docs/modelo-de-dados.md`, secao "PENDENTE: quebrar a tabela `branches`".
+A conferencia que o cabecalho manda rodar foi refeita no dia da adocao, e o
+resultado esta na secao seguinte. O plano esta em `docs/modelo-de-dados.md`,
+secao "PENDENTE: quebrar a tabela `branches`".
 
 Esta e a **etapa A** da divisao de `branches`, e a unica das duas que nao
 depende de decisao nenhuma: ela nao move dado, nao cria tabela e nao muda
-comportamento. So tira lixo.
+comportamento. So tira lixo. A **etapa B** (`20260905_0059`, a tarifa saindo
+para uma tabela 1:1) continua em `preparadas/`, esperando decisao.
+
+`src/models/branch_model.py` largou as cinco NO MESMO COMMIT, pelo motivo da
+secao "O codigo vai JUNTO" mais abaixo.
 
 ---
 

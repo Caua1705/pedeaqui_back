@@ -157,16 +157,49 @@ class RestaurantInfoServiceTests(unittest.TestCase):
 class BranchAddressTests(unittest.TestCase):
     """O endereço público sai do conjunto VIVO, o que o painel grava.
 
-    As seis `branches.address_*` são resto do schema pré-Alembic e nada as
-    escreve — mas `_build_address` as LIA primeiro, e elas venciam. Numa
+    As `branches.address_*` eram resto do schema pré-Alembic e nada as
+    escrevia — mas `_build_address` as LIA primeiro, e elas venciam. Numa
     filial com elas preenchidas, o lojista corrigia o endereço no painel e o
     app do cliente continuava mostrando o antigo, sem erro e sem log.
+
+    **A leitura foi consertada primeiro; as colunas saíram depois**, na
+    revisão `20260905_0058`. Sobrou `address_number`, que não tem par vivo.
     """
+
+    #: O que a `20260905_0058` derrubou. Escrito aqui porque é o que este
+    #: arquivo precisa que NÃO exista mais.
+    CONJUNTO_MORTO = (
+        "address_street",
+        "address_neighborhood",
+        "address_city",
+        "address_state",
+        "address_zipcode",
+    )
 
     def setUp(self):
         self.restaurant_id = uuid.uuid4()
 
-    def test_o_conjunto_morto_nao_sobrescreve_mais_o_que_o_painel_gravou(self):
+    def test_o_conjunto_morto_nao_existe_mais_para_sobrescrever_nada(self):
+        """O que era uma regra de leitura virou uma propriedade do schema.
+
+        Antes este teste montava uma filial com os dois conjuntos preenchidos
+        e conferia qual vencia. Hoje o segundo conjunto não pode ser montado:
+        as cinco colunas saíram do banco e do model, e um `Branch(...)` que as
+        passe é `TypeError` na hora — que é a defesa mais forte, porque não
+        depende de ninguém escrever o teste certo.
+        """
+        for morta in self.CONJUNTO_MORTO:
+            with self.subTest(coluna=morta):
+                with self.assertRaises(TypeError):
+                    make_branch(self.restaurant_id, **{morta: "Valor Antigo"})
+
+    def test_o_conjunto_vivo_e_o_que_sai_no_endereco_publico(self):
+        """A outra metade, e ela continua sendo sobre COMPORTAMENTO.
+
+        Sem ela, o teste acima ficaria verde num `_build_address` que não
+        lesse nada (armadilha 52: todo `raises` novo confere que a mesma
+        chamada com o dado certo funciona).
+        """
         filial = make_branch(
             self.restaurant_id,
             address="Av. Manoel Dias Branco",
@@ -174,12 +207,6 @@ class BranchAddressTests(unittest.TestCase):
             city="Fortaleza",
             state="CE",
             zipcode="60182-015",
-            # O que o painel não alcança, e que antes vencia.
-            address_street="Rua Antiga",
-            address_neighborhood="Bairro Antigo",
-            address_city="Cidade Antiga",
-            address_state="XX",
-            address_zipcode="00000-000",
         )
 
         endereco = RestaurantService._build_address(filial)
@@ -189,10 +216,9 @@ class BranchAddressTests(unittest.TestCase):
         self.assertEqual(endereco.city, "Fortaleza")
         self.assertEqual(endereco.state, "CE")
         self.assertEqual(endereco.zipcode, "60182-015")
-        self.assertNotIn("Antig", endereco.full_address)
 
     def test_o_numero_continua_saindo_de_address_number(self):
-        """A única das seis que sobrou, porque não tem par vivo.
+        """A única do conjunto morto que sobrou, porque não tem par vivo.
 
         Não existe `branches.number` nem campo de número em
         `AdminBranchUpdate`: `address_number` não sobrescreve ninguém, e

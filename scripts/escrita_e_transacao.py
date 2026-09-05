@@ -73,6 +73,11 @@ PREFIXOS_DE_LEITURA = (
     "last_order_", "segment_of_", "sales_", "totals_", "top_", "custo_",
     "cancellation", "rating_", "problem_tag_", "available_",
     "similarity_", "sellable_",
+    # As agregacoes de Desempenho de 05/09/2026. Estreitos de proposito:
+    # `cashback_` sozinho abriria a porta para um `cashback_credit` futuro
+    # entrar como leitura por acidente, que e exatamente o que o comentario
+    # acima recusa.
+    "customers_by_", "cashback_redeemed_", "cashback_earned_", "operation_",
 )
 
 # O indice deste script e MAIOR que o de `escopo_das_rotas`. La a pergunta

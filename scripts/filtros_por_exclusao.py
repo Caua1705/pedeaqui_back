@@ -135,6 +135,14 @@ ESPERADOS = {
         "Tipo de desconto novo nasce SEM poder ter teto, que e o lado que "
         "fecha — o banco recusaria de qualquer jeito"
     ),
+    "src/repositories/admin_report_repository.py:Order.order_type != 'delivery'": (
+        "NEGACAO COMPLETA em forma de complemento: e a CONTAGEM do que ficou "
+        "de fora de /reports/neighborhoods, que so lista entrega. Tipo de "
+        "pedido novo cai aqui dentro, e e o lado que fecha — este numero "
+        "existe para a diferenca entre esta tela e /reports/summary ser "
+        "explicavel, e um tipo fora dos dois lados reabriria o buraco. Por "
+        "isso o campo chama `non_delivery_orders_count` e nao `pickup`"
+    ),
     "src/services/admin_courier_service.py:order.order_type != 'delivery'": (
         "GUARDA INVERTIDA: tipo de pedido novo nao e atribuivel a entregador "
         "(`not_delivery`). Retirada nao tem motoboy, e um tipo novo tambem "

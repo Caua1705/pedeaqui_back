@@ -19,6 +19,7 @@ from decimal import Decimal
 from fastapi import HTTPException
 
 from src.services.admin_report_service import AdminReportService
+from tests import fabricas
 
 
 RESTAURANT_ID = uuid.uuid4()
@@ -41,6 +42,17 @@ class FakeReportRepository:
         cancellations=None,
         cancellations_by_status=None,
         totals_by_period=None,
+        by_hour=None,
+        by_weekday_hour=None,
+        by_neighborhood=None,
+        non_delivery_count=0,
+        recency=None,
+        recency_by_period=None,
+        redeemed=None,
+        redeemed_by_period=None,
+        earned=None,
+        earned_by_period=None,
+        durations=None,
     ):
         self.default_totals = totals or self._empty_totals()
         self.totals_by_period = totals_by_period or {}
@@ -55,6 +67,42 @@ class FakeReportRepository:
         # que o recorte CHEGOU ao repositorio sem subir Postgres — e, no
         # resumo, que ele chegou tambem na consulta do periodo anterior.
         self.branches_asked = []
+        self.by_hour = by_hour or []
+        self.by_weekday_hour = by_weekday_hour or []
+        self.by_neighborhood = by_neighborhood or []
+        self.non_delivery_count = non_delivery_count
+        self.default_recency = recency or self._empty_recency()
+        self.recency_by_period = recency_by_period or {}
+        self.default_redeemed = redeemed or {
+            "redeemed_total": Decimal("0"),
+            "orders_with_redeem_count": 0,
+        }
+        self.redeemed_by_period = redeemed_by_period or {}
+        self.default_earned = earned if earned is not None else Decimal("0")
+        self.earned_by_period = earned_by_period or {}
+        self.durations = durations or self._empty_durations()
+
+    @staticmethod
+    def _empty_recency():
+        return {
+            "customers_count": 0,
+            "new_customers_count": 0,
+            "returning_customers_count": 0,
+            "new_revenue_total": Decimal("0"),
+            "returning_revenue_total": Decimal("0"),
+        }
+
+    @staticmethod
+    def _empty_durations():
+        vazio = {"median": None, "p90": None, "average": None, "orders_count": 0}
+        return {
+            "orders_count": 0,
+            "accept": dict(vazio),
+            "prep": dict(vazio),
+            "delivery": dict(vazio),
+            "late_orders_count": 0,
+            "late_orders_base_count": 0,
+        }
 
     @staticmethod
     def _empty_totals():
@@ -101,10 +149,69 @@ class FakeReportRepository:
         self.branches_asked.append(branch_id)
         return self.cancellations_by_status_rows
 
+    # --- as quatro consultas de 05/09/2026 ---------------------------------
 
-def build_service(repository):
+    def sales_by_hour(self, restaurant_id, start_at, end_at, branch_id=None):
+        self.calls.append(("sales_by_hour", start_at, end_at))
+        self.branches_asked.append(branch_id)
+        return self.by_hour
+
+    def sales_by_weekday_hour(self, restaurant_id, start_at, end_at, branch_id=None):
+        self.branches_asked.append(branch_id)
+        return self.by_weekday_hour
+
+    def sales_by_neighborhood(self, restaurant_id, start_at, end_at, branch_id=None):
+        self.calls.append(("sales_by_neighborhood", start_at, end_at))
+        self.branches_asked.append(branch_id)
+        return self.by_neighborhood
+
+    def count_non_delivery_orders(self, restaurant_id, start_at, end_at, branch_id=None):
+        self.branches_asked.append(branch_id)
+        return self.non_delivery_count
+
+    def customers_by_recency(self, restaurant_id, start_at, end_at, branch_id=None):
+        self.calls.append(("customers_by_recency", start_at, end_at))
+        self.branches_asked.append(branch_id)
+        return self.recency_by_period.get(start_at.date(), self.default_recency)
+
+    def cashback_redeemed_totals(self, restaurant_id, start_at, end_at, branch_id=None):
+        self.branches_asked.append(branch_id)
+        return self.redeemed_by_period.get(start_at.date(), self.default_redeemed)
+
+    def cashback_earned_total(self, restaurant_id, start_at, end_at, branch_id=None):
+        self.branches_asked.append(branch_id)
+        return self.earned_by_period.get(start_at.date(), self.default_earned)
+
+    def operation_durations(self, restaurant_id, start_at, end_at, branch_id=None):
+        self.calls.append(("operation_durations", start_at, end_at))
+        self.branches_asked.append(branch_id)
+        return self.durations
+
+
+class FakeCashbackRuleRepository:
+    """Dublê de COLABORADOR (repositorio), nao de dado: o que ele devolve
+    sao instancias reais de `CashbackRule`, montadas pela fabrica."""
+
+    def __init__(self, da_filial=None, do_restaurante=None):
+        self.da_filial = da_filial
+        self.do_restaurante = do_restaurante
+        self.perguntas = []
+
+    def get_rules_for_branch(self, restaurant_id, branch_id):
+        self.perguntas.append(("filial", branch_id))
+        return self.da_filial, self.do_restaurante
+
+    def list_restaurant_rules(self, restaurant_ids):
+        self.perguntas.append(("restaurante", tuple(restaurant_ids)))
+        if self.do_restaurante is None:
+            return {}
+        return {restaurant_ids[0]: self.do_restaurante}
+
+
+def build_service(repository, rule_repository=None):
     service = AdminReportService.__new__(AdminReportService)
     service.report_repository = repository
+    service.cashback_rule_repository = rule_repository or FakeCashbackRuleRepository()
     return service
 
 
@@ -542,3 +649,449 @@ class BillableFilterAgreementTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# As quatro rotas de 05/09/2026
+# ---------------------------------------------------------------------------
+
+
+class SalesByHourTests(unittest.TestCase):
+    """As 24 horas SEMPRE, e o mapa dia x hora que NAO e preenchido.
+
+    A assimetria entre os dois e a decisao do relatorio, e ela e o unico
+    lugar onde ele poderia mentir: a hora 3 sem venda existiu de verdade; a
+    segunda-feira de um recorte de quarta a sexta nao existiu.
+    """
+
+    def test_devolve_as_24_horas_mesmo_com_venda_em_uma_so(self):
+        repository = FakeReportRepository(by_hour=[(19, 3, Decimal("300.00"))])
+
+        report = build_service(repository).sales_by_hour(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 7)
+        )
+
+        self.assertEqual(len(report.hours), 24)
+        self.assertEqual([item.hour for item in report.hours], list(range(24)))
+        self.assertEqual(report.hours[19].orders_count, 3)
+        self.assertEqual(report.hours[19].revenue_total, Decimal("300.00"))
+
+    def test_hora_sem_venda_vem_zerada_e_nao_omitida(self):
+        """Sem isto o grafico ligaria 11h direto em 13h e o vale sumiria."""
+        repository = FakeReportRepository(by_hour=[(11, 1, Decimal("50.00"))])
+
+        report = build_service(repository).sales_by_hour(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 1)
+        )
+
+        self.assertEqual(report.hours[12].orders_count, 0)
+        self.assertEqual(report.hours[12].revenue_total, Decimal("0.00"))
+
+    def test_o_total_e_a_soma_das_horas(self):
+        repository = FakeReportRepository(
+            by_hour=[(11, 2, Decimal("100.00")), (19, 3, Decimal("300.50"))]
+        )
+
+        report = build_service(repository).sales_by_hour(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 7)
+        )
+
+        self.assertEqual(report.orders_count, 5)
+        self.assertEqual(report.revenue_total, Decimal("400.50"))
+
+    def test_o_mapa_dia_x_hora_NAO_e_preenchido_com_zero(self):
+        """A assimetria com `hours`, e o motivo dela.
+
+        As 24 horas existem em todo dia; um dia da semana pode nao estar no
+        periodo. Preencher faria a resposta afirmar que a loja nao vendeu
+        numa segunda que o recorte nem contem."""
+        repository = FakeReportRepository(
+            by_weekday_hour=[(2, 19, 3, Decimal("300.00"))]
+        )
+
+        report = build_service(repository).sales_by_hour(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 1)
+        )
+
+        self.assertEqual(len(report.weekday_hours), 1)
+        celula = report.weekday_hours[0]
+        self.assertEqual(celula.weekday, 2)
+        self.assertEqual(celula.hour, 19)
+
+    def test_periodo_vazio_ainda_devolve_as_24_zeradas(self):
+        report = build_service(FakeReportRepository()).sales_by_hour(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 31)
+        )
+
+        self.assertEqual(len(report.hours), 24)
+        self.assertEqual(report.revenue_total, Decimal("0.00"))
+        self.assertEqual(report.weekday_hours, [])
+
+    def test_o_recorte_de_filial_chega_as_duas_consultas(self):
+        repository = FakeReportRepository()
+        filial = uuid.uuid4()
+
+        build_service(repository).sales_by_hour(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 7), branch_id=filial
+        )
+
+        self.assertTrue(repository.branches_asked)
+        self.assertTrue(all(pedida == filial for pedida in repository.branches_asked))
+
+
+class NeighborhoodsTests(unittest.TestCase):
+    def test_ticket_medio_e_fatia_por_bairro(self):
+        repository = FakeReportRepository(
+            by_neighborhood=[
+                ("Aldeota", "Fortaleza", 4, Decimal("400.00")),
+                ("Centro", "Fortaleza", 2, Decimal("100.00")),
+            ]
+        )
+
+        report = build_service(repository).neighborhoods_report(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 31)
+        )
+
+        self.assertEqual(report.revenue_total, Decimal("500.00"))
+        self.assertEqual(report.orders_count, 6)
+        self.assertEqual(report.neighborhoods[0].average_ticket, Decimal("100.00"))
+        self.assertEqual(report.neighborhoods[0].revenue_share_percent, Decimal("80.00"))
+        self.assertEqual(report.neighborhoods[1].average_ticket, Decimal("50.00"))
+
+    def test_bairro_nulo_continua_nulo_e_nao_vira_outro(self):
+        """Mesma regra do `payment_method` nulo: o pedido existe, o dinheiro
+        entrou, e ninguem anotou onde. "Outro" seria um bairro de verdade."""
+        repository = FakeReportRepository(
+            by_neighborhood=[(None, None, 1, Decimal("70.00"))]
+        )
+
+        report = build_service(repository).neighborhoods_report(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 31)
+        )
+
+        self.assertIsNone(report.neighborhoods[0].neighborhood)
+        self.assertIsNone(report.neighborhoods[0].city)
+
+    def test_a_retirada_e_publicada_a_parte_e_nao_somada(self):
+        """O total daqui NAO bate com o do resumo, e a diferenca precisa ser
+        explicavel sem abrir o codigo."""
+        repository = FakeReportRepository(
+            by_neighborhood=[("Aldeota", "Fortaleza", 4, Decimal("400.00"))],
+            non_delivery_count=9,
+        )
+
+        report = build_service(repository).neighborhoods_report(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 31)
+        )
+
+        self.assertEqual(report.orders_count, 4)
+        self.assertEqual(report.non_delivery_orders_count, 9)
+
+    def test_periodo_sem_entrega_nenhuma_nao_divide_por_zero(self):
+        report = build_service(FakeReportRepository()).neighborhoods_report(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 31)
+        )
+
+        self.assertEqual(report.neighborhoods, [])
+        self.assertEqual(report.revenue_total, Decimal("0.00"))
+
+
+def recencia(novos, recorrentes, receita_nova="0", receita_recorrente="0"):
+    return {
+        "customers_count": novos + recorrentes,
+        "new_customers_count": novos,
+        "returning_customers_count": recorrentes,
+        "new_revenue_total": Decimal(receita_nova),
+        "returning_revenue_total": Decimal(receita_recorrente),
+    }
+
+
+class CustomersReportTests(unittest.TestCase):
+    def test_novos_e_recorrentes_com_o_periodo_anterior_ao_lado(self):
+        repository = FakeReportRepository(
+            recency_by_period={
+                date(2026, 7, 8): recencia(3, 7, "300.00", "700.00"),
+                date(2026, 7, 1): recencia(1, 4),
+            }
+        )
+
+        report = build_service(repository).customers_report(
+            RESTAURANT_ID, date(2026, 7, 8), date(2026, 7, 14)
+        )
+
+        self.assertEqual(report.customers_count.current, Decimal("10"))
+        self.assertEqual(report.customers_count.previous, Decimal("5"))
+        self.assertEqual(report.new_customers_count.current, Decimal("3"))
+        self.assertEqual(report.returning_customers_count.current, Decimal("7"))
+        self.assertEqual(report.new_revenue_total, Decimal("300.00"))
+        self.assertEqual(report.returning_revenue_total, Decimal("700.00"))
+
+    def test_sem_cliente_no_periodo_anterior_a_variacao_e_nula(self):
+        """Sair de zero para dez clientes nao e crescimento de 1000%."""
+        repository = FakeReportRepository(
+            recency_by_period={date(2026, 7, 8): recencia(10, 0)}
+        )
+
+        report = build_service(repository).customers_report(
+            RESTAURANT_ID, date(2026, 7, 8), date(2026, 7, 14)
+        )
+
+        self.assertIsNone(report.customers_count.change_percent)
+
+    def test_o_gerado_e_o_resgatado_sao_numeros_independentes(self):
+        """Eles nao fecham entre si de proposito: o credito nasce na
+        conclusao de um pedido e o resgate na criacao de outro."""
+        repository = FakeReportRepository(
+            earned_by_period={
+                date(2026, 7, 8): Decimal("120.00"),
+                date(2026, 7, 1): Decimal("80.00"),
+            },
+            redeemed_by_period={
+                date(2026, 7, 8): {
+                    "redeemed_total": Decimal("45.00"),
+                    "orders_with_redeem_count": 6,
+                },
+                date(2026, 7, 1): {
+                    "redeemed_total": Decimal("15.00"),
+                    "orders_with_redeem_count": 2,
+                },
+            },
+        )
+
+        report = build_service(repository).customers_report(
+            RESTAURANT_ID, date(2026, 7, 8), date(2026, 7, 14)
+        )
+
+        self.assertEqual(report.cashback.earned_total.current, Decimal("120.00"))
+        self.assertEqual(report.cashback.earned_total.previous, Decimal("80.00"))
+        self.assertEqual(report.cashback.redeemed_total.current, Decimal("45.00"))
+        self.assertEqual(report.cashback.orders_with_redeem_count, 6)
+
+    def test_configured_e_falso_sem_regra_nenhuma(self):
+        """O estado de fabrica: `cashback_rules.enabled` nasce falso em todo
+        restaurante. Sem este campo, "R$ 0,00 resgatados" nao distingue
+        "ninguem usa" de "ninguem ligou"."""
+        report = build_service(FakeReportRepository()).customers_report(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 31)
+        )
+
+        self.assertFalse(report.cashback.configured)
+
+    def test_configured_e_verdadeiro_com_regra_do_restaurante_ligada(self):
+        regras = FakeCashbackRuleRepository(do_restaurante=fabricas.regra_de_cashback())
+
+        report = build_service(FakeReportRepository(), regras).customers_report(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 31)
+        )
+
+        self.assertTrue(report.cashback.configured)
+
+    def test_regra_desligada_nao_conta_como_configurada(self):
+        regras = FakeCashbackRuleRepository(
+            do_restaurante=fabricas.regra_de_cashback(enabled=False)
+        )
+
+        report = build_service(FakeReportRepository(), regras).customers_report(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 31)
+        )
+
+        self.assertFalse(report.cashback.configured)
+
+    def test_sem_branch_id_so_a_regra_do_RESTAURANTE_responde(self):
+        """Uma filial que sobrescreveu a campanha nao torna a REDE
+        configurada — e a leitura certa para quem olha o total da rede."""
+        regras = FakeCashbackRuleRepository(do_restaurante=fabricas.regra_de_cashback())
+
+        build_service(FakeReportRepository(), regras).customers_report(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 31)
+        )
+
+        self.assertEqual([tipo for tipo, _ in regras.perguntas], ["restaurante"])
+
+    def test_com_branch_id_a_regra_da_filial_entra_na_heranca(self):
+        regras = FakeCashbackRuleRepository(
+            da_filial=fabricas.regra_de_cashback(enabled=False),
+            do_restaurante=fabricas.regra_de_cashback(),
+        )
+        filial = uuid.uuid4()
+
+        report = build_service(FakeReportRepository(), regras).customers_report(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 31), branch_id=filial
+        )
+
+        # A da filial VENCE a do restaurante, e ela esta desligada — a mesma
+        # heranca do checkout, e nao um `or` entre as duas.
+        self.assertFalse(report.cashback.configured)
+        self.assertEqual(regras.perguntas, [("filial", filial)])
+
+
+class OperationsReportTests(unittest.TestCase):
+    def test_os_minutos_saem_com_uma_casa(self):
+        repository = FakeReportRepository(
+            durations={
+                "orders_count": 12,
+                "accept": {
+                    "median": Decimal("2.5"),
+                    "p90": Decimal("9.25"),
+                    "average": Decimal("3.333333"),
+                    "orders_count": 12,
+                },
+                "prep": {
+                    "median": Decimal("18"),
+                    "p90": Decimal("35"),
+                    "average": Decimal("21"),
+                    "orders_count": 10,
+                },
+                "delivery": {
+                    "median": None,
+                    "p90": None,
+                    "average": None,
+                    "orders_count": 0,
+                },
+                "late_orders_count": 2,
+                "late_orders_base_count": 8,
+            }
+        )
+
+        report = build_service(repository).operations_report(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 31)
+        )
+
+        self.assertEqual(report.accept_minutes.median, Decimal("2.5"))
+        self.assertEqual(report.accept_minutes.p90, Decimal("9.2"))
+        self.assertEqual(report.accept_minutes.average, Decimal("3.3"))
+        self.assertEqual(report.prep_minutes.median, Decimal("18.0"))
+
+    def test_estagio_sem_pedido_nenhum_vem_NULO_e_nao_zero(self):
+        """"Mediana de 0 min" afirmaria um aceite instantaneo. O que houve
+        foi nao ter havido aceite nenhum."""
+        report = build_service(FakeReportRepository()).operations_report(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 31)
+        )
+
+        self.assertIsNone(report.accept_minutes.median)
+        self.assertIsNone(report.prep_minutes.p90)
+        self.assertIsNone(report.delivery_minutes.average)
+        self.assertEqual(report.delivery_minutes.orders_count, 0)
+
+    def test_cada_bloco_traz_o_proprio_numero_de_pedidos(self):
+        """Nem todo pedido passa por todos os estagios: retirada nao tem
+        entrega, e pedido aceito e cancelado nao tem preparo."""
+        repository = FakeReportRepository(
+            durations={
+                "orders_count": 30,
+                "accept": {"median": Decimal("2"), "p90": Decimal("5"),
+                           "average": Decimal("3"), "orders_count": 30},
+                "prep": {"median": Decimal("20"), "p90": Decimal("40"),
+                         "average": Decimal("22"), "orders_count": 28},
+                "delivery": {"median": Decimal("15"), "p90": Decimal("30"),
+                             "average": Decimal("17"), "orders_count": 19},
+                "late_orders_count": 0,
+                "late_orders_base_count": 28,
+            }
+        )
+
+        report = build_service(repository).operations_report(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 31)
+        )
+
+        self.assertEqual(report.orders_count, 30)
+        self.assertEqual(report.accept_minutes.orders_count, 30)
+        self.assertEqual(report.prep_minutes.orders_count, 28)
+        self.assertEqual(report.delivery_minutes.orders_count, 19)
+
+    def test_a_taxa_de_atraso_sai_sobre_quem_TINHA_prazo_prometido(self):
+        """O denominador NAO e `prep_minutes.orders_count`: pedido com
+        preparo medido e sem prazo prometido nao pode ser julgado atrasado, e
+        conta-lo embaixo faria a tela subestimar o atraso."""
+        repository = FakeReportRepository(
+            durations={
+                "orders_count": 100,
+                "accept": {"median": None, "p90": None, "average": None, "orders_count": 0},
+                "prep": {"median": Decimal("20"), "p90": Decimal("40"),
+                         "average": Decimal("22"), "orders_count": 100},
+                "delivery": {"median": None, "p90": None, "average": None, "orders_count": 0},
+                "late_orders_count": 5,
+                "late_orders_base_count": 20,
+            }
+        )
+
+        report = build_service(repository).operations_report(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 31)
+        )
+
+        self.assertEqual(report.late_orders_base_count, 20)
+        # 5 em 20, e nao 5 em 100.
+        self.assertEqual(report.late_orders_percent, Decimal("25.00"))
+
+    def test_sem_denominador_a_taxa_e_nula_e_nao_zero(self):
+        report = build_service(FakeReportRepository()).operations_report(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 31)
+        )
+
+        self.assertEqual(report.late_orders_count, 0)
+        self.assertIsNone(report.late_orders_percent)
+
+    def test_o_recorte_de_filial_chega_ao_repositorio(self):
+        repository = FakeReportRepository()
+        filial = uuid.uuid4()
+
+        build_service(repository).operations_report(
+            RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 7), branch_id=filial
+        )
+
+        self.assertEqual(repository.branches_asked, [filial])
+
+
+class PeriodoDasQuatroTests(unittest.TestCase):
+    """As quatro validam periodo como as seis anteriores.
+
+    Sem isto, um recorte de anos varre a tabela inteira em quatro rotas
+    novas — e o teto de 92 dias existiria so nas antigas.
+    """
+
+    def test_periodo_invertido_e_recusado_nas_quatro(self):
+        service = build_service(FakeReportRepository())
+        for metodo in (
+            service.sales_by_hour,
+            service.neighborhoods_report,
+            service.customers_report,
+            service.operations_report,
+        ):
+            with self.subTest(metodo=metodo.__name__):
+                with self.assertRaises(HTTPException) as raised:
+                    metodo(RESTAURANT_ID, date(2026, 7, 31), date(2026, 7, 1))
+                self.assertEqual(raised.exception.status_code, 400)
+
+    def test_periodo_longo_demais_e_recusado_nas_quatro(self):
+        service = build_service(FakeReportRepository())
+        for metodo in (
+            service.sales_by_hour,
+            service.neighborhoods_report,
+            service.customers_report,
+            service.operations_report,
+        ):
+            with self.subTest(metodo=metodo.__name__):
+                with self.assertRaises(HTTPException) as raised:
+                    metodo(RESTAURANT_ID, date(2026, 1, 1), date(2026, 12, 31))
+                self.assertEqual(raised.exception.status_code, 400)
+
+    def test_o_fuso_da_operacao_vale_nas_quatro(self):
+        for metodo_nome, chamada in (
+            ("sales_by_hour", "sales_by_hour"),
+            ("neighborhoods_report", "sales_by_neighborhood"),
+            ("customers_report", "customers_by_recency"),
+            ("operations_report", "operation_durations"),
+        ):
+            with self.subTest(metodo=metodo_nome):
+                repository = FakeReportRepository()
+                getattr(build_service(repository), metodo_nome)(
+                    RESTAURANT_ID, date(2026, 7, 1), date(2026, 7, 1)
+                )
+
+                nome, start_at, end_at = next(
+                    linha for linha in repository.calls if linha[0] == chamada
+                )
+                self.assertEqual(start_at.utcoffset(), timedelta(hours=-3))
+                self.assertEqual(start_at.day, 1)
+                self.assertEqual(end_at.day, 2)

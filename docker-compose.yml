@@ -19,9 +19,14 @@
 # estar la e nao aqui esta no docstring dele. Este comentario fica para que
 # ninguem "simplifique" o validador achando que o `:-` ja resolve.
 #
-# O deploy que carimba esta em `docs/operacao.md`:
+# E DESDE 05/09/2026 A VARIAVEL AUSENTE NAO CUSTA MAIS O CARIMBO. A imagem
+# carrega `.git/HEAD`, `.git/refs` e `.git/packed-refs` (ver `.dockerignore`),
+# e `src/core/git_sha.py` le o SHA de dentro dela quando o arg vem vazio. Um
+# `docker compose up -d --build` pelado carimba.
 #
-#     GIT_SHA=$(git rev-parse --short HEAD) docker compose up -d --build
+# O `${GIT_SHA:-}` fica: exportar a variavel continua sendo o jeito de mandar
+# um valor que o `.git` do contexto nao teria como saber, e e o unico caminho
+# para quem constroi fora de um repositorio.
 #
 services:
   pedeaqui-api:

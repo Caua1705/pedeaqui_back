@@ -8,6 +8,24 @@
 .gitignore
 .github
 
+# ...menos os TRES arquivos que respondem "qual e o SHA do HEAD".
+#
+# Sao 228 kB medidos, e nao ha um unico objeto entre eles: nao da para fazer
+# `git log`, `git diff` nem recuperar o fonte de commit nenhum a partir daqui.
+# O que da e ler o SHA, que e o que `src/core/git_sha.py` faz.
+#
+# ISTO E O QUE FAZ O CARIMBO ACONTECER SOZINHO. Sem estas tres linhas, o
+# `git_sha` depende de alguem lembrar do prefixo `GIT_SHA=$(git rev-parse
+# --short HEAD)` no comando de deploy — e esquecer o prefixo nao quebra nada,
+# que e exatamente por que ele era esquecido.
+#
+# `packed-refs` nao e opcional: depois de um `git gc` os refs saem dos
+# arquivos soltos e passam a viver so nele. Sem esta linha o carimbo sumiria
+# num repositorio que rodou manutencao, com o sintoma "funcionava e parou".
+!.git/HEAD
+!.git/refs
+!.git/packed-refs
+
 # Artefatos Python
 __pycache__/
 *.pyc

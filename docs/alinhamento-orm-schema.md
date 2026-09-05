@@ -179,7 +179,7 @@ cd /caminho/do/projeto
 echo "ALEMBIC_TARGET=20260905_0055" >> .env
 grep ALEMBIC_TARGET .env                     # tem que imprimir a linha
 
-GIT_SHA=$(git rev-parse --short HEAD) docker compose up -d --build
+docker compose up -d --build
 docker logs -f pedeaqui-api
 #   esperado: [entrypoint] alembic upgrade 20260905_0055
 #             [entrypoint] ATENCAO: ALEMBIC_TARGET=... — o banco NAO esta em head.
@@ -236,7 +236,7 @@ docker exec pedeaqui-api python scripts/nulos_nas_colunas_em_desacordo.py
 
 sed -i '/^ALEMBIC_TARGET=/d' .env
 grep ALEMBIC_TARGET .env                     # não pode sobrar NADA
-GIT_SHA=$(git rev-parse --short HEAD) docker compose up -d --force-recreate pedeaqui-api
+docker compose up -d --force-recreate pedeaqui-api
 docker logs -f pedeaqui-api
 #   esperado: [entrypoint] alembic upgrade head   e NENHUM "ATENCAO".
 ```

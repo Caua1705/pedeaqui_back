@@ -25,11 +25,17 @@ COPY . .
 # do `COPY`, cada deploy recopiaria a arvore inteira por causa de sete
 # caracteres.
 #
-# **Nao da para descobrir isso em tempo de execucao:** o `.dockerignore`
-# exclui `.git`, entao nao ha repositorio dentro da imagem para perguntar. Tem
-# que entrar como build arg, e quem o preenche e o `docker-compose.yml`.
+# NAO E MAIS A UNICA FONTE, e o que mudou em 05/09/2026 esta no
+# `.dockerignore`: o `COPY . .` acima passou a trazer `.git/HEAD`, `.git/refs`
+# e `.git/packed-refs` (228 kB, sem objeto nenhum), e `src/core/git_sha.py` le
+# o SHA de dentro da imagem quando este arg nao vem. O carimbo deixou de
+# depender de alguem lembrar do prefixo no comando de deploy.
 #
-# O default e `nao-carimbado`, e nao um SHA falso: imagem construida sem o arg
+# O ARG FICA, e continua ganhando do que for descoberto: e o caminho de quem
+# constroi FORA de um repositorio — CI, registry, um tarball do codigo — onde
+# nao ha `.git` no contexto para perguntar.
+#
+# O default e `nao-carimbado`, e nao um SHA falso: imagem sem arg e sem `.git`
 # tem que ser reconhecivel como tal. `main.py` avisa no boot quando e o caso.
 ARG GIT_SHA=nao-carimbado
 ENV GIT_SHA=${GIT_SHA}

@@ -100,8 +100,9 @@ def conferir_a_imagem() -> Conferencia:
         linhas.append("  git_sha=nao-carimbado - nao da para saber que codigo e este")
         return Conferencia(
             "Imagem no ar", ERRO, linhas,
-            "Deploy que carimba: GIT_SHA=$(git rev-parse --short HEAD) "
-            "docker compose up -d --build",
+            "Construindo de um repositorio o carimbo e automatico "
+            "(.dockerignore + src/core/git_sha.py); fora de um, passe o valor: "
+            "docker compose build --build-arg GIT_SHA=<sha>",
         )
 
     linhas.insert(0, f"  git_sha={settings.GIT_SHA}")

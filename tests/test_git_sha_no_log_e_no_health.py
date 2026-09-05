@@ -30,7 +30,9 @@ from types import SimpleNamespace
 import pytest
 
 import main as main_module
+from src.core import config as config_module
 from src.core.config import GIT_SHA_NAO_CARIMBADO, Settings, settings
+from src.core.git_sha import sha_do_repositorio
 from src.services import chat_service as chat_module
 from src.ai.services.chat_history import historico
 from src.services.chat_service import ChatService
@@ -82,8 +84,12 @@ class TestOBoot:
         assert len(avisos) == 1
         mensagem = avisos[0].getMessage()
         assert GIT_SHA_NAO_CARIMBADO in mensagem
-        assert "GIT_SHA=$(git rev-parse --short HEAD)" in mensagem
-        assert "docker compose up -d --build" in mensagem
+        # Desde 05/09/2026 chegar aqui quer dizer que as DUAS fontes falharam
+        # — nem o build arg, nem o `.git` que a imagem carrega. O conserto
+        # acionavel deixou de ser o prefixo (que virou desnecessario) e passou
+        # a ser o arg explicito, para quem constroi fora de um repositorio.
+        assert "--build-arg GIT_SHA=" in mensagem
+        assert ".git" in mensagem
 
     def test_imagem_carimbada_nao_gera_aviso(self, monkeypatch, caplog):
         """A contraprova: sem ela, um `warning` incondicional passaria no teste acima."""
@@ -192,14 +198,35 @@ class TestOSHaVindoDoAMBIENTE:
     quebrou.** O que precisa ser testado e o ambiente entrando.
     """
 
-    def test_variavel_vazia_no_ambiente_vira_nao_carimbado(self, monkeypatch):
+    @pytest.fixture
+    def sem_git_no_contexto(self, monkeypatch):
+        """A imagem construida SEM o sliver de `.git` — nada a descobrir.
+
+        Precisa ser dublado: a suite roda dentro do repositorio, entao o
+        descobridor de verdade acharia um SHA e estes testes, que falam da
+        SENTINELA, passariam a falar de outra coisa.
+        """
+        monkeypatch.setattr(config_module, "sha_do_repositorio", lambda _raiz: None)
+
+    def test_variavel_vazia_no_ambiente_vira_nao_carimbado(self, monkeypatch, sem_git_no_contexto):
         monkeypatch.setenv("GIT_SHA", "")
 
         assert Settings().GIT_SHA == GIT_SHA_NAO_CARIMBADO
 
-    def test_so_espaco_tambem_conta_como_ausente(self, monkeypatch):
+    def test_so_espaco_tambem_conta_como_ausente(self, monkeypatch, sem_git_no_contexto):
         """Um espaco sobrando na linha do `.env` nao pode virar "carimbado"."""
         monkeypatch.setenv("GIT_SHA", "   ")
+
+        assert Settings().GIT_SHA == GIT_SHA_NAO_CARIMBADO
+
+    def test_variavel_ausente_tambem_vira_nao_carimbado(self, monkeypatch, sem_git_no_contexto):
+        """AUSENTE e VAZIA sao caminhos diferentes no pydantic, e os dois
+        precisam chegar no mesmo lugar.
+
+        Vazia passa pelo validator `mode="before"`; ausente cai no
+        `default_factory`, que validator nenhum toca. Foi por essa fresta que a
+        descoberta pelo `.git` quase entrou pela metade."""
+        monkeypatch.delenv("GIT_SHA", raising=False)
 
         assert Settings().GIT_SHA == GIT_SHA_NAO_CARIMBADO
 
@@ -210,7 +237,7 @@ class TestOSHaVindoDoAMBIENTE:
 
         assert Settings().GIT_SHA == SHA_FALSO
 
-    def test_o_ambiente_vazio_faz_o_boot_gritar(self, monkeypatch, caplog):
+    def test_o_ambiente_vazio_faz_o_boot_gritar(self, monkeypatch, caplog, sem_git_no_contexto):
         """As duas metades ligadas: e o WARNING que faltou no deploy real.
 
         Os testes de `TestOBoot` provam que a sentinela gera o aviso; estes
@@ -226,3 +253,112 @@ class TestOSHaVindoDoAMBIENTE:
         avisos = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(avisos) == 1
         assert f"git_sha={GIT_SHA_NAO_CARIMBADO}" in avisos[0].getMessage()
+
+
+class TestOSHaDescobertoNoGitDaImagem:
+    """O carimbo sem prefixo — o `.git` que a imagem carrega.
+
+    O prefixo `GIT_SHA=$(git rev-parse --short HEAD)` funcionava e era
+    esquecido, e esquece-lo nao quebra nada: o deploy sobe uma API perfeita
+    cujo `/health` responde `nao-carimbado`. A unica forma barata de saber qual
+    commit esta no ar some justamente no deploy em que ela faz falta.
+
+    O `.dockerignore` readmite `.git/HEAD`, `.git/refs` e `.git/packed-refs` —
+    228 kB, sem objeto nenhum — e `sha_do_repositorio` le o SHA de la.
+    """
+
+    SHA_COMPLETO = "0123456789abcdef0123456789abcdef01234567"
+
+    def _repo(self, raiz, head: str) -> None:
+        (raiz / ".git").mkdir()
+        (raiz / ".git" / "HEAD").write_text(head, encoding="utf-8")
+
+    def test_head_destacado_e_o_proprio_sha(self, tmp_path):
+        """`git checkout <sha>` no servidor para voltar uma versao. Caminho
+        raro, e o que mais precisa de carimbo."""
+        self._repo(tmp_path, self.SHA_COMPLETO)
+
+        assert sha_do_repositorio(tmp_path) == self.SHA_COMPLETO[:7]
+
+    def test_ref_solta(self, tmp_path):
+        self._repo(tmp_path, "ref: refs/heads/main\n")
+        destino = tmp_path / ".git" / "refs" / "heads"
+        destino.mkdir(parents=True)
+        (destino / "main").write_text(self.SHA_COMPLETO + "\n", encoding="utf-8")
+
+        assert sha_do_repositorio(tmp_path) == self.SHA_COMPLETO[:7]
+
+    def test_ref_empacotada_por_git_gc(self, tmp_path):
+        """Depois de um `git gc` o arquivo solto SOME e o ref passa a viver so
+        no `packed-refs`. Sem este caminho o carimbo sumiria num repositorio
+        que rodou manutencao, com o sintoma "funcionava e parou"."""
+        self._repo(tmp_path, "ref: refs/heads/main\n")
+        (tmp_path / ".git" / "packed-refs").write_text(
+            "# pack-refs with: peeled fully-peeled sorted \n"
+            f"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/outra\n"
+            f"{self.SHA_COMPLETO} refs/heads/main\n"
+            "^bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+            encoding="utf-8",
+        )
+
+        assert sha_do_repositorio(tmp_path) == self.SHA_COMPLETO[:7]
+
+    def test_sem_git_nenhum_e_None(self, tmp_path):
+        assert sha_do_repositorio(tmp_path) is None
+
+    def test_ref_que_nao_existe_em_lugar_nenhum_e_None(self, tmp_path):
+        self._repo(tmp_path, "ref: refs/heads/main\n")
+
+        assert sha_do_repositorio(tmp_path) is None
+
+    def test_git_como_ARQUIVO_e_None(self, tmp_path):
+        """Worktree e submodulo gravam `.git` como arquivo (`gitdir: ...`).
+        Ler `HEAD` dentro dele levanta `NotADirectoryError`, que e `OSError`."""
+        (tmp_path / ".git").write_text("gitdir: /outro/lugar\n", encoding="utf-8")
+
+        assert sha_do_repositorio(tmp_path) is None
+
+    @pytest.mark.parametrize(
+        "conteudo",
+        ["0123456", "", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", "nao e um sha"],
+    )
+    def test_lixo_no_lugar_do_sha_e_None_e_nao_um_carimbo_falso(self, tmp_path, conteudo):
+        """Pior que nao carimbar: um `git_sha` de aparencia normal que nao casa
+        com commit nenhum. Quem for conferir procura o commit antes de
+        suspeitar do carimbo."""
+        self._repo(tmp_path, conteudo)
+
+        assert sha_do_repositorio(tmp_path) is None
+
+    def test_o_build_arg_GANHA_do_que_foi_descoberto(self, monkeypatch):
+        """Quem constroi passando o arg esta dizendo alguma coisa que o `.git`
+        do contexto nao teria como saber. Inverter a ordem tiraria de quem
+        constroi em CI a unica fonte que ele tem."""
+        monkeypatch.setattr(config_module, "sha_do_repositorio", lambda _raiz: "ddddddd")
+        monkeypatch.setenv("GIT_SHA", SHA_FALSO)
+
+        assert Settings().GIT_SHA == SHA_FALSO
+
+    def test_arg_vazio_cai_no_descoberto_e_nao_na_sentinela(self, monkeypatch):
+        """O caminho do compose: `${GIT_SHA:-}` vira `--build-arg GIT_SHA=`, a
+        imagem nasce com `ENV GIT_SHA=""`, e e aqui que o carimbo deixa de
+        depender do prefixo."""
+        monkeypatch.setattr(config_module, "sha_do_repositorio", lambda _raiz: "ddddddd")
+        monkeypatch.setenv("GIT_SHA", "")
+
+        assert Settings().GIT_SHA == "ddddddd"
+
+    def test_variavel_ausente_tambem_cai_no_descoberto(self, monkeypatch):
+        """A outra metade, que passa por outro mecanismo do pydantic: ausente
+        cai no `default_factory`, que nenhum validator alcanca."""
+        monkeypatch.setattr(config_module, "sha_do_repositorio", lambda _raiz: "ddddddd")
+        monkeypatch.delenv("GIT_SHA", raising=False)
+
+        assert Settings().GIT_SHA == "ddddddd"
+
+    def test_a_raiz_consultada_e_a_do_repositorio(self):
+        """A contraprova de que o caminho aponta para onde o `COPY . .` poe as
+        coisas: `/app` na imagem, a raiz do repo aqui. Um `parents[]` errado
+        deixaria todos os testes acima verdes e o carimbo mudo em producao."""
+        assert (config_module.RAIZ_DO_REPOSITORIO / "Dockerfile").is_file()
+        assert (config_module.RAIZ_DO_REPOSITORIO / "src" / "core" / "config.py").is_file()

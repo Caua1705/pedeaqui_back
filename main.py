@@ -59,15 +59,23 @@ def _log_versao_da_imagem() -> None:
 
     SEM O CARIMBO, ELE GRITA. Um `git_sha=nao-carimbado` silencioso seria pior
     que nao ter campo nenhum: daria a impressao de que a versao esta sendo
-    registrada quando nao esta. O aviso traz o comando junto porque o modo de
-    errar e um so — rodar `docker compose up -d --build` sem a variavel na
-    frente.
+    registrada quando nao esta.
+
+    O QUE O AVISO SIGNIFICA MUDOU EM 05/09/2026, e por isso o texto mudou
+    junto. Antes ele queria dizer "voce esqueceu o prefixo no comando", que era
+    o modo de errar de todo dia. Agora o `.dockerignore` traz `.git/HEAD` e os
+    refs para dentro da imagem, e `src/core/git_sha.py` le o SHA de la sozinho:
+    chegar aqui quer dizer que **as duas** fontes falharam — nem o build arg
+    veio, nem havia `.git` no contexto de build. E raro, e aponta para outro
+    lugar (build a partir de um tarball, contexto sem repositorio), entao o
+    aviso manda o arg explicito em vez de repetir o prefixo.
     """
     if settings.GIT_SHA == GIT_SHA_NAO_CARIMBADO:
         logger.warning(
-            "[boot] git_sha=%s | a imagem foi construida sem o build arg. "
-            "Deploy que carimba: "
-            "GIT_SHA=$(git rev-parse --short HEAD) docker compose up -d --build",
+            "[boot] git_sha=%s | nem o build arg veio nem havia .git no "
+            "contexto de build. Construindo de um repositorio, o carimbo e "
+            "automatico (.dockerignore + src/core/git_sha.py); fora de um, "
+            "passe o valor: docker compose build --build-arg GIT_SHA=<sha>",
             GIT_SHA_NAO_CARIMBADO,
         )
         return

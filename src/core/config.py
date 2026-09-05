@@ -1,13 +1,39 @@
 from functools import lru_cache
+from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from src.core.git_sha import sha_do_repositorio
 
 
 #: O que `GIT_SHA` vale quando a imagem foi construida sem o build arg. Nao e
 #: string vazia de proposito: ele APARECE no log, e um campo vazio numa linha
 #: de log e indistinguivel de um campo que nao existe.
 GIT_SHA_NAO_CARIMBADO = "nao-carimbado"
+
+#: A raiz do repositorio, que dentro da imagem e `/app`. Tres niveis acima
+#: deste arquivo (`src/core/config.py`), e o mesmo lugar nos dois ambientes
+#: porque o `COPY . .` do Dockerfile preserva a arvore.
+RAIZ_DO_REPOSITORIO = Path(__file__).resolve().parents[2]
+
+
+def _sha_descoberto_ou_sentinela() -> str:
+    """O SHA lido do `.git` que a imagem carrega, ou a sentinela.
+
+    Chamado de DOIS lugares, e os dois precisam existir porque o pydantic trata
+    "variavel ausente" e "variavel vazia" por caminhos que nao se cruzam:
+
+    - `default_factory` do campo — a variavel nao esta no ambiente. E o caso de
+      quem roda `uvicorn` na propria maquina e de um `docker run` sem `-e`;
+    - o validator `mode="before"` — a variavel esta presente e vazia. E o caso
+      do compose, que manda `--build-arg GIT_SHA=` e faz a imagem nascer com
+      `ENV GIT_SHA=""` (ver o docstring do validator).
+
+    Validator nao roda sobre default, e default nao vale para campo presente.
+    Uma funcao so nos dois pontos e o que impede as duas metades de divergirem.
+    """
+    return sha_do_repositorio(RAIZ_DO_REPOSITORIO) or GIT_SHA_NAO_CARIMBADO
 
 
 class Settings(BaseSettings):
@@ -32,7 +58,12 @@ class Settings(BaseSettings):
     # NAO derruba o boot quando falta. E observabilidade, nao configuracao —
     # a mesma divisao de `warmup` contra `startup_checks`. O que ele faz e
     # gritar: ver a linha de aviso no lifespan de `main.py`.
-    GIT_SHA: str = GIT_SHA_NAO_CARIMBADO
+    #
+    # SAO TRES FONTES, nesta ordem: o build arg, o `.git` que a imagem carrega
+    # (`src/core/git_sha.py`) e a sentinela. A do meio entrou em 05/09/2026
+    # para que o carimbo pare de depender de alguem lembrar do prefixo
+    # `GIT_SHA=$(git rev-parse --short HEAD)` no comando de deploy.
+    GIT_SHA: str = Field(default_factory=_sha_descoberto_ou_sentinela)
 
     # Deixe em None para seguir o APP_ENV (desligado em producao).
     # Defina explicitamente para forcar um dos dois lados.
@@ -523,10 +554,22 @@ class Settings(BaseSettings):
         campo e quem sabe o que "sem carimbo" significa, entao a normalizacao
         mora nele. O comentario errado do `docker-compose.yml` foi corrigido
         junto, porque era ele que ensinava o modelo mental errado.
+
+        E DESDE 05/09/2026 A AUSENCIA TEM UM SEGUNDO LUGAR ONDE PROCURAR.
+        Normalizar o vazio fez o aviso voltar a gritar, mas gritar toda vez que
+        alguem esquece o prefixo nao e o mesmo que o prefixo deixar de ser
+        necessario — e ele continuava sendo esquecido. A imagem passou a levar
+        `.git/HEAD`, `.git/refs` e `.git/packed-refs` (228 kB, sem objeto
+        nenhum), e `sha_do_repositorio` le o SHA de dentro dela.
+
+        A ORDEM E BUILD ARG PRIMEIRO. Quem constroi fora de um repositorio (CI,
+        registry, tarball) so tem o arg, e quem passa um arg explicito esta
+        dizendo alguma coisa que o `.git` do contexto nao teria como saber.
         """
-        if isinstance(valor, str) and not valor.strip():
-            return GIT_SHA_NAO_CARIMBADO
-        return valor
+        if not isinstance(valor, str) or valor.strip():
+            return valor
+
+        return _sha_descoberto_ou_sentinela()
 
     model_config = SettingsConfigDict(
         env_file=".env",

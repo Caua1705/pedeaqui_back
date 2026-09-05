@@ -125,13 +125,22 @@ propósito.
 ## Deploy
 
 ```bash
-GIT_SHA=$(git rev-parse --short HEAD) docker compose up -d --build
+docker compose up -d --build
 docker logs -f pedeaqui-api
 ```
 
-**O `GIT_SHA=` na frente não é enfeite.** Sem ele a imagem nasce sem carimbo, o
-boot escreve `git_sha=nao-carimbado` e não há como saber que código está no ar —
-o que já custou uma bateria de medição em produção para ser respondido.
+**O carimbo do commit acontece sozinho** desde 05/09/2026: o `.dockerignore`
+readmite `.git/HEAD`, `.git/refs` e `.git/packed-refs` (228 kB, sem objeto
+nenhum) e `src/core/git_sha.py` lê o SHA de dentro da imagem. O prefixo
+`GIT_SHA=$(git rev-parse --short HEAD)` que este comando pedia **não é mais
+necessário** — e saiu porque esquecê-lo não quebrava nada: a API subia perfeita
+respondendo `git_sha=nao-carimbado`, e a única forma barata de saber o que
+estava no ar sumia no deploy em que ela fazia falta.
+
+Construindo fora de um repositório (CI, registry, tarball), o build arg continua
+sendo o caminho e continua ganhando:
+`docker compose build --build-arg GIT_SHA=<sha>`. Detalhes em
+[`docs/operacao.md`](docs/operacao.md#1-deploy).
 
 O Traefik roteia pela rede externa `n8n_default`; o compose não expõe porta.
 

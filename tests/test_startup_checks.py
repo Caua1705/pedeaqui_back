@@ -10,6 +10,7 @@ import sys
 
 import pytest
 
+from src.core import startup_checks
 from src.core.config import settings
 from src.core.startup_checks import (
     StartupConfigurationError,
@@ -79,6 +80,90 @@ class TestOsDoisSegredosDeAssinatura:
             CUSTOMER_AUTH_SECRET="segredo-repetido",
         )
         with pytest.raises(StartupConfigurationError, match="ADMIN_AUTH_SECRET"):
+            validate_settings(settings)
+
+    def test_a_comparacao_usa_o_SEGREDO_RESOLVIDO_e_nao_o_campo(self, monkeypatch):
+        """A trava lia `settings.CUSTOMER_AUTH_SECRET` e quem assinava era
+        `_customer_auth_secret()`. Enquanto houve fallback, os dois podiam
+        divergir — e a trava ficava cega justamente no caso em que os publicos
+        compartilhavam chave.
+
+        Hoje ela chama os resolvedores de `src.utils.security`, que sao as
+        MESMAS funcoes que assinam. Este teste prova a ligacao: mexer no
+        resolvedor tem que mexer no que a trava enxerga."""
+        _settings_with(
+            monkeypatch,
+            ADMIN_AUTH_SECRET="segredo-do-painel",
+            CUSTOMER_AUTH_SECRET="segredo-do-app",
+        )
+        assert not any("MESMO valor" in erro for erro in collect_configuration_errors(settings))
+
+        monkeypatch.setattr(
+            startup_checks,
+            "resolve_customer_auth_secret",
+            lambda configuracao: "segredo-do-painel",
+        )
+        assert any("MESMO valor" in erro for erro in collect_configuration_errors(settings))
+
+
+class TestSegredoDeAssinaturaVazio:
+    """`CUSTOMER_AUTH_SECRET=` passa pela pydantic e nao tem sintoma.
+
+    O tipo e `str`, e vazia e uma string: a API sobe e todo token daquele
+    publico nasce assinado com "" — que qualquer pessoa reproduz. Os tokens
+    continuam validos, nada falha, e nao ha nada no log.
+
+    Este era o caminho que o `CUSTOMER_JWT_SECRET` mantinha aberto: com ele,
+    campo vazio nao levantava nem no boot nem em runtime, porque a resolucao
+    caia no fallback.
+    """
+
+    def test_cliente_vazia_derruba_o_boot(self, monkeypatch):
+        _settings_with(
+            monkeypatch,
+            CUSTOMER_AUTH_SECRET="",
+            ADMIN_AUTH_SECRET="segredo-do-painel",
+        )
+        errors = collect_configuration_errors(settings)
+        assert any("CUSTOMER_AUTH_SECRET esta vazia" in error for error in errors)
+
+    def test_so_espacos_tambem_e_vazia(self, monkeypatch):
+        _settings_with(
+            monkeypatch,
+            CUSTOMER_AUTH_SECRET="   ",
+            ADMIN_AUTH_SECRET="segredo-do-painel",
+        )
+        errors = collect_configuration_errors(settings)
+        assert any("CUSTOMER_AUTH_SECRET esta vazia" in error for error in errors)
+
+    def test_lojista_vazia_tambem(self, monkeypatch):
+        """A mesma porta do outro lado, e ela nao era vigiada por nenhuma das
+        duas travas: `"" == "segredo-do-app"` e falso, entao a comparacao de
+        valores iguais passava batido."""
+        _settings_with(
+            monkeypatch,
+            CUSTOMER_AUTH_SECRET="segredo-do-app",
+            ADMIN_AUTH_SECRET="",
+        )
+        errors = collect_configuration_errors(settings)
+        assert any("ADMIN_AUTH_SECRET esta vazia" in error for error in errors)
+
+    def test_os_dois_vazios_reclamam_do_VAZIO_e_nao_da_igualdade(self, monkeypatch):
+        """Dois vazios sao iguais. Reportar "mesmo valor" mandaria gerar um par
+        de valores diferentes, quando o que falta e valor nenhum."""
+        _settings_with(monkeypatch, CUSTOMER_AUTH_SECRET="", ADMIN_AUTH_SECRET="")
+        errors = collect_configuration_errors(settings)
+        assert any("CUSTOMER_AUTH_SECRET esta vazia" in error for error in errors)
+        assert any("ADMIN_AUTH_SECRET esta vazia" in error for error in errors)
+        assert not any("MESMO valor" in error for error in errors)
+
+    def test_validate_settings_nao_sobe_com_segredo_vazio(self, monkeypatch):
+        _settings_with(
+            monkeypatch,
+            CUSTOMER_AUTH_SECRET="",
+            ADMIN_AUTH_SECRET="segredo-do-painel",
+        )
+        with pytest.raises(StartupConfigurationError, match="CUSTOMER_AUTH_SECRET"):
             validate_settings(settings)
 
 

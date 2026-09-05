@@ -11,6 +11,7 @@ import sys
 from collections.abc import Mapping
 
 from src.core.config import Settings
+from src.utils.security import resolve_admin_auth_secret, resolve_customer_auth_secret
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -156,18 +157,7 @@ def collect_configuration_errors(settings: Settings) -> list[str]:
             "ou volte PAYMENT_PROVIDER para sandbox."
         )
 
-    if settings.ADMIN_AUTH_SECRET.strip() == settings.CUSTOMER_AUTH_SECRET.strip():
-        # A variavel ser obrigatoria (config.py) resolve o caso de estar
-        # ausente; este erro cobre o outro jeito de chegar ao mesmo lugar,
-        # que e copiar o valor do cliente para preencher o campo. Token
-        # forjado de um publico passaria a valer no outro.
-        errors.append(
-            "ADMIN_AUTH_SECRET e CUSTOMER_AUTH_SECRET tem o MESMO valor: os "
-            "tokens de lojista e de cliente ficam assinados com a mesma "
-            "chave, e comprometer um segredo compromete os dois publicos. "
-            "Gere um valor proprio com "
-            '`python -c "import secrets; print(secrets.token_urlsafe(48))"`.'
-        )
+    errors.extend(_erros_dos_segredos_de_assinatura(settings))
 
     if settings.MERCADOPAGO_ENVIRONMENT not in ("test", "production"):
         errors.append(
@@ -177,6 +167,63 @@ def collect_configuration_errors(settings: Settings) -> list[str]:
         )
 
     return errors
+
+
+def _erros_dos_segredos_de_assinatura(settings: Settings) -> list[str]:
+    """Nenhum dos dois publicos pode assinar com chave vazia, nem com a do outro.
+
+    Sao TRES portas para o mesmo lugar — token forjado de um publico valendo
+    no outro — e ate 05/09/2026 so uma delas era vigiada:
+
+    1. **valor igual nos dois campos.** Copiar o segredo do cliente para
+       preencher o do lojista. Era a unica coberta.
+    2. **segredo vazio.** `CUSTOMER_AUTH_SECRET=` passa pela pydantic (o tipo
+       e `str`, e vazia e uma string), a API sobe, e todo token de cliente
+       nasce assinado com "" — que qualquer pessoa consegue reproduzir. O
+       sintoma nao aparece: os tokens funcionam.
+    3. **a resolucao divergindo da leitura crua.** A comparacao lia
+       `settings.CUSTOMER_AUTH_SECRET`, e quem assinava era
+       `_customer_auth_secret()`, que caia no antigo `CUSTOMER_JWT_SECRET`
+       quando o primeiro ficava vazio. Com esse fallback valendo o mesmo que
+       `ADMIN_AUTH_SECRET`, os dois publicos compartilhavam chave e esta
+       funcao comparava "" com o segredo de lojista, achando tudo certo.
+
+    A 3 esta fechada porque a comparacao passou a chamar os resolvedores de
+    `src.utils.security` — as mesmas funcoes que assinam. Fallback novo entra
+    la e chega aqui sozinho.
+
+    A ORDEM importa: os vazios saem primeiro e a funcao RETORNA. Dois
+    segredos vazios sao iguais, e reportar "os dois tem o mesmo valor" mandaria
+    quem esta lendo o boot gerar um par de valores diferentes — quando o que
+    falta e valor nenhum.
+    """
+    vazios = [
+        nome
+        for nome in ("CUSTOMER_AUTH_SECRET", "ADMIN_AUTH_SECRET")
+        if not (getattr(settings, nome) or "").strip()
+    ]
+    if vazios:
+        return [
+            f"{nome} esta vazia: a pydantic aceita o campo em branco (o tipo e "
+            "`str`), a API sobe, e todo token daquele publico passa a ser "
+            'assinado com "" — que qualquer pessoa reproduz. Nada falha, os '
+            "tokens continuam validos, e nao ha sintoma. Gere um valor com "
+            '`python -c "import secrets; print(secrets.token_urlsafe(48))"`.'
+            for nome in vazios
+        ]
+
+    # Os RESOLVEDORES, e nao os campos: e o que faz esta trava enxergar o
+    # segredo que de fato assina, e nao o que esta escrito no `.env`.
+    if resolve_admin_auth_secret(settings).strip() == resolve_customer_auth_secret(settings).strip():
+        return [
+            "ADMIN_AUTH_SECRET e CUSTOMER_AUTH_SECRET tem o MESMO valor: os "
+            "tokens de lojista e de cliente ficam assinados com a mesma "
+            "chave, e comprometer um segredo compromete os dois publicos. "
+            "Gere um valor proprio com "
+            '`python -c "import secrets; print(secrets.token_urlsafe(48))"`.'
+        ]
+
+    return []
 
 
 def collect_configuration_warnings(settings: Settings) -> list[str]:

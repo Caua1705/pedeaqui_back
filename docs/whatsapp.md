@@ -521,6 +521,72 @@ Na ordem, e cada passo responde o que o anterior não responde:
 **O que não dá para conferir daqui:** se a mensagem ficou bonita. `read` diz que
 abriram, não que ficou boa.
 
+### 9.7 Quantos avisos cada loja mandou — `GET /internal/whatsapp-usage`
+
+**O cartão da Meta é da plataforma e é cobrado por conta, não por loja.** Esta
+rota é o rateio, e o público é o mesmo de `/internal/ai-usage` — quem paga a
+fatura, não o lojista. Mesma chave (`PLATFORM_METRICS_KEY`), mesmo
+`include_in_schema=False`, mesma janela de calendário no fuso da plataforma com
+`end_date` entrando inteiro.
+
+```bash
+curl -s -H "X-Internal-Key: $PLATFORM_METRICS_KEY" \
+  "https://api.pederapidex.com/internal/whatsapp-usage?start_date=2026-08-01&end_date=2026-08-31" \
+  | python -m json.tool
+```
+
+```json
+{
+  "restaurants": [
+    {
+      "restaurant_name": "Júnior da Picanha",
+      "templates": 412, "sent": 405,
+      "refused_here": 5, "refused_by_meta": 2,
+      "by_kind": [
+        {"kind": "order_accepted", "templates": 210, "sent": 208},
+        {"kind": "order_delivered", "templates": 202, "sent": 197}
+      ]
+    }
+  ],
+  "total_templates": 412, "total_sent": 405
+}
+```
+
+**Nenhuma coluna nova foi precisa**, e é por isso que este item não tem migração:
+`whatsapp_messages` já tem `channel_id`, `kind`, `wamid`, `error_code` e
+`created_at`. Ela nasceu para responder "o cliente foi avisado?" e responde
+"quantos templates saíram" de graça.
+
+Três coisas dessa leitura que parecem detalhe e não são:
+
+- **`sent` conta `wamid IS NOT NULL`, não `status`.** Uma mensagem que a Meta
+  aceitou e não entregou **já saiu**. O `status` continua andando depois do
+  envio (`sent` → `delivered` → `read`, ou `failed` na entrega), e contar por ele
+  faria a conta do mês mudar sozinha, dias depois, por causa de um webhook. O
+  `wamid` existe se e só se a mensagem existiu lá.
+- **As duas recusas são separadas.** `refused_here` são as nossas — telefone que
+  não vira E.164, texto livre fora da janela — e nunca tocaram a Meta: não
+  custam nada e não indicam problema com ela. `refused_by_meta` é chamado a
+  abrir, e o `error_code` da linha é o que se cita nele. Juntas num balde só,
+  um cadastro torto vira suspeita de canal quebrado.
+- **O eixo é o CANAL, não o pedido.** Os dois responderiam igual hoje. O canal é
+  o certo porque **quem a Meta cobra é o número**, e no dia em que uma filial
+  mandar aviso pelo número de outra é ele que diz de qual conta saiu.
+
+**Não há dinheiro na resposta, e a ausência é deliberada.** Desde 11/2024 a Meta
+cobra por mensagem, por **categoria** de template e por país — e **template de
+utilidade entregue dentro da janela de atendimento de 24h é gratuito**. Os
+quatro avisos daqui são todos de utilidade. Para saber quanto cada linha custou
+seria preciso saber se a janela daquele cliente estava aberta **no instante do
+envio**, e isso não está gravado: `whatsapp_contact_windows` guarda a janela de
+agora, não a de então.
+
+Inventar um preço por mensagem produziria um número que soma e está errado — o
+mesmo critério de `cost_usd` NULO em `src/ai/custo.py`. O que fica é a contagem,
+que é exata, e ela é o **teto** do que pode ter sido cobrado. Se um dia o número
+exato importar, o que falta é uma coluna dizendo se a janela estava aberta no
+envio: decisão de schema, com migração, e não de leitura.
+
 ---
 
 ## 10. O que NÃO existe

@@ -103,8 +103,20 @@ abre `/admin`. Detalhe em [entregadores.md](entregadores.md) §2.
 ## 4. Dois segredos, e o `purpose` só separa dentro de cada um
 
 **Cliente e lojista assinam com chaves diferentes**, e é obrigatório que seja
-assim: `ADMIN_AUTH_SECRET` não tem default, e valor igual ao de
-`CUSTOMER_AUTH_SECRET` derruba o boot.
+assim. São três portas para o mesmo lugar, e desde 05/09/2026 o boot fecha as
+três (`_erros_dos_segredos_de_assinatura`, em `src/core/startup_checks.py`):
+
+| Porta | O que derruba o boot |
+|---|---|
+| segredo ausente | `ADMIN_AUTH_SECRET` e `CUSTOMER_AUTH_SECRET` não têm default — `ValidationError` na pydantic |
+| segredo **vazio** | `CUSTOMER_AUTH_SECRET=` passa pela pydantic (o tipo é `str`) e assinaria tudo com `""`. Recusado no boot, nos dois |
+| **mesmo valor** nos dois | recusado no boot |
+
+A terceira compara o **segredo resolvido** — ela chama
+`resolve_customer_auth_secret` / `resolve_admin_auth_secret`, as mesmas funções
+que assinam —, e não o campo do `.env`. Enquanto ela lia o campo cru, um
+fallback no meio do caminho a deixava cega: era exatamente o caso do
+`CUSTOMER_JWT_SECRET`, removido na mesma data.
 
 Havia fallback para o segredo de cliente, e ele era falha real: os dois públicos
 compartilhando chave fazem um token forjado de um lado valer do outro. O

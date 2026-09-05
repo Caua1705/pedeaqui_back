@@ -231,7 +231,7 @@ TTLs, cotas de voz, RFV, tempos do Google).
 | Arquivo | Assunto |
 |---|---|
 | [docs/arquitetura.md](docs/arquitetura.md) | **o mapa** — pastas, caminho de um pedido, onde mora o dinheiro, máquina de estados |
-| [docs/modelo-de-dados.md](docs/modelo-de-dados.md) | **o diagrama ER** (Mermaid, seis por assunto), as 42 tabelas e o isolamento entre restaurantes |
+| [docs/modelo-de-dados.md](docs/modelo-de-dados.md) | **o diagrama ER** (Mermaid, oito por assunto), as 49 tabelas e o isolamento entre restaurantes. `tests/test_diagrama_er_cobre_o_schema.py` cobra que nenhuma tabela fique de fora do desenho |
 | [docs/cardapio-por-filial.md](docs/cardapio-por-filial.md) | por que o cardápio pende de filial e nada nele herda |
 | [docs/cashback.md](docs/cashback.md) | crédito, resgate, validade e por que ligar a chave mexe em faturamento |
 | [docs/busca-vetorial-e-indice-ann.md](docs/busca-vetorial-e-indice-ann.md) | **por que NÃO existe índice ANN** no pgvector — a medição, e o gatilho que sozinho não autoriza criá-lo |

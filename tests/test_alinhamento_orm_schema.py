@@ -49,9 +49,19 @@ def _valor_do_modulo(caminho: Path, nome: str):
     Importar traria `from alembic import op` junto, e o `op` de uma revisao so
     existe dentro de um contexto de migracao. `ast.literal_eval` le o valor
     escrito, que e o que interessa.
+
+    AS DUAS FORMAS DE ATRIBUICAO, e a segunda nao e preciosismo: o template do
+    `alembic revision` escreve `revision: str = "..."`, que e `ast.AnnAssign` e
+    nao `ast.Assign`. As duas etapas do alinhamento usam a forma sem anotacao,
+    entao a versao que so lia `Assign` funcionou ate a primeira preparada
+    gerada pelo template — e falhou dizendo "nao define revision" sobre um
+    arquivo que define. Guarda que nao consegue LER o arquivo nao guarda nada.
     """
     arvore = ast.parse(caminho.read_text(encoding="utf-8"), filename=str(caminho))
     for no in arvore.body:
+        if isinstance(no, ast.AnnAssign) and isinstance(no.target, ast.Name):
+            if no.target.id == nome and no.value is not None:
+                return ast.literal_eval(no.value)
         if isinstance(no, ast.Assign) and any(
             isinstance(alvo, ast.Name) and alvo.id == nome for alvo in no.targets
         ):

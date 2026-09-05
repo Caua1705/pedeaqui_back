@@ -705,3 +705,102 @@ A terceira é a que combina com o resto do sistema — exclusão de conta aqui j
 é anonimização e não `DELETE` —, e é por isso que ela está escrita e não
 implementada: implementar antes do gatilho é escrever um caminho que ninguém
 vai exercitar até o dia em que ele precisar estar certo.
+
+---
+
+## PENDENTE: quebrar a tabela `branches`
+
+**Registrada em 05/09/2026. Duas revisões escritas e NÃO aplicadas**, em
+`alembic/preparadas/`:
+
+| Revisão | O que faz | Recomendação |
+|---|---|---|
+| `20260905_0058` | derruba as 5 colunas de endereço mortas | **fazer** — não move dado, não muda comportamento, só tira lixo |
+| `20260905_0059` | move a tarifa de entrega (7 colunas) para `branch_delivery_pricing` | **decidir** — é a única das quatro divisões candidatas que paga |
+
+### O problema não é o número de colunas
+
+São 50, e o incômodo óbvio é esse. O que **custa** é outro: **quatro regimes de
+nulo convivem na mesma tabela com a mesma cara**, e a coluna não diz a qual
+pertence.
+
+| Regime | Nº | `NULL` significa | Quem resolve |
+|---|---|---|---|
+| identidade | 9 | — | — |
+| endereço + lat/lng | 13 | "não cadastrado" — e **5 delas são lixo** | `RestaurantService._build_address` |
+| contato | 3 | não cadastrado | painel, WhatsApp |
+| estado do dia | 5 | (`NOT NULL`) | `resolve_branch_operation` |
+| **termo comercial** | 8 | **"herda de `restaurant_settings`"** | `resolve_branch_operation` |
+| rodapé da comanda | 1 | **"herda"** | `resolve_receipt_footer` |
+| **tarifa de entrega** | 5 | **"não cobra por esse eixo"** — não herda | `DeliveryEstimateService` |
+| taxa do entregador | 2 | "não configurado" — não herda | `CourierDeliveryService` |
+| cópias da comanda | 4 | (`NOT NULL`) | `print_layout` |
+
+Os dois em negrito são o par perigoso: **`default_delivery_fee` nulo herda e
+`delivery_base_fee` nulo não herda** — os dois nulos, os dois `NUMERIC`, os dois
+com `delivery` no nome, um do lado do outro. Nada no schema separa os dois, e a
+armadilha 35 existe porque confundi-los já custou caro.
+
+### Etapa A — as 5 colunas de endereço mortas (`0058`)
+
+`address_street`, `address_neighborhood`, `address_city`, `address_state`,
+`address_zipcode`. Resto do schema pré-Alembic; nenhuma revisão as toca e nada
+em `src/` as lê ou escreve. A seção "Os dois conjuntos de endereço de
+`branches`", acima, conta a história inteira.
+
+**`address_number` fica**, e é a exceção documentada: não tem par vivo, e largá-la
+apagaria o número da casa do endereço público sem nada para pôr no lugar.
+
+**Cuidado ao conferir:** `orders` tem colunas homônimas e vivíssimas (o snapshot
+do endereço de entrega). Um grep por `address_street` traz as duas tabelas
+misturadas, e é o jeito mais fácil de achar que a `0058` apaga o endereço dos
+pedidos.
+
+**Tamanho:** a revisão + 5 linhas fora de `src/models/branch_model.py`. Nada
+mais. 50 → 45 colunas.
+
+### Etapa B — a tarifa de entrega (`0059`)
+
+`branch_delivery_pricing`, 1:1 **opcional** com `branches`, levando as 5 da
+regra por km e as 2 do entregador. 45 → 38 colunas.
+
+**O que ganha:** a distinção entre "herda" e "não herda" passa a ser visível sem
+abrir o `branch_operation.py` — o que herda ficou em `branches`, o que não herda
+saiu. E "quanto esta loja cobra para entregar", hoje partido em dois grupos de
+colunas, passa a ter um lugar.
+
+**O que cobra:** a linha é opcional, então "sem linha" vira um estado novo. Ele
+é igual a "todas as colunas nulas", que já é o estado da maioria das filiais —
+mas quem consultar por `JOIN` em vez de `LEFT JOIN` passa a perder filiais
+inteiras, sem erro. **Toda consulta é `LEFT JOIN`.**
+
+**Tamanho medido em 05/09/2026:** 7 arquivos de `src/` (`branch_model`,
+`admin_settings_schema`, `admin_settings_service`, `delivery_estimate_service`,
+`courier_schema`, `courier_delivery_service`, `admin_couriers`) e 4 de teste.
+
+### As três divisões que eu NÃO recomendo, e o motivo é o mesmo
+
+**Estado do dia (5)**, **cópias da comanda (4)** e **termo comercial (8)**.
+
+Para os dois primeiros, que são `NOT NULL`, a linha ausente num 1:1 seria um
+estado que hoje não existe: uma filial sem linha em `branch_printing_settings`
+não imprime, e nada no schema impediria essa linha de faltar.
+
+Para o termo comercial é pior: a linha ausente seria um **terceiro** estado ao
+lado de "sobrescrito" e "herda" — e indistinguível do segundo num `LEFT JOIN`.
+É exatamente a confusão que a armadilha 35 registra, com uma fonte de nulo a
+mais.
+
+### As duas ordens que importam
+
+**A cópia antes do `DROP`, na mesma transação** (`0059`). Invertida, ela leria
+colunas que já não existem — e num banco vazio a cópia é no-op, então a ordem
+errada passaria verde na suíte inteira e derrubaria o deploy no Júnior. É a
+lição da revisão `20260820_0026` (armadilha 36), e
+`tests/test_revisoes_preparadas_de_branches.py` põe linha na mesa por causa
+dela.
+
+**O código vai JUNTO com cada revisão.** Com as colunas fora do banco e o model
+ainda mapeando, **todo `SELECT` de filial quebra**. Com o model largando antes,
+`scripts/divergencias_orm_schema.py` passa a contar colunas que o ORM não mapeia.
+Um commit por etapa, com o `git mv` e o model dentro.

@@ -11,6 +11,12 @@ confere a situação daquele passo. Um restaurante completo, com todos os cinco
 resolvidos, fecha o arquivo: sem ele, um script que respondesse ERRO para
 tudo passaria em todos os outros testes.
 
+**A sexta conferência (canal de WhatsApp) é de outra natureza, e os testes
+dela travam justamente isso: ela nunca sai ERRO.** Um restaurante sem
+WhatsApp continua pronto para o primeiro pedido — o pedido entra, a comanda
+sai, o dinheiro entra —, e fazer a falta dele derrubar o código de saída
+transformaria uma frente opcional em porta de instalação.
+
 Marcado `db` porque tudo aqui é consulta contra o schema de verdade — a
 maioria das cinco conferências é SQL cru, e um nome de coluna errado só
 aparece contra um Postgres.
@@ -26,6 +32,7 @@ from scripts.check_restaurant import (
     ERRO,
     OK,
     Restaurante,
+    conferir_canal_de_whatsapp,
     conferir_comissao,
     conferir_horarios,
     conferir_setores_de_impressao,
@@ -33,10 +40,13 @@ from scripts.check_restaurant import (
     conferir_tudo,
     conferir_webhook_do_pagamento,
 )
+from src.core.config import settings
 from src.models.branch_business_hour_model import BranchBusinessHour
 from src.models.branch_payment_method_model import BranchPaymentMethod
 from src.models.printing_sector_model import PrintingSector
 from src.models.restaurant_payment_credential_model import RestaurantPaymentCredential
+from src.models.whatsapp_model import WhatsAppChannel
+from src.utils.crypto import encrypt_whatsapp_token
 from tests.fabricas_db import (
     criar_categoria,
     criar_configuracoes,
@@ -97,6 +107,59 @@ def _setor(db, filial, is_active: bool = True) -> PrintingSector:
     db.add(setor)
     db.flush()
     return setor
+
+
+_numeros = iter(range(1000, 9999))
+
+
+def _canal(db, restaurante, filial=None, *, is_active=True, disconnected_at=None,
+           disconnect_reason=None) -> WhatsAppChannel:
+    """Uma linha de canal. `filial=None` e a QUEDA DO RESTAURANTE.
+
+    `branch_id` nulo nao e "canal sem dono": e a linha que toda filial sem a
+    sua propria herda, e so nulo significa isso.
+    """
+    numero = next(_numeros)
+    canal = WhatsAppChannel(
+        restaurant_id=restaurante.id,
+        branch_id=filial.id if filial is not None else None,
+        waba_id=f"waba-{numero}",
+        phone_number_id=f"pni-{numero}",
+        display_phone_number=f"+55 85 9{numero}-0000",
+        access_token_encrypted=encrypt_whatsapp_token("EAAG-token"),
+        is_active=is_active,
+        disconnected_at=disconnected_at,
+        disconnect_reason=disconnect_reason,
+    )
+    db.add(canal)
+    db.flush()
+    return canal
+
+
+@pytest.fixture
+def chave_de_cifra(monkeypatch):
+    """A chave do Fernet do WhatsApp, so para `_canal` conseguir cifrar.
+
+    O canal guarda o token do lojista cifrado, e a coluna e `NOT NULL`. A
+    conferencia nunca decifra nada — mas gravar um texto qualquer ali
+    descreveria uma linha que o cadastro nao produz.
+    """
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setattr(
+        settings, "WHATSAPP_TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode()
+    )
+
+
+@pytest.fixture
+def avisos_ligados(monkeypatch, chave_de_cifra):
+    """A chave da plataforma ligada.
+
+    Ela nasce FALSA de proposito (quem liga envio para telefone de cliente de
+    verdade liga de proposito), entao o cenario "tudo certo" precisa dize-lo.
+    """
+    monkeypatch.setattr(settings, "WHATSAPP_NOTIFICATIONS_ENABLED", True)
+    monkeypatch.setattr(settings, "WHATSAPP_APP_SECRET", "segredo-de-teste")
 
 
 def restaurante_pronto(db):
@@ -329,18 +392,152 @@ def test_comissao_negociada_diferente_do_padrao_passa(db):
 
 
 # ---------------------------------------------------------------------------
+# WA. Canal de WhatsApp
+# ---------------------------------------------------------------------------
+
+
+def test_sem_canal_nenhum_e_atencao_e_nunca_erro(db):
+    """A conferencia que nao bloqueia.
+
+    Aviso de WhatsApp e opcional: sem ele o pedido entra, a comanda sai e o
+    dinheiro entra. ERRO aqui derrubaria o codigo de saida de todo
+    restaurante que ainda nao conectou o numero — e o script existe para
+    dizer o que IMPEDE o primeiro pedido."""
+    restaurante, _ = restaurante_pronto(db)
+
+    conferencia = conferir_canal_de_whatsapp(db, _alvo(restaurante))
+
+    assert conferencia.situacao == ATENCAO
+    assert "nenhum numero cadastrado" in " ".join(conferencia.linhas)
+
+
+def test_filial_que_herda_o_numero_do_restaurante_sai_OK(db, avisos_ligados):
+    """O achado que motiva a conferencia inteira.
+
+    A filial que HERDA e a filial que nao tem numero nenhum sao
+    indistinguiveis de fora, e so uma delas avisa o cliente. Sem esta linha,
+    o dono da loja que herda acha que ela esta muda."""
+    restaurante, filial = restaurante_pronto(db)
+    canal = _canal(db, restaurante)
+
+    conferencia = conferir_canal_de_whatsapp(db, _alvo(restaurante))
+
+    assert conferencia.situacao == OK
+    texto = " ".join(conferencia.linhas)
+    assert "herda o numero do restaurante" in texto
+    assert canal.display_phone_number in texto
+    assert filial.name in texto
+
+
+def test_numero_proprio_no_ar_sai_OK(db, avisos_ligados):
+    restaurante, filial = restaurante_pronto(db)
+    canal = _canal(db, restaurante, filial)
+
+    conferencia = conferir_canal_de_whatsapp(db, _alvo(restaurante))
+
+    assert conferencia.situacao == OK
+    assert f"numero proprio {canal.display_phone_number}" in " ".join(conferencia.linhas)
+
+
+def test_numero_proprio_desligado_NAO_cai_no_do_restaurante(db, avisos_ligados):
+    """A regra de `resolve_for_branch`, e o motivo de a ordem das perguntas
+    nao poder ser invertida.
+
+    Cair seria a loja passando a falar por outro numero sem ninguem ter
+    pedido. O que se espera de um numero desligado e que a loja PARE de
+    mandar — e e isso que a linha precisa dizer, senao quem le ve o numero
+    do restaurante logo abaixo e conclui que esta coberto."""
+    restaurante, filial = restaurante_pronto(db)
+    _canal(db, restaurante)
+    _canal(db, restaurante, filial, is_active=False)
+
+    conferencia = conferir_canal_de_whatsapp(db, _alvo(restaurante))
+
+    assert conferencia.situacao == ATENCAO
+    texto = " ".join(conferencia.linhas)
+    assert "DESLIGADO no painel" in texto
+    assert "NAO cai no numero do restaurante" in texto
+
+
+def test_desconectado_pela_meta_diz_que_o_conserto_nao_e_nosso(db, avisos_ligados):
+    """O unico estado cujo conserto comeca FORA daqui.
+
+    Confundi-lo com "desligado no painel" faz o dono clicar em conectar no
+    nosso painel e continuar sem receber nada (docs/whatsapp.md, 9.3)."""
+    from datetime import datetime, timezone
+
+    restaurante, filial = restaurante_pronto(db)
+    _canal(db, restaurante, filial,
+           disconnected_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+           disconnect_reason="PARTNER_REMOVED")
+
+    conferencia = conferir_canal_de_whatsapp(db, _alvo(restaurante))
+
+    assert conferencia.situacao == ATENCAO
+    texto = " ".join(conferencia.linhas)
+    assert "DESCONECTADO PELA META em 01/09/2026" in texto
+    assert "PARTNER_REMOVED" in texto
+    assert "WhatsApp da loja" in conferencia.o_que_fazer
+
+
+def test_a_chave_da_plataforma_desligada_com_numero_cadastrado_e_atencao(
+    db, monkeypatch, chave_de_cifra
+):
+    """O numero esta la, o trabalho foi feito, e nada sai.
+
+    E o estado mais caro de nao enxergar: tudo parece configurado, e a chave
+    que cala tudo e uma variavel de ambiente que nao aparece em tela
+    nenhuma."""
+    monkeypatch.setattr(settings, "WHATSAPP_NOTIFICATIONS_ENABLED", False)
+    monkeypatch.setattr(settings, "WHATSAPP_APP_SECRET", "segredo-de-teste")
+    restaurante, filial = restaurante_pronto(db)
+    _canal(db, restaurante, filial)
+
+    conferencia = conferir_canal_de_whatsapp(db, _alvo(restaurante))
+
+    assert conferencia.situacao == ATENCAO
+    assert "WHATSAPP_NOTIFICATIONS_ENABLED esta FALSA" in " ".join(conferencia.linhas)
+
+
+def test_sem_app_secret_o_webhook_de_status_nunca_volta(db, monkeypatch, chave_de_cifra):
+    monkeypatch.setattr(settings, "WHATSAPP_NOTIFICATIONS_ENABLED", True)
+    monkeypatch.setattr(settings, "WHATSAPP_APP_SECRET", None)
+    restaurante, filial = restaurante_pronto(db)
+    _canal(db, restaurante, filial)
+
+    conferencia = conferir_canal_de_whatsapp(db, _alvo(restaurante))
+
+    assert conferencia.situacao == ATENCAO
+    assert "WHATSAPP_APP_SECRET ausente" in " ".join(conferencia.linhas)
+
+
+# ---------------------------------------------------------------------------
 # O restaurante completo
 # ---------------------------------------------------------------------------
 
 
 def test_restaurante_completo_responde_pronto(db):
     """Sem este teste, um script que respondesse ERRO para tudo passaria em
-    todos os outros — cada um deles so afirma que UM caso e detectado."""
+    todos os outros — cada um deles so afirma que UM caso e detectado.
+
+    A sexta sai ATENCAO porque `restaurante_pronto` nao conecta WhatsApp — e
+    e assim que tem que ser: os cinco silenciosos sao o que impede o primeiro
+    pedido, e o aviso ao cliente nao esta entre eles."""
     restaurante, _ = restaurante_pronto(db)
 
     conferencias = conferir_tudo(db, _alvo(restaurante))
 
-    assert [c.situacao for c in conferencias] == [OK] * 5
+    assert [c.situacao for c in conferencias] == [OK] * 5 + [ATENCAO]
+    assert not [c for c in conferencias if c.situacao == ERRO]
+
+
+def test_restaurante_completo_com_whatsapp_sai_OK_nos_seis(db, avisos_ligados):
+    restaurante, filial = restaurante_pronto(db)
+    _canal(db, restaurante, filial)
+
+    conferencias = conferir_tudo(db, _alvo(restaurante))
+
+    assert [c.situacao for c in conferencias] == [OK] * 6
 
 
 def test_o_script_nao_escreve_nada(db):

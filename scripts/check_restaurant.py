@@ -12,6 +12,17 @@ parece pronto, e falha no primeiro pedido de verdade.
     4. Segredo do webhook (6.4)      o cliente paga e o pedido nunca sai de "aguardando"
     5. Comissao negociada (7)        todo pedido congela 10%, e NAO tem conserto depois
 
+E uma SEXTA conferencia, que nao e um dos cinco e nao se comporta como eles:
+
+    6. Canal de WhatsApp (WA)        por qual numero cada loja avisa o cliente
+
+Ela NUNCA sai como ERRO, e isso e deliberado: os cinco de cima bloqueiam o
+primeiro pedido, e a falta de WhatsApp nao bloqueia nada — o pedido entra, a
+comanda sai, o dinheiro entra. O que ela responde e a pergunta que nao tem
+tela nem log: "por qual numero ESTA loja fala?". A filial que HERDA o numero
+do restaurante e a filial que nao tem numero nenhum sao indistinguiveis de
+fora, e so uma delas avisa o cliente.
+
 SO LEITURA. Nenhum INSERT, UPDATE ou DDL — este script nao conserta nada e
 nao deve passar a consertar. As cinco correcoes tem donos diferentes (duas
 sao tela do lojista, tres sao SQL ou script no servidor) e escolher por
@@ -59,7 +70,14 @@ DIAS = ("segunda", "terca", "quarta", "quinta", "sexta", "sabado", "domingo")
 
 @dataclass
 class Conferencia:
-    """O resultado de UM dos cinco. `passo` e o numero no documento."""
+    """O resultado de UMA conferencia.
+
+    `passo` e o numero no `docs/onboarding-de-restaurante.md` nos cinco
+    silenciosos. A do WhatsApp usa `WA` porque o passo dela nao mora naquele
+    documento: mora em `docs/whatsapp.md`, secoes 9.2 e 9.3. Inventar um
+    numero de onboarding para ela mandaria quem le procurar uma secao que nao
+    existe.
+    """
 
     passo: str
     titulo: str
@@ -404,6 +422,159 @@ def conferir_comissao(db: Session, restaurante: Restaurante) -> Conferencia:
 
 
 # ---------------------------------------------------------------------------
+# 6. Canal de WhatsApp (docs/whatsapp.md, 9.2 e 9.3)
+# ---------------------------------------------------------------------------
+
+
+def conferir_canal_de_whatsapp(db: Session, restaurante: Restaurante) -> Conferencia:
+    """Por qual numero cada loja avisa o cliente — e se ela avisa.
+
+    NUNCA devolve ERRO. Aviso de WhatsApp e opcional: sem canal o pedido
+    entra, a comanda sai e o dinheiro entra do mesmo jeito. Bloquear a
+    instalacao por causa dele seria o script mentindo sobre o que "pronto"
+    significa. Todo achado daqui e ATENCAO, que e "confirme com o lojista".
+
+    O que ela existe para mostrar sao os tres estados que se parecem de fora
+    e pedem coisas diferentes:
+
+        herda o numero do restaurante   avisa, e esta certo
+        numero proprio DESLIGADO        nao avisa, e NAO cai no do
+                                        restaurante (ver `resolve_for_branch`)
+        sem numero nenhum               nao avisa, e ninguem sabe
+
+    A resolucao e repetida em Python aqui, e o preco disso e o mesmo de
+    `_filiais_ativas`: se `resolve_for_branch` mudar, muda aqui. A alternativa
+    seria importar o repositorio e abrir uma sessao do ORM, e este script
+    conversa com o banco em SQL cru de proposito — ele roda sem subir o app.
+    """
+    canais = _canais_do_restaurante(db, restaurante)
+    filiais = _filiais_ativas(db, restaurante)
+    o_que_fazer = (
+        "docs/whatsapp.md 9.2 (script) ou 9.3 (painel). Religar depois de uma "
+        "desconexao da Meta comeca no WhatsApp da loja, e SO DEPOIS aqui."
+    )
+
+    if not canais:
+        return Conferencia("WA", "Canal de WhatsApp", ATENCAO, [
+            "  nenhum numero cadastrado - o cliente nao recebe aviso de pedido nenhum",
+            "  (pode ser decisao: a frente inteira e opcional)",
+        ], o_que_fazer)
+
+    linhas, situacao = [], OK
+    if not settings.WHATSAPP_NOTIFICATIONS_ENABLED:
+        situacao = ATENCAO
+        linhas.append("  WHATSAPP_NOTIFICATIONS_ENABLED esta FALSA na plataforma:")
+        linhas.append("  ha numero cadastrado e MESMO ASSIM nenhum aviso sai, de loja nenhuma")
+
+    if not settings.WHATSAPP_APP_SECRET:
+        situacao = _pior(situacao, ATENCAO)
+        linhas.append("  WHATSAPP_APP_SECRET ausente: o webhook responde 503, entao")
+        linhas.append("  'entregue' e 'lido' nunca voltam e a janela de 24h nunca abre")
+
+    do_restaurante = _canal_do_restaurante(canais)
+    for filial in filiais:
+        situacao = _pior(situacao, _linha_do_canal_da_filial(
+            filial, canais, do_restaurante, linhas
+        ))
+
+    return Conferencia("WA", "Canal de WhatsApp", situacao, linhas, o_que_fazer)
+
+
+def _linha_do_canal_da_filial(
+    filial: dict,
+    canais: list[dict],
+    do_restaurante: dict | None,
+    linhas: list[str],
+) -> str:
+    """Uma linha por filial, dizendo por qual numero ela fala.
+
+    A ordem das perguntas e a de `resolve_for_branch`, e ela nao pode ser
+    invertida: quem tem linha PROPRIA nunca cai na do restaurante, nem quando
+    a propria esta desligada.
+    """
+    propria = _canal_da_filial(canais, filial["id"])
+
+    if propria is not None and _utilizavel(propria):
+        linhas.append(f"  {filial['name']}: numero proprio {propria['display_phone_number']}")
+        return OK
+
+    if propria is not None:
+        linhas.append(f"  {filial['name']}: numero proprio {propria['display_phone_number']} "
+                      f"{_por_que_nao_manda(propria)}")
+        linhas.append("    esta loja nao avisa ninguem, e NAO cai no numero do restaurante")
+        return ATENCAO
+
+    if do_restaurante is not None and _utilizavel(do_restaurante):
+        linhas.append(f"  {filial['name']}: herda o numero do restaurante "
+                      f"{do_restaurante['display_phone_number']}")
+        return OK
+
+    if do_restaurante is not None:
+        linhas.append(f"  {filial['name']}: herdaria o numero do restaurante, que esta "
+                      f"{_por_que_nao_manda(do_restaurante)}")
+        return ATENCAO
+
+    linhas.append(f"  {filial['name']}: SEM numero - nenhum aviso sai desta loja")
+    return ATENCAO
+
+
+def _por_que_nao_manda(canal: dict) -> str:
+    """As duas razoes, e elas pedem consertos em lugares diferentes.
+
+    Desligado aqui se resolve aqui. Desconectado pela Meta comeca no WhatsApp
+    da loja, e clicar em "conectar" no nosso painel antes disso deixa o dono
+    achando que resolveu (docs/whatsapp.md, 9.3).
+    """
+    if canal["disconnected_at"] is not None:
+        motivo = canal["disconnect_reason"] or "sem motivo registrado"
+        return f"DESCONECTADO PELA META em {canal['disconnected_at']:%d/%m/%Y} ({motivo})"
+    return "DESLIGADO no painel"
+
+
+def _utilizavel(canal: dict) -> bool:
+    """A MESMA regra de `canal_utilizavel`, em cima do dicionario do SQL cru.
+
+    Sao duas condicoes que nao se substituem: `is_active` e "eu nao
+    desliguei", `disconnected_at` e "a Meta nao tirou o acesso".
+    """
+    return bool(canal["is_active"]) and canal["disconnected_at"] is None
+
+
+def _canal_da_filial(canais: list[dict], branch_id) -> dict | None:
+    for canal in canais:
+        if canal["branch_id"] is not None and str(canal["branch_id"]) == str(branch_id):
+            return canal
+    return None
+
+
+def _canal_do_restaurante(canais: list[dict]) -> dict | None:
+    """A linha de queda: `branch_id` NULO, e so nulo significa isso."""
+    for canal in canais:
+        if canal["branch_id"] is None:
+            return canal
+    return None
+
+
+def _canais_do_restaurante(db: Session, restaurante: Restaurante) -> list[dict]:
+    """Todas as linhas, ATIVAS OU NAO.
+
+    Filtrar pelas utilizaveis aqui apagaria justamente o achado: um numero
+    desconectado que nao aparecesse na lista ficaria indistinguivel de um
+    numero que nunca existiu, e as duas situacoes pedem coisas opostas do
+    dono.
+    """
+    linhas = db.execute(text(
+        """
+        SELECT branch_id, display_phone_number, is_active,
+               disconnected_at, disconnect_reason
+          FROM whatsapp_channels
+         WHERE restaurant_id = CAST(:id AS uuid)
+        """
+    ), {"id": restaurante.id}).mappings().all()
+    return [dict(linha) for linha in linhas]
+
+
+# ---------------------------------------------------------------------------
 # Leituras compartilhadas
 # ---------------------------------------------------------------------------
 
@@ -484,6 +655,7 @@ def conferir_tudo(db: Session, restaurante: Restaurante) -> list[Conferencia]:
         conferir_setores_de_impressao(db, restaurante),
         conferir_webhook_do_pagamento(db, restaurante),
         conferir_comissao(db, restaurante),
+        conferir_canal_de_whatsapp(db, restaurante),
     ]
 
 
@@ -518,7 +690,7 @@ def _veredito(conferencias: list[Conferencia]) -> str:
         passos = ", ".join(c.passo for c in atencoes)
         return f"Nenhum erro. Confirme com o lojista os passos {passos} - podem ser decisao dele."
 
-    return "Pronto: os cinco silenciosos estao cobertos."
+    return "Pronto: os cinco silenciosos estao cobertos, e o WhatsApp esta no ar."
 
 
 def main() -> int:

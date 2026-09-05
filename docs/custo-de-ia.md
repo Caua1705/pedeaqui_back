@@ -82,8 +82,8 @@ Por isso também não entra no `/openapi.json`: o painel consome o documento
 (armadilha 16), e rota que não é do painel não entra no contrato dele.
 
 `PLATFORM_METRICS_KEY` é **segredo novo para público novo** (armadilha 32) — não
-reaproveita a `INTERNAL_API_KEY`, que está depreciada e que o `startup_checks`
-pede para remover do `.env`. É **opcional**: sem ela, só esta rota responde 503.
+reaproveita nenhum outro segredo do ambiente. É **opcional**: sem ela, só esta
+rota responde 503.
 
 A comparação é `hmac.compare_digest` e não `!=` (armadilha 18).
 

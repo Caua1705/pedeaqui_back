@@ -250,12 +250,10 @@ def collect_configuration_warnings(settings: Settings) -> list[str]:
             "restante do cardapio e as imagens ja enviadas nao sao afetados."
         )
 
-    if settings.INTERNAL_API_KEY:
-        warnings.append(
-            "INTERNAL_API_KEY ainda definida no ambiente: desde a Fase 1 "
-            "nenhuma rota a utiliza. Pode ser removida do .env."
-        )
-
+    # Houve aqui um aviso pedindo para remover `INTERNAL_API_KEY` do ambiente.
+    # Ele saiu junto com a variavel em 05/09/2026: sem campo em `Settings` nao
+    # ha o que conferir, e `extra="ignore"` faz um `.env` que ainda a tenha
+    # subir sem reclamar de nada.
     warnings.extend(_avisos_do_whatsapp(settings))
 
     if settings.PAYMENT_PROVIDER == "sandbox" and not (settings.PAYMENT_WEBHOOK_SECRET or "").strip():

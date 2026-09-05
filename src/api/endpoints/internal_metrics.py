@@ -15,13 +15,14 @@ Por isso tambem `include_in_schema=False`: o painel consome o `/openapi.json`
 `tests/test_custo_de_ia.py` trava as duas coisas — a ausencia no documento e a
 recusa sem chave.
 
-## Segredo NOVO, e nao o `INTERNAL_API_KEY` que ja existe
+## Segredo NOVO, e nao um dos que ja existem
 
-`INTERNAL_API_KEY` esta depreciada desde a Fase 1 e o `startup_checks` pede
-para remove-la do `.env`. Reaproveita-la aqui contradiria esse aviso e faria
-uma chave que "nao e usada por rota nenhuma" voltar a valer alguma coisa em
-silencio — que e exatamente o erro que a armadilha 32 registra (segredo novo
-por publico novo).
+Armadilha 32: segredo novo por publico novo. Houve a tentacao concreta de
+reaproveitar a `INTERNAL_API_KEY` — a X-API-Key que as rotas /admin usavam
+antes do JWT de lojista —, e ela seria o pior caso possivel: uma chave que
+"nao e usada por rota nenhuma" voltando a valer alguma coisa em silencio,
+depois de anos parada num `.env` que ninguem revisa. Aquela variavel foi
+removida em 05/09/2026, e esta e propria desta rota.
 
 `PLATFORM_METRICS_KEY` e OPCIONAL: sem ela a rota responde 503 e o resto da
 API sobe igual. Obrigatoria, ela derrubaria o boot de todo mundo por causa de

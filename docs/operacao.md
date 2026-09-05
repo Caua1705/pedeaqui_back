@@ -527,7 +527,6 @@ produção: `ENABLE_API_DOCS=true`.
 | `SUPABASE_SERVICE_ROLE_KEY` vazia | upload de imagem do painel responde 503; leitura das imagens segue |
 | `PAYMENT_WEBHOOK_SECRET` vazia com provider sandbox | webhook responde 503 e nenhum pedido online sai de "aguardando pagamento" |
 | `PAYMENT_PROVIDER=sandbox` em produção | cobranças criadas localmente, nenhum dinheiro movimentado de verdade |
-| `INTERNAL_API_KEY` presente | depreciada, nenhuma rota usa; pode sair do `.env` |
 | `RATE_LIMIT_CLIENT_IP_HEADER` vazio | atrás do proxy, todos os clientes no mesmo balde |
 
 ---

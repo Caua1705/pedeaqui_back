@@ -207,8 +207,10 @@ Opcionais, mas **cada uma desliga alguma coisa em silêncio** — o boot só avi
 | `PLATFORM_METRICS_KEY` | `GET /internal/ai-usage` responde 503 — o custo de IA por restaurante ([docs/custo-de-ia.md](docs/custo-de-ia.md)) |
 | `VOICE_ENABLED` | com ela falsa o router de voz não é registrado |
 
-E uma que **precisa sair** do ambiente: `INTERNAL_API_KEY`, depreciada desde a
-Fase 1 — nenhuma rota a usa, e o boot avisa enquanto ela existir.
+Duas saíram do código em 05/09/2026 e **podem sair do `.env`** — nenhuma das
+duas derruba nada enquanto estiver lá (`extra="ignore"`): `INTERNAL_API_KEY`, a
+X-API-Key anterior ao JWT de lojista, e `EXPERIMENTO_VOZ_ENABLED`, que ficou sem
+consumidor quando o experimento de voz virou `src/ai/voice/`.
 
 O `.env.example` está anotado por categoria e cobre o resto (limites de corpo,
 TTLs, cotas de voz, RFV, tempos do Google).

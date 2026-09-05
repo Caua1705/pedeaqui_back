@@ -49,18 +49,16 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_ROLE_KEY: str | None = None
     SUPABASE_STORAGE_TIMEOUT_SECONDS: float = 15
 
-    # DEPRECIADA na Fase 1. Nenhuma rota HTTP usa mais esta chave: as rotas
-    # /admin passaram a exigir JWT de lojista. Continua opcional aqui apenas
-    # para que um .env antigo nao derrube o boot; pode ser removida do
-    # ambiente depois que a Fase 1 estiver no ar.
-    INTERNAL_API_KEY: str | None = None
-
     # A chave de `GET /internal/ai-usage` — o rateio do custo de IA por
     # restaurante. Publico proprio, segredo proprio: e a leitura de quem opera
-    # a PLATAFORMA, e nao do lojista (ver `internal_metrics.py`). Nao
-    # reaproveita `INTERNAL_API_KEY`, que esta depreciada e que o
-    # `startup_checks` pede para remover — armadilha 32, segredo novo por
-    # publico novo.
+    # a PLATAFORMA, e nao do lojista (ver `internal_metrics.py`) — armadilha
+    # 32, segredo novo por publico novo.
+    #
+    # Havia aqui uma `INTERNAL_API_KEY`, a X-API-Key que as rotas /admin usavam
+    # antes do JWT de lojista. Removida em 05/09/2026: nenhuma rota a lia desde
+    # a Fase 1, e o proprio `startup_checks` pedia para tira-la do ambiente.
+    # `extra="ignore"` no `model_config` faz um `.env` que ainda a tenha subir
+    # normalmente.
     #
     # OPCIONAL: vazia, so aquela rota responde 503. Obrigatoria, ela derrubaria
     # o boot de todo mundo por causa de um relatorio que uma pessoa le.

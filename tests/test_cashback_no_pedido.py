@@ -255,6 +255,11 @@ class CreditoNaMudancaDeStatusTests(unittest.TestCase):
         service = AdminOrderService(FakeDb())
         repository = SimpleNamespace(
             get_order_detail=lambda order_id, restaurant_id: order,
+            # O dublê do lock é a MESMA busca: aqui não há segunda transação
+            # disputando a linha, e o que o writer precisa de volta é o
+            # pedido. Quem exercita o lock de verdade é
+            # `tests/test_lock_do_status_do_pedido_db.py`, contra o Postgres.
+            lock_for_status_change=lambda order_id, restaurant_id: order,
             update_status=lambda current, novo: setattr(current, "status", novo),
             create_status_history=lambda history: None,
         )

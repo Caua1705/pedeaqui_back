@@ -158,6 +158,22 @@ PAPEL_ESPERADO = {
     ("GET", "/admin/reports/payment-methods"): GERENCIA,
     ("GET", "/admin/reports/products"): GERENCIA,
     ("GET", "/admin/reports/cancellations"): GERENCIA,
+    # As quatro de 05/09/2026, e a divisao acima decide as quatro.
+    #
+    # TRES sao de dinheiro e exigem recorte de quem nao e dono, como o
+    # `summary`. `neighborhoods` parece operacional e NAO e: ela diz quanto
+    # cada regiao rendeu, e sem `ensure_pode_ler_dinheiro` o gerente do
+    # Centro leria o faturamento da Aldeota por bairro — a mesma leitura que
+    # se recusa no resumo, escrita de outro jeito.
+    ("GET", "/admin/reports/sales-by-hour"): GERENCIA,
+    ("GET", "/admin/reports/neighborhoods"): GERENCIA,
+    ("GET", "/admin/reports/customers"): GERENCIA,
+    # `operations` e a UNICA das quatro sem recorte obrigatorio, porque e a
+    # unica sem uma linha de dinheiro: sao minutos entre carimbos. Quem toca
+    # o balcao precisa ler o proprio tempo de preparo, e o mesmo criterio ja
+    # deixou `/admin/reviews` em GERENCIA — nota e tempo nao dizem quanto
+    # entrou.
+    ("GET", "/admin/reports/operations"): GERENCIA,
     # --- avaliacao de pedido
     #
     # GERENCIA, e nao SOMENTE_DONO. A divisao dos relatorios acima e "dinheiro

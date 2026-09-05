@@ -43,6 +43,7 @@ from src.models.admin_user_model import AdminUser
 from src.models.branch_business_hour_model import BranchBusinessHour
 from src.models.branch_model import Branch
 from src.models.branch_payment_method_model import BranchPaymentMethod
+from src.models.cashback_rule_model import CashbackRule
 from src.models.coupon_model import CouponTemplate, RestaurantCoupon
 from src.models.courier_model import Courier, CourierAssignment
 from src.core.constants import SOCIAL_PROVIDER_GOOGLE
@@ -321,6 +322,35 @@ def arte_de_cupom(**sobrescritas) -> CouponTemplate:
     campos.update(sobrescritas)
     return CouponTemplate(**campos)
 
+
+
+def regra_de_cashback(**sobrescritas) -> CashbackRule:
+    """A regra de campanha do RESTAURANTE, LIGADA.
+
+    `branch_id` nulo e a regra padrao da rede, e so nulo significa isso —
+    quem quer a sobrescrita de uma loja passa `branch_id=`.
+
+    **Nasce `enabled=True`, ao contrario da coluna**, e a inversao e
+    deliberada: no banco o `default=False` e a trava que impede uma campanha
+    de ligar sozinha, e aqui o caso interessante e quase sempre a regra
+    valendo. Quem testa o estado de fabrica passa `enabled=False` e o teste
+    fica dizendo isso em voz alta.
+
+    `weekdays` vazio nao e "todo dia zero": dia sem linha propria herda
+    `default_percent` da propria regra (ver `CashbackRuleWeekday`).
+    """
+    campos = {
+        "id": uuid.uuid4(),
+        "restaurant_id": uuid.uuid4(),
+        "branch_id": None,
+        "enabled": True,
+        "default_percent": Decimal("5.00"),
+        "min_redeem_balance": Decimal("10.00"),
+        "expiry_days": 60,
+        "weekdays": [],
+    }
+    campos.update(sobrescritas)
+    return CashbackRule(**campos)
 
 def cupom(**sobrescritas) -> RestaurantCoupon:
     """Uma campanha publica, ativa e dentro da janela.

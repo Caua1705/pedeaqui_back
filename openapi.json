@@ -5910,6 +5910,33 @@
         "title": "CashbackBalanceResponse",
         "type": "object"
       },
+      "CashbackReportBlock": {
+        "description": "O cashback do periodo, dos dois lados.\n\n`earned_total` e credito GERADO no periodo (linhas `earned` de\n`cashback_transactions`), qualquer que seja o destino delas depois —\nsaldo usado, vencido ou cancelado continua tendo sido gerado.\n\n`redeemed_total` e o que saiu do saldo DENTRO de pedidos faturados do\nperiodo (`orders.cashback_redeemed_amount`). Os dois nao se cancelam e\nnao tem por que fechar entre si: o crédito nasce na conclusao de um\npedido e o resgate acontece na criacao de outro, meses depois.",
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "earned_total": {
+            "$ref": "#/components/schemas/MetricComparison"
+          },
+          "orders_with_redeem_count": {
+            "title": "Orders With Redeem Count",
+            "type": "integer"
+          },
+          "redeemed_total": {
+            "$ref": "#/components/schemas/MetricComparison"
+          }
+        },
+        "required": [
+          "earned_total",
+          "redeemed_total",
+          "orders_with_redeem_count",
+          "configured"
+        ],
+        "title": "CashbackReportBlock",
+        "type": "object"
+      },
       "CashbackTransactionResponse": {
         "properties": {
           "amount": {
@@ -9113,6 +9140,68 @@
         "title": "CustomerSocialIdentityItem",
         "type": "object"
       },
+      "CustomersReportResponse": {
+        "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "cashback": {
+            "$ref": "#/components/schemas/CashbackReportBlock"
+          },
+          "customers_count": {
+            "$ref": "#/components/schemas/MetricComparison"
+          },
+          "new_customers_count": {
+            "$ref": "#/components/schemas/MetricComparison"
+          },
+          "new_revenue_total": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "New Revenue Total",
+            "type": "string"
+          },
+          "period": {
+            "$ref": "#/components/schemas/ReportPeriod"
+          },
+          "previous_period": {
+            "$ref": "#/components/schemas/ReportPeriod"
+          },
+          "restaurant_id": {
+            "format": "uuid",
+            "title": "Restaurant Id",
+            "type": "string"
+          },
+          "returning_customers_count": {
+            "$ref": "#/components/schemas/MetricComparison"
+          },
+          "returning_revenue_total": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Returning Revenue Total",
+            "type": "string"
+          }
+        },
+        "required": [
+          "restaurant_id",
+          "period",
+          "previous_period",
+          "customers_count",
+          "new_customers_count",
+          "returning_customers_count",
+          "new_revenue_total",
+          "returning_revenue_total",
+          "cashback"
+        ],
+        "title": "CustomersReportResponse",
+        "type": "object"
+      },
       "DeleteCustomerAccountRequest": {
         "description": "A prova de que quem pede e o dono da conta. UMA das duas.\n\nCorpo em `DELETE` e incomum mas legal. A alternativa — senha na\nquerystring — a colocaria no log de todo proxy no caminho.\n\n**Qual dos dois campos mandar nao e escolha de quem chama: e da conta.**\n`GET /customers/me` responde `password_set`, e ele decide:\n\n    password_set: true   -> `password`, como sempre foi\n    password_set: false  -> `email_code`, pedido em\n                            POST /customers/me/delete-code\n\nOs dois sao opcionais NO SCHEMA e obrigatorios no servico, e a assimetria\ne proposital: um `password: str` obrigatorio deixaria a conta sem senha\nsem forma de preencher o corpo, e um `Union` de dois schemas faria o app\nescolher o formato — que e exatamente a decisao que nao pode ser dele.\nMandar o campo errado e **400** com a frase que diz qual mandar.\n\nO e-mail com o codigo diz EXCLUIR, com todas as letras: o mesmo codigo de\nseis digitos serve a tres pedidos neste sistema, e a caixa de entrada e o\nunico lugar onde a pessoa ve o que esta confirmando.",
         "properties": {
@@ -9477,6 +9566,56 @@
           }
         },
         "title": "DeliveryTimeBandsReplaceRequest",
+        "type": "object"
+      },
+      "DurationStats": {
+        "description": "Um tempo em minutos, com uma casa decimal.\n\nMediana e p90 ANTES da media, e nao por estilo: um pedido esquecido tres\nhoras puxa a media para \"preparo de 40 min\" e nao move a mediana. Quem\nle a tela precisa ver primeiro o numero que descreve o pedido tipico.\n\n`orders_count` e por bloco porque nem todo pedido passa por todos os\nestagios: retirada nao tem entrega, e pedido aceito e cancelado nao tem\npreparo. Sem ele, \"mediana de 12 min\" nao diz se saiu de 3 pedidos ou\nde 300.",
+        "properties": {
+          "average": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average"
+          },
+          "median": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median"
+          },
+          "orders_count": {
+            "title": "Orders Count",
+            "type": "integer"
+          },
+          "p90": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P90"
+          }
+        },
+        "required": [
+          "orders_count"
+        ],
+        "title": "DurationStats",
         "type": "object"
       },
       "ErrorReportResponse": {
@@ -10189,6 +10328,188 @@
           "change"
         ],
         "title": "MetricComparison",
+        "type": "object"
+      },
+      "NeighborhoodSalesItem": {
+        "properties": {
+          "average_ticket": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Average Ticket",
+            "type": "string"
+          },
+          "city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "neighborhood": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Neighborhood"
+          },
+          "orders_count": {
+            "title": "Orders Count",
+            "type": "integer"
+          },
+          "revenue_share_percent": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revenue Share Percent"
+          },
+          "revenue_total": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Revenue Total",
+            "type": "string"
+          }
+        },
+        "required": [
+          "orders_count",
+          "revenue_total",
+          "average_ticket"
+        ],
+        "title": "NeighborhoodSalesItem",
+        "type": "object"
+      },
+      "NeighborhoodSalesResponse": {
+        "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "neighborhoods": {
+            "items": {
+              "$ref": "#/components/schemas/NeighborhoodSalesItem"
+            },
+            "title": "Neighborhoods",
+            "type": "array"
+          },
+          "non_delivery_orders_count": {
+            "title": "Non Delivery Orders Count",
+            "type": "integer"
+          },
+          "orders_count": {
+            "title": "Orders Count",
+            "type": "integer"
+          },
+          "period": {
+            "$ref": "#/components/schemas/ReportPeriod"
+          },
+          "restaurant_id": {
+            "format": "uuid",
+            "title": "Restaurant Id",
+            "type": "string"
+          },
+          "revenue_total": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Revenue Total",
+            "type": "string"
+          }
+        },
+        "required": [
+          "restaurant_id",
+          "period",
+          "orders_count",
+          "revenue_total",
+          "non_delivery_orders_count",
+          "neighborhoods"
+        ],
+        "title": "NeighborhoodSalesResponse",
+        "type": "object"
+      },
+      "OperationsReportResponse": {
+        "properties": {
+          "accept_minutes": {
+            "$ref": "#/components/schemas/DurationStats"
+          },
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "delivery_minutes": {
+            "$ref": "#/components/schemas/DurationStats"
+          },
+          "late_orders_base_count": {
+            "title": "Late Orders Base Count",
+            "type": "integer"
+          },
+          "late_orders_count": {
+            "title": "Late Orders Count",
+            "type": "integer"
+          },
+          "late_orders_percent": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Late Orders Percent"
+          },
+          "orders_count": {
+            "title": "Orders Count",
+            "type": "integer"
+          },
+          "period": {
+            "$ref": "#/components/schemas/ReportPeriod"
+          },
+          "prep_minutes": {
+            "$ref": "#/components/schemas/DurationStats"
+          },
+          "restaurant_id": {
+            "format": "uuid",
+            "title": "Restaurant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "restaurant_id",
+          "period",
+          "orders_count",
+          "accept_minutes",
+          "prep_minutes",
+          "delivery_minutes",
+          "late_orders_count",
+          "late_orders_base_count"
+        ],
+        "title": "OperationsReportResponse",
         "type": "object"
       },
       "OrderDetailResponse": {
@@ -13026,6 +13347,118 @@
           "days"
         ],
         "title": "SalesByDayResponse",
+        "type": "object"
+      },
+      "SalesByHourItem": {
+        "properties": {
+          "hour": {
+            "title": "Hour",
+            "type": "integer"
+          },
+          "orders_count": {
+            "title": "Orders Count",
+            "type": "integer"
+          },
+          "revenue_total": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Revenue Total",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hour",
+          "orders_count",
+          "revenue_total"
+        ],
+        "title": "SalesByHourItem",
+        "type": "object"
+      },
+      "SalesByHourResponse": {
+        "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "hours": {
+            "items": {
+              "$ref": "#/components/schemas/SalesByHourItem"
+            },
+            "title": "Hours",
+            "type": "array"
+          },
+          "orders_count": {
+            "title": "Orders Count",
+            "type": "integer"
+          },
+          "period": {
+            "$ref": "#/components/schemas/ReportPeriod"
+          },
+          "restaurant_id": {
+            "format": "uuid",
+            "title": "Restaurant Id",
+            "type": "string"
+          },
+          "revenue_total": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Revenue Total",
+            "type": "string"
+          },
+          "weekday_hours": {
+            "items": {
+              "$ref": "#/components/schemas/SalesByWeekdayHourItem"
+            },
+            "title": "Weekday Hours",
+            "type": "array"
+          }
+        },
+        "required": [
+          "restaurant_id",
+          "period",
+          "orders_count",
+          "revenue_total",
+          "hours",
+          "weekday_hours"
+        ],
+        "title": "SalesByHourResponse",
+        "type": "object"
+      },
+      "SalesByWeekdayHourItem": {
+        "description": "Uma celula do mapa dia x hora.",
+        "properties": {
+          "hour": {
+            "title": "Hour",
+            "type": "integer"
+          },
+          "orders_count": {
+            "title": "Orders Count",
+            "type": "integer"
+          },
+          "revenue_total": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Revenue Total",
+            "type": "string"
+          },
+          "weekday": {
+            "description": "Dia da semana com 0 = SEGUNDA e 6 = domingo (`datetime.weekday()` do Python). NAO e o `getDay()` do JavaScript, que usa 0 = domingo: converter e obrigatorio dos dois lados.",
+            "title": "Weekday",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "weekday",
+          "hour",
+          "orders_count",
+          "revenue_total"
+        ],
+        "title": "SalesByWeekdayHourItem",
         "type": "object"
       },
       "SalesSummaryResponse": {
@@ -18684,6 +19117,252 @@
         ]
       }
     },
+    "/admin/reports/customers": {
+      "get": {
+        "description": "Quem comprou no periodo — novos, recorrentes — e o cashback dos dois lados.\n\n**Identidade do cliente: o telefone do pedido**\n(`customer_phone_snapshot`), a mesma de `/admin/customers`. Agrupar por\n`customer_id` descartaria o pedido de visitante, que nao tem conta, e\n\"12 clientes\" aqui contaria menos gente que a tela de Clientes.\n\n**\"Novo\" e pelo PERIODO DESTE RELATORIO**, e nao o `segment` de\n`/admin/customers`: o primeiro pedido faturado da vida do cliente cai\ndentro de `[start_date, end_date]`. O segmento usa a janela RFV em dias\ncorridos, e num recorte de 7 dias ele chamaria de \"novo\" quem estreou ha\ntres semanas.\n\n**Com `branch_id`, \"primeiro pedido\" continua sendo NO RESTAURANTE**, e\nnao na filial. Duas razoes: quem pediu na Aldeota depois de dois anos no\nCentro nao e um cliente novo do negocio, e com a leitura por filial a\nsoma das lojas teria mais clientes novos que o restaurante inteiro. O\nrecorte de filial restringe QUAIS PEDIDOS entram no periodo, nunca de\nonde vem a estreia.\n\n**O cashback tem dois numeros que nao fecham entre si, de proposito:**\n\n- `earned_total` e o credito GERADO no periodo (linhas `earned` do\n  razao), qualquer que seja o destino delas depois. Sem filtro de\n  `status`: filtrar por `available` faria o numero de um mes encolher\n  sozinho conforme os clientes gastassem o saldo;\n- `redeemed_total` e o saldo que entrou nos pedidos faturados do\n  periodo. O credito nasce na conclusao de um pedido e o resgate\n  acontece na criacao de outro, meses depois — nao ha razao para os dois\n  baterem.\n\n**`cashback_transactions` nao tem filial**, entao com `branch_id` o\ncredito e atribuido pelo PEDIDO que o gerou. Consequencia: credito sem\npedido — hoje so ajuste manual por SQL — nao entra em recorte de filial\nnenhum, porque nao ha como dizer de qual loja ele e. Sem `branch_id`\nele entra.\n\n`configured` diz se ha campanha VALENDO no recorte, e existe porque\n\"R$ 0,00 resgatados\" sozinho nao distingue \"ninguem usa\" de \"ninguem\nligou\" — e a segunda e o estado de fabrica: `cashback_rules.enabled`\nnasce falso em todo restaurante. Sem `branch_id`, a pergunta e do\nrestaurante e so a regra dele responde.\n\nQuem nao e dono precisa mandar `branch_id`.",
+        "operationId": "customers_report_admin_reports_customers_get",
+        "parameters": [
+          {
+            "description": "Primeiro dia do periodo (inclusive)",
+            "in": "query",
+            "name": "start_date",
+            "required": true,
+            "schema": {
+              "description": "Primeiro dia do periodo (inclusive)",
+              "format": "date",
+              "title": "Start Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Ultimo dia do periodo (inclusive)",
+            "in": "query",
+            "name": "end_date",
+            "required": true,
+            "schema": {
+              "description": "Ultimo dia do periodo (inclusive)",
+              "format": "date",
+              "title": "End Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+              "title": "Branch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomersReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Customers Report",
+        "tags": [
+          "admin reports"
+        ]
+      }
+    },
+    "/admin/reports/neighborhoods": {
+      "get": {
+        "description": "Faturamento por bairro, para decidir onde estender ou encolher a area.\n\n**SO PEDIDO DE ENTREGA.** Retirada nao tem bairro, e joga-la num balde\n\"sem bairro\" faria a maior regiao da tela ser o balcao. Por isso\n`orders_count` daqui NAO bate com o de `/reports/summary`, e a diferenca\nvem publicada em `non_delivery_orders_count` — `non_delivery` e nao\n`pickup` porque hoje o que sobra e so retirada, e um tipo de pedido novo\ncairia ali dentro.\n\nO bairro sai do SNAPSHOT do pedido (`address_neighborhood`), como veio\nno endereco naquele dia, sem normalizar — o endereco cadastrado do\ncliente muda depois, e o relatorio precisa dizer para onde a comida foi.\n**Cidade entra no agrupamento junto com o bairro**: \"Centro\" de\nFortaleza e \"Centro\" de Maracanau sao dois lugares.\n\nPedido de entrega SEM bairro registrado vem com `neighborhood: null`, e\nnao num balde \"outro\" — o pedido existe, o dinheiro entrou, e ninguem\nanotou onde. Mesma regra do `payment_method` nulo de\n`/reports/payment-methods`.\n\nOrdenado por faturamento, do maior para o menor. Sem `limit`: a lista de\nbairros de um restaurante cabe numa resposta, e paginar um ranking de\ncinco linhas seria contrato a mais sem pergunta a menos.\n\nQuem nao e dono precisa mandar `branch_id`.",
+        "operationId": "neighborhoods_report_admin_reports_neighborhoods_get",
+        "parameters": [
+          {
+            "description": "Primeiro dia do periodo (inclusive)",
+            "in": "query",
+            "name": "start_date",
+            "required": true,
+            "schema": {
+              "description": "Primeiro dia do periodo (inclusive)",
+              "format": "date",
+              "title": "Start Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Ultimo dia do periodo (inclusive)",
+            "in": "query",
+            "name": "end_date",
+            "required": true,
+            "schema": {
+              "description": "Ultimo dia do periodo (inclusive)",
+              "format": "date",
+              "title": "End Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+              "title": "Branch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NeighborhoodSalesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Neighborhoods Report",
+        "tags": [
+          "admin reports"
+        ]
+      }
+    },
+    "/admin/reports/operations": {
+      "get": {
+        "description": "Os tempos entre os carimbos do pedido: aceite, preparo e entrega.\n\nSai de `order_status_history`, e o marco de cada estagio e o PRIMEIRO\ncarimbo daquele status. Um pedido que volta a `preparing` depois de\n`ready` nao reabre o relogio: a promessa foi cumprida, ou nao, na\nprimeira vez que a loja disse \"pronto\".\n\n- `accept_minutes` — da criacao do pedido ate o aceite;\n- `prep_minutes` — do aceite ate `ready`;\n- `delivery_minutes` — de `out_for_delivery` ate `completed`, **so em\n  pedido de entrega**.\n\nCada bloco traz o proprio `orders_count` porque nem todo pedido passa\npor todos os estagios: retirada nao tem entrega, e pedido aceito e\ncancelado nao tem preparo. Sem ele, \"mediana de 12 min\" nao diz se saiu\nde 3 pedidos ou de 300.\n\n**Mediana e p90 vem antes da media**, e nao por estilo: um pedido\nesquecido tres horas puxa a media para \"preparo de 40 min\" e nao move a\nmediana. Nulo quando nenhum pedido teve aquele estagio — e nao zero, que\nafirmaria um aceite instantaneo que nao aconteceu.\n\n`late_orders_count` compara com o `delivery_prep_time_max` do PROPRIO\npedido, congelado na criacao, e nao com a configuracao atual da filial:\no cliente leu aquele prazo na vitrine, e julgar a loja pela promessa que\nela nao fez seria mudar a nota dela ao mexer numa tela de configuracao.\n\nO denominador de `late_orders_percent` vem publicado em\n`late_orders_base_count`, e ele NAO e `prep_minutes.orders_count`:\npedido com preparo medido mas SEM prazo prometido nao pode ser julgado\natrasado, e conta-lo embaixo faria a tela subestimar o atraso. Nulo\nquando nao ha denominador.\n\nGERENCIA sem recorte obrigatorio: e a unica rota de Desempenho que nao\npublica uma linha de dinheiro, e quem toca o balcao precisa ler o\nproprio tempo de preparo.",
+        "operationId": "operations_report_admin_reports_operations_get",
+        "parameters": [
+          {
+            "description": "Primeiro dia do periodo (inclusive)",
+            "in": "query",
+            "name": "start_date",
+            "required": true,
+            "schema": {
+              "description": "Primeiro dia do periodo (inclusive)",
+              "format": "date",
+              "title": "Start Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Ultimo dia do periodo (inclusive)",
+            "in": "query",
+            "name": "end_date",
+            "required": true,
+            "schema": {
+              "description": "Ultimo dia do periodo (inclusive)",
+              "format": "date",
+              "title": "End Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+              "title": "Branch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationsReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Operations Report",
+        "tags": [
+          "admin reports"
+        ]
+      }
+    },
     "/admin/reports/payment-methods": {
       "get": {
         "description": "Quanto entrou por forma de pagamento no periodo.\n\n`payment_method` nulo e pedido sem forma registrada, e continua nulo na\nresposta — nao vira \"other\", que e uma forma de pagamento de verdade.\n\nQuem nao e dono precisa mandar `branch_id`. E o relatorio em que o\nrecorte mais muda a leitura: as formas aceitas sao de cada filial\n(`branch_payment_methods`), entao a soma da rede mistura lojas que nem\noferecem os mesmos meios.",
@@ -18939,6 +19618,88 @@
           }
         ],
         "summary": "Sales By Day",
+        "tags": [
+          "admin reports"
+        ]
+      }
+    },
+    "/admin/reports/sales-by-hour": {
+      "get": {
+        "description": "A que horas a loja vende, somando todos os dias do periodo.\n\nDevolve as 24 HORAS SEMPRE, inclusive as sem venda, com zero — a mesma\nregra dos dias de `/reports/sales-by-day`. A hora e a hora LOCAL da\noperacao (America/Fortaleza): um pedido das 22h de sexta e hora 22, e\nnao 1h do sabado em UTC.\n\n`weekday_hours` e o mapa dia x hora, com `weekday` 0 = SEGUNDA e\n6 = domingo (o `datetime.weekday()` do Python, NAO o `getDay()` do\nJavaScript). Ele NAO vem preenchido com zeros, e a assimetria com\n`hours` e deliberada: as 24 horas existem em todo dia, mas um dia da\nsemana pode simplesmente nao estar no periodo pedido — emitir\n\"segunda: 0\" num recorte sem nenhuma segunda seria afirmar que a loja\nnao vendeu num dia sobre o qual ninguem perguntou.\n\nMesmo criterio de \"faturado\" do resumo: cancelados, recusados e\nestornados ficam de fora.\n\nQuem nao e dono precisa mandar `branch_id`.",
+        "operationId": "sales_by_hour_admin_reports_sales_by_hour_get",
+        "parameters": [
+          {
+            "description": "Primeiro dia do periodo (inclusive)",
+            "in": "query",
+            "name": "start_date",
+            "required": true,
+            "schema": {
+              "description": "Primeiro dia do periodo (inclusive)",
+              "format": "date",
+              "title": "Start Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Ultimo dia do periodo (inclusive)",
+            "in": "query",
+            "name": "end_date",
+            "required": true,
+            "schema": {
+              "description": "Ultimo dia do periodo (inclusive)",
+              "format": "date",
+              "title": "End Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recorte por filial. Omitido, soma o restaurante inteiro. So restringe.",
+              "title": "Branch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesByHourResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Sales By Hour",
         "tags": [
           "admin reports"
         ]

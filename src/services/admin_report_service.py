@@ -37,13 +37,20 @@ from sqlalchemy.orm import Session
 from src.core.constants import PLATFORM_TIMEZONE
 from src.utils.date_window import period_bounds
 from src.repositories.admin_report_repository import AdminReportRepository
+from src.repositories.cashback_rule_repository import CashbackRuleRepository
 from src.repositories.order_repository import OrderRepository
 from src.schemas.admin_report_schema import (
     CancellationBreakdownItem,
     CancellationsResponse,
+    CashbackReportBlock,
     CommissionReportItem,
     CommissionReportResponse,
+    CustomersReportResponse,
+    DurationStats,
     MetricComparison,
+    NeighborhoodSalesItem,
+    NeighborhoodSalesResponse,
+    OperationsReportResponse,
     OrderTypeSplitItem,
     PaymentMethodItem,
     PaymentMethodsResponse,
@@ -53,8 +60,12 @@ from src.schemas.admin_report_schema import (
     SalesBreakdown,
     SalesByDayItem,
     SalesByDayResponse,
+    SalesByHourItem,
+    SalesByHourResponse,
+    SalesByWeekdayHourItem,
     SalesSummaryResponse,
 )
+from src.services.cashback_rule import resolve_cashback_terms
 from src.utils.money import ZERO, quantize_money, to_decimal
 
 
@@ -81,11 +92,22 @@ PRODUCT_REVENUE_NOTE = (
 
 ONE_HUNDRED = Decimal("100")
 
+# Todas as horas do dia. A serie da resposta e sempre esta, com zero onde nao
+# houve venda — mesma regra dos dias de `sales_by_day`.
+HORAS_DO_DIA = tuple(range(24))
+
+# Uma casa decimal nos minutos. Duas dariam a impressao de precisao que o
+# dado nao tem (o carimbo depende de quando o lojista clicou), e zero
+# esconderia a diferenca entre 12 e 12,5 min num numero que a tela compara
+# semana a semana.
+UMA_CASA = Decimal("0.1")
+
 
 class AdminReportService:
     def __init__(self, db: Session):
         self.order_repository = OrderRepository(db)
         self.report_repository = AdminReportRepository(db)
+        self.cashback_rule_repository = CashbackRuleRepository(db)
 
     def commission_report(
         self,
@@ -371,6 +393,308 @@ class AdminReportService:
                 )
                 for order_status, payment_status, orders_count, amount in rows
             ],
+        )
+
+    def sales_by_hour(
+        self,
+        restaurant_id: UUID,
+        start_date: date,
+        end_date: date,
+        branch_id: UUID | None = None,
+    ) -> SalesByHourResponse:
+        """A que horas a loja vende, somando todos os dias do periodo.
+
+        As 24 horas SEMPRE, com zero nas vazias: o eixo do grafico e o dia
+        inteiro, e uma hora omitida faria a tela ligar 11h direto em 13h —
+        o mesmo motivo do preenchimento de `sales_by_day`.
+
+        O mapa `weekday_hours` NAO e preenchido, e a assimetria e
+        deliberada: as 24 horas existem todo dia, e um dia da semana pode
+        simplesmente nao estar no periodo pedido. Emitir "segunda: 0" para
+        um recorte que nao contem nenhuma segunda seria a resposta afirmando
+        que a loja nao vendeu num dia sobre o qual nao foi perguntada.
+        """
+        self._validate_period(start_date, end_date)
+        start_at, end_at = self._period_bounds(start_date, end_date)
+
+        por_hora = {
+            hora: (pedidos, quantize_money(to_decimal(receita)))
+            for hora, pedidos, receita in self.report_repository.sales_by_hour(
+                restaurant_id, start_at, end_at, branch_id
+            )
+        }
+        horas = [
+            SalesByHourItem(
+                hour=hora,
+                orders_count=por_hora.get(hora, (0, ZERO))[0],
+                revenue_total=por_hora.get(hora, (0, ZERO))[1],
+            )
+            for hora in HORAS_DO_DIA
+        ]
+
+        celulas = self.report_repository.sales_by_weekday_hour(
+            restaurant_id, start_at, end_at, branch_id
+        )
+        return SalesByHourResponse(
+            restaurant_id=restaurant_id,
+            branch_id=branch_id,
+            period=self._period(start_date, end_date),
+            orders_count=sum(item.orders_count for item in horas),
+            revenue_total=quantize_money(
+                sum((item.revenue_total for item in horas), ZERO)
+            ),
+            hours=horas,
+            weekday_hours=[
+                SalesByWeekdayHourItem(
+                    weekday=weekday,
+                    hour=hora,
+                    orders_count=pedidos,
+                    revenue_total=quantize_money(to_decimal(receita)),
+                )
+                for weekday, hora, pedidos, receita in celulas
+            ],
+        )
+
+    def neighborhoods_report(
+        self,
+        restaurant_id: UUID,
+        start_date: date,
+        end_date: date,
+        branch_id: UUID | None = None,
+    ) -> NeighborhoodSalesResponse:
+        """Para onde a comida foi, e quanto cada bairro rendeu.
+
+        **So pedido de ENTREGA**, e o total daqui por isso NAO bate com o de
+        `/reports/summary`. A diferenca fica publicada em
+        `non_delivery_orders_count` em vez de o painel ter que descobri-la.
+
+        O ticket medio e por bairro e sai daqui e nao do banco pelo mesmo
+        motivo de `_totals_for`: uma divisao feita em dois lugares e uma
+        divisao que um dia discorda de si mesma.
+        """
+        self._validate_period(start_date, end_date)
+        start_at, end_at = self._period_bounds(start_date, end_date)
+
+        rows = self.report_repository.sales_by_neighborhood(
+            restaurant_id, start_at, end_at, branch_id
+        )
+        revenue_total = quantize_money(sum((to_decimal(row[3]) for row in rows), ZERO))
+        return NeighborhoodSalesResponse(
+            restaurant_id=restaurant_id,
+            branch_id=branch_id,
+            period=self._period(start_date, end_date),
+            orders_count=sum(row[2] for row in rows),
+            revenue_total=revenue_total,
+            non_delivery_orders_count=self.report_repository.count_non_delivery_orders(
+                restaurant_id, start_at, end_at, branch_id
+            ),
+            neighborhoods=[
+                NeighborhoodSalesItem(
+                    neighborhood=neighborhood,
+                    city=city,
+                    orders_count=orders_count,
+                    revenue_total=quantize_money(to_decimal(receita)),
+                    average_ticket=self._ticket(to_decimal(receita), orders_count),
+                    revenue_share_percent=self._share(
+                        to_decimal(receita), revenue_total
+                    ),
+                )
+                for neighborhood, city, orders_count, receita in rows
+            ],
+        )
+
+    def customers_report(
+        self,
+        restaurant_id: UUID,
+        start_date: date,
+        end_date: date,
+        branch_id: UUID | None = None,
+    ) -> CustomersReportResponse:
+        """Quem comprou no periodo, e o cashback dos dois lados.
+
+        "Novo" e pelo PERIODO DESTE RELATORIO — o primeiro pedido faturado
+        do cliente neste restaurante cai dentro do recorte —, e nao o
+        `segment` de `/admin/customers`, que usa a janela RFV em dias
+        corridos. Num recorte de 7 dias o segmento diria "novo" para quem
+        estreou ha tres semanas, e as duas telas se contradiriam.
+        """
+        self._validate_period(start_date, end_date)
+        period = self._period(start_date, end_date)
+        previous = self._previous_period(period)
+
+        atual = self._customer_totals(restaurant_id, period, branch_id)
+        anterior = self._customer_totals(restaurant_id, previous, branch_id)
+
+        return CustomersReportResponse(
+            restaurant_id=restaurant_id,
+            branch_id=branch_id,
+            period=period,
+            previous_period=previous,
+            customers_count=self._compare_counts(atual, anterior, "customers_count"),
+            new_customers_count=self._compare_counts(
+                atual, anterior, "new_customers_count"
+            ),
+            returning_customers_count=self._compare_counts(
+                atual, anterior, "returning_customers_count"
+            ),
+            new_revenue_total=atual["new_revenue_total"],
+            returning_revenue_total=atual["returning_revenue_total"],
+            cashback=CashbackReportBlock(
+                earned_total=self._compare(
+                    atual["cashback_earned_total"], anterior["cashback_earned_total"]
+                ),
+                redeemed_total=self._compare(
+                    atual["cashback_redeemed_total"],
+                    anterior["cashback_redeemed_total"],
+                ),
+                orders_with_redeem_count=atual["orders_with_redeem_count"],
+                configured=self._cashback_configurado(restaurant_id, branch_id),
+            ),
+        )
+
+    def operations_report(
+        self,
+        restaurant_id: UUID,
+        start_date: date,
+        end_date: date,
+        branch_id: UUID | None = None,
+    ) -> OperationsReportResponse:
+        """Os tempos entre os carimbos do pedido.
+
+        Mede a promessa que a loja fez: `late_orders_count` compara com o
+        `delivery_prep_time_max` congelado NO PEDIDO, e nao com a
+        configuracao atual da filial — o cliente leu o prazo daquele dia.
+        """
+        self._validate_period(start_date, end_date)
+        start_at, end_at = self._period_bounds(start_date, end_date)
+
+        medidas = self.report_repository.operation_durations(
+            restaurant_id, start_at, end_at, branch_id
+        )
+        base = medidas["late_orders_base_count"]
+        return OperationsReportResponse(
+            restaurant_id=restaurant_id,
+            branch_id=branch_id,
+            period=self._period(start_date, end_date),
+            orders_count=medidas["orders_count"],
+            accept_minutes=self._duracao(medidas["accept"]),
+            prep_minutes=self._duracao(medidas["prep"]),
+            delivery_minutes=self._duracao(medidas["delivery"]),
+            late_orders_count=medidas["late_orders_count"],
+            late_orders_base_count=base,
+            late_orders_percent=self._share(
+                Decimal(medidas["late_orders_count"]), Decimal(base)
+            ),
+        )
+
+    def _customer_totals(
+        self,
+        restaurant_id: UUID,
+        period: ReportPeriod,
+        branch_id: UUID | None,
+    ) -> dict:
+        """Tudo que a tela de clientes precisa de UM periodo.
+
+        Existe pelo mesmo motivo de `_totals_for`: o relatorio precisa
+        exatamente disto duas vezes, para o periodo pedido e para o
+        anterior, e duas montagens diferentes seriam duas definicoes de
+        "cliente novo" na mesma tela.
+        """
+        start_at, end_at = self._period_bounds(period.start_date, period.end_date)
+
+        recencia = self.report_repository.customers_by_recency(
+            restaurant_id, start_at, end_at, branch_id
+        )
+        resgate = self.report_repository.cashback_redeemed_totals(
+            restaurant_id, start_at, end_at, branch_id
+        )
+        gerado = self.report_repository.cashback_earned_total(
+            restaurant_id, start_at, end_at, branch_id
+        )
+        return {
+            "customers_count": recencia["customers_count"],
+            "new_customers_count": recencia["new_customers_count"],
+            "returning_customers_count": recencia["returning_customers_count"],
+            "new_revenue_total": quantize_money(
+                to_decimal(recencia["new_revenue_total"])
+            ),
+            "returning_revenue_total": quantize_money(
+                to_decimal(recencia["returning_revenue_total"])
+            ),
+            "cashback_redeemed_total": quantize_money(
+                to_decimal(resgate["redeemed_total"])
+            ),
+            "orders_with_redeem_count": resgate["orders_with_redeem_count"],
+            "cashback_earned_total": quantize_money(to_decimal(gerado)),
+        }
+
+    def _cashback_configurado(
+        self, restaurant_id: UUID, branch_id: UUID | None
+    ) -> bool:
+        """Ha campanha VALENDO no recorte?
+
+        Passa por `resolve_cashback_terms` e nao por um `if` equivalente: a
+        heranca filial -> restaurante e a mesma do checkout, e uma segunda
+        forma da regra divergiria dela no dia em que uma das duas mudasse.
+
+        Sem `branch_id`, a pergunta e do restaurante e so a regra dele
+        responde. Uma filial que sobrescreveu a campanha nao torna a rede
+        "configurada" — e a leitura certa para quem esta olhando o total da
+        rede.
+        """
+        if branch_id is None:
+            regra_da_filial, do_restaurante = None, self._regra_do_restaurante(
+                restaurant_id
+            )
+        else:
+            regra_da_filial, do_restaurante = (
+                self.cashback_rule_repository.get_rules_for_branch(
+                    restaurant_id, branch_id
+                )
+            )
+        return resolve_cashback_terms(regra_da_filial, do_restaurante).enabled
+
+    def _regra_do_restaurante(self, restaurant_id: UUID):
+        """A regra de campanha do restaurante (a linha com  nulo)."""
+        regras = self.cashback_rule_repository.list_restaurant_rules([restaurant_id])
+        return regras.get(restaurant_id)
+
+    @staticmethod
+    def _duracao(medida: dict) -> DurationStats:
+        """Uma duracao agregada, em minutos com uma casa.
+
+        Nulo e nao zero quando nenhum pedido teve aquele estagio: "mediana
+        de 0 min" afirmaria que a loja aceita instantaneamente, e o que
+        aconteceu foi nao ter havido aceite nenhum.
+        """
+        return DurationStats(
+            median=AdminReportService._minutos(medida["median"]),
+            p90=AdminReportService._minutos(medida["p90"]),
+            average=AdminReportService._minutos(medida["average"]),
+            orders_count=medida["orders_count"] or 0,
+        )
+
+    @staticmethod
+    def _minutos(valor) -> Decimal | None:
+        if valor is None:
+            return None
+        return to_decimal(valor).quantize(UMA_CASA)
+
+    @staticmethod
+    def _ticket(revenue: Decimal, orders_count: int) -> Decimal:
+        """Faturamento por pedido. Zero pedidos devolve 0.00, como no resumo.
+
+        Aqui o zero nao e ambiguo — nao houve venda —, e e por isso que ele
+        nao segue a regra de `_share`, que devolve nulo.
+        """
+        if not orders_count:
+            return ZERO
+        return quantize_money(revenue / orders_count)
+
+    @staticmethod
+    def _compare_counts(atual: dict, anterior: dict, chave: str) -> MetricComparison:
+        return AdminReportService._compare(
+            Decimal(atual[chave]), Decimal(anterior[chave])
         )
 
     def _totals_for(

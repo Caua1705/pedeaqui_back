@@ -3,9 +3,10 @@
 **Decisão: não criar índice `ivfflat` nem `hnsw` em
 `ai_product_embeddings.embedding`.** Medido em 17/08/2026, contra o schema
 real, no tamanho de cardápio real; **reafirmado em 26/08/2026 por um motivo
-diferente e mais forte** (ver "A recusa de 26/08/2026"); e **remedido em
-02/09/2026** com o filtro por filial e com o custo de construir, que faltavam
-(ver a última seção). Este documento existe para a pergunta não voltar do
+diferente e mais forte** (ver "A recusa de 26/08/2026"); **remedido em
+02/09/2026** com o filtro por filial e com o custo de construir, que faltavam;
+e **remedido de novo em 05/09/2026**, quando a pergunta voltou pela quarta vez
+— dessa vez com a falha de recall **reproduzindo** (ver a última seção). Este documento existe para a pergunta não voltar do
 zero.
 
 **Ao ler as tabelas: elas não se comparam entre si.** Cada uma é de uma
@@ -286,3 +287,99 @@ Isso **não** é motivo para criar o índice. É motivo para tratá-lo pior:
 - e o argumento de 26/08 **não é estatístico**. Ele é sobre o que a busca vazia
   *significa* desde a armadilha 46. Uma taxa de erro baixa não devolve o dono
   da negativa.
+
+---
+
+## A remedição de 05/09/2026, e a vez em que o `mínimo 0` voltou
+
+A pergunta voltou pela quarta vez, com o mesmo enunciado: avaliar `ivfflat`
+contra `hnsw` para o volume atual, implementar, e medir antes e depois. Foi
+medida e **não** foi implementada, e as duas metades da conta continuam
+apontando para o mesmo lado — uma com folga, a outra com um dado novo.
+
+Bancada: `docker-compose.test.yml`, 300 consultas por cenário, `top_k=5`,
+`AI_SEARCH_MIN_SIMILARITY = 0,30`.
+
+**161 produtos — o volume de hoje.** O maior cardápio em produção é o do
+Júnior, com 136 produtos:
+
+| Cenário | Mediana | p95 | Servidor | O planejador leu | Mínimo de linhas |
+|---|---|---|---|---|---|
+| sem índice | 44,24 ms | 51,46 ms | 1,11 ms | `Seq Scan` | 5 |
+| ivfflat `lists=12` | 43,41 ms | 48,66 ms | 0,91 ms | `Seq Scan` | 5 |
+| hnsw `m=16` | 43,28 ms | 47,30 ms | 0,83 ms | `Seq Scan` | 5 |
+
+**Nada a implementar neste volume, e não é uma questão de grau.** Os "ganhos"
+de 1,9% e 2,2% são ruído de bancada, e a coluna do planejador diz por quê: com
+161 linhas ele lê a tabela inteira nos três cenários. O índice seria criado,
+ocuparia disco, seria mantido em toda escrita do container `reindex` — **e
+nunca seria lido**. Não existe "antes e depois" a medir quando o depois não
+usa o índice.
+
+**5.000 produtos — o volume do gatilho:**
+
+| Cenário | Mediana | p95 | Servidor | Construção | O planejador leu | Mínimo de linhas |
+|---|---|---|---|---|---|---|
+| sem índice | 69,84 ms | 107,30 ms | 30,88 ms | — | `Seq Scan` | 5 |
+| ivfflat `lists=50` | 43,55 ms | 48,38 ms | 0,25 ms | 0,53 s | `Index Scan` | 5 |
+| hnsw `m=16` | 43,42 ms | 47,56 ms | 0,67 ms | 5,21 s | `Index Scan` | **0** |
+
+Lá o índice paga, e paga muito: o trabalho do servidor cai de 30,88 ms para
+menos de 1, e o p95 de 107 ms para 48.
+
+### O dado novo: a falha de recall reproduziu
+
+A última coluna do `hnsw` é **0**. Uma consulta entre as 300 devolveu **zero
+produtos** onde a busca exata devolveu cinco.
+
+Isso importa porque a seção anterior (02/09) registrou que a falha **não**
+tinha reproduzido em 2.300 consultas, e concluiu que ela era "rara o bastante
+para não aparecer num benchmark e frequente o bastante para ter aparecido".
+Este resultado é a terceira observação da série, e ela confirma a leitura:
+
+| Medição | `hnsw`, mínimo de linhas |
+|---|---|
+| 17/08/2026 (400 consultas) | **0** |
+| 02/09/2026 (300 + 2.000 consultas) | 5 |
+| 05/09/2026 (300 consultas) | **0** |
+
+Duas de três. Não é configuração, e `ef_search` desloca a fronteira sem
+apagá-la: ANN é aproximado por definição, e devolver menos é o comportamento
+correto dele.
+
+**E "devolver zero" continua tendo um significado específico neste sistema.**
+Desde 25/08/2026 a negativa do atendente não é escrita pelo modelo — a busca
+vazia devolve a frase pronta (`_NEGATIVA`, em
+`src/ai/voice/search_service.py`), e "não temos" tem uma origem só. Com um
+índice ANN, busca vazia passa a significar "não tem, **ou** o grafo não passou
+por lá", e as duas chegam ao cliente como a mesma frase. É a armadilha 46 de
+volta, sem erro, sem log e sem tela onde conferir.
+
+### O que isso NÃO muda: a escolha do tipo
+
+O `ivfflat` manteve `mínimo 5` nesta execução e o `hnsw` não, e **isso não
+inverte a recomendação de tipo** registrada acima. Uma execução de 300
+consultas com vetores sintéticos não decide recall entre dois algoritmos, e o
+motivo de preferir `hnsw` nunca foi recall: é que o `lists` do `ivfflat`
+precisa ser calibrado ao tamanho da tabela e **degrada em silêncio** conforme o
+cardápio cresce — ninguém recalibra um índice que ninguém está olhando.
+
+A leitura certa do par é outra, e é mais desconfortável: **os dois são
+aproximados, e a medição só encostou no de sempre.** Trocar de tipo para fugir
+do `mínimo 0` seria escolher o algoritmo em que a falha ainda não foi vista.
+
+### Conclusão desta rodada
+
+Nada foi implementado, e a decisão não mudou. Para mudar ela faltam duas
+coisas, nesta ordem:
+
+1. **o gatilho** — um único restaurante passando de ~3.000 produtos ativos
+   indexados. Hoje o maior tem 136, e o SQL que responde isso está acima;
+2. **uma resposta própria para a recall**, que o gatilho não dá. Bater os
+   3.000 vira o argumento de latência, e a negativa continua sem dono no dia
+   seguinte.
+
+O caminho que dispensa as duas continua sendo o de sempre: das ~44 ms de uma
+consulta, o banco usa 1. As outras 43 são o vetor de 1536 dimensões viajando
+como texto. **É ali que existe tempo para ganhar**, e ganhar sem trocar nada
+por exatidão.

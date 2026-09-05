@@ -85,7 +85,7 @@ def avisar(db: Session, pedido, restaurante) -> None:
 
 
 class TestOsQuatroAvisos:
-    def test_aceito_manda_o_template_com_nome_numero_e_loja(
+    def test_aceito_manda_o_template_com_o_nome_e_o_numero(
         self, db: Session, envio
     ) -> None:
         restaurante, _, pedido = cenario(db, status="accepted")
@@ -96,7 +96,7 @@ class TestOsQuatroAvisos:
         argumentos = envio.call_args.kwargs
         assert argumentos["template_name"] == "pedido_aceito"
         assert argumentos["language"] == "pt_BR"
-        assert argumentos["parameters"] == ("Maria", "5471", "Júnior da Picanha")
+        assert argumentos["parameters"] == ("Maria", "5471")
         assert argumentos["to"] == "5585988887777"
 
     def test_saiu_para_entrega(self, db: Session, envio) -> None:
@@ -127,11 +127,7 @@ class TestOsQuatroAvisos:
         assert (
             envio.call_args.kwargs["template_name"] == "pedido_pronto_para_retirada"
         )
-        assert envio.call_args.kwargs["parameters"] == (
-            "Maria",
-            "5471",
-            "Júnior da Picanha",
-        )
+        assert envio.call_args.kwargs["parameters"] == ("Maria", "5471")
 
     def test_o_envio_bem_sucedido_grava_a_linha_com_o_wamid(
         self, db: Session, envio

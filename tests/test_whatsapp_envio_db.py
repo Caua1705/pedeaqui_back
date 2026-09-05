@@ -152,7 +152,7 @@ class TestOTemplateNaoDependeDaJanela:
             to_phone=TELEFONE_DIGITADO,
             template_name="pedido_aceito",
             language="pt_BR",
-            parameters=("Maria", "5471", "Júnior da Picanha"),
+            parameters=("Maria", "5471"),
         )
 
         assert wamid == "wamid.TEMPLATE"
@@ -168,7 +168,7 @@ class TestOTemplateNaoDependeDaJanela:
             to_phone=TELEFONE_DIGITADO,
             template_name="pedido_aceito",
             language="pt_BR",
-            parameters=("Maria", "5471", "Júnior"),
+            parameters=("Maria", "5471"),
         )
 
         assert transporte["template"].call_args.kwargs["access_token"] == "EAAG-token"
@@ -184,7 +184,7 @@ class TestOTelefoneQueNaoDaParaAfirmar:
                 to_phone="99999999",
                 template_name="pedido_aceito",
                 language="pt_BR",
-                parameters=("Maria", "5471", "Júnior"),
+                parameters=("Maria", "5471"),
             )
 
         assert erro.value.reason == "phone"

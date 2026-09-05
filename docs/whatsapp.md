@@ -233,10 +233,23 @@ aceito". `_TEMPLATE_POR_KIND` é a única costura entre os dois.
 barra a LINHA, e nesse ponto a mensagem já saiu. Quem protege o cliente de
 receber duas é `exists_for`, antes da chamada.
 
-**Os quatro templates têm as mesmas três variáveis, na mesma ordem** — nome do
-cliente (só o primeiro), número do pedido, nome da loja. A Meta **não nomeia
-parâmetro**: trocar dois de lugar manda o número do pedido onde vai o nome do
-cliente, sem erro nenhum.
+**Os quatro templates têm as mesmas DUAS variáveis, na mesma ordem** — `{{1}}`
+o nome do cliente (só o primeiro) e `{{2}}` o número do pedido. Aprovados na
+Meta em 05/09/2026, `pt_BR`, categoria Utilidade, sem cabeçalho, sem rodapé e
+sem botão.
+
+**O nome da loja saiu do corpo**, e com ele o terceiro parâmetro que o código
+montava: a mensagem chega pelo número da própria loja, então o WhatsApp já diz
+de quem é a conversa, e repeti-lo custava uma consulta a `restaurants` por
+aviso.
+
+**Os dois erros de parâmetro não se parecem, e é por isso que os dois têm
+trava.** A Meta **não nomeia parâmetro**: trocar dois de lugar manda o número
+do pedido onde vai o nome do cliente, **sem erro nenhum**. Já mandar um a mais
+(ou a menos) ela recusa — os componentes do envio têm que bater com os do
+template aprovado, e a recusa vale para **todo** envio daquele aviso, não para
+um caso de borda. `tests/test_whatsapp_parametros_do_template.py` trava a
+contagem contra o número aprovado, escrito lá como constante.
 
 ---
 

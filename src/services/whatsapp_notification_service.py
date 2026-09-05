@@ -63,7 +63,6 @@ from src.core.config import settings
 from src.integrations.whatsapp_client import WhatsAppSendError
 from src.models.whatsapp_model import WhatsAppChannel, WhatsAppMessage
 from src.repositories.order_repository import OrderRepository
-from src.repositories.restaurant_repository import RestaurantRepository
 from src.repositories.whatsapp_repository import (
     WhatsAppChannelRepository,
     WhatsAppMessageRepository,
@@ -157,7 +156,6 @@ class WhatsAppOrderNotifier:
         self.channel_repository = WhatsAppChannelRepository(db)
         self.message_repository = WhatsAppMessageRepository(db)
         self.order_repository = OrderRepository(db)
-        self.restaurant_repository = RestaurantRepository(db)
         self.sender = WhatsAppSender(db)
         # Injetavel, pela convencao da armadilha 51: o teste do reenvio
         # declara o instante em vez de depender da hora em que roda.
@@ -191,7 +189,7 @@ class WhatsAppOrderNotifier:
             )
             return
 
-        self._send_and_record(order=order, restaurant_id=restaurant_id, channel=channel, kind=kind)
+        self._send_and_record(order=order, channel=channel, kind=kind)
 
     def retry(self, message: WhatsAppMessage) -> str:
         """Tenta de novo UM aviso que falhou. Devolve o desfecho.
@@ -232,7 +230,6 @@ class WhatsAppOrderNotifier:
 
         enviado = self._send_and_record(
             order=order,
-            restaurant_id=order.restaurant_id,
             channel=channel,
             kind=message.kind,
             existente=message,
@@ -277,7 +274,6 @@ class WhatsAppOrderNotifier:
         self,
         *,
         order,
-        restaurant_id: uuid.UUID,
         channel: WhatsAppChannel,
         kind: str,
         existente: WhatsAppMessage | None = None,
@@ -297,7 +293,7 @@ class WhatsAppOrderNotifier:
                 to_phone=order.customer_phone_snapshot,
                 template_name=_TEMPLATE_POR_KIND[kind],
                 language=IDIOMA_DO_TEMPLATE,
-                parameters=self._parameters(order, restaurant_id),
+                parameters=_parameters(order),
             )
         except WhatsAppSendRefused as recusa:
             logger.warning(
@@ -345,19 +341,6 @@ class WhatsAppOrderNotifier:
         self._record(order, channel, kind, status="sent", wamid=wamid, existente=existente)
         return True
 
-    def _parameters(self, order, restaurant_id: uuid.UUID) -> tuple[str, str, str]:
-        """Os tres `{{n}}` do template, na ordem em que ele os declara.
-
-        A Meta nao nomeia parametro: trocar dois de lugar manda o numero do
-        pedido onde vai o nome do cliente, sem erro nenhum.
-        """
-        restaurant = self.restaurant_repository.get_by_id(restaurant_id)
-        return (
-            _primeiro_nome(order.customer_name_snapshot),
-            str(order.order_number),
-            restaurant.name if restaurant is not None else "",
-        )
-
     def _record(
         self,
         order,
@@ -395,6 +378,28 @@ class WhatsAppOrderNotifier:
         existente.next_attempt_at = next_attempt_at
         existente.attempts += 1
         self.db.commit()
+
+
+def _parameters(order) -> tuple[str, str]:
+    """Os DOIS `{{n}}` do template, na ordem em que ele os declara.
+
+    A Meta nao nomeia parametro: trocar dois de lugar manda o numero do
+    pedido onde vai o nome do cliente, sem erro nenhum. E parametro A MAIS
+    nao e ignorado — ela recusa a mensagem inteira por divergencia de
+    componentes (`132000`), o que da no mesmo que o cliente nao ser avisado.
+
+    Sao DOIS porque os quatro templates aprovados declaram dois: o nome do
+    cliente e o numero do pedido. O nome da LOJA saiu do corpo — a mensagem
+    chega pelo numero dela, entao o proprio WhatsApp ja diz de quem e a
+    conversa, e repeti-lo custava uma consulta a `restaurants` por aviso.
+
+    Funcao de modulo e nao metodo: sem o nome da loja ela nao toca em banco
+    nem em nada do service.
+    """
+    return (
+        _primeiro_nome(order.customer_name_snapshot),
+        str(order.order_number),
+    )
 
 
 def _primeiro_nome(nome: str) -> str:

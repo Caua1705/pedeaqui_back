@@ -126,7 +126,7 @@ class AChamadaAoGraphTests(_ComTransporteFalso):
             to="5585999999999",
             template_name="pedido_aceito",
             language="pt_BR",
-            parameters=("Maria", "5471", "Júnior da Picanha"),
+            parameters=("Maria", "5471"),
         )
 
         self.assertEqual(wamid, "wamid.ENVIADA")
@@ -143,7 +143,6 @@ class AChamadaAoGraphTests(_ComTransporteFalso):
                     "parameters": [
                         {"type": "text", "text": "Maria"},
                         {"type": "text", "text": "5471"},
-                        {"type": "text", "text": "Júnior da Picanha"},
                     ],
                 }
             ],
@@ -191,7 +190,7 @@ class OErroDaMetaTests(_ComTransporteFalso):
                 to="5585999999999",
                 template_name="pedido_aceito",
                 language="pt_BR",
-                parameters=("Maria", "5471", "Júnior"),
+                parameters=("Maria", "5471"),
             )
 
         self.assertEqual(erro.exception.error_code, "132001")

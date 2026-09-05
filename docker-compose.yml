@@ -275,9 +275,30 @@ services:
       # pressão, descarta a que expira e não a que ficou.
       - --maxmemory-policy
       - volatile-lru
-      # Sem persistência de propósito: os dois usos são cache e janela curta.
-      # Um dump em disco só traria contador velho de volta depois de um
-      # restart, e o custo do fsync não compra nada aqui.
+      # SEM PERSISTÊNCIA, e o motivo mudou em 05/09/2026 — leia antes de ligar.
+      #
+      # O argumento antigo era de CACHE: "um dump só traria contador velho de
+      # volta depois de um restart, e o fsync não compra nada aqui". Continua
+      # verdade, e é o argumento que PERDE — quem for ligar AOF vai justamente
+      # porque quer o contador sobrevivendo ao restart.
+      #
+      # O motivo que manda é dado pessoal. O que mora neste Redis hoje:
+      #
+      #   histórico do chat   TEXTO EM CLARO do que o cliente escreveu. O
+      #                       modelo precisa ler; não há digest possível. Ver
+      #                       o bloco em src/ai/services/chat_history.py, que
+      #                       lista esta linha do compose como uma das três
+      #                       defesas dele
+      #   rate limit          o IP do cliente, na chave, por desenho do slowapi
+      #   estimativa          coordenada, agora hasheada (armadilha 56)
+      #
+      # Os três se apagam sozinhos pelo TTL — e o TTL é do Redis EM MEMÓRIA.
+      # Com RDB ou AOF ligado, o snapshot grava a chave em disco e o arquivo
+      # não expira: "1 hora" vira "até alguém apagar o dump", e dump vai para
+      # backup. Ligar persistência aqui é uma conversa de LGPD, não de
+      # desempenho, e ela vem ANTES da mudança.
+      #
+      # tests/test_persistencia_do_redis.py trava as duas flags.
       - --save
       - ""
       - --appendonly

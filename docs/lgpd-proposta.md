@@ -53,6 +53,43 @@ Verificado no código, não presumido.
 | `email_verification_codes`, `password_reset_codes` | e-mail | para sempre |
 | `cashback_transactions`, `coupon_redemptions` | `customer_id` | para sempre |
 
+### E o Redis, que faltava neste inventário inteiro
+
+Acrescentado em 05/09/2026. **Enquanto ele esteve de fora, este documento
+descrevia metade do que a plataforma guarda** — e a metade que faltava é a
+única que não é apagada por `DELETE` nenhum.
+
+| Chave | O quê | Prazo |
+|---|---|---|
+| histórico do chat (`chat_history.py`) | **o texto em claro do que o cliente escreveu** ao Rapi | TTL de 1h, renovado a cada turno |
+| contador de rate limit (`slowapi`) | **o IP do cliente, na CHAVE** — é o desenho da biblioteca, não escolha nossa | TTL = a própria janela |
+| estimativa de entrega | coordenada, hoje **hasheada** na chave e removida do valor (armadilha 56) | TTL de 600 s |
+| cache de embedding | a mensagem **hasheada** — o único que já nasceu certo | TTL de 60 min |
+
+**Três coisas que este quadro muda no resto do documento:**
+
+- **quem apaga é o TTL, e o TTL é da memória.** Não há varredura, não há
+  `DELETE`, e a exclusão de conta não alcança nada disso. Com `RDB`/`AOF`
+  ligado, o snapshot põe a chave em disco num arquivo que não expira: "1 hora"
+  vira "até alguém apagar o dump", e dump vai para backup. Por isso a
+  persistência está desligada no `docker-compose.yml` e travada por
+  `tests/test_persistencia_do_redis.py` — **ligá-la é uma conversa deste
+  documento, não de desempenho**;
+- **o histórico do chat não pende de `customers`.** A chave é o digest do
+  `session_id`, que não identifica ninguém — então não há o que a anonimização
+  alcance, e é o TTL que responde. É o mesmo desenho de `ai_feedback` e do
+  `comment` de convidado (§2), com a diferença de o prazo ser de uma hora e não
+  de meses;
+- **o IP é o que sobra sem defesa.** Ele está em claro na chave por desenho do
+  `slowapi`, e trocá-lo por digest quebraria a biblioteca. O que o protege é só
+  o TTL curto e a ausência de persistência.
+
+**E uma linha deste documento ficou ERRADA e está corrigida abaixo:** a seção
+"para onde o dado sai" dizia que o histórico do chat era *"dicionário em
+memória do worker e não é persistido"*. Era verdade até 04/09/2026, quando ele
+foi para o Redis (`HistoricoNoRedis`). O inventário dizia "verificado no
+código, não presumido" e tinha deixado de ser as duas coisas.
+
 Os dois `cleanup` rodam pelo mesmo script (`scripts/cleanup_idempotency_keys.py`),
 que hoje roda pelo serviço `limpeza` do `docker-compose.yml` — um container
 próprio, em laço de 24h. Antes dependia de cron na máquina; a mudança é das
@@ -65,8 +102,10 @@ servidor, as duas tabelas crescem para sempre.
 - **Google Routes** — origem e destino como coordenadas. O destino é o
   endereço residencial do cliente.
 - **Supabase** — banco e Storage (imagens do cardápio; sem dado pessoal).
-- **OpenAI** — mensagens do chat. O histórico é dicionário em memória do
-  worker (armadilha 20) e não é persistido.
+- **OpenAI** — mensagens do chat. **O histórico fica no Redis desde
+  04/09/2026** (`HistoricoNoRedis`), em texto claro, com TTL de 1h — ver o
+  quadro do Redis acima. Esta linha dizia "dicionário em memória do worker e
+  não é persistido", o que era verdade até aquela data.
 
 ---
 

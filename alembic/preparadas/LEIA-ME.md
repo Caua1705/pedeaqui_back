@@ -18,12 +18,15 @@ O que mora aqui é migração **escrita, revisada e esperando uma decisão que n
 
 ## O que está aqui hoje
 
-São **duas**, e as duas esperam a mesma coisa: uma decisão que não é de código.
+São **quatro**, e todas esperam a mesma coisa: uma decisão que não é de
+código.
 
 | Revisão | O que faz | Plano | Recomendação |
 |---|---|---|---|
 | `20260905_0057` | `ai_usage_events.surface` passa a aceitar `indexing`, ao lado de `text` e `voice` | [`docs/custo-de-ia.md`](../../docs/custo-de-ia.md), seção 7 | **decidir** — mede o custo de indexar o cardápio |
 | `20260905_0059` | a tarifa de entrega sai de `branches` para uma tabela 1:1 opcional | [`docs/modelo-de-dados.md`](../../docs/modelo-de-dados.md), "PENDENTE: quebrar a tabela `branches`" | **decidir** — é a única das quatro divisões candidatas que paga |
+| `20260906_0061` | `customers.cpf` e o índice único parcial dela | o cabeçalho da própria revisão · auditoria §2.1 | **fazer** — a `20260812_0019` pediu isso "numa revisão próxima", há 25 dias |
+| `20260906_0062` | `coupon_claims.claimed_at`, que grava o mesmo instante de `created_at` | o cabeçalho da própria revisão · auditoria §2.2 | **fazer** — coluna sem leitor, escrita em todo resgate |
 
 **A `20260905_0058` saiu daqui em 05/09/2026**, e o caminho dela é o que este
 arquivo descreve, executado: a conferência do cabeçalho foi refeita, o
@@ -34,7 +37,7 @@ MESMO commit. Quem cobra o resultado agora é
 `upgrade head` — a pergunta deixou de ser "esta revisão ainda descreve o
 schema?" e passou a ser "o schema é o que ela prometeu?".
 
-**As duas têm CÓDIGO ACOPLADO, e é por isso que estão aqui sozinhas** — sem o
+**Todas têm CÓDIGO ACOPLADO, e é por isso que estão aqui sozinhas** — sem o
 código do lado. É o que elas têm de diferente das duas anteriores, que eram
 schema puro:
 
@@ -44,9 +47,20 @@ schema puro:
   commit é a única ordem verde**;
 - na `0059`, com as colunas fora do banco e `src/models/branch_model.py`
   ainda mapeando, **todo `SELECT` de filial quebra**. Foi assim que a
-  `0058` foi aplicada, e é assim que esta tem que ser.
+  `0058` foi aplicada, e é assim que esta tem que ser;
+- na `0061` e na `0062` é a mesma coisa, uma linha cada: `cpf` em
+  `src/models/customer_model.py` e `claimed_at` em
+  `src/models/coupon_claim_model.py`. Com a coluna fora do banco e o model
+  ainda mapeando, todo `SELECT` de cliente (ou de resgate) quebra.
 
 Em qualquer uma delas, o `git mv` e as linhas do model vão no mesmo commit.
+
+**As duas da auditoria pedem uma conferência ANTES**, e as duas são uma
+consulta só, escrita no cabeçalho de cada uma: a `0061` só é segura se
+`count(cpf) = 0` (a `20260812_0019` anulou os valores, e o que ela apaga é uma
+coluna vazia), e a `0062` só é segura se `claimed_at = created_at` em toda
+linha. Se alguma não bater, **pare**: alguém escreveu por fora (armadilha 33) e
+a premissa da revisão caiu.
 
 O `Revises` das duas é **marcador**: é o head do dia em que cada uma foi
 escrita. As três frentes foram escritas em paralelo, e por isso a `0057` e a
@@ -57,12 +71,18 @@ Na `0058` o marcador coincidiu com a revisão de verdade (`20260905_0056`
 continuava sendo o head no dia da adoção) e a linha não precisou mudar. **É
 coincidência, e não a regra:** confira o head antes de assumir o mesmo.
 
-`tests/test_revisao_preparada_da_indexacao.py` e
-`tests/test_revisoes_preparadas_de_branches.py` cobram as três coisas da
+`tests/test_revisao_preparada_da_indexacao.py`,
+`tests/test_revisoes_preparadas_de_branches.py` e
+`tests/test_revisoes_preparadas_da_auditoria.py` cobram as três coisas da
 armadilha 53 em cada uma: o Alembic não as conhece, elas ainda descrevem o
 schema real, e elas **rodam** (contra o Postgres de teste, numa transação que
-volta). A `0059` é exercitada **com linha na mesa** — um `INSERT ... SELECT`
-sobre tabela vazia é no-op, e provar só ele seria não provar nada.
+volta). A `0059`, a `0061` e a `0062` são exercitadas **com linha na mesa** —
+um `INSERT ... SELECT` ou um `DROP COLUMN` sobre tabela vazia é no-op, e provar
+só ele seria não provar nada.
+
+E as duas da auditoria têm um teste a mais cada, o da PREMISSA: que o CPF está
+vazio, e que as duas colunas do resgate gravam o mesmo instante. É o que separa
+"a migração roda" de "a migração não apaga nada que importe".
 
 ## O que as anteriores deixaram de lição
 

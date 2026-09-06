@@ -2230,7 +2230,7 @@ não é nosso — é o Traefik, e a aplicação não respondeu.
 
 ---
 
-## 50. O `nullable=` do model NUNCA vira DDL — e em 41 colunas ele mente
+## 50. O `nullable=` do model NUNCA vira DDL — e em 20 colunas ele ainda mente
 
 O schema deste projeto **não nasceu do ORM**: foi criado à mão no Supabase e só
 depois virou `alembic/schema_baseline.sql`. O `Base.metadata` foi escrito
@@ -2240,19 +2240,26 @@ cujo schema sai do baseline mais as revisões (armadilha 24) —, **o
 `nullable=False` do model nunca é cobrado por ninguém**.
 
 Ele orienta o type checker e decide se o SQLAlchemy manda a coluna no INSERT.
-Nada mais. `scripts/divergencias_orm_schema.py` conta **41 colunas** em que os
-dois lados discordam, em três classes com custos diferentes:
+Nada mais. `scripts/divergencias_orm_schema.py` mede quantas colunas discordam.
 
-- **16 — o ORM diz NOT NULL e o banco aceita NULL.** Risco de **leitura**: a
-  anotação promete valor e o banco pode dar `None`.
+**Eram 41, em três classes. Hoje são 20, em UMA** — as revisões `20260905_0055`
+e `20260905_0056` (alinhamento ORM × schema, etapas 1 e 2) fecharam as outras
+duas classes inteiras. O que sobrou:
+
 - **20 — o banco diz NOT NULL e o ORM diz nullable.** Risco de **escrita**, mas
   só nas **duas sem `DEFAULT`** (`ai_product_embeddings.content`,
   `coupon_templates.image_path`): ali um `Modelo(...)` incompleto passa no type
   checker e estoura `IntegrityError` em runtime. Hoje não estoura porque nada
   instancia os dois models — circunstância, não decisão, e
   `tests/test_models_nunca_instanciados.py` avisa quando mudar.
-- **6 — coluna que o ORM não mapeia.** `Modelo.created_at` é `AttributeError`
-  numa tabela que **tem** `created_at`.
+
+As duas que **fecharam**, e vale saber que fecharam para não procurá-las:
+
+- **16 — o ORM dizia NOT NULL e o banco aceitava NULL.** Era o risco de
+  **leitura**, e é de onde saem as sete que derrubavam o schema de resposta com
+  500 (a lista está mais abaixo, e é história agora).
+- **6 — coluna que o ORM não mapeava.** `Modelo.created_at` era
+  `AttributeError` numa tabela que **tem** `created_at`.
 
 **A que mordia de verdade era `restaurant_coupons.valid_until`** — e ela foi
 **consertada em 03/09/2026, no CÓDIGO e não no schema.** O caminho merece ser
@@ -2297,12 +2304,20 @@ no Postgres NULL é distinto de qualquer outro NULL.
 escrita **fora** do ORM: SQL manual no Supabase, script de importação, linha
 anterior à criação da coluna. É o outro lado da armadilha 33.
 
-**Onde isso está escrito e o que já está pronto:**
-`docs/alinhamento-orm-schema.md` tem o roteiro, `alembic/preparadas/` tem as
-duas revisões (ver armadilha 53), `tests/test_colunas_em_desacordo.py` prova
-cada caminho que quebra, e o CI roda o script como **aviso** — passar de 42 vira
-`::warning::`, nunca vermelho: portão vermelho contra dívida herdada é portão
-que se aprende a ignorar.
+**Onde isso está escrito, e o que já foi feito:**
+`docs/alinhamento-orm-schema.md` tem o roteiro. As duas revisões saíram de
+`alembic/preparadas/` e estão aplicadas (`20260905_0055` e `20260905_0056`);
+quem mora lá hoje é outra frente (armadilha 53).
+`tests/test_colunas_em_desacordo.py` prova cada caminho que quebra, e o CI roda
+o script como **aviso** — nunca vermelho: portão vermelho contra dívida herdada
+é portão que se aprende a ignorar.
+
+**O limite do aviso mora no `ci.yml`, e não aqui.** Ele foi de 41 para 20 em
+05/09/2026, e a lição é a do próprio número: o limite ficou parado em 41 depois
+das duas etapas, e o CI passou a imprimir `::notice` pedindo que alguém o
+baixasse — **limite folgado não vigia nada**, porque as 21 divergências de folga
+deixariam uma nova entrar de graça. Quem derruba a contagem baixa o limite no
+mesmo commit; quem a sobe deliberadamente, sobe.
 
 ---
 

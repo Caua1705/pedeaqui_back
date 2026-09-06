@@ -20,9 +20,13 @@ menor sem explicacao.
 
 ## Quem commita
 
-As duas nao fazem a mesma coisa, e a diferenca esta no docstring de cada uma.
-Em resumo: no `/chat` esta e a UNICA escrita do turno, entao ela commita; na
-voz ela pega carona na transacao do encerramento, que ja existe e ja commita.
+`registrar_texto` commita: no `/chat` ela e a UNICA escrita do turno.
+
+Houve uma segunda gravacao aqui, `registrar_voz`, que NAO commitava — ela
+pegava carona na transacao do encerramento da sessao falada. Saiu em
+06/09/2026 com o resto do assistente de voz. As linhas que ela gravou
+continuam na tabela e continuam somando no relatorio; ver
+`src/models/ai_usage_event_model.py`.
 """
 
 import logging
@@ -32,11 +36,9 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from src.ai.custo import CASAS_DO_CUSTO, custo_de_texto, custo_de_voz
+from src.ai.custo import CASAS_DO_CUSTO, custo_de_texto
 from src.ai.services.chat_llm_service import UsoDoModelo
-from src.core.config import settings
-from src.models.ai_usage_event_model import AIUsageEvent, SURFACE_TEXT, SURFACE_VOICE
-from src.models.ai_voice_session_model import AIVoiceSession
+from src.models.ai_usage_event_model import AIUsageEvent, SURFACE_TEXT
 from src.repositories.ai_usage_repository import AIUsageRepository
 from src.schemas.ai_usage_schema import AIUsageByRestaurant, AIUsageReportResponse
 
@@ -100,80 +102,6 @@ class AIUsageService:
                 exc_info=True,
             )
 
-    def registrar_voz(self, sessao: AIVoiceSession) -> None:
-        """Uma linha por SESSAO de voz. NAO commita — quem commita e `encerrar`.
-
-        Nao commita porque ela roda dentro de `VoiceSessionService.encerrar`,
-        que ja abre e fecha a transacao do encerramento. Um commit aqui
-        gravaria o custo de uma sessao que ainda pode nao ter sido encerrada.
-
-        **Por sessao, e nao por turno**, porque nao ha turno visivel daqui: o
-        audio vai do navegador direto para a OpenAI e o backend nao ve os
-        eventos da conversa. O numero chega uma vez so, no aviso de fim.
-
-        **Idempotente**, e isso e requisito: o aviso de fim vai com
-        `keepalive` e e reenviado quando a aba fecha. Sem a releitura por
-        `voice_session_id` (que o UNIQUE parcial do banco garante ser unica),
-        a segunda chegada dobraria o custo daquela conversa. A segunda chegada
-        CORRIGE a primeira, e nao o contrario: ela costuma trazer o numero
-        mais completo.
-
-        O modelo gravado e o `VOICE_MODEL` de AGORA, e nao o de quando a
-        credencial foi emitida — a sessao nao guarda essa informacao. Trocar
-        `VOICE_MODEL` no meio de uma conversa carimbaria a linha com o modelo
-        novo; e uma janela de minutos, e o conserto seria uma coluna em
-        `ai_voice_sessions` que so serviria para isso.
-        """
-        entrada_audio = sessao.input_audio_tokens or 0
-        entrada_texto = sessao.input_text_tokens or 0
-        saida_audio = sessao.output_audio_tokens or 0
-        saida_texto = sessao.output_text_tokens or 0
-        if not (entrada_audio or entrada_texto or saida_audio or saida_texto):
-            # Sessao que encerrou sem reportar numero nenhum. NULL nao e zero
-            # (ver a revisao 0023): gravar uma linha de custo zero aqui
-            # inventaria uma conversa de graca que ninguem mediu.
-            return
-
-        modelo = settings.VOICE_MODEL
-        em_cache = sessao.cached_tokens or 0
-        custo = custo_de_voz(
-            modelo=modelo,
-            entrada_audio=entrada_audio,
-            entrada_texto=entrada_texto,
-            entrada_em_cache=em_cache,
-            saida_audio=saida_audio,
-            saida_texto=saida_texto,
-        )
-
-        try:
-            evento = self.repository.get_by_voice_session(sessao.id)
-            if evento is None:
-                self.repository.add(
-                    AIUsageEvent(
-                        restaurant_id=sessao.restaurant_id,
-                        surface=SURFACE_VOICE,
-                        voice_session_id=sessao.id,
-                        model=modelo,
-                        input_tokens=entrada_audio + entrada_texto,
-                        cached_input_tokens=em_cache,
-                        output_tokens=saida_audio + saida_texto,
-                        cost_usd=custo,
-                    )
-                )
-                return
-
-            evento.model = modelo
-            evento.input_tokens = entrada_audio + entrada_texto
-            evento.cached_input_tokens = em_cache
-            evento.output_tokens = saida_audio + saida_texto
-            evento.cost_usd = custo
-        except Exception:
-            logger.warning(
-                "[AI custo] custo_nao_gravado=true | superficie=voz | sessao_id=%s",
-                sessao.id,
-                exc_info=True,
-            )
-
     # -- leitura ------------------------------------------------------------
 
     def custo_por_restaurante(
@@ -197,6 +125,10 @@ class AIUsageService:
                 restaurant_name=linha.restaurante,
                 calls=linha.chamadas,
                 text_calls=linha.chamadas_texto,
+                # HISTORICO desde 06/09/2026: a voz saiu do projeto e estes
+                # dois campos param de crescer. Continuam na resposta porque
+                # sem eles `calls` deixaria de fechar com `text_calls` em toda
+                # janela que alcance agosto ou o comeco de setembro de 2026.
                 voice_calls=linha.chamadas_voz,
                 cost_usd=linha.custo_usd,
                 text_cost_usd=linha.custo_texto_usd,

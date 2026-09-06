@@ -22,8 +22,8 @@ rem  lista de origens do `main.py` so aceita origem conhecida: toda chamada
 rem  morreria no CORS antes de sair. Por isso o http.server na 5500, que ja
 rem  esta liberada la (junto da 5501 e da 5173).
 rem
-rem  E `localhost`, nao o IP da maquina na rede: o navegador so libera o
-rem  microfone em contexto seguro, e `http://` de outro aparelho nao e.
+rem  E `localhost`, e nao o IP da maquina na rede, porque e a origem que o
+rem  CORS do backend ja aceita.
 rem ---------------------------------------------------------------------
 
 cd /d "%~dp0"
@@ -70,8 +70,7 @@ if not exist "%BANCADA%\bancada.html" (
 
 if not exist "%~dp0.env" (
     echo AVISO: nao ha .env na raiz. A API precisa de DATABASE_URL e de
-    echo        OPENAI_API_KEY, e a voz so acende com VOICE_ENABLED=true.
-    echo        Ver src\ai\voice\COMO-RODAR.md.
+    echo        OPENAI_API_KEY para o /chat responder.
     echo.
 )
 
@@ -124,13 +123,8 @@ echo   Se a janela da API disser "Configuracao invalida", foi o
 echo   startup_checks: ele confere o .env no lifespan, lista o que falta e
 echo   recusa subir de proposito. A janela fica aberta com a lista.
 echo.
-echo   Para a voz funcionar sao DUAS chaves, e as duas precisam estar
-echo   ligadas: VOICE_ENABLED=true no .env e voice_enabled na linha do
-echo   restaurante em restaurant_settings. So a primeira da 403 na
-echo   emissao; nenhuma das duas, e as rotas /voice nem aparecem no /docs.
-echo.
-echo   O passo a passo esta em src\ai\voice\COMO-RODAR.md e o que a tela
-echo   mede (e o que ela nao mede) em tools\bancada\LEIA-ME.md.
+echo   O que a tela mede, e o que ela nao mede, esta em
+echo   tools\bancada\LEIA-ME.md.
 echo.
 pause
 endlocal

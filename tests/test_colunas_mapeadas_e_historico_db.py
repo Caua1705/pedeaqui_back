@@ -3,8 +3,12 @@
 ## As seis
 
 `Modelo.created_at` era `AttributeError` em tabelas que **têm** `created_at` —
-a terceira classe de `scripts/divergencias_orm_schema.py`, que agora está em
-zero. Duas coisas que só aparecem contra o banco de verdade:
+a terceira classe de `scripts/divergencias_orm_schema.py`, que chegou a zero e
+hoje tem **duas** entradas, as duas deliberadas: as colunas da voz que o código
+deixou de mapear em 06/09/2026 e que a revisão preparada `20260906_0060` ainda
+não derrubou. Ver `SEM_MAPEAMENTO_DE_PROPOSITO`, abaixo.
+
+Duas coisas que só aparecem contra o banco de verdade:
 
 - **`product_options.updated_at` e `product_option_groups.updated_at` nunca se
   moviam.** Não há trigger nessas tabelas (ao contrário de `orders`), e a
@@ -97,17 +101,58 @@ class TestAsSeisColunasAgoraExistemNoORM:
         coluna = AIProductEmbedding.__table__.c.updated_at
         assert coluna.onupdate is None
 
-    def test_o_varredor_nao_acha_mais_coluna_sem_mapeamento(self, db) -> None:
+    #: As DUAS colunas que o ORM deliberadamente não mapeia, e a data em que
+    #: elas passaram a ser deliberadas. Não é "exceção porque falhou": é o
+    #: estado intencional entre o código do assistente de voz sair (06/09/2026)
+    #: e a revisão preparada `20260906_0060` derrubá-las do banco.
+    #:
+    #: **Escritas aqui uma a uma, e não como um `!= 0` frouxo**, pelo motivo de
+    #: sempre neste arquivo: a lista pode ENCOLHER sozinha (quando a revisão
+    #: for aplicada, e aí o teste manda apagá-la), e não pode CRESCER — coluna
+    #: nova que o ORM não enxergue continua vermelha, que é o que este teste
+    #: existe para pegar.
+    SEM_MAPEAMENTO_DE_PROPOSITO = {
+        ("ai_usage_events", "voice_session_id"),
+        ("restaurant_settings", "voice_enabled"),
+    }
+
+    def test_o_varredor_so_acha_as_duas_colunas_da_voz(self, db) -> None:
         """A trava da terceira classe. Coluna nova no banco que o ORM não
-        enxergue volta a aparecer aqui — e `Modelo.coluna` é `AttributeError`,
-        que só estoura em quem for usá-la."""
+        enxergue aparece aqui — e `Modelo.coluna` é `AttributeError`, que só
+        estoura em quem for usá-la.
+
+        As duas da voz são o oposto disso: **ninguém as usa, de propósito**. O
+        código do assistente falado saiu em 06/09/2026 e o schema não —
+        `restaurant_settings.voice_enabled` é `NOT NULL` com `DEFAULT false` e
+        `ai_usage_events.voice_session_id` é nullable, então o INSERT do ORM
+        continua valendo sem mencionar nenhuma das duas. É isso que permitiu o
+        código sair antes do banco, que é a ordem segura: coluna apagada não
+        volta.
+
+        **Quando `alembic/preparadas/20260906_0060` for aplicada, este teste
+        falha** — e a mensagem diz o que fazer: esvaziar o conjunto acima e
+        renomear o teste de volta.
+        """
         from sqlalchemy import inspect
 
         from scripts.divergencias_orm_schema import comparar
 
         achados = comparar(inspect(db.get_bind()))
+        encontradas = {(tabela, coluna) for tabela, coluna, _, _ in achados.nao_mapeadas}
 
-        assert achados.nao_mapeadas == []
+        novas = encontradas - self.SEM_MAPEAMENTO_DE_PROPOSITO
+        assert novas == set(), (
+            f"coluna(s) no banco que o ORM não enxerga: {sorted(novas)}. "
+            "`Modelo.coluna` nelas é AttributeError."
+        )
+
+        sumidas = self.SEM_MAPEAMENTO_DE_PROPOSITO - encontradas
+        assert sumidas == set(), (
+            f"{sorted(sumidas)} não existe(m) mais no banco — a revisão "
+            "preparada `20260906_0060` foi aplicada. Tire-a(s) de "
+            "SEM_MAPEAMENTO_DE_PROPOSITO; com o conjunto vazio este teste "
+            "volta a ser 'o varredor não acha coluna sem mapeamento'."
+        )
 
 
 class TestOHistoricoDizPorQueOPedidoEstaParado:

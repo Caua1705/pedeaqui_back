@@ -1,10 +1,16 @@
-"""`similarity` chega a VOZ e nao chega ao prompt do TEXTO.
+"""`similarity` sai da busca e NAO chega ao prompt.
 
-Por que isto merece teste proprio: o campo nasce na busca porque o log da voz
-precisa dele (`VoiceSearchService.buscar`, linha `topo=`), e a mesma lista, no
-chat de texto, e interpolada INTEIRA em `{retrieved_products}`
-(`src/ai/prompts/chat_prompt.py`). Sao ~10 tokens por produto em todo turno do
-`/chat`, mais um campo sobre o qual o `system_prompt` nao diz uma palavra.
+Por que isto merece teste proprio: a lista que a busca devolve e interpolada
+INTEIRA em `{retrieved_products}` (`src/ai/prompts/chat_prompt.py`), entao todo
+campo que sobrar ali vira ~10 tokens por produto em todo turno do `/chat` —
+mais um campo sobre o qual o `system_prompt` nao diz uma palavra.
+
+O campo nasceu para o assistente de voz, que imprimia a maior similaridade no
+log da busca. **A voz saiu em 06/09/2026 e ele ficou**, porque e o numero que
+`AI_SEARCH_MIN_SIMILARITY` filtra e o unico que separa "buscou errado" de
+"buscou bem e nao havia nada" — a diferenca que `scripts/afere_limiar_de_
+similaridade.py` existe para medir. Ficando, ele precisa continuar sendo
+tirado aqui.
 
 O unico ponto que tira e `ChatService._retrieve_menu_products`. Ele e uma
 linha, nao tem efeito visivel, e nenhum outro teste falharia se alguem o

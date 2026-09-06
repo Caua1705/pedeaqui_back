@@ -13,9 +13,9 @@ e purismo: **um objeto de atributos livres nao tem o contrato que o teste diz
 estar verificando.** Ele responde qualquer atributo que o teste escrever e
 nenhum que o teste esquecer. O caso que fechou a porta foi `serves_people`,
 que entrou em `products` e em duas superficies mas nao no `ProductResponse` —
-os testes rapidos da voz montavam o produto com `SimpleNamespace`, o atributo
-existia PORQUE O TESTE O ESCREVEU, a suite ficou verde, e `buscar_no_cardapio`
-levantava `AttributeError` em toda busca falada em producao.
+os testes rapidos montavam o produto com `SimpleNamespace`, o atributo
+existia PORQUE O TESTE O ESCREVEU, a suite ficou verde, e a busca levantava
+`AttributeError` em toda chamada em producao.
 
 Sem um lugar como este, cada teste que precisa de uma filial escreve a propria
 filial de mentira — e foi assim que a suite acumulou 141 dubles de dado.
@@ -127,7 +127,6 @@ def configuracoes(**sobrescritas) -> RestaurantSetting:
         "free_delivery_enabled": None,
         "free_delivery_min_order_value": None,
         "platform_commission_percent": Decimal("10.00"),
-        "voice_enabled": False,
     }
     campos.update(sobrescritas)
     return RestaurantSetting(**campos)
@@ -424,7 +423,7 @@ def pedido(**sobrescritas) -> Order:
 
 
 def cartao_de_produto(**sobrescritas) -> ProductResponse:
-    """O produto COMO A API o entrega — e como a voz e o `/chat` o leem.
+    """O produto COMO A API o entrega — e como o `/chat` o le.
 
     E o schema da armadilha do `serves_people`: ele nasceu so no
     `AdminProductResponse`, `ProductResponse` ficou sem, e `buscar_no_cardapio`

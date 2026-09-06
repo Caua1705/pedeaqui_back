@@ -214,15 +214,19 @@ Opcionais, mas **cada uma desliga alguma coisa em silêncio** — o boot só avi
 | `RESEND_API_KEY` | o cadastro responde **500** e a recuperação de senha falha **em silêncio** — `forgot_password` engole a exceção de propósito (a resposta não pode denunciar quais e-mails existem), então o cliente vê "enviamos um código" e nada chega. Esta é a única da tabela **sem aviso de boot**: descobre-se pelo log `[Auth] forgot_password_failed`, ou pelo chamado |
 | `PAYMENT_WEBHOOK_SECRET` | o webhook do sandbox responde 503 e nenhum pedido sai de "aguardando pagamento" (no Mercado Pago o segredo é por restaurante e mora no banco) |
 | `PLATFORM_METRICS_KEY` | `GET /internal/ai-usage` responde 503 — o custo de IA por restaurante ([docs/custo-de-ia.md](docs/custo-de-ia.md)) |
-| `VOICE_ENABLED` | com ela falsa o router de voz não é registrado |
 
-Duas saíram do código em 05/09/2026 e **podem sair do `.env`** — nenhuma das
-duas derruba nada enquanto estiver lá (`extra="ignore"`): `INTERNAL_API_KEY`, a
-X-API-Key anterior ao JWT de lojista, e `EXPERIMENTO_VOZ_ENABLED`, que ficou sem
-consumidor quando o experimento de voz virou `src/ai/voice/`.
+**Doze podem sair do `.env` da VPS**, e nenhuma delas derruba nada enquanto
+estiver lá (`extra="ignore"`). Duas saíram do código em 05/09/2026:
+`INTERNAL_API_KEY`, a X-API-Key anterior ao JWT de lojista, e
+`EXPERIMENTO_VOZ_ENABLED`. As outras dez saíram em 06/09/2026, com o
+assistente de voz: `VOICE_ENABLED`, `VOICE_MODEL`, `VOICE_NAME`,
+`VOICE_ALLOW_VOICE_OVERRIDE`, `VOICE_MAX_SESSION_SECONDS`,
+`VOICE_IDLE_SECONDS`, `VOICE_WARN_BEFORE_END_SECONDS`,
+`VOICE_SESSIONS_PER_CUSTOMER_PER_DAY`,
+`VOICE_SESSIONS_PER_RESTAURANT_PER_DAY` e `VOICE_QUOTA_WINDOW_HOURS`.
 
 O `.env.example` está anotado por categoria e cobre o resto (limites de corpo,
-TTLs, cotas de voz, RFV, tempos do Google).
+TTLs, RFV, tempos do Google).
 
 ---
 

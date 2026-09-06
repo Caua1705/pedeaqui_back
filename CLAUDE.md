@@ -65,21 +65,24 @@ o teste diz estar verificando**: ele responde qualquer atributo que o teste
 escrever e nenhum que o teste esquecer. O resultado é um teste que fica verde
 descrevendo um objeto que a aplicação nunca produz.
 
-**O caso que fecha esta porta.** A revisão `20260825_0039` acrescentou
-`serves_people` a `products`. O campo chegou ao `AdminProductResponse` (o do
-painel) e a `_serve_quantas_pessoas` (a voz), e **não** ao `ProductResponse` —
-que é o que `MenuService.product_response` devolve e, portanto, o que a
-hidratação entrega à ferramenta de voz.
+**O caso que fecha esta porta**, e ele é de agosto de 2026: o assistente de
+VOZ saiu do projeto em 06/09/2026, mas o caso ficou porque nada nele depende de
+áudio — troque "voz" por "qualquer consumidor do schema" e ele se lê igual.
 
-Os testes rápidos da voz montavam o produto assim:
+A revisão `20260825_0039` acrescentou `serves_people` a `products`. O campo
+chegou ao `AdminProductResponse` (o do painel) e à função que montava a linha
+falada do produto, e **não** ao `ProductResponse` — que é o que
+`MenuService.product_response` devolve e, portanto, o que a hidratação entregava
+à ferramenta.
+
+Os testes rápidos montavam o produto assim:
 
 ```python
 SimpleNamespace(name=nome, price=..., description=None, serves_people=None)
 ```
 
-O atributo existia **porque o teste o escreveu**. Os testes passaram, e
-`buscar_no_cardapio` levantava `AttributeError` em **toda** busca falada em
-produção. Quem denunciou foi um teste de fumaça com banco, um dia depois — e o
+O atributo existia **porque o teste o escreveu**. Os testes passaram, e a busca
+levantava `AttributeError` em **toda** chamada em produção. Quem denunciou foi um teste de fumaça com banco, um dia depois — e o
 lojista, nesse meio-tempo, preenchia o campo no painel para um atendente que
 não conseguia lê-lo.
 
@@ -91,8 +94,8 @@ O que o tipo real dá de graça, e o dublê solto não dá:
   `TypeError`, e `ProductResponse(...)` sem um campo obrigatório é
   `ValidationError`. Erro de nome deixa de sobreviver a uma suíte verde;
 - **os tipos são os de verdade.** Foi assim que apareceu que `price` chega ao
-  resumo da voz como `float` e nunca como `None` (a coluna é `NOT NULL`) — o
-  dublê com `Decimal` e `None` descrevia um produto que não existe.
+  consumidor do schema como `float` e nunca como `None` (a coluna é `NOT NULL`)
+  — o dublê com `Decimal` e `None` descrevia um produto que não existe.
 
 Instância transiente **não precisa de banco**, então isto vale igual na suíte
 rápida: `Product(...)` sem `db.add` é um objeto Python comum. O que ela **não**

@@ -1,8 +1,16 @@
 # Modelo de dados
 
-42 tabelas mapeadas pelo ORM. Este documento cobre o que cada uma guarda, como
+41 tabelas mapeadas pelo ORM. Este documento cobre o que cada uma guarda, como
 se ligam e por que o isolamento entre restaurantes funciona do jeito que
 funciona.
+
+**Há uma 42ª tabela no BANCO que não está aqui: `ai_voice_sessions`.** O
+assistente de voz saiu do projeto em 06/09/2026 e o ORM parou de mapeá-la no
+mesmo dia; a tabela, e as linhas dela, continuam em produção até a revisão
+preparada `20260906_0060` ser aplicada. Ver
+[`alembic/preparadas/LEIA-ME.md`](../alembic/preparadas/LEIA-ME.md) — o
+diagrama desenha o ORM, e desenhar uma tabela que o código não conhece seria
+prometer um caminho que não existe.
 
 A fonte da verdade do schema é `alembic/versions/`. A pasta `migrations/` tem os
 12 `.sql` aplicados a mão antes do Alembic entrar — é arquivo histórico
@@ -16,7 +24,7 @@ está na §6, e importa antes de confiar numa anotação deste documento.
 
 ## 1. O desenho geral
 
-Seis diagramas e não um, e a razão é prática: 42 tabelas num `erDiagram` só
+Seis diagramas e não um, e a razão é prática: 41 tabelas num `erDiagram` só
 renderizam como um novelo em que nada se acha. O corte é por **assunto**, que é
 como as perguntas chegam — "onde mora a taxa de entrega?", "o que o pedido
 congela?" —, e cada tabela aparece no diagrama do dono dela.
@@ -141,7 +149,6 @@ erDiagram
     customer_payment_profiles ||--o{ customer_saved_cards : "token do gateway"
     customers ||--o{ cashback_transactions : "saldo por restaurante"
     customers ||--o{ coupon_redemptions : "quem já usou"
-    customers |o--o{ ai_voice_sessions : "cota por cliente"
     customers |o--o{ delivery_estimates : "quando há login"
 ```
 
@@ -201,10 +208,8 @@ erDiagram
     printing_sectors |o--o{ print_agent_commands : "para qual impressora"
     admin_users |o--o{ print_agent_commands : "quem mandou"
     restaurants ||--o{ ai_feedback : "texto do cliente, expurgo por retenção"
-    restaurants ||--o{ ai_voice_sessions : "cota e uso"
     restaurants ||--o{ ai_usage_events : "o que a IA custou"
     branches |o--o{ ai_usage_events : "no texto, de que loja"
-    ai_voice_sessions |o--o| ai_usage_events : "uma linha por sessão"
     restaurants ||--o{ admin_error_reports : "relato do lojista"
     branches |o--o{ admin_error_reports : "de que loja"
     admin_users |o--o{ admin_error_reports : "quem relatou"
@@ -248,7 +253,7 @@ Desenho inteiro em [whatsapp.md](whatsapp.md).
 | Tabela | Guarda | Notas |
 |---|---|---|
 | `restaurants` | nome, `slug` (UNIQUE), cores da marca, logo, `is_active`, `description`, `assistant_notes` | O `slug` é a identidade pública na URL. Os dois textos têm públicos **opostos**: `description` é a vitrine (sai em `RestaurantPublicResponse`), `assistant_notes` é o contexto do assistente de IA e não sai em resposta pública nenhuma |
-| `restaurant_settings` | `min_order_value`, `service_fee_enabled/amount`, `estimated_delivery_time_min/max`, `default_delivery_fee`, `platform_commission_percent`, `voice_enabled` | **1:1 opcional.** Os seis primeiros são só o **padrão** que a filial herda — nenhum pedido os lê direto (ver `operacao-por-filial.md`) |
+| `restaurant_settings` | `min_order_value`, `service_fee_enabled/amount`, `estimated_delivery_time_min/max`, `default_delivery_fee`, `platform_commission_percent` | **1:1 opcional.** Os seis primeiros são só o **padrão** que a filial herda — nenhum pedido os lê direto (ver `operacao-por-filial.md`) |
 | `branches` | endereço, lat/lng, regras de entrega da loja (base, por km, piso, teto, raio), **`is_open` / `accepts_delivery` / `accepts_pickup`** e as sobrescritas comerciais | A taxa de entrega e a **operação do dia** são por filial. Nas colunas comerciais homônimas de `restaurant_settings`, **NULL significa "herda"**. O endereço tem **dois conjuntos**, e só um vale — ver abaixo |
 | `branch_business_hours` | uma linha por faixa de horário: `weekday`, `opens_at`, `closes_at`, `prep_time_min/max`, `is_closed` | **`weekday` 0 = segunda** (é o `datetime.weekday()` do Python) |
 | `branch_payment_methods` | `payment_flow` (`online`/`delivery`), `method_type`, `label`, `enabled`, `earns_cashback` | É a fonte da verdade das formas de pagamento aceitas — e por isso "quais formas geram cashback" é coluna daqui, não lista nova |
@@ -383,7 +388,7 @@ expira — está em [cashback.md](cashback.md).
 | `delivery_estimates` | `token` (UNIQUE), `address_fingerprint`, taxa/distância/ETA, `expires_at` | Reaproveitada na criação do pedido |
 | `restaurant_payment_credentials` | `public_key`, `access_token_encrypted`, `webhook_secret_encrypted`, `environment` | Cifrados com Fernet. Uma linha por `(restaurant_id, environment)` |
 | `admin_error_reports` | `description`, `error_log`, `screen`, `order_number`, e o `restaurant_id`/`branch_id`/`admin_user_id` que saem do TOKEN | O "deu erro" do painel. Credencial é mascarada antes do INSERT; o resto **vence em 90 dias**, e é assim que sai do banco — a tabela não tem `customer_id` (armadilha 38). `order_number` é número solto, sem FK: é o que uma pessoa digitou |
-| `ai_usage_events` | `surface` (`text`/`voice`), `model`, `input_tokens`, `cached_input_tokens`, `output_tokens`, `cost_usd`, `voice_session_id` | Uma linha por turno do `/chat` e uma por **sessão** de voz. `cost_usd` **nulo é "modelo sem preço em `src/ai/custo.py`", nunca zero**; `cached_input_tokens` é subconjunto de `input_tokens`. UNIQUE parcial em `voice_session_id`: o aviso de fim da voz chega duas vezes, e sem ele o custo da conversa dobraria |
+| `ai_usage_events` | `surface` (`text`/`voice`), `model`, `input_tokens`, `cached_input_tokens`, `output_tokens`, `cost_usd` | Uma linha por turno do `/chat`. `cost_usd` **nulo é "modelo sem preço em `src/ai/custo.py`", nunca zero**; `cached_input_tokens` é subconjunto de `input_tokens`. **`surface = 'voice'` é histórico**: as linhas das sessões faladas ficam, e o relatório continua as somando — o que não existe mais é quem escreve novas. A coluna `voice_session_id` e o UNIQUE parcial dela continuam no banco, sem mapeamento no ORM, até a revisão preparada `20260906_0060` |
 
 ---
 

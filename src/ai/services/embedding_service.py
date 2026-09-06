@@ -14,9 +14,9 @@ variacao da rede sozinha ia de 300 a 2000 ms, maior que o efeito procurado):
                                  -------------
     diferenca                            314 ms, em 11 dos 12 pares
 
-Trezentos milissegundos por busca sao invisiveis no chat de texto e sao o
-grosso da pausa numa conversa por voz, em que o cliente fica ouvindo silencio
-enquanto a ferramenta responde.
+Trezentos milissegundos por busca somem dentro dos segundos que a chamada ao
+modelo custa, e e por isso que o ganho nao aparece no relogio de quem usa o
+`/chat`. Ele aparece na conta: a busca roda em todo turno.
 
 `lru_cache` e nao um objeto de modulo, pelo mesmo motivo de `get_engine` em
 `src/db/session.py`: construido no import, ele congelaria `settings` no

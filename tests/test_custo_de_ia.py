@@ -1,9 +1,14 @@
 """O custo de IA por restaurante: a conta, a rota e o que ela NAO publica.
 
 A suite rapida cobre a aritmetica e a porta da rota. A metade que fala com o
-Postgres esta em `tests/test_custo_de_ia_db.py` — o UNIQUE que torna a
-gravacao da voz idempotente e a agregacao por periodo SAO consultas, e dublar
-qualquer uma seria testar o dublê.
+Postgres esta em `tests/test_custo_de_ia_db.py` — a agregacao por periodo E
+uma consulta, e dublar consulta seria testar o dublê.
+
+`CustoDeVozTests` viveu aqui ate 06/09/2026, quando o assistente de voz saiu
+do projeto e levou junto `custo_de_voz` e `PRECOS_DE_VOZ`. As linhas de
+`ai_usage_events` com `surface = 'voice'` continuam na tabela e continuam
+somando no relatorio — o que a rota devolve delas e o `cost_usd` gravado na
+epoca, e nao uma conta refeita aqui.
 """
 
 import unittest
@@ -13,7 +18,7 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from main import app
-from src.ai.custo import custo_de_texto, custo_de_voz
+from src.ai.custo import custo_de_texto
 from src.ai.services.chat_llm_service import ChatLLMService
 from src.core.config import settings
 from src.services.ai_usage_service import AIUsageService
@@ -52,73 +57,6 @@ class CustoDeTextoTests(unittest.TestCase):
         em `calls_without_price`.
         """
         self.assertIsNone(custo_de_texto("gpt-6-turbo-imaginario", 1000, 0, 500))
-
-
-class CustoDeVozTests(unittest.TestCase):
-    def test_audio_e_texto_sao_cobrados_em_faixas_diferentes(self):
-        """1000 tokens de audio de saida nao custam o mesmo que 1000 de texto.
-
-        No `gpt-realtime-mini` sao US$ 20,00 contra US$ 2,40 por milhao — se
-        esta conta somasse tudo numa faixa so, a voz sairia oito vezes mais
-        barata do que e.
-        """
-        so_audio = custo_de_voz(
-            modelo="gpt-realtime-mini",
-            entrada_audio=0,
-            entrada_texto=0,
-            entrada_em_cache=0,
-            saida_audio=1000,
-            saida_texto=0,
-        )
-        so_texto = custo_de_voz(
-            modelo="gpt-realtime-mini",
-            entrada_audio=0,
-            entrada_texto=0,
-            entrada_em_cache=0,
-            saida_audio=0,
-            saida_texto=1000,
-        )
-        self.assertEqual(so_audio, Decimal("0.020000"))
-        self.assertEqual(so_texto, Decimal("0.002400"))
-
-    def test_o_cache_sai_do_audio_primeiro(self):
-        """A escolha documentada em `custo_de_voz`, travada aqui.
-
-        A Realtime manda um `cached_tokens` so, sem dizer se era audio ou
-        texto. Numa conversa falada o audio e a quase totalidade da entrada,
-        entao o desconto sai dele primeiro.
-        """
-        custo = custo_de_voz(
-            modelo="gpt-realtime-mini",
-            entrada_audio=1000,
-            entrada_texto=1000,
-            entrada_em_cache=1000,
-            saida_audio=0,
-            saida_texto=0,
-        )
-        # 1000 de audio em cache (US$ 0,30/1M) + 1000 de texto cheio
-        # (US$ 0,60/1M) = 0,0003 + 0,0006
-        self.assertEqual(custo, Decimal("0.000900"))
-
-    def test_cache_maior_que_o_audio_transborda_para_o_texto(self):
-        custo = custo_de_voz(
-            modelo="gpt-realtime-mini",
-            entrada_audio=100,
-            entrada_texto=100,
-            entrada_em_cache=150,
-            saida_audio=0,
-            saida_texto=0,
-        )
-        # 100 de audio em cache + 50 de texto em cache + 50 de texto cheio
-        esperado = (
-            Decimal(100) * Decimal("0.30")
-            + Decimal(50) * Decimal("0.06")
-            + Decimal(50) * Decimal("0.60")
-        ) / Decimal(1000000)
-        self.assertEqual(custo, esperado.quantize(Decimal("0.000001")))
-
-    def test_modelo_desconhecido_custa_None_e_nao_zero(self):
-        self.assertIsNone(custo_de_voz("gpt-realtime-imaginario", 1, 1, 0, 1, 1))
 
 
 class UsoDaRespostaTests(unittest.TestCase):

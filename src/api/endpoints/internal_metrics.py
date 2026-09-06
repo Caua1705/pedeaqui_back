@@ -100,12 +100,18 @@ def ai_usage_report(
     restaurant_id: uuid.UUID | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> AIUsageReportResponse:
-    """Custo de IA por restaurante, no periodo. Voz e texto separados.
+    """Custo de IA por restaurante, no periodo.
+
+    `text_*` e `voice_*` continuam separados, e desde 06/09/2026 a segunda
+    metade e HISTORICA: o assistente de voz saiu do projeto e nenhuma linha
+    nova nasce com `surface = 'voice'`. Janela que alcance agosto ou o comeco
+    de setembro de 2026 ainda a traz preenchida, e e por isso que ela nao saiu
+    da resposta — sem ela `calls` deixaria de fechar com `text_calls`.
 
     O periodo e de CALENDARIO, no fuso da plataforma, e `end_date` entra
     INTEIRO: quem pede "ate 31/08" quer o dia 31 todo. Cortar em UTC jogaria
     as conversas das 21h as 00h — o horario de maior movimento — para o dia
-    seguinte, que e o mesmo cuidado de `scripts/voice_usage_report.py`.
+    seguinte.
 
     Ver `AIUsageService.custo_por_restaurante` para o que `calls_without_price`
     significa, e por que o total sem ele engana.
@@ -154,8 +160,7 @@ def _janela(start_date: date | None, end_date: date | None) -> tuple[datetime, d
     dia 31 todo) e o default sao os ultimos 30 dias.
 
     Cortar em UTC jogaria o movimento das 21h as 00h para o dia seguinte — o
-    horario de pico do restaurante —, que e o mesmo cuidado de
-    `scripts/voice_usage_report.py`.
+    horario de pico do restaurante.
     """
     hoje = datetime.now(FUSO).date()
     ultimo_dia = end_date or hoje

@@ -7,8 +7,7 @@ def build_chat_prompt() -> ChatPromptTemplate:
     """Build the chat prompt used by the Rapi LCEL chain.
 
     `Loja` e uma secao PROPRIA, e nao mais uma linha do bloco `Restaurante`.
-    O motivo e o mesmo que `voice_prompt.instructions_for` ja registra: junto,
-    "Aberta agora: nao" viraria mais uma linha sobre a marca, e a secao
+    Junto, "Aberta agora: nao" viraria mais uma linha sobre a marca, e a secao
     ESTADO DA LOJA do prompt — que fala em "o bloco Loja" — nao teria a que
     apontar.
 

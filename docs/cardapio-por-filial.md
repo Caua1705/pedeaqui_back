@@ -15,6 +15,14 @@ o passo 2 (`20260818_0025`) passou a operação para a filial
 dizem, cada um, que "os produtos continuam sendo do restaurante". **Não
 continuam mais.**
 
+> **AS ROTAS `/voice/*` CITADAS AQUI NÃO EXISTEM MAIS.** O assistente de voz
+> saiu do projeto em 06/09/2026. Este documento é o registro do passo 3 e não
+> foi reescrito: onde ele diz `/voice/session` ou `/voice/search`, leia "as
+> rotas do assistente falado, enquanto elas existiram". **Tudo o que ele diz
+> sobre o `/chat` e sobre o cardápio continua valendo palavra por palavra** — e
+> a exigência de `branch_id` no `/chat`, que é a parte que o app consome, não
+> mudou.
+
 ---
 
 ## 1. O que mudou, em um parágrafo
@@ -527,10 +535,8 @@ O que muda de fato é o `total_usage_limit` compartilhado — ver §2.2.
   e sem sobrescrita. O custo aceito é cadastrar o produto novo N vezes, e
   `catalog_key` é o que mantém o relatório inteiro apesar disso.
 - **Não mexe em cupom.** Ver §7.
-- **Não atribui custo de voz por filial.** `ai_voice_sessions` continua só com
-  `restaurant_id`. É coluna anulável em tabela de log, dá para acrescentar
-  depois sem recadastrar nada — que é o critério que decidiu o `catalog_key`
-  para o outro lado.
+- ~~**Não atribui custo de voz por filial.**~~ Deixou de ser limitação em
+  06/09/2026, por remoção: não há mais voz a atribuir.
 - **Não remove `settings_branch_id`** do `/menu`. Ver §3.1.
 - **Não apaga produto, e não vai apagar.** `order_items` referencia `products`
   por FK: apagar quebra o histórico que o cliente ainda consulta pelo link de
@@ -561,8 +567,9 @@ para quando houver um.
   servir o preço de uma loja na tela da outra.
 - **Carrinho não migra entre filiais.** Trocar de loja com o carrinho cheio
   produz 400 no checkout, sem dizer qual produto.
-- **`branch_id` é obrigatório em `/chat` e `/voice/*`.** 422 na primeira
-  chamada, e o app do cliente para de conversar com o Rapi até subir junto.
+- **`branch_id` é obrigatório no `/chat`** (e era nas rotas de voz, enquanto
+  elas existiram). 422 na primeira chamada, e o app do cliente para de
+  conversar com o Rapi até subir junto.
 - **Produto criado depois do deploy nasce sem `catalog_key`.** Ele some do
   agrupamento do relatório até alguém preencher a chave — e o painel precisa
   de tela para isso (§4.4).

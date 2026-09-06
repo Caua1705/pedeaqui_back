@@ -11,7 +11,6 @@ possíveis são todas silenciosas:
     GET  .../menu?branch_id=B          →  produtos de B, e só de B
     GET  .../products/{slug}           →  o produto da filial padrão
     POST .../orders com produto de A   →  400, e não pedido aceito
-    POST /voice/search para B          →  nada de A (ver test_voice_fumaca_db)
     GET  /admin/products               →  só o que o token alcança
 
 **Nenhuma delas falha sozinha.** Um `/menu` que devolvesse os dois cardápios

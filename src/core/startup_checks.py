@@ -278,8 +278,8 @@ def collect_configuration_warnings(settings: Settings) -> list[str]:
         # pergunta, indefinidamente, sem nada no log do `/chat` alem de um
         # miss que parece cache frio.
         warnings.append(
-            "REDIS_URL nao definida: o cache de embedding do Rapi (/chat e "
-            "/voice) fica so no dict do processo — morre a cada deploy e nao "
+            "REDIS_URL nao definida: o cache de embedding do Rapi (/chat) "
+            "fica so no dict do processo — morre a cada deploy e nao "
             "e compartilhado entre workers nem entre clientes, entao a mesma "
             "pergunta de duas pessoas paga dois embeddings (~400 ms e uma "
             "chamada cobrada cada). No log do /chat isso aparece como "

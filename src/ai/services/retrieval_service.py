@@ -27,17 +27,15 @@ TOP_K_PADRAO = 5
 class RetrievalService:
     """Retrieve restaurant products that are relevant to a user question.
 
-    `agent` so existe para o LOG. Esta busca serve dois agentes — o chat de
-    texto e o de voz — e as linhas de medicao saiam todas com o
-    prefixo `[AI /chat perf]`, vindas dos dois. Quem grepava esse prefixo para
-    medir o chat estava medindo a soma, sem nenhuma forma de separar.
-
-    Vale como parametro e nao como duplicacao do codigo de medicao: os
-    cronometros continuam sendo um so, e o unico que muda e o rotulo.
+    O PREFIXO DA MEDICAO E FIXO desde 06/09/2026. Houve aqui um parametro
+    `agent`, e ele existia por um motivo so: esta busca servia dois agentes —
+    o `/chat` de texto e o assistente de voz — e as linhas de medicao saiam
+    todas como `[AI /chat perf]`, vindas dos dois, entao quem grepava o
+    prefixo para medir o chat estava medindo a soma. Com a voz fora do
+    projeto ha um caminho so, e o rotulo volta a ser constante.
     """
 
-    def __init__(self, db: Session, agent: str = "/chat"):
-        self.agent = agent
+    def __init__(self, db: Session):
         self.embedding_service = EmbeddingService()
         self.ai_repository = AIRepository(db)
         self.product_repository = ProductRepository(db)
@@ -95,13 +93,11 @@ class RetrievalService:
             embedding = self.embedding_service.generate_embedding(question)
             chat_cache.set_embedding(embedding_cache_key, embedding)
         logger.info(
-            "[AI %s perf] embedding_ms=%.2f",
-            self.agent,
+            "[AI /chat perf] embedding_ms=%.2f",
             (perf_counter() - embedding_started_at) * 1000,
         )
         logger.info(
-            "[AI %s cache] embedding_cache_hit=%s | embedding_cache_origem=%s",
-            self.agent,
+            "[AI /chat cache] embedding_cache_hit=%s | embedding_cache_origem=%s",
             str(embedding_cache_hit).lower(),
             cache_origin or "nenhuma",
         )
@@ -123,13 +119,11 @@ class RetrievalService:
             ]
             chat_cache.set_retrieval(retrieval_cache_key, retrieved_products)
         logger.info(
-            "[AI %s perf] retrieval_ms=%.2f",
-            self.agent,
+            "[AI /chat perf] retrieval_ms=%.2f",
             (perf_counter() - retrieval_started_at) * 1000,
         )
         logger.info(
-            "[AI %s cache] retrieval_cache_hit=%s",
-            self.agent,
+            "[AI /chat cache] retrieval_cache_hit=%s",
             str(retrieval_cache_hit).lower(),
         )
         # A terceira etapa desta funcao, e a unica que nao tinha cronometro.
@@ -140,11 +134,10 @@ class RetrievalService:
         prices_started_at = perf_counter()
         retrieved_products = self._with_current_prices(branch_id, retrieved_products)
         logger.info(
-            "[AI %s perf] current_prices_ms=%.2f",
-            self.agent,
+            "[AI /chat perf] current_prices_ms=%.2f",
             (perf_counter() - prices_started_at) * 1000,
         )
-        logger.info("[AI %s perf] context_products=%d", self.agent, len(retrieved_products))
+        logger.info("[AI /chat perf] context_products=%d", len(retrieved_products))
         return retrieved_products
 
     def _with_current_prices(

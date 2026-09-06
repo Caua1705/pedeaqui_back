@@ -589,21 +589,6 @@ class CardapioPorFilialContractTests(unittest.TestCase):
         self.assertIn("branch_id", corpo["properties"])
         self.assertIn("branch_id", corpo["required"])
 
-    def test_as_duas_rotas_de_voz_exigem_a_filial(self):
-        """A sessao E a busca. A busca nao recebe o id da sessao, entao nao ha
-        de onde herdar a loja.
-
-        Medido nos SCHEMAS e nao no /openapi.json: o router da voz so e
-        montado com `VOICE_ENABLED`, e a suite roda com ele desligado — que e
-        o padrao em todo lugar. Sem esta excecao, as duas rotas ficariam sem
-        rede nenhuma.
-        """
-        from src.api.voice import BuscaRequest, SessaoRequest
-
-        for schema in (SessaoRequest, BuscaRequest):
-            campo = schema.model_fields["branch_id"]
-            self.assertTrue(campo.is_required(), schema.__name__)
-
     def test_a_criacao_de_categoria_exige_a_filial_e_a_de_produto_nao(self):
         """A assimetria e proposital, e esta na decisao 3 do service.
 

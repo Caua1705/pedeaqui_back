@@ -22,18 +22,6 @@ class AIUsageRepository:
         self.db.flush()
         return evento
 
-    def get_by_voice_session(self, voice_session_id: uuid.UUID) -> AIUsageEvent | None:
-        """A linha ja gravada para aquela sessao de voz, se houver.
-
-        E o que torna a gravacao da voz idempotente: o aviso de fim vai com
-        `keepalive` e pode chegar duas vezes, e a segunda chegada tem que
-        CORRIGIR a primeira em vez de dobrar o custo da conversa.
-        """
-        stmt = select(AIUsageEvent).where(
-            AIUsageEvent.voice_session_id == voice_session_id
-        )
-        return self.db.scalars(stmt).one_or_none()
-
     def custo_por_restaurante(
         self,
         desde: datetime,
@@ -52,6 +40,11 @@ class AIUsageRepository:
         todas as chamadas ficaram sem preco sairia com total nulo em vez de
         zero, que e mais dificil de ler do lado de fora.
         """
+        # As duas superficies continuam separadas depois de a voz sair do
+        # projeto (06/09/2026), e a separacao passou a ser HISTORICA: nenhuma
+        # linha nova nasce com `surface = 'voice'`, e as que ja existem sao
+        # dinheiro gasto. Somar tudo numa coluna so esconderia, no mes da
+        # saida, um custo que nao vai se repetir dentro de um numero que vai.
         e_texto = AIUsageEvent.surface == SURFACE_TEXT
         e_voz = AIUsageEvent.surface == SURFACE_VOICE
 

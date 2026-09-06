@@ -19,8 +19,7 @@ class Restaurant(Base):
     # O que o ASSISTENTE precisa saber sobre a casa. Separado da `description`
     # na revisao 20260823_0034 porque os dois destinos pedem textos opostos:
     # ela e vitrine (`RestaurantPublicResponse`, o cliente decide pedir por
-    # ela), esta e prompt (`ChatService._build_restaurant_context`, reusado
-    # pelo agente de voz).
+    # ela), esta e prompt (`ChatService._build_restaurant_context`).
     #
     # NAO sai em resposta publica nenhuma, e a leitura do prompt NAO cai para
     # `description` quando isto e nulo: o fallback preservaria o anuncio no

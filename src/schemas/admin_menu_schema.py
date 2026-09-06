@@ -250,9 +250,10 @@ class AdminProductCreate(BaseModel):
     category_id: UUID
     name: str = Field(min_length=1, max_length=MAX_NAME_LENGTH)
     description: str | None = Field(default=None, max_length=MAX_DESCRIPTION_LENGTH)
-    # Opcional, e o normal e vir vazio. Nao ha default 1: o assistente de voz
-    # le nulo como "nao sei" e responde que nao sabe, que e verdade — um
-    # default faria o cadastro afirmar um numero que ninguem digitou.
+    # Opcional, e o normal e vir vazio. Nao ha default 1: nulo e "o lojista
+    # nao disse", e um default faria o cadastro afirmar um numero que ninguem
+    # digitou. Ver `src/models/product_model.py` para por que este campo
+    # continua aqui depois de o assistente de voz sair.
     serves_people: int | None = Field(default=None, ge=1, le=MAX_SERVES_PEOPLE)
     # Decimal e nao float: preco entra na conta do pedido, e float acumula
     # erro de centavo (mesma regra do resto do projeto, ver utils/money).

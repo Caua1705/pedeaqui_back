@@ -1,9 +1,9 @@
 """Quanto custou uma chamada ao modelo, em dolar.
 
 A pergunta que isto existe para responder e "a comissao paga a conta do
-assistente?". Ela nao se responde com contagem de token: audio de entrada
-custa 40x o texto de entrada no mesmo modelo, e um turno de texto com muito
-cache custa um decimo de um sem cache. So o valor em dinheiro compara.
+assistente?". Ela nao se responde com contagem de token: um turno com muito
+cache custa um decimo de um sem cache, no mesmo modelo e com o mesmo numero
+de tokens. So o valor em dinheiro compara.
 
 ## Os precos sao uma COPIA, e ela envelhece
 
@@ -20,20 +20,24 @@ deles, e eles mudam sem avisar. Duas consequencias de desenho:
 - **os tokens continuam gravados mesmo sem preco.** Quando a tabela for
   atualizada, da para reprocessar — o dado bruto nao se perdeu.
 
-## Por que duas tabelas e duas funcoes, e nao uma generica
+## Houve uma segunda tabela aqui, e ela saiu em 06/09/2026
 
-Texto tem tres precos (entrada, entrada em cache, saida). Voz tem seis, porque
-audio e texto sao cobrados em faixas diferentes nas duas direcoes. Uma
-estrutura unica com seis campos deixaria tres deles sempre nulos no texto, e
-toda leitura passaria a comecar com "este campo vale aqui?". Duas funcoes que
-se leem inteiras valem mais.
+`PRECOS_DE_VOZ` e `custo_de_voz` viveram neste arquivo enquanto existiu o
+assistente falado: seis faixas de preco em vez de tres, porque audio e texto
+sao cobrados separado nas duas direcoes. Sairam junto com ele.
+
+O que NAO saiu e as linhas de `ai_usage_events` com `surface = 'voice'`: elas
+ja tem o `cost_usd` gravado, calculado na epoca, e o relatorio continua as
+somando. **Reprocessar aquelas linhas deixou de ser possivel** — a tabela de
+precos da Realtime nao esta mais aqui —, e essa e a unica coisa que se perdeu.
+Vale para uma so situacao, que nunca aconteceu: a OpenAI corrigir para tras um
+preco de audio de 2026.
 
 ## `cached` e SUBCONJUNTO da entrada
 
-Vale nos dois lados, e ja esta escrito no model de `ai_voice_sessions` e no
-`usage_metadata` do langchain: `input_tokens` ja inclui o que veio do cache, e
-`cached` diz que fatia foi essa. Somar os dois conta o cache duas vezes. Por
-isso as duas funcoes SUBTRAEM antes de multiplicar.
+Ja esta escrito no `usage_metadata` do langchain: `input_tokens` ja inclui o
+que veio do cache, e `cached` diz que fatia foi essa. Somar os dois conta o
+cache duas vezes. Por isso a funcao SUBTRAI antes de multiplicar.
 """
 
 from dataclasses import dataclass
@@ -55,23 +59,6 @@ class PrecoDeTexto:
     entrada: Decimal
     entrada_em_cache: Decimal
     saida: Decimal
-
-
-@dataclass(frozen=True)
-class PrecoDeVoz:
-    """USD por milhao de tokens, para um modelo da Realtime.
-
-    Seis faixas porque audio e texto sao cobrados separado nas duas direcoes.
-    A diferenca nao e detalhe: no `gpt-realtime-mini` um token de audio de
-    saida custa mais de oito vezes um de texto de saida.
-    """
-
-    entrada_texto: Decimal
-    entrada_texto_em_cache: Decimal
-    entrada_audio: Decimal
-    entrada_audio_em_cache: Decimal
-    saida_texto: Decimal
-    saida_audio: Decimal
 
 
 # Conferido em 02/09/2026 em developers.openai.com/api/docs/pricing.
@@ -98,25 +85,6 @@ PRECOS_DE_TEXTO: dict[str, PrecoDeTexto] = {
     ),
 }
 
-PRECOS_DE_VOZ: dict[str, PrecoDeVoz] = {
-    "gpt-realtime": PrecoDeVoz(
-        entrada_texto=Decimal("4.00"),
-        entrada_texto_em_cache=Decimal("0.40"),
-        entrada_audio=Decimal("32.00"),
-        entrada_audio_em_cache=Decimal("0.40"),
-        saida_texto=Decimal("16.00"),
-        saida_audio=Decimal("64.00"),
-    ),
-    "gpt-realtime-mini": PrecoDeVoz(
-        entrada_texto=Decimal("0.60"),
-        entrada_texto_em_cache=Decimal("0.06"),
-        entrada_audio=Decimal("10.00"),
-        entrada_audio_em_cache=Decimal("0.30"),
-        saida_texto=Decimal("2.40"),
-        saida_audio=Decimal("20.00"),
-    ),
-}
-
 
 def custo_de_texto(
     modelo: str,
@@ -140,45 +108,5 @@ def custo_de_texto(
         cheia * preco.entrada
         + em_cache * preco.entrada_em_cache
         + max(saida, 0) * preco.saida
-    ) / POR_MILHAO
-    return total.quantize(CASAS_DO_CUSTO)
-
-
-def custo_de_voz(
-    modelo: str,
-    entrada_audio: int,
-    entrada_texto: int,
-    entrada_em_cache: int,
-    saida_audio: int,
-    saida_texto: int,
-) -> Decimal | None:
-    """O custo de UMA sessao de voz, ou None se o modelo nao tem preco aqui.
-
-    O `cached_tokens` da Realtime nao diz se o que veio do cache era audio ou
-    texto: e um numero so. Aqui ele e descontado do AUDIO primeiro, e o que
-    sobrar do texto. Numa conversa falada o audio e a quase totalidade da
-    entrada, entao essa e a leitura que erra menos — e ela erra para o lado
-    barato, o que a torna um PISO do custo e nao um teto. O jeito de nao
-    precisar dessa escolha seria o navegador reportar o cache separado por
-    faixa, que e mudanca de contrato com o front.
-    """
-    preco = PRECOS_DE_VOZ.get(modelo)
-    if preco is None:
-        return None
-
-    audio = max(entrada_audio, 0)
-    texto = max(entrada_texto, 0)
-    cache = max(entrada_em_cache, 0)
-
-    audio_em_cache = min(cache, audio)
-    texto_em_cache = min(cache - audio_em_cache, texto)
-
-    total = (
-        (audio - audio_em_cache) * preco.entrada_audio
-        + audio_em_cache * preco.entrada_audio_em_cache
-        + (texto - texto_em_cache) * preco.entrada_texto
-        + texto_em_cache * preco.entrada_texto_em_cache
-        + max(saida_audio, 0) * preco.saida_audio
-        + max(saida_texto, 0) * preco.saida_texto
     ) / POR_MILHAO
     return total.quantize(CASAS_DO_CUSTO)

@@ -710,12 +710,12 @@ vai exercitar até o dia em que ele precisar estar certo.
 
 ## PENDENTE: quebrar a tabela `branches`
 
-**Registrada em 05/09/2026. Duas revisões escritas e NÃO aplicadas**, em
-`alembic/preparadas/`:
+**Registrada em 05/09/2026. A etapa A foi APLICADA no mesmo dia; a B continua
+esperando decisão**, em `alembic/preparadas/`:
 
-| Revisão | O que faz | Recomendação |
+| Revisão | O que faz | Estado |
 |---|---|---|
-| `20260905_0058` | derruba as 5 colunas de endereço mortas | **fazer** — não move dado, não muda comportamento, só tira lixo |
+| `20260905_0058` | derruba as 5 colunas de endereço mortas | **aplicada** em 05/09/2026 — está em `alembic/versions/` |
 | `20260905_0059` | move a tarifa de entrega (7 colunas) para `branch_delivery_pricing` | **decidir** — é a única das quatro divisões candidatas que paga |
 
 ### O problema não é o número de colunas
@@ -741,11 +741,20 @@ Os dois em negrito são o par perigoso: **`default_delivery_fee` nulo herda e
 com `delivery` no nome, um do lado do outro. Nada no schema separa os dois, e a
 armadilha 35 existe porque confundi-los já custou caro.
 
-### Etapa A — as 5 colunas de endereço mortas (`0058`)
+### Etapa A — as 5 colunas de endereço mortas (`0058`) — FEITA
+
+**Aplicada em 05/09/2026.** A revisão saiu de `alembic/preparadas/` para
+`alembic/versions/` e as cinco linhas saíram de `src/models/branch_model.py` no
+mesmo commit. `branches` foi de **50 para 45 colunas**. Quem cobra o resultado é
+`tests/test_branches_perdeu_o_endereco_morto_db.py`, contra o schema depois do
+`upgrade head`.
+
+O que segue é o registro do porquê, e continua valendo para quem for mexer na
+sexta coluna.
 
 `address_street`, `address_neighborhood`, `address_city`, `address_state`,
-`address_zipcode`. Resto do schema pré-Alembic; nenhuma revisão as toca e nada
-em `src/` as lê ou escreve. A seção "Os dois conjuntos de endereço de
+`address_zipcode`. Resto do schema pré-Alembic; nenhuma revisão as tocava e nada
+em `src/` as lia ou escrevia. A seção "Os dois conjuntos de endereço de
 `branches`", acima, conta a história inteira.
 
 **`address_number` fica**, e é a exceção documentada: não tem par vivo, e largá-la
@@ -756,8 +765,9 @@ do endereço de entrega). Um grep por `address_street` traz as duas tabelas
 misturadas, e é o jeito mais fácil de achar que a `0058` apaga o endereço dos
 pedidos.
 
-**Tamanho:** a revisão + 5 linhas fora de `src/models/branch_model.py`. Nada
-mais. 50 → 45 colunas.
+**Tamanho, medido depois de feita:** a revisão + 5 linhas fora de
+`src/models/branch_model.py`, mais os testes que mudaram de dono. Nada mais.
+50 → 45 colunas.
 
 ### Etapa B — a tarifa de entrega (`0059`)
 

@@ -270,7 +270,7 @@ jobs:
       # um portao que se aprende a ignorar — ate o dia em que ele acusar uma
       # divergencia nova e alguem o desligar para conseguir entregar.
       #
-      # O que faltava era so isto: o numero nao crescer calado. Passando de 41,
+      # O que faltava era so isto: o numero nao crescer calado. Passando de 20,
       # o `::warning::` aparece no Summary do Actions e na PR, com o nome da
       # coluna nova na saida logo acima.
       #
@@ -285,10 +285,18 @@ jobs:
       #
       # O limite mora aqui, no YAML, de proposito: mudar o numero esperado vira
       # um diff que alguem revisa.
+      #
+      # 41 -> 20 em 05/09/2026. As revisoes `20260905_0055` e `20260905_0056`
+      # (alinhamento ORM x schema, etapas 1 e 2) fecharam as 16 do lado da
+      # LEITURA e as 6 colunas que o ORM nao mapeava, e o limite ficou para
+      # tras — o CI vinha imprimindo o `::notice` de "baixe o limite" desde
+      # entao. As 20 que sobraram sao uma classe so: o banco diz NOT NULL e o
+      # ORM diz nullable, e so DUAS delas (`ai_product_embeddings.content` e
+      # `coupon_templates.image_path`) nao tem DEFAULT.
       - name: Divergencias entre o ORM e o schema (aviso)
         if: always()
         continue-on-error: true
-        run: python scripts/divergencias_orm_schema.py --url "$TEST_DATABASE_URL" --limite 41
+        run: python scripts/divergencias_orm_schema.py --url "$TEST_DATABASE_URL" --limite 20
         env:
           TEST_DATABASE_URL: postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
 

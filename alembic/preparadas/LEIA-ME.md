@@ -18,15 +18,23 @@ O que mora aqui é migração **escrita, revisada e esperando uma decisão que n
 
 ## O que está aqui hoje
 
-São **três**, e as três esperam a mesma coisa: uma decisão que não é de código.
+São **duas**, e as duas esperam a mesma coisa: uma decisão que não é de código.
 
 | Revisão | O que faz | Plano | Recomendação |
 |---|---|---|---|
 | `20260905_0057` | `ai_usage_events.surface` passa a aceitar `indexing`, ao lado de `text` e `voice` | [`docs/custo-de-ia.md`](../../docs/custo-de-ia.md), seção 7 | **decidir** — mede o custo de indexar o cardápio |
-| `20260905_0058` | `branches` perde as 5 colunas de endereço mortas | [`docs/modelo-de-dados.md`](../../docs/modelo-de-dados.md), "PENDENTE: quebrar a tabela `branches`" | **fazer** — não move dado, não muda comportamento |
-| `20260905_0059` | a tarifa de entrega sai de `branches` para uma tabela 1:1 opcional | idem | **decidir** — é a única das quatro divisões candidatas que paga |
+| `20260905_0059` | a tarifa de entrega sai de `branches` para uma tabela 1:1 opcional | [`docs/modelo-de-dados.md`](../../docs/modelo-de-dados.md), "PENDENTE: quebrar a tabela `branches`" | **decidir** — é a única das quatro divisões candidatas que paga |
 
-**As três têm CÓDIGO ACOPLADO, e é por isso que estão aqui sozinhas** — sem o
+**A `20260905_0058` saiu daqui em 05/09/2026**, e o caminho dela é o que este
+arquivo descreve, executado: a conferência do cabeçalho foi refeita, o
+`down_revision` já era o head do dia (`20260905_0056`), o `git mv` foi para
+`alembic/versions/` e as cinco linhas saíram de `src/models/branch_model.py` no
+MESMO commit. Quem cobra o resultado agora é
+`tests/test_branches_perdeu_o_endereco_morto_db.py`, contra o schema depois do
+`upgrade head` — a pergunta deixou de ser "esta revisão ainda descreve o
+schema?" e passou a ser "o schema é o que ela prometeu?".
+
+**As duas têm CÓDIGO ACOPLADO, e é por isso que estão aqui sozinhas** — sem o
 código do lado. É o que elas têm de diferente das duas anteriores, que eram
 schema puro:
 
@@ -34,16 +42,20 @@ schema puro:
   `scripts/espelhos_de_enum.py`, e o portão compara valor a valor. Código antes
   do schema o deixa vermelho; schema antes do código também. **Os dois no mesmo
   commit é a única ordem verde**;
-- na `0058` e na `0059`, com as colunas fora do banco e
-  `src/models/branch_model.py` ainda mapeando, **todo `SELECT` de filial
-  quebra**.
+- na `0059`, com as colunas fora do banco e `src/models/branch_model.py`
+  ainda mapeando, **todo `SELECT` de filial quebra**. Foi assim que a
+  `0058` foi aplicada, e é assim que esta tem que ser.
 
 Em qualquer uma delas, o `git mv` e as linhas do model vão no mesmo commit.
 
-O `Revises` das três é **marcador**: é o head do dia em que cada uma foi
-escrita. A `0058` aponta para `20260905_0056` e não para a `0057` justamente por
-isso — as duas frentes foram escritas em paralelo, e quem tirar a primeira do
-diretório acerta o valor no passo 2 acima.
+O `Revises` das duas é **marcador**: é o head do dia em que cada uma foi
+escrita. As três frentes foram escritas em paralelo, e por isso a `0057` e a
+`0059` apontam para revisões que podem não ser mais o head quando chegar a vez
+delas — quem tirar uma do diretório acerta o valor no passo 2 acima.
+
+Na `0058` o marcador coincidiu com a revisão de verdade (`20260905_0056`
+continuava sendo o head no dia da adoção) e a linha não precisou mudar. **É
+coincidência, e não a regra:** confira o head antes de assumir o mesmo.
 
 `tests/test_revisao_preparada_da_indexacao.py` e
 `tests/test_revisoes_preparadas_de_branches.py` cobram as três coisas da

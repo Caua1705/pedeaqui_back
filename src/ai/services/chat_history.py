@@ -31,8 +31,6 @@ virada, e ai a sessao seria limpa e regravada no mesmo pedido.
 - **Nao sobrevive a reinicio do Redis**, e nao deve: historico de uma hora nao
   e dado duravel, e persisti-lo aumentaria a superficie de LGPD sem nenhum
   ganho para o cliente.
-- **Nao vale para a voz.** O atendente de voz nao usa isto — o historico dele
-  e da sessao do Realtime, do lado da OpenAI.
 """
 
 import hashlib

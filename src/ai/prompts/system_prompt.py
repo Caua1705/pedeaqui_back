@@ -1,4 +1,4 @@
-"""O prompt do Rapi de TEXTO. O de voz e outro, e nao deve virar este.
+"""O prompt do Rapi.
 
 AS ENUMERACOES SAO O QUE FUNCIONA, E ELAS QUASE FORAM CORTADAS.
 
@@ -11,9 +11,7 @@ regras existiam na forma de julgamento —
     Termine com uma pergunta apenas quando ela ajudar o cliente a decidir.
 
 — e o modelo as desobedeceu em 7 de 9 e em 9 de 9 turnos. Nao era regra
-faltando: era regra sem mordida, e o modelo julgava a favor da cortesia. O
-`voice_prompt.py` ja tinha aprendido isso em 15/08/2026 e acertado pelo mesmo
-caminho, enumerando.
+faltando: era regra sem mordida, e o modelo julgava a favor da cortesia.
 
 O PRECO E O GANHO, MEDIDOS. O prompt foi de 557 para 1013 tokens de ENTRADA
 (+456), o que contra latencia e ~zero (a regressao contra a entrada da

@@ -159,26 +159,6 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str
     MODEL_NAME: str = "gpt-5-mini"
     EMBEDDING_MODEL: str = "text-embedding-3-small"
-    VOICE_MODEL: str = "gpt-realtime-mini"
-    VOICE_NAME: str = "marin"
-
-    # O SELETOR DE VOZ DA BANCADA, e ele nasce DESLIGADO de proposito.
-    #
-    # Ligado, `POST /voice/session` aceita um campo `voz` no corpo e a sessao
-    # e emitida com ela em vez de `VOICE_NAME`. Isso existe para uma coisa so:
-    # trocar de voz e ouvir na hora, sem restart — `VOICE_NAME` e lido no
-    # import e um `settings` e construido uma vez por processo.
-    #
-    # Por que ele nao pode ficar ligado depois da escolha: e um parametro da
-    # SESSAO escolhido pelo cliente, e a pagina e do cliente. Nao ha dano de
-    # custo (a voz nao muda a tarifa) nem de dado, mas e a porta aberta que
-    # nao precisa existir — e a VPS onde ele vai rodar e producao.
-    #
-    # A lista fechada esta em `realtime_client.VOZES_DO_REALTIME`, e ela vale
-    # mesmo com a chave ligada: sem ela, um nome qualquer viraria 502 da
-    # OpenAI depois de a rota ja ter gasto consulta de cota.
-    VOICE_ALLOW_VOICE_OVERRIDE: bool = False
-
     # O TETO DA RESPOSTA DO RAPI, E ELE E VALVULA DE SEGURANCA — NAO CONTROLE
     # DE COMPRIMENTO.
     #
@@ -287,61 +267,6 @@ class Settings(BaseSettings):
     # porque o servico da API nao tem healthcheck no compose — ver a
     # armadilha 40 da skill `rapidex-backend` antes de acrescentar um.
     AI_WARMUP_TIMEOUT_SECONDS: float = 8.0
-
-    # Atendimento por voz em tempo real (src/ai/voice/, rotas sob /voice).
-    #
-    # Desligado, as rotas nao existem — nem no /docs. Ligado, elas sobem com
-    # login de cliente, rate limit e cota; ver `src/api/voice.py`.
-    VOICE_ENABLED: bool = False
-
-    # Tetos de sessao de voz. O relogio da OpenAI comeca quando o navegador
-    # abre a conexao de audio e nao para sozinho: aba esquecida aberta fatura
-    # em silencio ate alguem fechar.
-    #
-    # Cinco minutos e mais do que qualquer duvida de cardapio precisa e o
-    # suficiente para o custo de uma sessao ser um numero conhecido em vez de
-    # uma incognita. Ver `docs/` e o cabecalho de sessao_service.py.
-    VOICE_MAX_SESSION_SECONDS: int = 300
-    # Silencio que encerra. Conta desde o ultimo `speech_started`.
-    VOICE_IDLE_SECONDS: int = 45
-    # Quanto antes do corte o atendente avisa por fala. Falar antes de cortar
-    # e o que separa "encerrou" de "caiu" para quem esta do outro lado.
-    VOICE_WARN_BEFORE_END_SECONDS: int = 10
-
-    # Cota de voz. A unidade e SESSAO, e nao minuto, e a escolha nao e de
-    # conveniencia: o backend conta emissao com CERTEZA e nao consegue medir
-    # minuto — a conversa acontece entre o navegador e a OpenAI, e o servidor
-    # nao a ve. Com o teto de 5 minutos por sessao, N sessoes valem no maximo
-    # N x 5 minutos, que e um numero que da para prometer. Cota em minutos
-    # seria palpite com cara de precisao.
-    #
-    # O CUSTO DE UMA SESSAO, de onde saem os numeros abaixo.
-    #
-    # Taxas da OpenAI para audio (`gpt-realtime-mini`), consultadas em
-    # 15/08/2026: entrada 1 token por 100 ms (600 tok/min) a US$ 10 / 1M;
-    # saida 1 token por 50 ms (1200 tok/min) a US$ 20 / 1M; entrada em cache
-    # a US$ 0,30 / 1M. Ou seja US$ 0,006 por minuto ouvido e US$ 0,024 por
-    # minuto falado.
-    #
-    # Uma sessao de 5 minutos com o atendente falando ~40% do tempo:
-    #     entrada nova   5 min x 600 tok   = US$ 0,030
-    #     saida          2 min x 1200 tok  = US$ 0,048
-    #     contexto reenviado a cada turno, quase todo em cache  ~ US$ 0,008
-    #     texto (instrucoes + resultado da busca), quase todo em cache < US$ 0,002
-    #                                              -----------------------
-    #                                              cerca de US$ 0,09
-    # Com o atendente falando 70% do tempo, US$ 0,12. Use US$ 0,10 a US$ 0,13
-    # como teto de uma sessao que vai ate o fim dos 5 minutos.
-    #
-    # Cinco sessoes por cliente = teto de ~US$ 0,55 por dia por pessoa.
-    VOICE_SESSIONS_PER_CUSTOMER_PER_DAY: int = 5
-    # A rede de seguranca: mesmo que a cota por cliente falhe ou que aparecam
-    # muitos clientes de uma vez, o gasto de uma loja tem teto. Cem sessoes de
-    # 5 minutos = ~US$ 11 por dia, no pior caso em que TODAS vao ate o fim.
-    VOICE_SESSIONS_PER_RESTAURANT_PER_DAY: int = 100
-    # Janela ROLANTE, e nao dia de calendario: um teto que zera a meia-noite
-    # convida a gastar o dobro entre 23h59 e 00h01.
-    VOICE_QUOTA_WINDOW_HOURS: int = 24
 
     # Varredura que mantem o indice do Rapi em dia (scripts/reindex_worker.py).
     #

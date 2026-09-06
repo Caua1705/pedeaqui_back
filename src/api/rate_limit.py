@@ -92,12 +92,6 @@ COURIER_RATE_LIMIT = "30/minute;600/hour"
 START_PAYMENT_RATE_LIMIT = "15/minute;60/hour"
 CHAT_RATE_LIMIT = "20/minute;200/hour"
 CHAT_FEEDBACK_RATE_LIMIT = "30/minute"
-# Emissao de credencial de voz. Bem mais apertado que o chat de
-# texto porque cada emissao pode virar minutos de audio faturado, e nao uma
-# resposta que acaba sozinha. E a segunda linha de defesa: a primeira e a cota
-# por cliente, que este limite so complementa contra quem troca de conta.
-VOICE_SESSION_RATE_LIMIT = "3/minute;20/hour"
-
 # Tela de escolha de filial. UMA requisicao pode virar ate uma rota paga do
 # Google POR FILIAL — e a unica rota publica cujo custo cresce com o cadastro
 # do restaurante, e nao com o que o cliente pediu. O filtro geometrico e o

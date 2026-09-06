@@ -113,7 +113,8 @@ def greeting_reply(restaurant_name: str) -> str:
     chat ja e a estrutura em memoria que nao sobrevive a mais de um worker
     (armadilha 20).
 
-    Serve ao chat e a VOZ: nada aqui depende de HTTP, de sessao ou do
-    `ChatService`. O agente de voz importa esta funcao e fala a mesma frase.
+    Nada aqui depende de HTTP, de sessao ou do `ChatService` — foi assim
+    que o assistente de voz falou a mesma frase enquanto existiu, sem uma
+    segunda lista de saudacoes para divergir desta.
     """
     return random.choice(GREETING_REPLIES).format(restaurant=restaurant_name)

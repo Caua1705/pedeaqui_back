@@ -10,11 +10,19 @@ O que existia respondia meia pergunta cada:
 
 | Onde | O que dava | O que faltava |
 |---|---|---|
-| `ai_voice_sessions` + `scripts/voice_usage_report.py` | tokens da **voz**, por restaurante | tokens, nunca dinheiro — quatro contadores com preços diferentes |
 | linha de log `[AI /chat usage]` | tokens do **texto**, por turno | morria no `docker logs`, que gira |
+| `ai_voice_sessions` + `scripts/voice_usage_report.py` | tokens da **voz**, por restaurante | tokens, nunca dinheiro — e saiu do projeto em 06/09/2026, com a voz |
 
 Agora há uma linha por chamada, com o custo já calculado, em
 `ai_usage_events` (revisão `20260902_0044`).
+
+> **A VOZ SAIU DO PROJETO EM 06/09/2026.** Este documento mantém o que ela
+> deixou porque o que ela deixou é dinheiro: as linhas `surface = 'voice'` de
+> agosto e do início de setembro continuam na tabela e continuam somando no
+> relatório. O que não existe mais é quem escreve novas — `registrar_voz`,
+> `custo_de_voz` e `PRECOS_DE_VOZ` saíram junto. As seções abaixo dizem
+> **HAVIA** onde a voz aparece, e essa é a única forma de o relatório de agosto
+> continuar legível daqui a um ano.
 
 ---
 
@@ -94,18 +102,22 @@ A comparação é `hmac.compare_digest` e não `!=` (armadilha 18).
 | Superfície | Uma linha por | Onde o gancho está |
 |---|---|---|
 | `text` | **turno** do `/chat` | `ChatService._invoke_llm` |
-| `voice` | **sessão** de voz | `VoiceSessionService.encerrar` |
+| `voice` | **sessão** de voz | *não há mais gancho* — só linhas históricas |
 
-**A voz é por sessão e não por turno** porque não existe turno visível daqui: o
-áudio vai do navegador direto para a OpenAI e o backend não vê os eventos da
-conversa. O número chega uma vez só, no `POST /voice/session/{id}/ended`.
+**A voz era por sessão e não por turno** porque não existia turno visível
+daqui: o áudio ia do navegador direto para a OpenAI e o backend não via os
+eventos da conversa. O número chegava uma vez só, no aviso de fim — que ia com
+`keepalive` e era reenviado quando a aba fechava, e por isso a linha carrega
+`voice_session_id` com **UNIQUE parcial**: a segunda chegada corrigia a
+primeira em vez de dobrar o custo da conversa.
 
-**E esse aviso chega duas vezes.** Ele vai com `keepalive` e o navegador o
-reenvia ao fechar a aba. Por isso a linha de voz carrega `voice_session_id` com
-**UNIQUE parcial**: a segunda chegada corrige a primeira em vez de dobrar o
-custo da conversa. O CHECK
-`(surface = 'voice') = (voice_session_id IS NOT NULL)` impede que nasça linha de
-voz sem essa chave — que seria uma duplicata esperando acontecer.
+**As duas coisas continuam no banco, e a segunda passou a valer para outra
+coisa.** O CHECK `(surface = 'voice') = (voice_session_id IS NOT NULL)` agora
+impede que uma linha de voz NASÇA: o ORM não mapeia mais `voice_session_id`,
+então toda linha que ele grava deixa a coluna nula, e um
+`surface = 'voice'` escrito por engano é recusado pelo banco em vez de virar
+custo histórico falso. Ver a revisão preparada `20260906_0060`, que derruba a
+coluna, a CHECK e a tabela — e o custo que ela cobra.
 
 ### Medir não pode derrubar o que está sendo medido
 
@@ -125,8 +137,8 @@ sessão que não foi encerrada:
 - **texto**: `registrar_texto` commita. No `/chat` esta é a única escrita do
   turno; deixar a transação para o `get_db` fechar sem commit descartaria a
   linha;
-- **voz**: `registrar_voz` **não** commita. Ela pega carona na transação de
-  `encerrar`, que já existe.
+- **voz**: `registrar_voz` **não** commitava — pegava carona na transação do
+  encerramento da sessão. Saiu em 06/09/2026.
 
 ---
 
@@ -141,10 +153,18 @@ A tabela está em `src/ai/custo.py`, conferida em **02/09/2026** contra
 | `gpt-5-mini` | 0,25 | 0,025 | 2,00 |
 | `gpt-5-nano` | 0,05 | 0,005 | 0,40 |
 
+A tabela de voz (seis faixas: texto e áudio, cheios e em cache, nas duas
+direções) saiu de `src/ai/custo.py` em 06/09/2026. Ela ficou registrada aqui
+porque é o que explica os números de agosto:
+
 | Modelo de voz | Texto in | Texto in cache | Áudio in | Áudio in cache | Texto out | Áudio out |
 |---|---|---|---|---|---|---|
 | `gpt-realtime` | 4,00 | 0,40 | 32,00 | 0,40 | 16,00 | 64,00 |
 | `gpt-realtime-mini` | 0,60 | 0,06 | 10,00 | 0,30 | 2,40 | 20,00 |
+
+**Reprocessar as linhas de voz deixou de ser possível**, e é a única coisa que
+se perdeu com a saída da tabela do código. Vale para uma situação só, que nunca
+aconteceu: a OpenAI corrigir para trás um preço de áudio de 2026.
 
 **Modelo fora da tabela custa `NULL`, nunca zero.** Zero é um número que soma, e
 um restaurante inteiro apareceria de graça no relatório que existe para dizer
@@ -154,18 +174,18 @@ atualizada, dá para reprocessar.
 É o critério da armadilha 49 — **número desatualizado degrada a mensagem, não a
 correção**.
 
-**`cached` é SUBCONJUNTO da entrada**, nos dois lados. `input_tokens` já inclui
-o que veio do cache; somar os dois conta o cache duas vezes. As duas funções
-subtraem antes de multiplicar.
+**`cached` é SUBCONJUNTO da entrada.** `input_tokens` já inclui o que veio do
+cache; somar os dois conta o cache duas vezes. `custo_de_texto` subtrai antes
+de multiplicar.
 
-### A aproximação que existe, e é uma só
+### A aproximação que HAVIA nos números da voz
 
-A Realtime manda **um** `cached_tokens`, sem dizer se o que veio do cache era
-áudio ou texto. `custo_de_voz` desconta do **áudio primeiro** e o que sobrar do
-texto — numa conversa falada o áudio é a quase totalidade da entrada, e o
-áudio em cache é o mais barato dos dois. Ou seja, o número é um **piso** do
-custo, nunca um teto. Resolver isso de verdade pede o navegador reportar o
-cache separado por faixa, que é mudança de contrato com o front.
+A Realtime mandava **um** `cached_tokens`, sem dizer se o que veio do cache era
+áudio ou texto. `custo_de_voz` descontava do **áudio primeiro** e o que sobrasse
+do texto — numa conversa falada o áudio é a quase totalidade da entrada, e o
+áudio em cache é o mais barato dos dois. Ou seja: **o `cost_usd` das linhas de
+voz gravadas é um piso, nunca um teto.** Continua valendo para quem ler o
+relatório de agosto.
 
 ---
 
@@ -181,9 +201,9 @@ com `tiktoken` no caminho quente da busca, para medir um arredondamento.
 Se um dia o modelo de embedding mudar de faixa de preço, a conta muda e este
 parágrafo também.
 
-**Transcrição da voz.** O backend não a liga (armadilha 43) — quem liga é a
-bancada, por `session.update`, e ela é cobrada à parte por minuto. Medição de
-custo limpa se faz com ela desligada.
+**Transcrição da voz.** Nunca entrou, e agora não há o que entrar: o backend
+não a ligava, quem a ligava era a bancada, e a bancada perdeu a metade falada
+em 06/09/2026.
 
 ---
 
@@ -194,8 +214,10 @@ decidir o resto, e cada um deles é uma decisão de produto diferente — a que
 número alertar, quem recebe, e o que acontece quando o teto é batido (o
 assistente cala? responde sem busca? o lojista paga o excedente?).
 
-O que já existe e não foi tocado: a **cota** de voz por cliente e por
-restaurante (`VOICE_QUOTA_*`), que é controle de emissão e não de custo.
+A cota de voz por cliente e por restaurante — o único controle de gasto que
+existiu neste projeto — saiu com a voz. Não sobrou nenhum: **o `/chat` não tem
+teto de gasto**, e o que limita é o `CHAT_RATE_LIMIT` por IP, que é outra
+pergunta.
 
 ---
 
@@ -308,23 +330,23 @@ some do radar se ninguém a anotar.
 **5. `src/ai/services/product_indexing.py`** — `index_product` ganha
 `usage_service: AIUsageService | None = None`. Grava **só quando gerou
 embedding**: o desfecho `touched` não paga nada, e uma linha de custo zero ali
-inventaria uma chamada que não houve (o mesmo critério de `registrar_voz` com
-sessão sem número).
+inventaria uma chamada que não houve (o mesmo critério que `registrar_voz`
+usava para a sessão que encerrava sem reportar número nenhum).
 
 Parâmetro opcional e não obrigatório porque os dois testes que já chamam
 `index_product` com dublê de `EmbeddingService` continuam valendo sem mudança.
 
-**6. `AIUsageService.registrar_indexacao`** — **não commita**, como
-`registrar_voz`: os dois varredores já são "um produto, uma transação" e o
-commit deles é logo abaixo da chamada. Engole falha e loga
-`custo_nao_gravado=true`, como as outras duas.
+**6. `AIUsageService.registrar_indexacao`** — **não commita**, pelo mesmo
+motivo que `registrar_voz` não commitava: os dois varredores já são "um
+produto, uma transação" e o commit deles é logo abaixo da chamada. Engole falha
+e loga `custo_nao_gravado=true`, como `registrar_texto`.
 
 **7. Os dois varredores** — `scripts/reindex_ai.py` e
 `scripts/reindex_worker.py` passam o service.
 
 **8. A leitura** — `AIUsageRepository.custo_por_restaurante` ganha
-`indexing_calls` e `indexing_cost_usd` ao lado dos de texto e voz, e
-`AIUsageByRestaurant` os publica.
+`indexing_calls` e `indexing_cost_usd` ao lado dos de texto e dos de voz (que
+continuam publicados, e históricos), e `AIUsageByRestaurant` os publica.
 
 ### 7.5 Como conferir depois de aplicar
 

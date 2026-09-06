@@ -56,10 +56,16 @@ class Product(Base):
     description: Mapped[str | None] = mapped_column(Text)
     # Para quantas pessoas o produto serve (revisao 20260825_0039).
     #
-    # NULO quer dizer "o lojista nao disse", e nunca "serve para ninguem" — a
-    # diferenca e o que faz o assistente de voz responder ou dizer que nao
-    # sabe. Nao ha default 1 de proposito: seria o banco inventando um fato
-    # sobre todo produto ja cadastrado.
+    # NASCEU PARA O ASSISTENTE DE VOZ E SOBREVIVEU A ELE (06/09/2026). O
+    # backend nao le mais este campo em lugar nenhum: ele e preenchido pelo
+    # lojista no painel e PUBLICADO em `ProductResponse`, no cardapio, para
+    # quem quiser mostra-lo na tela. Nao foi derrubado junto com a voz porque
+    # e dado do lojista — coluna apagada nao volta, e o que ele digitou sobre
+    # 161 produtos nao se redigita.
+    #
+    # NULO quer dizer "o lojista nao disse", e nunca "serve para ninguem".
+    # Nao ha default 1 de proposito: seria o banco inventando um fato sobre
+    # todo produto ja cadastrado.
     serves_people: Mapped[int | None] = mapped_column(Integer)
     price: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
     image_path: Mapped[str | None] = mapped_column(Text)

@@ -260,19 +260,21 @@ class ChatCache:
         "sobremesa" sem teto, e o cliente veria produtos acima do que pediu.
 
         `top_k` ENTROU EM 25/08/2026, e ate esse dia a ausencia dele era
-        inofensiva por acidente: ninguem passava `top_k`, entao toda consulta
-        pedia cinco e todas as chaves descreviam o mesmo conjunto.
+        inofensiva por acidente: havia um chamador so, toda consulta pedia
+        cinco, e todas as chaves descreviam o mesmo conjunto.
 
-        A voz quebrou isso ao pedir uma busca larga para poder ordenar por
-        preco. Sem `top_k` na chave, as duas consultas — a de cinco do `/chat`
-        e a de quarenta da voz — dividem a mesma entrada, e quem chegar
-        primeiro serve o outro pelos 20 minutos seguintes: ou a voz ordena
-        cinco achando que sao quarenta, ou o `/chat` recebe quarenta produtos
-        para escolher tres. Nenhum dos dois levanta erro.
+        Quem quebrou isso foi o assistente de voz, ao pedir uma busca larga
+        para ordenar por preco: sem `top_k` na chave, a consulta de cinco e a
+        de quarenta dividiam a mesma entrada, e quem chegasse primeiro servia
+        a outra pelos 20 minutos seguintes — ou uma ordenava cinco achando que
+        eram quarenta, ou a outra recebia quarenta produtos para escolher
+        tres. Nenhum dos dois levanta erro.
 
-        `None` continua escrevendo a chave curta de antes, entao o `/chat` —
-        que nao passa `top_k` — nao muda de comportamento; a diferenca e que
-        agora isso e escolha, e nao sorte.
+        **A voz saiu do projeto em 06/09/2026 e o parametro FICOU**, com um
+        chamador so de novo. Ele nao e sobra: o defeito acima nao era da voz,
+        era da chave, e ele volta no minuto em que um segundo chamador pedir
+        outro `top_k`. `None` continua escrevendo a chave curta, entao o
+        `/chat` nao muda de comportamento.
         """
         generation = menu_generation.current(restaurant_id)
         teto = "" if max_price is None else f":p{max_price}"

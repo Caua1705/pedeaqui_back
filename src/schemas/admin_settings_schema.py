@@ -117,8 +117,8 @@ class AdminRestaurantProfileUpdate(BaseModel):
     `description` e VITRINE: sai em `RestaurantPublicResponse`, e o cliente
     decide pedir por ela. Anuncio ali e o uso certo.
 
-    `assistant_notes` e PROMPT: entra no contexto do assistente de IA (chat e
-    voz) e nao sai em resposta publica nenhuma. O que serve ali e o oposto do
+    `assistant_notes` e PROMPT: entra no contexto do assistente de IA e nao
+    sai em resposta publica nenhuma. O que serve ali e o oposto do
     anuncio — o que a casa faz, o que ela nao faz, o que o atendente precisa
     saber para nao inventar. Foi para poder dizer isso na tela sem mentir que
     os dois campos se separaram (revisao 20260823_0034).

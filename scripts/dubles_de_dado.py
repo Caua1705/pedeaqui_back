@@ -6,12 +6,12 @@ nao tem o contrato que o teste diz estar verificando.** Ele responde qualquer
 atributo que o teste escrever e nenhum que o teste esquecer, e o resultado e
 um teste verde descrevendo um objeto que a aplicacao nunca produz.
 
-O caso que fechou a porta: `serves_people` entrou em `products`, no
-`AdminProductResponse` e na voz, e NAO no `ProductResponse` — que e o que a
-hidratacao entrega a ferramenta de voz. Os testes rapidos montavam o produto
-com `SimpleNamespace(..., serves_people=None)`; o atributo existia porque o
-teste o escreveu. Suite verde, e `buscar_no_cardapio` levantando
-`AttributeError` em toda busca falada em producao.
+O caso que fechou a porta (agosto de 2026): `serves_people` entrou em
+`products`, no `AdminProductResponse` e no consumidor que lia o campo, e NAO no
+`ProductResponse` — que e o que a hidratacao entrega. Os testes rapidos
+montavam o produto com `SimpleNamespace(..., serves_people=None)`; o atributo
+existia porque o teste o escreveu. Suite verde, e `AttributeError` em toda
+busca em producao.
 
 ## Como ele decide
 

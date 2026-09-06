@@ -96,21 +96,14 @@ def criar_filial(db: Session, restaurante: Restaurant, nome: str = "Matriz") -> 
     return filial
 
 
-def criar_configuracoes(
-    db: Session,
-    restaurante: Restaurant,
-    voice_enabled: bool = False,
-) -> RestaurantSetting:
+def criar_configuracoes(db: Session, restaurante: Restaurant) -> RestaurantSetting:
     """A linha de `restaurant_settings` do restaurante.
 
-    `voice_enabled` tem default False igual ao da coluna: quem quiser voz num
-    teste pede voz, e o teste que não pedir descreve o estado em que todo
-    restaurante nasce.
+    Sem parametro nenhum desde 06/09/2026: o unico que existia era
+    `voice_enabled`, e ele saiu com o assistente de voz. Todo o resto da linha
+    nasce do default da coluna, que e o estado em que todo restaurante nasce.
     """
-    configuracoes = RestaurantSetting(
-        restaurant_id=restaurante.id,
-        voice_enabled=voice_enabled,
-    )
+    configuracoes = RestaurantSetting(restaurant_id=restaurante.id)
     db.add(configuracoes)
     db.flush()
     return configuracoes

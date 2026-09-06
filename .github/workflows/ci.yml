@@ -263,16 +263,16 @@ jobs:
       # AVISO, NAO FALHA — e `continue-on-error` e o que garante isso: o job
       # fica verde mesmo que este passo estoure, por qualquer motivo.
       #
-      # As 41 divergencias entre o `nullable=` do model e o DDL do banco sao
+      # As divergencias entre o `nullable=` do model e o DDL do banco sao
       # herdadas: o schema nasceu a mao no Supabase e o `Base.metadata` foi
       # escrito depois, olhando para tabelas que ja existiam. Nenhuma delas foi
       # introduzida por um commit, e um portao VERMELHO contra divida herdada e
       # um portao que se aprende a ignorar — ate o dia em que ele acusar uma
       # divergencia nova e alguem o desligar para conseguir entregar.
       #
-      # O que faltava era so isto: o numero nao crescer calado. Passando de 20,
-      # o `::warning::` aparece no Summary do Actions e na PR, com o nome da
-      # coluna nova na saida logo acima.
+      # O que faltava era so isto: o numero nao crescer calado. Passando do
+      # limite, o `::warning::` aparece no Summary do Actions e na PR, com o
+      # nome da coluna nova na saida logo acima.
       #
       # O SCHEMA AQUI E O QUE O PASSO ANTERIOR DEIXOU. A fixture
       # `engine_de_teste` apaga e remonta o schema no SETUP e nao o derruba no
@@ -293,10 +293,20 @@ jobs:
       # entao. As 20 que sobraram sao uma classe so: o banco diz NOT NULL e o
       # ORM diz nullable, e so DUAS delas (`ai_product_embeddings.content` e
       # `coupon_templates.image_path`) nao tem DEFAULT.
+      #
+      # 20 -> 22 em 06/09/2026, e este e o movimento CONTRARIO: o assistente de
+      # voz saiu do CODIGO e o banco continua com
+      # `ai_usage_events.voice_session_id` e `restaurant_settings.voice_enabled`,
+      # agora sem mapeamento no ORM. Sao as duas unicas da terceira classe, e
+      # sao deliberadas e temporarias — a revisao preparada `20260906_0060` as
+      # derruba, e no dia em que ela for aplicada este numero volta a 20.
+      # `tests/test_colunas_mapeadas_e_historico_db.py` cobra as duas PELO NOME
+      # e falha quando elas sumirem, entao nao ha como esse retorno passar
+      # despercebido.
       - name: Divergencias entre o ORM e o schema (aviso)
         if: always()
         continue-on-error: true
-        run: python scripts/divergencias_orm_schema.py --url "$TEST_DATABASE_URL" --limite 20
+        run: python scripts/divergencias_orm_schema.py --url "$TEST_DATABASE_URL" --limite 22
         env:
           TEST_DATABASE_URL: postgresql+psycopg://pedeaqui:pedeaqui@localhost:55432/pedeaqui_teste
 

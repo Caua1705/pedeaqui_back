@@ -38,6 +38,11 @@ class AIUsageByRestaurant(BaseModel):
 
     calls: int
     text_calls: int
+    # HISTORICOS. O assistente de voz saiu do projeto em 06/09/2026 e nenhuma
+    # linha nova nasce com `surface = 'voice'` — mas as gravadas ate la sao
+    # dinheiro que a plataforma pagou, e continuam sendo somadas. Os dois
+    # campos ficam para `calls` continuar fechando com `text_calls` em
+    # qualquer janela; numa que so alcance depois da saida, vem zero.
     voice_calls: int
 
     cost_usd: Decimal

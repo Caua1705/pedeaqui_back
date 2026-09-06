@@ -1457,10 +1457,11 @@ Os três últimos são o mesmo defeito em camadas diferentes: consertar só a bu
 deixa o cache servindo o resultado errado por 20 minutos, e o sintoma vira
 "intermitente".
 
-**`/chat` e `/voice/*` exigem `branch_id`, sem queda para a filial padrão.** Um
-default daria a mesma resposta errada escondida atrás de um caminho que parece
-configurado. Na voz é pior: o modelo **fala** nome e preço em áudio, e não há
-tela onde o cliente notasse.
+**`/chat` exige `branch_id`, sem queda para a filial padrão.** Um default daria
+a mesma resposta errada escondida atrás de um caminho que parece configurado.
+As rotas `/voice/*` exigiam pelo mesmo motivo, com um agravante que vale
+lembrar mesmo depois de elas saírem (06/09/2026): o modelo **falava** nome e
+preço em áudio, e não havia tela onde o cliente notasse.
 
 **`catalog_key` não tem semântica de herança.** Nada no cardápio, no pedido ou
 no Rapi a lê para decidir preço ou disponibilidade — ela existe só para
@@ -1777,91 +1778,61 @@ demais testa o dublê.
 
 ---
 
-## 43. A transcrição da fala do cliente NÃO é o que o modelo de voz ouviu
+## 43. ~~A transcrição da fala do cliente NÃO é o que o modelo de voz ouviu~~
 
-Contraintuitivo, e engana rápido: no `/voice` o log mostra "eu falei: *quero o
-bairro mesmo*" quando a pessoa disse "quero o **baião** mesmo", e a conclusão
-óbvia — "o áudio virou texto errado antes de o modelo ver" — **está errada**.
+**REMOVIDA EM 06/09/2026, com o assistente de voz.** Ela dizia que o
+`gpt-realtime-mini` é *speech-to-speech* — consome o áudio direto — e que a
+transcrição da entrada é um serviço separado, cobrado à parte, que roda em
+paralelo e **não** está no caminho da resposta: melhorá-la melhorava a tela e
+não mudava uma palavra do que o atendente falava.
 
-O `gpt-realtime-mini` é *speech-to-speech*: **ele consome o áudio direto**, em
-tokens de áudio. A transcrição da entrada é um serviço SEPARADO, que roda em
-paralelo e não está no caminho da resposta. A documentação do próprio SDK diz
-isso, em `openai/types/realtime/realtime_audio_config_input.py` (conferido no
-`openai==3.3.1`, o do lock):
+Não sobrou nada dela para o `/chat`, que nunca teve áudio. O número fica
+ocupado de propósito: a revisão aplicada `20260825_0042` o cita, e renumerar as
+seguintes quebraria as referências de quatro arquivos que ainda estão certos.
 
-> *Input audio transcription is not native to the model, since the model
-> consumes audio directly. Transcription runs asynchronously through the
-> /audio/transcriptions endpoint and should be treated as guidance of input
-> audio content rather than precisely what the model heard.*
-
-**O que isso muda na prática:**
-
-- **Melhorar a transcrição melhora a TELA, e nada mais.** Vocabulário do
-  cardápio no `prompt`/`keywords`, `language: "pt"`, trocar `whisper-1` por
-  `gpt-transcribe` — tudo isso deixa o log mais fiel e **não muda uma palavra
-  da resposta falada**. É gasto que não compra qualidade de atendimento.
-- **O sinal real do que o modelo entendeu é o argumento da ferramenta.** A
-  linha `[tool] buscar_no_cardapio {"consulta":"..."}` é o modelo dizendo, com
-  as palavras dele, o que ele acha que foi pedido. É ela que separa "ele
-  ouviu errado" de "ele ouviu certo e a busca trouxe lixo" — e são consertos
-  diferentes. Olhe essa linha ANTES de mexer em transcrição.
-- **O lever que muda o que ele entende é o prefixo de texto** (as
-  `instructions` da sessão): nome que ele nunca viu escrito ele tem mais
-  dificuldade de reconhecer falado. Mas isso é reenviado em TODA resposta —
-  o cardápio do Júnior tem 136 produtos, ~2.000 tokens por resposta. Se um dia
-  entrar, é uma lista curta dos mais pedidos, e com medição antes.
-- **A transcrição é cobrada à parte, por minuto.** O backend não a liga (não
-  precisa dela); quem liga é a bancada, por `session.update`, só para mostrar
-  "o que eu falei". Medição de custo limpa se faz com ela desligada.
-
-O mesmo vale ao contrário: `response.output_audio_transcript.done` é a
-transcrição do que o assistente falou, e serve para conferir de olho — não é
-o que o cliente ouviu.
+A parte que sobreviveu, porque não era sobre áudio, está em [[44]] e [[45]]: **o
+argumento da chamada de ferramenta é o que separa "o modelo inventou" de "o dado
+veio errado"**.
 
 ---
 
 ## 44. Exemplo em prompt: ancorado na FONTE ensina, solto na SAÍDA vira molde
 
-Em 24/08/2026 o prompt de voz ganhou, como ilustração da forma curta de falar
-preço, a frase:
+**Todo exemplo de valor num prompt aponta para DE ONDE o valor vem, e não para
+como a resposta soa.** Vale para preço, quantidade, prazo, distância, número de
+pedido — qualquer campo que o modelo deveria copiar e pode inventar.
+
+O `system_prompt.py` do `/chat` faz a forma certa, e faz há muito tempo:
+
+> *"o preço vem em `retrieved_products`, no campo `price`, já escrito como deve
+> aparecer. Exemplo: `R$ 23,90`"*
+
+Ele ensina o modelo a **reconhecer o campo de origem**. O exemplo descreve um
+dado que existe fora do prompt, e o modelo precisa ir buscar o dado.
+
+**O contraexemplo é medido, e custou uma sessão.** Em 24/08/2026 o prompt do
+assistente de voz ganhou, como ilustração da forma curta de falar preço, a
+frase pronta `"trinta e cinco e trinta"` — a SAÍDA, solta, sem fonte. Na sessão
+seguinte o modelo disse **"trinta e quatro e noventa"** e **"vinte e quatro e
+noventa"**: mesma forma, mesmo ritmo, e **sem ter chamado a ferramenta em
+nenhum dos dois turnos**. Números que não vieram de lugar nenhum. Na sessão
+anterior, sem essa linha, os dois preços falados eram reais.
+
+A diferença é essa e só essa: exemplo ancorado na FONTE é referência; exemplo
+solto da SAÍDA é **molde**, e preencher um molde é mais barato para o modelo do
+que chamar uma ferramenta.
+
+Quando a forma da resposta precisa mesmo de exemplo, escreva o par
+**fonte → saída**, nunca a saída sozinha:
 
 ```
-- Copie o valor EXATO ..., na forma curta do balcao: "trinta e cinco e trinta"
+"R$ 43,50" vira "quarenta e três e cinquenta"
 ```
 
-Na sessão seguinte o assistente disse **"trinta e quatro e noventa"** e **"vinte
-e quatro e noventa"** — mesma forma, mesmo ritmo, e **sem ter chamado a
-ferramenta em nenhum dos dois turnos**. Números que não vieram de lugar nenhum.
-Na sessão anterior, sem essa linha, os dois preços falados eram reais.
-
-**A diferença que explica os dois casos** — porque o `system_prompt.py` do texto
-tem `Exemplo: "R$ 23,90"` há muito tempo e não produz isso:
-
-| | onde o exemplo vive | o que o modelo aprende |
-|---|---|---|
-| texto | *"o preço vem em `retrieved_products`, no campo `price`, já escrito como deve aparecer. Exemplo: `R$ 23,90`"* | como **reconhecer** o campo de origem |
-| voz (errado) | *"na forma curta do balcão: `trinta e cinco e trinta`"* | como **produzir** a frase — inclusive sem fonte |
-
-Exemplo ancorado na FONTE é referência: ele descreve um dado que existe fora do
-prompt, e o modelo precisa ir buscar o dado. Exemplo solto da SAÍDA é molde: é
-uma frase pronta, no formato final, e preencher um molde é mais barato para o
-modelo do que chamar uma ferramenta.
-
-**A regra:** todo exemplo de valor num prompt aponta para de onde o valor vem, e
-não para como a resposta soa. Quando a forma de falar precisa mesmo de exemplo,
-escreva o par **fonte → saída**, nunca a saída sozinha:
-
-```
-"R$ 43,50" vira "quarenta e tres e cinquenta"
-```
-
-Vale para os dois agentes, e vale além de preço: quantidade, prazo, distância,
-número de pedido — qualquer campo que o modelo deveria copiar e pode inventar.
-
-**Correlato, e foi o que denunciou este caso:** o argumento da tool call no log
-(`consulta=` em `[Voz] busca`) é o que separa "o modelo inventou" de "o dado
-veio errado". Sem ele, os dois parecem iguais de fora. Ver [[43]] para o outro
-lado dessa mesma linha.
+**Correlato, e foi o que denunciou aquele caso:** o argumento da chamada de
+ferramenta no log é o que separa "o modelo inventou" de "o dado veio errado".
+Sem ele, os dois parecem iguais de fora. Ver [[45]] para as três linhas que não
+se substituem.
 
 ---
 
@@ -1869,122 +1840,90 @@ lado dessa mesma linha.
 
 Duas linhas diferentes, e confundi-las manda consertar o lugar errado.
 
-Em 25/08/2026 o atendente de voz falou três produtos numa frase, com o teto do
-prompt em dois. O log da sessão trazia:
-
-```
-[Voz] busca | ... | encontrados=5 | hidratados=5
-```
-
-Lido de fora, isso parece dizer "o modelo recebeu cinco e escolheu falar três".
-**Não diz.** `encontrados` e `hidratados` são o que a busca achou e o que o
-banco devolveu — o que chega ao modelo é o `resumo`, que é montado depois, tem
-teto próprio, e não aparece nessa linha.
-
-Naquele caso a busca daquele turno havia devolvido **dois** produtos, e o
-terceiro nome veio da conversa, de um turno anterior. O diagnóstico correto era
-"o teto é da frase e o modelo somou produto de outro turno", e não "o corte
-falhou". A proposta que quase foi implementada — cortar o `resumo` no código —
+O caso concreto era da voz e saiu com ela em 06/09/2026 — o atendente falou
+três produtos numa frase com o teto em dois, e o log trazia
+`encontrados=5 | hidratados=5`. Lido de fora, isso parece dizer "o modelo
+recebeu cinco e escolheu falar três". **Não dizia:** aqueles dois números eram o
+que a busca achou e o que o banco devolveu, e o que chegava ao modelo era
+montado depois, com teto próprio. O terceiro nome tinha vindo de um turno
+anterior. A proposta que quase foi implementada — mexer no código de corte —
 atacava um alvo que já estava certo.
 
-**A regra:** ao ler log de agente, separe sempre três coisas que parecem uma só:
+**A regra vale igual no `/chat`, e é por isso que este item ficou.** Ao ler log
+de agente, separe sempre três coisas que parecem uma só:
 
 | o que a linha diz | onde ela é escrita | o que NÃO prova |
 |---|---|---|
-| o que a busca **achou** | `[Voz] busca`, `[AI /chat perf] context_products` | o que foi enviado |
-| o que o modelo **recebeu** | o `resumo` / o prompt montado | o que ele usou |
-| o que o modelo **falou** | `output_audio_transcript`, a resposta do `/chat` | de onde cada nome veio |
+| o que a busca **achou** | `[AI /chat perf] context_products` | o que foi enviado |
+| o que o modelo **recebeu** | o prompt montado, com `{retrieved_products}` interpolado | o que ele usou |
+| o que o modelo **falou** | a resposta do `/chat` | de onde cada nome veio |
 
-Um produto citado na fala pode ter vindo do **histórico da conversa**, e não da
-busca daquele turno. Em voz isso é regra, não exceção: a sessão inteira está no
-contexto, e o modelo não distingue "o que a ferramenta me deu agora" de "o que
-eu disse há três turnos" sem uma regra explícita mandando distinguir.
+Um produto citado na resposta pode ter vindo do **histórico da conversa**
+(`ChatHistory`, últimas 20 mensagens), e não da busca daquele turno.
 
 **Antes de mexer no código de corte, confira o corte com os olhos** — imprima o
-`resumo` daquele turno, não a contagem da busca. E quando a diferença importar
-para uma decisão, meça o terceiro nível: o contador de produtos citados na fala
-(`[teto]` na bancada) existe exatamente porque nenhuma das duas primeiras linhas
-responde "quantos ele falou?".
-
-Ver [[43]] para o outro lado da mesma confusão — a transcrição da fala do
-cliente não é o que o modelo ouviu — e [[44]] para o caso em que só o argumento
-da tool call separou "inventou" de "veio errado".
+que foi interpolado naquele turno, não a contagem da busca.
 
 ---
 
-## 46. A negativa do assistente precisa de dono — e o dono não pode ser o modelo
+## 46. Regra que depende de alguém lembrar de aplicá-la é uma recomendação
 
-25/08/2026, numa churrascaria: *"vocês têm picanha?"*. O modelo não entendeu a
-palavra, chamou `listar_categorias` em vez de `buscar_no_cardapio`, e
-respondeu **"não tem no cardápio, mas tem Executivos e Bebidas"**. Dois turnos
-depois negou bebida — tendo ele mesmo acabado de listar "Bebidas" como
-categoria da loja.
+**O caso que deu nome a este item.** 25/08/2026, numa churrascaria: *"vocês têm
+picanha?"*. O assistente não entendeu a palavra, chamou `listar_categorias` em
+vez de buscar, e respondeu **"não tem no cardápio, mas tem Executivos e
+Bebidas"**. Dois turnos depois negou bebida — tendo ele mesmo acabado de listar
+"Bebidas" como categoria da loja.
 
-**É a NÃO INVENTE ao contrário, e é pior que inventar.** Quem inventa um
-produto é desmentido no cardápio, na tela, no primeiro toque. Quem ouve que a
+**É a NÃO INVENTE ao contrário, e é pior que inventar.** Quem inventa um produto
+é desmentido no cardápio, na tela, no primeiro toque. Quem ouve que a
 churrascaria não tem picanha desliga, e ninguém reclama de um produto que lhe
-disseram não existir — não há tela onde conferir, não há log de cliente
-perdido, e o lojista descobre pela receita.
+disseram não existir — não há tela onde conferir, não há log de cliente perdido,
+e o lojista descobre pela receita.
 
 **A regra já existia e não bastou**, e é isso que este item registra. O prompt
 dizia, com todas as letras: *"NUNCA diga que algo não existe, não tem, acabou,
 sem ter buscado antes"*. O modelo obedeceu à forma e não ao conteúdo — ele
 chamou **uma** ferramenta, e chamar uma ferramenta passou por "eu busquei".
 
-**Enquanto a negativa for texto que o modelo escreve, ele consegue
-escrevê-la a qualquer momento.** Nenhuma regra fecha isso, porque a regra e a
-frase moram no mesmo lugar: o prompt. O conserto foi tirar a frase de lá —
-`_NEGATIVA`, em `src/ai/voice/search_service.py`, e a busca vazia passou a
-devolver a negativa pronta (com as categorias que a loja tem dentro dela).
-Agora "não temos" tem uma origem só, e ela é uma busca que voltou vazia
-**naquele turno**. Sem busca, a frase não existe, e o que sobra é *"não
-entendi, pode repetir?"*.
+**Enquanto a negativa for texto que o modelo escreve, ele consegue escrevê-la a
+qualquer momento.** Nenhuma regra fecha isso, porque a regra e a frase moram no
+mesmo lugar: o prompt. O conserto foi tirar a frase de lá — a busca vazia passou
+a devolver a negativa pronta, com as categorias que a loja tem dentro dela —, e
+"não temos" ganhou uma origem única e verificável: uma busca que voltou vazia
+**naquele turno**.
 
-É o quarto movimento da mesma família de `frase_para_o_modelo`, e a família
-inteira diz a mesma coisa: **preço parou de errar quando chegou por extenso,
-superlativo parou de errar quando o banco ordenou, o teto parou de errar
-quando a frase veio com dois — e a negativa parou de errar quando deixou de
-ser escrita pelo modelo.** Em nenhum dos quatro o conserto foi mais uma
-regra.
+**Esse conserto era da VOZ, e saiu com ela em 06/09/2026.** O `/chat` nunca o
+teve: lá a negativa continua sendo frase que o modelo escreve, guiada por regra
+de prompt. Saber disso é o ponto — hoje, no texto, **"não temos" é uma
+recomendação bem escrita e não uma garantia**, e o modo de falha acima continua
+possível. `docs/busca-vetorial-e-indice-ann.md` registra o que essa saída custou
+ao argumento contra o índice ANN.
 
-**O que fica para o próximo agente, e vale além da voz:** quando uma regra de
-prompt já existe, está escrita corretamente e mesmo assim é violada, o
-problema não é a redação. Procure a frase que o modelo precisa produzir para
-violá-la, e veja se ela pode nascer em código. Se puder, a regra vira
-verificável; se não puder, aceite que ela é uma recomendação e desenhe o resto
-do sistema sabendo disso.
+### A regra geral, e é ela que o resto do repositório cita
 
-E uma contradição de duas linhas foi fechada de passagem, porque foi ela que
-deu ao modelo a saída: *"nome que você não conhece: busque esse nome mesmo
-assim"* convivia com *"se não entendeu bem o nome, pergunte antes de buscar"*.
-São dois casos diferentes e agora estão escritos como tais — **não pegou a
-palavra**, pergunte; **pegou mas não conhece**, busque. Duas regras que se
-contradizem no mesmo prompt não são duas regras: são uma licença.
+**Quando uma regra já existe, está escrita corretamente e mesmo assim é
+violada, o problema não é a redação.** Procure a frase — ou o `if` — que alguém
+precisa produzir para violá-la, e veja se ela pode nascer em código. Se puder, a
+regra vira verificável; se não puder, aceite que ela é uma recomendação e
+desenhe o resto do sistema sabendo disso.
 
-**O conserto criou uma dependência nova, e ela não está no prompt nem no
-`search_service.py`: a negativa agora vale porque a BUSCA É EXATA.** "Não
-temos" tem uma origem só — uma busca que voltou vazia naquele turno —, e essa
-frase só é verdadeira enquanto vazio significar "não existe". Numa varredura
-sequencial significa, porque ela olha o cardápio inteiro.
+**E ela vale muito além de prompt** — é por isso que este número é citado de
+lugares que não têm nada a ver com IA:
 
-Quem for mexer na busca vetorial precisa saber disso antes de mexer, porque a
-mudança que quebra isso não parece ter relação nenhuma com a voz: **um índice
-ANN** (`ivfflat`, `hnsw`) é aproximado por definição — visita parte do grafo,
-não a tabela toda — e faz a busca devolver vazio para produto que existe. Numa
-medição de 400 consultas, uma devolveu zero onde a busca exata devolveu cinco.
+- `CouponService.evaluate` perdeu o parâmetro `require_public`: "de qual
+  superfície eu vim" era decisão do CHAMADOR, e uma rota nova que esquecesse de
+  passar `True` publicava cupom privado sem erro nenhum. Hoje quem responde é a
+  coluna, dentro da função, sempre (armadilha 47);
+- `WhatsAppSendService` e `google_identity_client` guardam a regra dentro do
+  serviço, em vez de num `if` que a próxima rota pode esquecer;
+- `scripts/reenvia_avisos_de_whatsapp.py` não repete a decisão de quem chama.
 
-Do lado de fora isso chega ao cliente **como esta armadilha, de novo**: a
-churrascaria dizendo que não tem picanha, sem erro, sem log, sem tela onde
-conferir. E dessa vez o prompt estaria certo e o código estaria certo — o que
-teria mudado é o significado de "vazio".
-
-A decisão de não criar o índice, a medição e o gatilho estão em
-`docs/busca-vetorial-e-indice-ann.md`, com a regra que importa aqui: bater o
-gatilho de ~3.000 produtos **não é autorização**, porque ele só cobre o
-argumento de latência. Esta armadilha é a outra metade da conta.
-
-Ver [[44]] — exemplo solto na SAÍDA vira molde — e [[45]], sobre ler o log
-certo antes de mexer no código de corte.
+**A contradição que deu a saída ao modelo, porque ela se repete.** Duas linhas
+do mesmo prompt diziam *"nome que você não conhece: busque esse nome mesmo
+assim"* e *"se não entendeu bem o nome, pergunte antes de buscar"*. São dois
+casos diferentes — **não pegou a palavra**, pergunte; **pegou mas não
+conhece**, busque — e escritos como um só viraram licença. **Duas regras que se
+contradizem no mesmo prompt não são duas regras: são uma licença.**
 
 ---
 

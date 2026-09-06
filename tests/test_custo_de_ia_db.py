@@ -1,14 +1,24 @@
-"""O custo de IA contra o Postgres: a idempotencia da voz e a agregacao.
+"""O custo de IA contra o Postgres: a agregacao, e o que sobrou da voz.
 
-As duas metades daqui SAO banco, e dublar qualquer uma seria testar o dublê:
+A agregacao por periodo E banco — um `GROUP BY` com `FILTER`, `SUM` de
+`NUMERIC` e janela meio-aberta. Sao exatamente os pontos em que uma reescrita
+da consulta quebra sem ninguem notar, e dublar qualquer um seria testar o
+dublê.
 
-- a idempotencia da voz e sustentada por um UNIQUE parcial em
-  `voice_session_id`. Um dublê de repositorio "lembraria" da sessao porque o
-  teste mandou lembrar; o que se quer provar e que o BANCO nao deixa nascer a
-  segunda linha;
-- a agregacao por periodo e um `GROUP BY` com `FILTER`, `SUM` de `NUMERIC` e
-  janela meio-aberta. Sao exatamente os pontos em que uma reescrita da
-  consulta quebra sem ninguem notar.
+## A voz saiu do projeto em 06/09/2026, e este arquivo guarda a metade que fica
+
+`registrar_voz` nao existe mais, entao os testes da gravacao falada sairam com
+ela. O que NAO saiu, e o que `TestRelatorioPorPeriodo` continua provando, e que
+**as linhas ja gravadas continuam saindo no relatorio**: `voice_calls` e
+`voice_cost_usd` sao historicos, e a promessa escrita em
+`src/schemas/ai_usage_schema.py` — `calls` fecha com `text_calls` + `voice_calls`
+em qualquer janela — so vale enquanto isso for verdade.
+
+Por isso a linha de voz do cenario e semeada por **SQL cru**: o ORM nao mapeia
+mais `voice_session_id` e `AIVoiceSession` nao existe. O SQL aqui e a unica
+forma de escrever a linha que producao ja tem — e e tambem por isso que este
+arquivo esta na lista de codigo acoplado da revisao preparada
+`20260906_0060`, que derruba a coluna e a tabela.
 """
 
 import uuid
@@ -21,7 +31,6 @@ from sqlalchemy.exc import IntegrityError
 
 from src.ai.services.chat_llm_service import UsoDoModelo
 from src.models.ai_usage_event_model import AIUsageEvent
-from src.models.ai_voice_session_model import AIVoiceSession
 from src.services.ai_usage_service import AIUsageService
 from tests.fabricas_db import criar_filial, criar_restaurante
 
@@ -32,15 +41,36 @@ pytestmark = pytest.mark.db
 ONTEM = datetime(2026, 9, 1, 20, 0, tzinfo=timezone.utc)
 
 
-def _sessao_de_voz(db, restaurante, **tokens) -> AIVoiceSession:
-    sessao = AIVoiceSession(
-        restaurant_id=restaurante.id,
-        expires_at=ONTEM + timedelta(minutes=10),
-        **tokens,
+def _linha_de_voz_ja_gravada(db, restaurante, custo: str) -> None:
+    """Uma sessao de voz e o evento de custo dela, como producao ja os tem.
+
+    SQL CRU e nao ORM, e nao ha escolha: `AIVoiceSession` saiu do codigo em
+    06/09/2026 e `voice_session_id` deixou de ser mapeada. Escrever isto pelo
+    ORM e impossivel — o que e exatamente a propriedade que o resto do
+    repositorio quer, e o motivo de esta linha precisar existir aqui: sem ela,
+    "o relatorio continua somando a voz" seria uma frase sem teste.
+
+    Os dois INSERT juntos porque a CHECK
+    `(surface = 'voice') = (voice_session_id IS NOT NULL)` amarra os dois: nem
+    a sessao sozinha vira custo, nem o custo nasce sem a sessao.
+    """
+    sessao_id = uuid.uuid4()
+    db.execute(
+        text(
+            "INSERT INTO ai_voice_sessions (id, restaurant_id, expires_at) "
+            "VALUES (:id, :r, :expira)"
+        ),
+        {"id": sessao_id, "r": restaurante.id, "expira": ONTEM + timedelta(minutes=10)},
     )
-    db.add(sessao)
-    db.flush()
-    return sessao
+    db.execute(
+        text(
+            "INSERT INTO ai_usage_events "
+            "(restaurant_id, surface, model, input_tokens, output_tokens, "
+            " cost_usd, voice_session_id) "
+            "VALUES (:r, 'voice', 'gpt-realtime-mini', 1000, 1000, :custo, :s)"
+        ),
+        {"r": restaurante.id, "custo": Decimal(custo), "s": sessao_id},
+    )
 
 
 class TestGravacaoDoTexto:
@@ -60,7 +90,6 @@ class TestGravacaoDoTexto:
         assert evento.surface == "text"
         assert evento.model == "gpt-5-mini"
         assert evento.branch_id == filial.id
-        assert evento.voice_session_id is None
         assert evento.cost_usd == Decimal("0.001250")
 
     def test_modelo_sem_preco_grava_os_tokens_e_deixa_o_custo_NULO(self, db):
@@ -86,76 +115,16 @@ class TestGravacaoDoTexto:
         assert evento.output_tokens == 500
 
 
-class TestGravacaoDaVoz:
-    def test_o_aviso_de_fim_repetido_nao_dobra_o_custo(self, db):
-        """O caso concreto: o aviso vai com `keepalive` e o navegador o reenvia.
-
-        Sem o UNIQUE de `voice_session_id`, a segunda chegada viraria uma
-        segunda linha e a conversa apareceria custando o dobro no relatorio.
-        """
-        restaurante = criar_restaurante(db)
-        sessao = _sessao_de_voz(
-            db,
-            restaurante,
-            input_audio_tokens=1000,
-            input_text_tokens=200,
-            output_audio_tokens=500,
-            output_text_tokens=50,
-            cached_tokens=0,
-        )
-        servico = AIUsageService(db)
-
-        servico.registrar_voz(sessao)
-        db.flush()
-        servico.registrar_voz(sessao)
-        db.flush()
-
-        eventos = db.query(AIUsageEvent).all()
-        assert len(eventos) == 1
-        assert eventos[0].surface == "voice"
-        assert eventos[0].voice_session_id == sessao.id
-        assert eventos[0].input_tokens == 1200
-        assert eventos[0].output_tokens == 550
-
-    def test_a_segunda_chegada_CORRIGE_a_primeira(self, db):
-        """Ela costuma trazer o numero mais completo, e nao o contrario."""
-        restaurante = criar_restaurante(db)
-        sessao = _sessao_de_voz(db, restaurante, input_audio_tokens=100)
-        servico = AIUsageService(db)
-
-        servico.registrar_voz(sessao)
-        db.flush()
-
-        sessao.input_audio_tokens = 900
-        sessao.output_audio_tokens = 300
-        servico.registrar_voz(sessao)
-        db.flush()
-
-        evento = db.query(AIUsageEvent).one()
-        assert evento.input_tokens == 900
-        assert evento.output_tokens == 300
-
-    def test_sessao_que_nao_reportou_numero_nao_vira_linha(self, db):
-        """NULO nao e zero (revisao 0023).
-
-        Gravar custo zero aqui inventaria uma conversa de graca que ninguem
-        mediu — e ela contaria como chamada no relatorio.
-        """
-        restaurante = criar_restaurante(db)
-        sessao = _sessao_de_voz(db, restaurante)
-
-        AIUsageService(db).registrar_voz(sessao)
-        db.flush()
-
-        assert db.query(AIUsageEvent).count() == 0
-
-
 class TestOsCheckDoBanco:
     def test_linha_de_voz_sem_sessao_e_recusada(self, db):
-        """A duplicata que o CHECK impede de nascer.
+        """O CHECK que sobreviveu ao codigo que ele protegia.
 
-        Voz sem `voice_session_id` nao teria chave de idempotencia, e o
-        proximo aviso de fim criaria outra linha para a mesma conversa.
+        Ele nasceu para impedir linha de voz sem chave de idempotencia. Com a
+        voz fora do projeto ele passou a valer para outra coisa, e ela importa
+        mais: o ORM nao mapeia mais `voice_session_id`, entao TODA linha que
+        ele grava deixa a coluna nula — e uma que tentasse nascer com
+        `surface = 'voice'` seria recusada pelo banco em vez de virar custo
+        historico falso.
         """
         restaurante = criar_restaurante(db)
         db.add(
@@ -193,14 +162,20 @@ class TestRelatorioPorPeriodo:
             branch_id=filial.id,
             uso=UsoDoModelo("sem-preco-nenhum", entrada=1000, entrada_em_cache=0, saida=500),
         )
-        sessao = _sessao_de_voz(
-            db, restaurante, input_audio_tokens=1000, output_audio_tokens=1000
-        )
-        servico.registrar_voz(sessao)
+        # 1000 tokens de audio de entrada (US$ 10/1M) + 1000 de saida
+        # (US$ 20/1M) = 0,01 + 0,02, que e o que a conta de voz gravava
+        # quando ela existia.
+        _linha_de_voz_ja_gravada(db, restaurante, custo="0.030000")
         db.flush()
         return restaurante
 
     def test_voz_e_texto_saem_separados_e_o_total_soma_os_dois(self, db):
+        """A promessa do schema: `calls` fecha com `text_calls` + `voice_calls`.
+
+        E o que impede a saida da voz de virar um buraco no relatorio — o mes
+        de agosto de 2026 tem chamada falada dentro, e ela nao pode aparecer no
+        total sem aparecer em coluna nenhuma.
+        """
         restaurante = self._semear(db)
 
         relatorio = AIUsageService(db).custo_por_restaurante(
@@ -213,9 +188,8 @@ class TestRelatorioPorPeriodo:
         assert linha.text_calls == 2
         assert linha.voice_calls == 1
         assert linha.text_cost_usd == Decimal("0.001250")
-        # 1000 tokens de audio de entrada (US$ 10/1M) + 1000 de saida
-        # (US$ 20/1M) = 0,01 + 0,02
         assert linha.voice_cost_usd == Decimal("0.030000")
+        assert linha.calls == linha.text_calls + linha.voice_calls
         assert relatorio.total_cost_usd == Decimal("0.031250")
 
     def test_a_chamada_sem_preco_e_contada_e_nao_soma_dinheiro(self, db):

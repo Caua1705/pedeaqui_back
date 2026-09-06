@@ -97,21 +97,18 @@ def feedback_retention_cutoff(now: datetime) -> datetime:
 
 
 class ChatService:
-    def __init__(self, db: Session, agent: str = "/chat"):
-        """`agent` so existe para o LOG — ver `RetrievalService`.
+    def __init__(self, db: Session):
+        """Houve aqui um parametro `agent`, e ele saiu em 06/09/2026.
 
-        O agente de voz reusa `retrieval_service`, `_get_active_restaurant`,
-        `_get_active_branch` e `_hydrate_products` deste servico, entao as
-        linhas de medicao dos dois agentes saiam com o mesmo prefixo
-        `[AI /chat perf]`. Passando "/voz", cada um mede o proprio caminho sem
-        que exista um segundo cronometro.
-
-        O default mantem o chat de texto escrevendo exatamente o que escrevia:
-        nenhum grep existente muda de resultado.
+        Ele existia porque o assistente de voz reusava `retrieval_service`,
+        `_get_active_restaurant`, `_get_active_branch` e `_hydrate_products`
+        deste servico: sem rotulo, as linhas de medicao dos dois agentes
+        saiam com o mesmo prefixo e quem grepava `[AI /chat perf]` media a
+        soma. Com a voz fora do projeto ha um caminho so, e o prefixo voltou
+        a ser constante — nenhum grep existente muda de resultado.
         """
         self.db = db
-        self.agent = agent
-        self.retrieval_service = RetrievalService(db, agent=agent)
+        self.retrieval_service = RetrievalService(db)
         self.product_repository = ProductRepository(db)
         self.restaurant_repository = RestaurantRepository(db)
         self.branch_repository = BranchRepository(db)
@@ -422,13 +419,12 @@ class ChatService:
         passasse, e uma segunda definicao de "o que e saudacao" se divergisse.
 
         AQUI O `similarity` SAI, e este e o unico lugar que o tira. A busca o
-        devolve porque a voz precisa dele (ver `_format_retrieved_product`),
-        mas esta lista vai INTEIRA para `{retrieved_products}` no prompt do
-        texto: deixar passar seria ~10 tokens por produto em todo turno do
-        `/chat` e um campo sobre o qual o `system_prompt` nao diz uma palavra.
-
-        A voz nao passa por esta funcao — ela chama `retrieve_products`
-        direto, em `VoiceSearchService.buscar`.
+        devolve para quem MEDE — o log da busca e
+        `scripts/afere_limiar_de_similaridade.py` (ver
+        `_format_retrieved_product`) —, mas esta lista vai INTEIRA para
+        `{retrieved_products}` no prompt: deixar passar seria ~10 tokens por
+        produto em todo turno do `/chat` e um campo sobre o qual o
+        `system_prompt` nao diz uma palavra.
         """
         produtos = self.retrieval_service.retrieve_products(
             restaurant_id=restaurant.id,
@@ -481,9 +477,7 @@ class ChatService:
         instrucao nao tinha como ser cumprida. Hoje o prompt PROIBE dizer o
         nome: o cliente abriu o link do restaurante e ja sabe onde esta, e
         "Aqui na Junior da Picanha" saia em sete de nove turnos — token em
-        toda resposta para informar o que a pessoa acabou de escolher. E o
-        mesmo raciocinio que `voice_prompt.branch_context_for` ja registra
-        para a loja.
+        toda resposta para informar o que a pessoa acabou de escolher.
 
         O nome fica porque o modelo precisa se SITUAR — e o que separa "aqui
         nao temos" de um assistente que nao sabe de que cardapio esta
@@ -538,8 +532,7 @@ class ChatService:
         chutando o horario, ele nao sabia que existia horario.
 
         `_answer` ja carregava a filial (`_get_active_branch`) e a descartava:
-        ela servia de barreira 404 e nada mais. Aqui ela vira dado, do mesmo
-        jeito que `POST /voice/session` fez em 20/08/2026.
+        ela servia de barreira 404 e nada mais. Aqui ela vira dado.
 
         DOIS FATOS, E SO ELES. Prazo de entrega, taxa, pedido minimo e ate que
         horas a loja fica aberta NAO entram, e a omissao e deliberada: sao os
@@ -787,8 +780,7 @@ class ChatService:
             )
         }
         logger.info(
-            "[AI %s perf] hydration_ms=%.2f",
-            self.agent,
+            "[AI /chat perf] hydration_ms=%.2f",
             (perf_counter() - hydration_started_at) * 1000,
         )
         return [
@@ -920,9 +912,6 @@ def _limitar_cartoes(selected_product_ids: list[uuid.UUID]) -> list[uuid.UUID]:
     e turno em que o modelo desobedeceu la. O grep no radar:
     `acima do teto`.
 
-    Nao alcanca a voz: `VoiceSearchService.buscar` nao passa por `_answer`, e
-    la nao ha selecao de modelo para limitar — a lista que aparece e a propria
-    busca.
     """
     if len(selected_product_ids) <= _MAX_CARTOES:
         return selected_product_ids

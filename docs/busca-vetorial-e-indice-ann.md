@@ -24,9 +24,9 @@ docker compose -f docker-compose.test.yml up -d
 python scripts/bench_busca_vetorial.py --produtos 161 --restaurantes 1
 ```
 
-A consulta medida é a de `AIRepository.similarity_search` — a mesma que o
-Rapi (texto) e a voz usam, com `top_k=5` e o piso de
-`AI_SEARCH_MIN_SIMILARITY = 0,30`.
+A consulta medida é a de `AIRepository.similarity_search` — a do Rapi, com
+`top_k=5` e o piso de `AI_SEARCH_MIN_SIMILARITY = 0,30`. Ela servia também ao
+assistente de voz, que saiu do projeto em 06/09/2026; a consulta é a mesma.
 
 ---
 
@@ -156,18 +156,25 @@ ANN é aproximado por definição: ele visita parte do grafo, não a tabela inte
 Devolver menos é o comportamento correto dele, não um defeito de configuração —
 `ef_search` desloca a fronteira, não a apaga.
 
-**E "devolver zero" tem um significado específico neste sistema.** Desde
-25/08/2026 a negativa do atendente de voz não é mais escrita pelo modelo: a
-busca vazia devolve a frase pronta (`_NEGATIVA`, em
-`src/ai/voice/search_service.py`), e "não temos" passou a ter uma origem só —
-uma busca que voltou vazia **naquele turno**. Foi o conserto da armadilha 46,
-onde uma churrascaria disse não ter picanha.
+**E "devolver zero" tem um significado específico neste sistema.** Busca vazia
+é o que o assistente lê como "não temos", e um índice ANN reabre essa porta por
+dentro: a busca vazia deixaria de significar "não tem" e passaria a significar
+"não tem, **ou** o grafo não passou por lá" — e as duas chegam ao cliente como
+a mesma frase, sem erro, sem log, sem tela onde conferir. É a armadilha 46
+(uma churrascaria dizendo não ter picanha) de volta, por um caminho novo.
 
-Um índice ANN reabre essa porta por dentro. A busca vazia deixaria de
-significar "não tem" e passaria a significar "não tem, **ou** o grafo não
-passou por lá" — e as duas chegam ao cliente como a mesma frase, sem erro, sem
-log, sem tela onde conferir. Trocaríamos 4 ms por uma negativa que volta a não
-ter dono, três semanas depois de ela ter ganhado um.
+**ESTE ARGUMENTO ENFRAQUECEU EM 06/09/2026, e vale saber em quanto.** Ele tinha
+duas metades. A primeira era o assistente de voz: desde 25/08/2026 a negativa
+dele não era escrita pelo modelo — a busca vazia devolvia uma frase pronta
+(`_NEGATIVA`), e "não temos" tinha uma origem única e verificável. Essa metade
+saiu com a voz.
+
+A que ficou é o `/chat`, e ela é mais fraca **de propósito e desde sempre**: no
+texto a negativa continua sendo frase que o modelo escreve, guiada por regra de
+prompt. Ou seja, hoje uma busca vazia falsa não quebra nenhuma garantia de
+código — ela só faz o Rapi dizer, por escrito, que a loja não tem um produto
+que ela tem. O estrago para o lojista é o mesmo; o que se perdeu foi o lugar do
+sistema que tornava isso **impossível de acontecer em silêncio**.
 
 Isso vale a pena escrever porque é o tipo de custo que não aparece em nenhum
 `EXPLAIN`: quem medir de novo vai reencontrar os 4 ms e não vai reencontrar
@@ -348,12 +355,11 @@ apagá-la: ANN é aproximado por definição, e devolver menos é o comportament
 correto dele.
 
 **E "devolver zero" continua tendo um significado específico neste sistema.**
-Desde 25/08/2026 a negativa do atendente não é escrita pelo modelo — a busca
-vazia devolve a frase pronta (`_NEGATIVA`, em
-`src/ai/voice/search_service.py`), e "não temos" tem uma origem só. Com um
-índice ANN, busca vazia passa a significar "não tem, **ou** o grafo não passou
-por lá", e as duas chegam ao cliente como a mesma frase. É a armadilha 46 de
-volta, sem erro, sem log e sem tela onde conferir.
+Busca vazia é o que o assistente lê como "não temos". Com um índice ANN, ela
+passa a significar "não tem, **ou** o grafo não passou por lá", e as duas
+chegam ao cliente como a mesma frase. É a armadilha 46 de volta, sem erro, sem
+log e sem tela onde conferir — e desde 06/09/2026 sem a metade do argumento que
+vinha do assistente de voz (ver a seção acima).
 
 ### O que isso NÃO muda: a escolha do tipo
 

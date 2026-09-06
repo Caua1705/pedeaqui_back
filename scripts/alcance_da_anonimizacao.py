@@ -155,11 +155,6 @@ ALCANCE: dict[str, Alcancada | Fora | Indireta] = {
         "resgatar uma. A linha nao guarda nada da pessoa alem do id, que "
         "depois da anonimizacao e um pseudonimo"
     ),
-    "ai_voice_sessions": Fora(
-        "Contagem de token e duracao de sessao emitida — medicao de custo, "
-        "sem conteudo nenhum: o audio vai do navegador direto para a OpenAI e "
-        "o backend nunca o ve (armadilha 43). Sobra o id, que e pseudonimo"
-    ),
 }
 
 

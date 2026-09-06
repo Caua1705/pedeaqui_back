@@ -199,17 +199,3 @@ app.include_router(admin_error_reports.router)
 app.include_router(admin_whatsapp.router)
 app.include_router(internal_metrics.router)
 app.include_router(chat.router)
-
-# Atendimento por voz. `VOICE_ENABLED` e a CHAVE MESTRA: desligada, as rotas
-# nao existem — nem no /docs — e nenhum restaurante tem voz, por mais que a
-# coluna `restaurant_settings.voice_enabled` diga o contrario.
-#
-# Ligada, ela nao acende a voz para ninguem sozinha: cada restaurante ainda
-# precisa da propria habilitacao. Ver `src/ai/voice/session_service.py`.
-#
-# O import fica aqui dentro, e nao no topo: desligado, o pacote de voz nem
-# chega a ser carregado.
-if settings.VOICE_ENABLED:
-    from src.api import voice as voice_router
-
-    app.include_router(voice_router.router)

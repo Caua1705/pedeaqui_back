@@ -362,9 +362,11 @@ estimated_delivery_*   fica  ←   estimated_delivery_*        NULL = herda
 default_delivery_fee   fica  ←   default_delivery_fee        NULL = herda
 ```
 
-Não se moveram, e não vão se mover: `platform_commission_percent` e
-`voice_enabled` são da **plataforma**, não do lojista, e não aparecem em schema
-nenhum do painel. `payment_methods` (jsonb) ficou onde estava por já ser dado morto — removê-lo
+Não se moveu, e não vai se mover: `platform_commission_percent` é da
+**plataforma**, não do lojista, e não aparece em schema nenhum do painel. Ao
+lado dele ficava `voice_enabled`, pelo mesmo motivo; ela saiu do ORM em
+06/09/2026, com o assistente de voz, e sai do banco quando a revisão preparada
+`20260906_0060` for aplicada. `payment_methods` (jsonb) ficou onde estava por já ser dado morto — removê-lo
 muda contrato público, e foi feito no passo 3 (revisão `20260820_0027`).
 
 ### 5.2 Onde a regra mora, uma vez só

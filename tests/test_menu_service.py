@@ -178,7 +178,7 @@ def make_restaurant():
 # solto, coluna nova que entre no model e no `product_response` — e que nao
 # esteja escrita aqui — vira `AttributeError`; e coluna que exista aqui com o
 # nome errado nunca e denunciada. Foi exatamente o que aconteceu com
-# `serves_people` (revisao 20260825_0039) na ponta da voz.
+# `serves_people` (revisao 20260825_0039) na ponta que o publica.
 #
 # Uma instancia TRANSIENTE do model resolve os dois lados de graca: coluna nao
 # passada vale `None` (nao estoura), e kwarg que nao seja coluna levanta
@@ -410,7 +410,7 @@ class TestProductResponseValues:
         lado do cliente lia.
 
         Quem le e o atendente de VOZ, que monta a linha do produto a partir
-        desta resposta (a hidratacao da voz e do `/chat` passa por aqui). Sem
+        desta resposta (a hidratacao do `/chat` passa por aqui). Sem
         esta linha, `_serve_quantas_pessoas` levantava `AttributeError` em
         toda busca falada — sem que nenhum teste rapido notasse."""
         product = make_product()

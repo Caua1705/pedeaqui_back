@@ -92,7 +92,7 @@ Eles têm públicos opostos, e o `insert` acima só preenche o primeiro:
 
 - **`description` é a vitrine.** Sai em `RestaurantPublicResponse`, e é por ela
   que o cliente decide pedir. Anúncio ali é o uso certo.
-- **`assistant_notes` é o contexto do assistente de IA** (chat e voz), e não sai
+- **`assistant_notes` é o contexto do assistente de IA**, e não sai
   em resposta pública nenhuma. O que serve ali é o contrário do anúncio: o que
   a casa faz, o que ela não faz, o que o atendente precisa saber para não
   inventar. Cabem 300 caracteres, e o corte vale nos dois lados — 422 na

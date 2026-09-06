@@ -53,6 +53,13 @@ class FakeOrderRepository:
             return None
         return self.order
 
+    def lock_for_status_change(self, order_id, restaurant_id):
+        # O dublê do lock é a MESMA busca de `get_order_detail`: aqui não
+        # há segunda transação disputando a linha, e o que o writer precisa
+        # de volta é o pedido. Quem exercita o lock de verdade é
+        # `tests/test_lock_do_status_do_pedido_db.py`, contra o Postgres.
+        return self.get_order_detail(order_id, restaurant_id)
+
     def update_status(self, order, new_status):
         order.status = new_status
 

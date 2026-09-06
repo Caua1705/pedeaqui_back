@@ -505,6 +505,67 @@ class OrderRepository:
         )
         return self.db.scalar(stmt)
 
+    def lock_for_status_change(self, order_id: uuid.UUID, restaurant_id: uuid.UUID) -> Order | None:
+        """A linha do pedido TRAVADA, para quem vai escrever o status.
+
+        Existe ao lado de `get_order_detail` e nao dentro dele: aquele e o
+        caminho de LEITURA (a tela, o corpo da resposta, a comanda) e travar
+        ali poria um `FOR UPDATE` em toda abertura de pedido no painel.
+
+        ## O que ela impede
+
+        `OrderStatusChangeService.apply` fazia ler -> validar -> escrever sem
+        lock, e as duas leituras concorrentes viam o mesmo status:
+
+            pedido em `ready`
+              lojista clica "concluir"           le ready -> ready->completed        OK
+              entregador clica "sai p/ entrega"  le ready -> ready->out_for_delivery OK
+              os dois escrevem. o ultimo ganha.
+
+        O status errado e o menor estrago. `apply` roda EFEITO COLATERAL por
+        destino — `completed` credita cashback, `cancelled` estorna o cupom e
+        devolve o cashback resgatado —, entao uma corrida
+        `completed` x `cancelled` a partir de `ready` roda os DOIS: o cliente
+        leva o credito E o cupom volta, num pedido que terminou cancelado e
+        portanto fora do faturamento. O credito e idempotente por
+        `cashback:earn:{id}` e nao sai em dobro; o PAR credito-mais-estorno
+        nao tem nada que o impeca.
+
+        ## `populate_existing`, e sem ele isto seria um no-op
+
+        Quem chama `apply` ja carregou o pedido, entao a instancia esta no
+        identity map da sessao. Um `select()` que devolva a mesma identidade
+        **nao reescreve os atributos ja carregados** — o Postgres travaria a
+        linha e o Python continuaria validando o `status` velho, que e
+        exatamente o bug que este metodo existe para fechar. Com
+        `populate_existing`, a linha travada sobrepoe o que estava em memoria.
+
+        ## Sem eager loading, de proposito
+
+        `FOR UPDATE` nao convive com o lado nulavel de um OUTER JOIN no
+        Postgres, e nada aqui precisa dos itens: quem valida a transicao le
+        `status`, `order_type` e `payment_status`, que sao colunas da propria
+        linha. A resposta continua saindo de `get_order_detail` depois do
+        commit.
+
+        ## Ordem de lock
+
+        `orders` e o PRIMEIRO recurso existente que `apply` trava, e nenhuma
+        outra transacao do sistema trava um pedido depois de ter travado
+        cliente ou cupom: `create_order` trava cliente -> cupom e so entao
+        INSERE o pedido (linha nova, sem disputa), e `payment_service` escreve
+        em `orders` sem tocar em cupom nem em cashback. Nao ha ciclo, e a
+        ordem fixada em `OrderService.create_order` continua valendo como
+        esta.
+        """
+        stmt = (
+            select(Order)
+            .where(Order.id == order_id, Order.restaurant_id == restaurant_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return self.db.scalar(stmt)
+
     def list_orders_by_customer(self, customer_id: uuid.UUID) -> list[tuple[Order, str, str]]:
         stmt = (
             select(Order, Restaurant.name, Branch.name)

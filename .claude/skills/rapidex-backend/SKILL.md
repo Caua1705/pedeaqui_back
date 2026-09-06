@@ -975,6 +975,34 @@ repositório precisam ser ligados nas DUAS camadas —
 primeira faz o teste rodar contra o repositório de verdade e estourar num
 `FakeDb` sem `add`, longe de onde o dublê foi montado.
 
+**E desde 05/09/2026 `apply` TRAVA a linha** (`lock_for_status_change`), porque
+sem isso ele fazia ler → validar → escrever e as cinco portas liam o mesmo
+status. Uma corrida `completed` × `cancelled` a partir de `ready` — as duas
+transições são válidas — rodava os DOIS conjuntos de efeito colateral: o
+cliente levava o crédito de cashback **e** o cupom voltava, num pedido que
+terminou cancelado e portanto fora do faturamento. O crédito é idempotente por
+`cashback:earn:{id}` e não sai em dobro; o **par** crédito-mais-estorno não
+tinha nada que o impedisse.
+
+Três coisas para quem for mexer nisso:
+
+- **`populate_existing` não é enfeite.** Quem chama `apply` já carregou o
+  pedido, então ele está no identity map; um `select()` que devolva a mesma
+  identidade **não reescreve os atributos já carregados**, e o Postgres
+  travaria a linha enquanto o Python continuava validando o status velho —
+  o conserto inteiro viraria um no-op silencioso.
+- **Todo dublê de repositório do writer precisa de `lock_for_status_change`.**
+  São nove na suíte, e o sintoma de esquecer um é `AttributeError` no meio de
+  `apply`, não uma asserção falhando.
+- **A ordem de lock continua sendo a de `create_order`** (cliente → cupom).
+  `orders` entra como o primeiro recurso existente que o writer trava, e não
+  fecha ciclo porque `create_order` só INSERE o pedido (linha nova) e o
+  `payment_service` escreve em `orders` sem tocar em cupom nem em cashback.
+
+`tests/test_lock_do_status_do_pedido_db.py` exercita a corrida contra o
+Postgres — com fixture própria, porque a fixture `db` põe as duas sessões
+dentro da mesma transação e ali não há lock a disputar.
+
 ---
 
 ## 26. O cashback está ligado no código, e desligado nos dados

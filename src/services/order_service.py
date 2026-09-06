@@ -42,6 +42,10 @@ from src.services.delivery_estimate_service import (
 from src.services.cashback_service import CashbackService
 from src.services.coupon_service import CouponService
 from src.services.idempotency_service import IdempotencyService
+from src.services.order_state_machine import (
+    INITIAL_ORDER_STATUS,
+    INITIAL_PAYMENT_STATUS_BY_FLOW,
+)
 from src.services.restaurant_service import RestaurantService
 from src.utils.money import ZERO, money_to_float, quantize_money, to_decimal
 from src.utils.normalization import normalize_digits
@@ -197,13 +201,13 @@ class OrderService:
                 customer_name_snapshot=customer_name,
                 customer_phone_snapshot=customer_phone,
                 order_type=payload.order_type,
-                status="pending",
+                status=INITIAL_ORDER_STATUS,
                 payment_method=payload.payment_method,
                 payment_flow=payment_flow,
                 # Pedido online nasce devendo: so vira "paid" quando o
                 # gateway avisar, e so entao pode ser aceito. Pedido pago na
                 # entrega nasce em `on_delivery` e nunca muda.
-                payment_status="pending" if payment_flow == "online" else "on_delivery",
+                payment_status=INITIAL_PAYMENT_STATUS_BY_FLOW[payment_flow],
                 subtotal=subtotal,
                 delivery_fee=delivery_fee,
                 delivery_fee_waived=delivery_fee_waived,
@@ -264,7 +268,12 @@ class OrderService:
             if order_item_options:
                 self.order_repository.create_order_item_options(order_item_options)
             self.order_repository.create_status_history(
-                OrderStatusHistory(order_id=order.id, status="pending", changed_by="system", note="Pedido criado")
+                OrderStatusHistory(
+                    order_id=order.id,
+                    status=INITIAL_ORDER_STATUS,
+                    changed_by="system",
+                    note="Pedido criado",
+                )
             )
             response = CreateOrderResponse(
                 id=order.id,

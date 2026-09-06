@@ -40,9 +40,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.api.dependencies.admin_scope import AdminScope
-from src.models.branch_model import Branch
 from src.models.cashback_rule_model import CashbackRule, CashbackRuleWeekday
-from src.repositories.branch_repository import BranchRepository
 from src.repositories.cashback_rule_repository import CashbackRuleRepository
 from src.schemas.admin_cashback_schema import (
     AdminCashbackRuleResponse,
@@ -50,13 +48,14 @@ from src.schemas.admin_cashback_schema import (
     AdminCashbackRuleWrite,
     CashbackWeekdayResponse,
 )
+from src.services.branch_scope import BranchScope
 
 
 class AdminCashbackService:
     def __init__(self, db: Session):
         self.db = db
         self.repository = CashbackRuleRepository(db)
-        self.branch_repository = BranchRepository(db)
+        self.branch_scope = BranchScope(db)
 
     def get_restaurant_rule(self, scope: AdminScope) -> AdminCashbackRuleView:
         """A regra padrao da rede, a que toda filial sem sobrescrita herda."""
@@ -80,7 +79,7 @@ class AdminCashbackService:
         segunda implementacao da heranca faria a tela do painel discordar do
         que o checkout aplica, sem erro em lugar nenhum.
         """
-        self._get_branch(scope, branch_id)
+        self.branch_scope.get(scope=scope, branch_id=branch_id)
         da_filial, do_restaurante = self.repository.get_rules_for_branch(
             scope.restaurant_id, branch_id
         )
@@ -101,7 +100,7 @@ class AdminCashbackService:
         A partir daqui a filial **para de herdar**: mudar a regra da rede nao
         a alcanca mais, ate alguem apagar a sobrescrita.
         """
-        self._get_branch(scope, branch_id)
+        self.branch_scope.get(scope=scope, branch_id=branch_id)
         rule = self._upsert(scope.restaurant_id, branch_id, payload)
         return self._response(rule)
 
@@ -113,7 +112,7 @@ class AdminCashbackService:
         herdava" — e um 204 mudo faria o painel mostrar sucesso para um botao
         que nao deveria estar la.
         """
-        self._get_branch(scope, branch_id)
+        self.branch_scope.get(scope=scope, branch_id=branch_id)
         rule = self.repository.get_rule(scope.restaurant_id, branch_id)
         if rule is None:
             raise HTTPException(
@@ -151,25 +150,6 @@ class AdminCashbackService:
             for dia in payload.weekdays
         ]
         self.repository.add(rule)
-
-    def _get_branch(self, scope: AdminScope, branch_id: uuid.UUID) -> Branch:
-        """Filial dentro do escopo do token.
-
-        Mesmo par de conferencias de `AdminSettingsService._get_branch`, e
-        pelo mesmo motivo: `ensure_branch_allowed` barra a filial que existe
-        mas nao e a deste lojista, o repositorio barra a de outro
-        restaurante, e as duas respondem o MESMO 404 para a rota nao virar
-        oraculo de quais filiais existem.
-        """
-        scope.ensure_branch_allowed(branch_id)
-        branch = self.branch_repository.get_active_by_id_and_restaurant(
-            branch_id, scope.restaurant_id
-        )
-        if branch is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Filial não encontrada"
-            )
-        return branch
 
     @staticmethod
     def _response(rule: CashbackRule) -> AdminCashbackRuleResponse:

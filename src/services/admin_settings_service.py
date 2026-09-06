@@ -71,6 +71,7 @@ from src.schemas.admin_settings_schema import (
 )
 from src.services.branch_hours_service import BranchHoursService
 from src.services.branch_operation import BranchOperation, resolve_branch_operation
+from src.services.branch_scope import BranchScope
 from src.utils.money import money_to_float, quantize_money
 from src.utils.security import utcnow
 
@@ -94,6 +95,7 @@ class AdminSettingsService:
         self.db = db
         self.repository = AdminSettingsRepository(db)
         self.branch_repository = BranchRepository(db)
+        self.branch_scope = BranchScope(db)
         # O PERFIL mora em `restaurants`, e nao em `restaurant_settings`: sao
         # tabelas diferentes, e as rotas de perfil sao as unicas deste
         # service que escrevem na primeira.
@@ -182,7 +184,7 @@ class AdminSettingsService:
         Ate a revisao 20260818_0025 esta rota era do restaurante e fechava
         todas as filiais juntas. Nao havia como fechar so a do Centro.
         """
-        branch = self._get_branch(scope, branch_id)
+        branch = self.branch_scope.get(scope=scope, branch_id=branch_id)
         branch.is_open = payload.is_open
         self._commit()
         return self._branch_operation_response(branch)
@@ -200,7 +202,7 @@ class AdminSettingsService:
         lojista ja pode pedir por `store-status`. Recusar aqui obrigaria a
         adivinhar qual das duas ele quis manter.
         """
-        branch = self._get_branch(scope, branch_id)
+        branch = self.branch_scope.get(scope=scope, branch_id=branch_id)
         changes = payload.model_dump(exclude_unset=True)
         for field, value in changes.items():
             setattr(branch, field, value)
@@ -227,7 +229,7 @@ class AdminSettingsService:
         O motivo e apagado junto ao retomar: motivo de uma pausa que acabou
         so tem como confundir quem abrir a tela depois.
         """
-        branch = self._get_branch(scope, branch_id)
+        branch = self.branch_scope.get(scope=scope, branch_id=branch_id)
         if payload.minutes == 0:
             branch.delivery_paused_until = None
             branch.delivery_pause_reason = None
@@ -242,7 +244,7 @@ class AdminSettingsService:
         scope: AdminScope,
         branch_id: uuid.UUID,
     ) -> list[DeliveryTimeBandResponse]:
-        self._get_branch(scope, branch_id)
+        self.branch_scope.get(scope=scope, branch_id=branch_id)
         return [
             DeliveryTimeBandResponse(
                 id=band.id,
@@ -272,7 +274,7 @@ class AdminSettingsService:
         lista de impressoras: sem ele, o UNIQUE `(branch_id, max_distance_km)`
         bate contra as linhas que estao sendo apagadas na mesma transacao.
         """
-        self._get_branch(scope, branch_id)
+        self.branch_scope.get(scope=scope, branch_id=branch_id)
         novas = [
             BranchDeliveryTimeBand(
                 branch_id=branch_id,
@@ -326,7 +328,7 @@ class AdminSettingsService:
         e `exclude_unset` que separa os dois, e por isso ele nao pode virar
         `exclude_none` numa limpeza futura.
         """
-        branch = self._get_branch(scope, branch_id)
+        branch = self.branch_scope.get(scope=scope, branch_id=branch_id)
         changes = payload.model_dump(exclude_unset=True)
 
         self._ensure_delivery_time_range(
@@ -359,7 +361,7 @@ class AdminSettingsService:
         ]
 
     def get_branch(self, scope: AdminScope, branch_id: uuid.UUID) -> AdminBranchResponse:
-        return self._branch_response(self._get_branch(scope, branch_id))
+        return self._branch_response(self.branch_scope.get(scope=scope, branch_id=branch_id))
 
     def update_branch(
         self,
@@ -367,7 +369,7 @@ class AdminSettingsService:
         branch_id: uuid.UUID,
         payload: AdminBranchUpdate,
     ) -> AdminBranchResponse:
-        branch = self._get_branch(scope, branch_id)
+        branch = self.branch_scope.get(scope=scope, branch_id=branch_id)
         changes = payload.model_dump(exclude_unset=True)
         self._validate_merged_delivery_rules(branch, changes)
 
@@ -381,7 +383,7 @@ class AdminSettingsService:
         scope: AdminScope,
         branch_id: uuid.UUID,
     ) -> list[BusinessHourResponse]:
-        self._get_branch(scope, branch_id)
+        self.branch_scope.get(scope=scope, branch_id=branch_id)
         periods = self.branch_repository.list_business_hours(branch_id)
         return [BusinessHourResponse.model_validate(period) for period in periods]
 
@@ -401,7 +403,7 @@ class AdminSettingsService:
         `branch_business_hours` nao e referenciada por pedido nenhum, entao
         aqui o DELETE e seguro (diferente do cardapio, onde nada e apagado).
         """
-        self._get_branch(scope, branch_id)
+        self.branch_scope.get(scope=scope, branch_id=branch_id)
         self._validate_weekly_periods(payload.periods)
 
         # sort_order acompanha a ordem em que as faixas do dia chegaram: e
@@ -458,7 +460,7 @@ class AdminSettingsService:
         parecida" foi exatamente o bug que `BranchHoursService` nasceu para
         corrigir: as 3h da manha, a estimativa cobrava o prazo do almoco.
         """
-        self._get_branch(scope, branch_id)
+        self.branch_scope.get(scope=scope, branch_id=branch_id)
         period = self.branch_hours_service.find_current_period(branch_id)
         if period is None:
             raise HTTPException(
@@ -478,7 +480,7 @@ class AdminSettingsService:
         scope: AdminScope,
         branch_id: uuid.UUID,
     ) -> list[AdminPaymentMethodResponse]:
-        self._get_branch(scope, branch_id)
+        self.branch_scope.get(scope=scope, branch_id=branch_id)
         methods = self.repository.list_payment_methods(branch_id)
         return [AdminPaymentMethodResponse.model_validate(method) for method in methods]
 
@@ -488,7 +490,7 @@ class AdminSettingsService:
         branch_id: uuid.UUID,
         payload: AdminPaymentMethodCreate,
     ) -> AdminPaymentMethodResponse:
-        self._get_branch(scope, branch_id)
+        self.branch_scope.get(scope=scope, branch_id=branch_id)
         if "earns_cashback" in payload.model_fields_set:
             ensure_pode_definir_cashback(scope.admin_user)
         duplicated = self.repository.get_payment_method_by_type(
@@ -557,24 +559,6 @@ class AdminSettingsService:
         settings_row = RestaurantSetting(restaurant_id=restaurant_id)
         self._commit(lambda: self.repository.add_settings(settings_row))
         return settings_row
-
-    def _get_branch(self, scope: AdminScope, branch_id: uuid.UUID) -> Branch:
-        """Filial dentro do escopo do token.
-
-        As duas conferencias sao necessarias e diferentes: `ensure_branch_allowed`
-        barra a filial que existe mas nao e a deste lojista; o repositorio
-        barra a filial de outro restaurante. Mesmo 404 para as duas, para
-        nao virar oraculo de quais filiais existem na plataforma.
-        """
-        scope.ensure_branch_allowed(branch_id)
-        branch = self.branch_repository.get_active_by_id_and_restaurant(
-            branch_id, scope.restaurant_id
-        )
-        if branch is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Filial não encontrada"
-            )
-        return branch
 
     def _get_payment_method(
         self,

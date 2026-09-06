@@ -326,6 +326,7 @@ def build_service(
     service.repository = sector_repository or FakeSectorRepository()
     service.menu_repository = menu_repository or FakeMenuRepository()
     service.branch_repository = FakeBranchRepository(branches or [make_branch()])
+    service.branch_scope.branch_repository = service.branch_repository
     service.settings_repository = FakeSettingsRepository(settings)
     if order_detail is not None:
         service.order_service = FakeOrderService(order_detail)

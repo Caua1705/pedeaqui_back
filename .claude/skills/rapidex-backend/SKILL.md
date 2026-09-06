@@ -975,6 +975,24 @@ repositório precisam ser ligados nas DUAS camadas —
 primeira faz o teste rodar contra o repositório de verdade e estourar num
 `FakeDb` sem `add`, longe de onde o dublê foi montado.
 
+**E ela não é sobre pedido: ela vale para todo colaborador que ganhe um
+repositório próprio.** Aconteceu de novo em 06/09/2026, quando as seis cópias
+de `_get_branch` viraram `BranchScope` (auditoria §3.1): 71 testes ficaram
+vermelhos de uma vez, todos com o mesmo `AttributeError: 'FakeDb' object has
+no attribute 'scalar'` — o dublê estava em `service.branch_repository` e a
+conferência passou a ler por `service.branch_scope.branch_repository`.
+
+**O vermelho é alto e imediato, e isso é sorte de desenho, não garantia.** Ele
+só aparece porque `FakeDb` não responde a nada: um dublê de `db` mais
+"completo" devolveria `None` no lugar, a filial viraria 404, e o teste passaria
+a falhar por um motivo que não é o dele — ou pior, um teste de caminho negativo
+continuaria VERDE pelo motivo errado. É o mesmo argumento da armadilha 52: o
+dublê que responde qualquer coisa é o que esconde.
+
+O precedente de como ligar está em `tests/test_delivery_estimate.py`:
+`self.service.branch_hours_service.branch_repository = self.service.branch_repository`
+— um dublê só, ligado nas duas pontas, e não dois que podem divergir.
+
 **E desde 05/09/2026 `apply` TRAVA a linha** (`lock_for_status_change`), porque
 sem isso ele fazia ler → validar → escrever e as cinco portas liam o mesmo
 status. Uma corrida `completed` × `cancelled` a partir de `ready` — as duas

@@ -323,7 +323,7 @@ class FakeBranchRepository:
 def build_service(repository):
     service = AdminMenuService(FakeDb())
     service.repository = repository
-    service.branch_repository = FakeBranchRepository()
+    service.branch_scope.branch_repository = FakeBranchRepository()
     return service
 
 

@@ -20,7 +20,6 @@ from src.api.dependencies.admin_scope import AdminScope
 from src.models.branch_model import Branch
 from src.models.courier_model import Courier, CourierAssignment
 from src.models.order_model import Order
-from src.repositories.branch_repository import BranchRepository
 from src.repositories.courier_repository import CourierRepository
 from src.repositories.order_repository import OrderRepository
 from src.schemas.courier_schema import (
@@ -41,6 +40,7 @@ from src.schemas.courier_schema import (
 )
 from src.schemas.admin_report_schema import ReportPeriod
 from src.services.admin_report_service import MAX_REPORT_DAYS
+from src.services.branch_scope import BranchScope
 from src.services.courier_fee import calculate_courier_fee
 from src.utils.date_window import period_bounds
 from src.services.order_state_machine import TERMINAL_ORDER_STATUSES
@@ -61,7 +61,7 @@ ENTREGADOR_NAO_ENCONTRADO = "Entregador não encontrado"
 class AdminCourierService:
     def __init__(self, db: Session):
         self.db = db
-        self.branch_repository = BranchRepository(db)
+        self.branch_scope = BranchScope(db)
         self.courier_repository = CourierRepository(db)
         self.order_repository = OrderRepository(db)
         # Injetavel, pela convencao da armadilha 51: quem decide se a trava
@@ -74,7 +74,7 @@ class AdminCourierService:
     def get_courier_fee(
         self, scope: AdminScope, branch_id: uuid.UUID
     ) -> AdminBranchCourierFeeResponse:
-        branch = self._get_branch(scope, branch_id)
+        branch = self.branch_scope.get(scope=scope, branch_id=branch_id)
         return self._courier_fee_response(branch)
 
     def update_courier_fee(
@@ -85,7 +85,7 @@ class AdminCourierService:
     ) -> AdminBranchCourierFeeResponse:
         """Grava a taxa desta filial. Campo ausente nao e tocado; `null`
         explicito apaga — e `exclude_unset` que separa os dois."""
-        branch = self._get_branch(scope, branch_id)
+        branch = self.branch_scope.get(scope=scope, branch_id=branch_id)
         changes = payload.model_dump(exclude_unset=True)
         for field, value in changes.items():
             setattr(branch, field, None if value is None else quantize_money(value))
@@ -104,7 +104,7 @@ class AdminCourierService:
         return [self._courier_response(courier) for courier in couriers]
 
     def create_courier(self, scope: AdminScope, payload: AdminCourierCreate) -> AdminCourierResponse:
-        branch = self._get_branch(scope, payload.branch_id)
+        branch = self.branch_scope.get(scope=scope, branch_id=payload.branch_id)
         self._ensure_phone_is_free(branch.id, payload.phone)
         courier = Courier(
             restaurant_id=scope.restaurant_id,
@@ -230,7 +230,7 @@ class AdminCourierService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Entregador inativo não recebe pedido.",
             )
-        branch = self._get_branch(scope, courier.branch_id)
+        branch = self.branch_scope.get(scope=scope, branch_id=courier.branch_id)
         now = utcnow()
 
         items = []
@@ -387,24 +387,6 @@ class AdminCourierService:
         if order is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido não encontrado")
         return order
-
-    def _get_branch(self, scope: AdminScope, branch_id: uuid.UUID) -> Branch:
-        """Filial dentro do escopo do token.
-
-        Duas conferencias, e as duas sao necessarias (o padrao de
-        `AdminSettingsService._get_branch`): `ensure_branch_allowed` barra a
-        filial que existe mas nao e a deste lojista; o repositorio barra a
-        filial de outro restaurante. Mesmo 404 para as duas.
-        """
-        scope.ensure_branch_allowed(branch_id)
-        branch = self.branch_repository.get_active_by_id_and_restaurant(
-            branch_id, scope.restaurant_id
-        )
-        if branch is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Filial não encontrada"
-            )
-        return branch
 
     def _get_courier(self, scope: AdminScope, courier_id: uuid.UUID) -> Courier:
         """Entregador dentro do escopo: o repositorio confere o restaurante,

@@ -118,7 +118,7 @@ class _Base(unittest.TestCase):
         )
         self.db = FakeDb()
         self.service = AdminCourierService(self.db)
-        self.service.branch_repository = FakeBranchRepository(
+        self.service.branch_scope.branch_repository = FakeBranchRepository(
             [self.centro, self.aldeota, self.foreign_branch]
         )
         self.repository = FakeCourierRepository([self.ze, self.tonho, self.alheio])

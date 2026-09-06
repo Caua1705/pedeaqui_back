@@ -293,6 +293,7 @@ def build_service(
     service = AdminSettingsService(FakeDb())
     service.repository = settings_repository or FakeSettingsRepository()
     service.branch_repository = branch_repository or FakeBranchRepository()
+    service.branch_scope.branch_repository = service.branch_repository
     service.restaurant_repository = restaurant_repository or FakeRestaurantRepository(
         make_restaurant()
     )

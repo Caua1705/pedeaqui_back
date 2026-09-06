@@ -104,7 +104,7 @@ class TestARotaDaFilial(unittest.TestCase):
         self.foreign_branch = fabricas.filial(restaurant_id=uuid.uuid4())
         self.db = FakeDb()
         self.service = AdminCourierService(self.db)
-        self.service.branch_repository = FakeBranchRepository(
+        self.service.branch_scope.branch_repository = FakeBranchRepository(
             [self.branch, self.other_branch, self.foreign_branch]
         )
 

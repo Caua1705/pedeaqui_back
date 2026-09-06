@@ -551,6 +551,72 @@ class TestConectar:
         assert linha.access_token_encrypted != "EAAG-token-do-lojista"
         assert "EAAG" not in resposta.text
 
+    def test_conectar_numa_filial_DESATIVADA_responde_404(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """MUDOU em 06/09/2026, e a mudança é o item §3.1 da auditoria.
+
+        Esta rota era a única das seis que conferia a filial por
+        `get_by_id_and_restaurant` — a leitura que devolve a filial ATIVA OU
+        NÃO. Conectar um canal a uma loja desativada passava; agora responde
+        404, como em todo o resto do painel.
+
+        O motivo não é gosto: está escrito no docstring daquela leitura, que
+        existe para a reimpressão de comanda e diz com todas as letras que
+        "não serve para configurar nem para vender". Conectar um canal é
+        configurar.
+        """
+        restaurante, centro, _ = rede
+        centro.is_active = False
+        db.flush()
+        dono = criar_admin(db, restaurante)
+
+        resposta = cliente_http.post(
+            "/admin/whatsapp/channels",
+            json=self._corpo(centro),
+            headers=auth(db, dono),
+        )
+
+        assert resposta.status_code == 404
+
+    def test_a_contraprova_a_MESMA_filial_ativa_conecta(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """Sem ela, o teste acima passaria com um corpo inválido por outro
+        motivo — o procedimento da armadilha 52."""
+        restaurante, centro, _ = rede
+        dono = criar_admin(db, restaurante)
+
+        resposta = cliente_http.post(
+            "/admin/whatsapp/channels",
+            json=self._corpo(centro),
+            headers=auth(db, dono),
+        )
+
+        assert resposta.status_code == 200
+
+    def test_desconectar_ainda_alcanca_a_loja_que_fechou(
+        self, db: Session, cliente_http, rede
+    ) -> None:
+        """A outra metade da decisão, e a que garante que ela não prende nada.
+
+        A leitura tolerante saiu do caminho de CONECTAR e não existia no de
+        desconectar: `_find_in_scope` acha o canal pelo id e confere o
+        restaurante na linha dele, sem passar por filial. Uma loja desativada
+        com canal ligado continua podendo ser desligada pelo painel.
+        """
+        restaurante, centro, _ = rede
+        linha = canal(db, restaurante, centro)
+        centro.is_active = False
+        db.flush()
+        dono = criar_admin(db, restaurante)
+
+        resposta = cliente_http.delete(
+            f"/admin/whatsapp/channels/{linha.id}", headers=auth(db, dono)
+        )
+
+        assert resposta.status_code == 200
+
     def test_o_gerente_nao_conecta(self, db: Session, cliente_http, rede) -> None:
         restaurante, centro, _ = rede
         gerente = criar_admin(db, restaurante, role="manager")

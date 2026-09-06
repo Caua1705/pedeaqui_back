@@ -82,6 +82,7 @@ from src.schemas.admin_printing_schema import (
 from src.schemas.order_schema import OrderDetailResponse, OrderItemResponse
 from src.services.admin_order_service import AdminOrderService
 from src.services.branch_operation import resolve_receipt_footer
+from src.services.branch_scope import BranchScope
 from src.services.order_state_machine import PAYMENT_STATUSES_THAT_RELEASE_ORDER
 from src.services.unique_conflict import conflito, traduzir
 from src.services.print_layout import (
@@ -116,6 +117,7 @@ class AdminPrintingService:
         self.db = db
         self.repository = PrintingSectorRepository(db)
         self.branch_repository = BranchRepository(db)
+        self.branch_scope = BranchScope(db)
         self.menu_repository = AdminMenuRepository(db)
         # So para ler o padrao do restaurante na heranca do rodape. A
         # escrita dele e de `AdminSettingsService`, e continua la.
@@ -136,7 +138,7 @@ class AdminPrintingService:
         Inclui os desativados de proposito, igual a listagem de categorias:
         quem desligou precisa continuar vendo para religar.
         """
-        self._get_branch(scope, branch_id)
+        self.branch_scope.get(scope=scope, branch_id=branch_id)
         sectors = self.repository.list_by_branch(branch_id)
         return [PrintingSectorResponse.model_validate(sector) for sector in sectors]
 
@@ -146,7 +148,7 @@ class AdminPrintingService:
         branch_id: uuid.UUID,
         payload: PrintingSectorCreate,
     ) -> PrintingSectorResponse:
-        self._get_branch(scope, branch_id)
+        self.branch_scope.get(scope=scope, branch_id=branch_id)
         self._ensure_name_is_free(payload.name, branch_id)
 
         sector = PrintingSector(
@@ -253,7 +255,7 @@ class AdminPrintingService:
         scope: AdminScope,
         branch_id: uuid.UUID,
     ) -> BranchPrintSettingsResponse:
-        return self._print_settings_response(self._get_branch(scope, branch_id))
+        return self._print_settings_response(self.branch_scope.get(scope=scope, branch_id=branch_id))
 
     def update_print_settings(
         self,
@@ -270,7 +272,7 @@ class AdminPrintingService:
         contra o outro — e a filial perderia o unico jeito de recusar a
         campanha da rede.
         """
-        branch = self._get_branch(scope, branch_id)
+        branch = self.branch_scope.get(scope=scope, branch_id=branch_id)
         changes = payload.model_dump(exclude_unset=True)
 
         for field, value in changes.items():
@@ -581,17 +583,6 @@ class AdminPrintingService:
             )
         scope.ensure_branch_allowed(sector.branch_id)
         return sector
-
-    def _get_branch(self, scope: AdminScope, branch_id: uuid.UUID):
-        scope.ensure_branch_allowed(branch_id)
-        branch = self.branch_repository.get_active_by_id_and_restaurant(
-            branch_id, scope.restaurant_id
-        )
-        if branch is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Filial não encontrada"
-            )
-        return branch
 
     def _get_product(self, scope: AdminScope, product_id: uuid.UUID):
         """Produto dentro do escopo do token, restaurante E filial.

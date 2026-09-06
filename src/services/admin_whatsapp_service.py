@@ -48,6 +48,7 @@ from src.schemas.admin_whatsapp_schema import (
     WhatsAppBranchSource,
     WhatsAppChannelStatus,
 )
+from src.services.branch_scope import BranchScope
 from src.utils.crypto import encrypt_whatsapp_token
 
 
@@ -133,6 +134,7 @@ class AdminWhatsAppService:
         self.db = db
         self.channel_repository = WhatsAppChannelRepository(db)
         self.branch_repository = BranchRepository(db)
+        self.branch_scope = BranchScope(db)
 
     # --- Ler ------------------------------------------------------------------
 
@@ -259,6 +261,10 @@ class AdminWhatsAppService:
     ) -> None:
         """Recusa filial de outro restaurante, e filial fora do escopo.
 
+        As duas conferencias moram em `BranchScope.get`, uma vez para a
+        plataforma inteira. **O que sobrou aqui e a queda do restaurante**, que
+        e desta rota e nao das outras cinco.
+
         **Nao ha guarda propria para `branch_id` nulo (a queda do
         restaurante), e a ausencia e deliberada.** Conectar e desconectar sao
         `SOMENTE_DONO`, e `build_admin_scope` deixa o dono SEM filial
@@ -270,18 +276,24 @@ class AdminWhatsAppService:
         O que fica valendo se um dia estas rotas abrirem para `GERENCIA` e a
         linha abaixo: `ensure_branch_allowed` ja recusa filial fora do escopo,
         e a queda passaria a precisar da decisao que hoje nao existe.
+
+        **MUDOU DE COMPORTAMENTO em 06/09/2026 (auditoria §3.1).** Esta era a
+        sexta copia da conferencia, e a unica que lia por
+        `get_by_id_and_restaurant` — a versao que devolve a filial ATIVA OU
+        NAO. Conectar um canal a uma filial desativada passava; agora responde
+        404, como em todo o resto do painel. O motivo esta no docstring
+        daquela leitura: ela existe para a reimpressao de comanda, e diz com
+        todas as letras que "nao serve para configurar nem para vender".
+        Conectar um canal e configurar.
+
+        Desconectar continua alcancando a loja fechada: aquele caminho e o
+        `_find_in_scope`, que acha o canal pelo id e confere o restaurante na
+        linha dele, sem passar por filial.
         """
         if branch_id is None:
             return
 
-        scope.ensure_branch_allowed(branch_id)
-        filial = self.branch_repository.get_by_id_and_restaurant(
-            branch_id, scope.restaurant_id
-        )
-        if filial is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Filial não encontrada"
-            )
+        self.branch_scope.get(scope=scope, branch_id=branch_id)
 
     def _reconectar(
         self,

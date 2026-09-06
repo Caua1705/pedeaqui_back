@@ -45,7 +45,6 @@ from src.models.category_model import Category
 from src.models.product_model import Product
 from src.models.product_option_model import ProductOption, ProductOptionGroup
 from src.repositories.admin_menu_repository import AdminMenuRepository
-from src.repositories.branch_repository import BranchRepository
 from src.schemas.admin_menu_schema import (
     AdminCategoryCreate,
     AdminCategoryResponse,
@@ -68,6 +67,7 @@ from src.schemas.admin_menu_schema import (
     ProductReorderRequest,
 )
 from src.repositories.restaurant_repository import RestaurantRepository
+from src.services.branch_scope import BranchScope
 from src.services.menu_rules import blocking_required_group
 from src.services.unique_conflict import conflito, traduzir
 from src.utils.images import IMAGE_CONTENT_TYPES, detect_image_extension
@@ -89,7 +89,7 @@ class AdminMenuService:
     def __init__(self, db: Session, storage_client: SupabaseStorageClient | None = None):
         self.db = db
         self.repository = AdminMenuRepository(db)
-        self.branch_repository = BranchRepository(db)
+        self.branch_scope = BranchScope(db)
         self.restaurant_repository = RestaurantRepository(db)
         self.storage_client = storage_client or SupabaseStorageClient(
             base_url=settings.SUPABASE_URL,
@@ -121,7 +121,7 @@ class AdminMenuService:
         scope: AdminScope,
         payload: AdminCategoryCreate,
     ) -> AdminCategoryResponse:
-        branch = self._get_branch(payload.branch_id, scope)
+        branch = self.branch_scope.get(scope=scope, branch_id=payload.branch_id)
         slug = self._build_slug(payload.name)
         self._ensure_category_slug_is_free(slug, branch.id)
 
@@ -166,7 +166,7 @@ class AdminMenuService:
         cardapio de uma loja, porque e ele que ordena a resposta de
         `/menu?branch_id=...`.
         """
-        branch = self._get_branch(payload.branch_id, scope)
+        branch = self.branch_scope.get(scope=scope, branch_id=payload.branch_id)
         existing = self.repository.list_categories(scope.restaurant_id, branch_id=branch.id)
         existing_ids = {category.id for category in existing}
         sent_ids = set(payload.category_ids)
@@ -546,24 +546,6 @@ class AdminMenuService:
             setattr(option, field, value)
         self._commit()
         return self._option_response(option)
-
-    def _get_branch(self, branch_id: uuid.UUID, scope: AdminScope):
-        """A filial do corpo, conferida contra o token. 404 nos dois casos.
-
-        Duas checagens que parecem uma: `ensure_branch_allowed` recusa a
-        filial que existe mas nao e deste lojista, e o repositorio recusa a
-        que nao e deste restaurante. As duas respondem 404 — um 403
-        confirmaria que aquela filial existe.
-        """
-        scope.ensure_branch_allowed(branch_id)
-        branch = self.branch_repository.get_active_by_id_and_restaurant(
-            branch_id, scope.restaurant_id
-        )
-        if branch is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Filial não encontrada"
-            )
-        return branch
 
     def _get_category(self, category_id: uuid.UUID, scope: AdminScope) -> Category:
         category = self.repository.get_category(category_id, scope.restaurant_id)

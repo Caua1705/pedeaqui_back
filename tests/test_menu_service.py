@@ -52,12 +52,17 @@ class FakeMenuRepository:
     def get_settings(self, restaurant_id):
         return self.settings
 
-    def get_active_branches(self, restaurant_id):
-        return self.branches
+    def get_banners_by_types(self, restaurant_id, banner_types):
+        """Uma consulta so, e ela devolve os tipos JUNTOS.
 
-    def get_banners_by_type(self, restaurant_id, banner_type):
-        self.banner_types_asked.append(banner_type)
-        return self.banners.get(banner_type, [])
+        A ordem imita a do SQL (`banner_type`, depois `sort_order`), porque e
+        dela que o service depende para separar as duas faixas em memoria.
+        """
+        self.banner_types_asked.append(tuple(banner_types))
+        juntos = []
+        for tipo in sorted(banner_types):
+            juntos.extend(self.banners.get(tipo, []))
+        return juntos
 
     def get_active_coupons(self, restaurant_id):
         return self.coupons
@@ -98,13 +103,27 @@ def make_branch(is_open=True, **sobrescritas):
 
 
 class FakeBranchRepository:
+    """Dublê de COLABORADOR, e ele imita o contrato do repositorio de verdade.
+
+    `get_default_branch` E `list_active_by_restaurant()[0]` no repositorio real
+    — nao duas respostas independentes —, e desde 06/09/2026 o `/menu` depende
+    disso: ele le a lista UMA vez e tira a filial padrao dela (auditoria 5.2).
+    Um dublê que respondesse as duas coisas de forma independente deixaria o
+    teste concordar com um service que a produção contradiz.
+
+    `default_branch` continua aceito sozinho, sem `branches`, porque a maioria
+    dos testes daqui so precisa de "uma filial qualquer" — ele entra na lista.
+    """
+
     def __init__(self, default_branch=None, branches=(), delivery_time_bands=()):
-        self.default_branch = default_branch
-        self.branches = list(branches)
+        self.branches = list(branches) or ([default_branch] if default_branch else [])
         self.delivery_time_bands = list(delivery_time_bands)
 
+    def list_active_by_restaurant(self, restaurant_id):
+        return list(self.branches)
+
     def get_default_branch(self, restaurant_id):
-        return self.default_branch
+        return self.branches[0] if self.branches else None
 
     def get_active_by_id_and_restaurant(self, branch_id, restaurant_id):
         return next((b for b in self.branches if b.id == branch_id), None)
@@ -574,16 +593,24 @@ class TestGetProductDetail:
 
 
 class TestGetRestaurantMenu:
-    def test_it_asks_for_hero_and_highlight_banners_separately(self):
-        """Duas leituras de banner com o mesmo repositorio, distinguidas pelo
-        tipo. Se alguem trocar a ordem das duas chamadas, o cardapio troca as
-        faixas de lugar sem erro nenhum."""
+    def test_os_banners_saem_de_UMA_consulta_com_os_dois_tipos(self):
+        """MUDOU em 06/09/2026 (auditoria 5.2): eram duas leituras.
+
+        Este teste afirmava `banner_types_asked == ["hero", "highlight"]` — as
+        duas chamadas, na ordem. Agora e uma chamada com os dois tipos, e o
+        que ele trava e o que importava antes: que os dois tipos sao PEDIDOS.
+        Pedir so um deixaria uma das faixas do cardapio vazia, com 200 e sem
+        erro nenhum.
+
+        A separacao por tipo passou a ser em memoria, e quem a prova e o
+        teste logo abaixo.
+        """
         menu_repository = FakeMenuRepository()
         service = make_service(menu_repository=menu_repository)
 
         service.get_restaurant_menu("pizzaria-do-ze")
 
-        assert menu_repository.banner_types_asked == ["hero", "highlight"]
+        assert menu_repository.banner_types_asked == [("hero", "highlight")]
 
     def test_each_banner_type_lands_in_its_own_field(self):
         hero = fabricas.banner(restaurant_id=RESTAURANT_ID)

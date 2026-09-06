@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from src.models.product_model import Product
 from src.models.product_option_model import ProductOption, ProductOptionGroup
 from src.models.branch_model import Branch
+from src.models.restaurant_banner_model import BANNER_HERO, BANNER_HIGHLIGHT
 from src.repositories.branch_repository import BranchRepository
 from src.repositories.cashback_rule_repository import CashbackRuleRepository
 from src.repositories.menu_repository import MenuRepository
@@ -66,8 +67,21 @@ class MenuService:
         """
         restaurant = self.restaurant_service.get_active_restaurant(restaurant_slug)
         settings = self.menu_repository.get_settings(restaurant.id)
-        branch = self._resolve_menu_branch(restaurant.id, branch_id)
+        # UMA leitura de `branches`, e ela serve as duas coisas: a lista que a
+        # resposta publica e a filial escolhida, que esta dentro dela. Ver
+        # `_branch_from_list` para por que a lista canonica e a do
+        # `branch_repository` e nao a que ficava aqui.
+        branches = self.branch_repository.list_active_by_restaurant(restaurant.id)
+        branch = self._branch_from_list(branches, branch_id)
+        if branch_id is not None and branch is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Filial não encontrada para este restaurante",
+            )
         operation = resolve_branch_operation(branch, settings) if branch else None
+        banners = self.menu_repository.get_banners_by_types(
+            restaurant.id, (BANNER_HERO, BANNER_HIGHLIGHT)
+        )
 
         return RestaurantMenuResponse(
             restaurant=self.restaurant_service.to_public_response(restaurant),
@@ -82,11 +96,16 @@ class MenuService:
                 if operation
                 else None
             ),
-            branches=[BranchResponse.model_validate(branch) for branch in self.menu_repository.get_active_branches(restaurant.id)],
-            banners=[self._banner_response(banner) for banner in self.menu_repository.get_banners_by_type(restaurant.id, "hero")],
+            branches=[BranchResponse.model_validate(filial) for filial in branches],
+            banners=[
+                self._banner_response(banner)
+                for banner in banners
+                if banner.banner_type == BANNER_HERO
+            ],
             highlight_banners=[
                 self._banner_response(banner)
-                for banner in self.menu_repository.get_banners_by_type(restaurant.id, "highlight")
+                for banner in banners
+                if banner.banner_type == BANNER_HIGHLIGHT
             ],
             coupons=self._coupon_responses(restaurant.id),
             categories=self._category_responses(branch),
@@ -150,6 +169,38 @@ class MenuService:
 
         return self.product_response(product)
 
+    @staticmethod
+    def _branch_from_list(
+        branches: list[Branch],
+        branch_id: UUID | None,
+    ) -> Branch | None:
+        """A mesma escolha de `_resolve_menu_branch`, sobre a lista JA LIDA.
+
+        Existe para o `/menu` nao ler `branches` duas vezes (auditoria §5.2):
+        ele ja precisa da lista inteira para publicar, e a filial escolhida
+        esta dentro dela.
+
+        **A LISTA TEM QUE SER A CANONICA**, e essa e a unica coisa delicada
+        aqui. `get_default_branch` e `list_active_by_restaurant()[0]`, e
+        aquela ordenacao e `is_main DESC NULLS LAST, name ASC`. O `/menu`
+        publicava a lista por `menu_repository.get_active_branches`, que
+        ordena `is_main DESC` **sem** `NULLS LAST` — e no Postgres `DESC`
+        e `NULLS FIRST`. As duas so concordam enquanto nenhuma filial tiver
+        `is_main` nulo; com uma nula, o primeiro item da lista publicada
+        deixava de ser a filial padrao que a propria resposta usava.
+
+        Ler as duas da MESMA consulta fecha as duas coisas de uma vez: some a
+        consulta repetida e some a divergencia de ordem. `is_main` e
+        nullable (`Mapped[bool | None]`), entao o caso nao e hipotetico —
+        linha escrita por SQL manual nasce com ele nulo.
+
+        404 continua sendo 404: filial que nao esta na lista ou nao e deste
+        restaurante, ou nao esta ativa, e as tres respondem igual.
+        """
+        if branch_id is None:
+            return branches[0] if branches else None
+        return next((filial for filial in branches if filial.id == branch_id), None)
+
     def _resolve_menu_branch(
         self,
         restaurant_id: UUID,
@@ -165,6 +216,11 @@ class MenuService:
         `None` (e nao 404) quando o restaurante nao tem filial ativa: a
         vitrine continua sendo respondida, so sem cardapio e sem o bloco de
         operacao — nao ha loja para eles descreverem.
+
+        O `/menu` NAO passa por aqui: ele ja tem a lista de filiais na mao e
+        usa `_branch_from_list`. Quem chega aqui sao as rotas de UM produto e
+        de UMA categoria, que nao publicam lista nenhuma e para as quais uma
+        consulta so e o caminho mais curto.
         """
         if branch_id is None:
             return self.branch_repository.get_default_branch(restaurant_id)

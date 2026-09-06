@@ -104,6 +104,7 @@ ESPELHOS: dict[str, str | tuple[None, str]] = {
     "ck_restaurant_coupons_visibility": "src/models/coupon_model.py:COUPON_VISIBILITIES",
     "ck_restaurant_coupons_target_segment": "src/schemas/admin_customer_schema.py:CustomerSegment",
     "ck_ai_usage_events_surface": "src/models/ai_usage_event_model.py:AI_SURFACES",
+    "restaurant_banners_banner_type_check": "src/models/restaurant_banner_model.py:BANNER_TYPES",
     "coupon_templates_discount_type_check": "src/schemas/coupon_schema.py:DiscountType",
     "restaurant_coupons_discount_type_valid": "src/schemas/coupon_schema.py:DiscountType",
     "ai_feedback_feedback_check": "src/schemas/ai_feedback_schema.py:AIFeedbackRequest.feedback",
@@ -151,11 +152,6 @@ ESPELHOS: dict[str, str | tuple[None, str]] = {
     "ck_customer_payment_profiles_environment": (
         SEM_ESPELHO,
         "Par do de cima, e o mesmo caso",
-    ),
-    "restaurant_banners_banner_type_check": (
-        SEM_ESPELHO,
-        "`hero`/`highlight` sao literais nas duas chamadas de "
-        "`get_banners_by_type`, em `menu_service.py`",
     ),
     "restaurant_coupons_discount_value_valid": (
         SEM_ESPELHO,

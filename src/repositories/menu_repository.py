@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from src.models.branch_model import Branch
 from src.models.category_model import Category
 from src.services.coupon_window import filtro_de_janela
 from src.models.coupon_model import (
@@ -26,14 +25,6 @@ class MenuRepository:
     def get_settings(self, restaurant_id: uuid.UUID) -> RestaurantSetting | None:
         stmt = select(RestaurantSetting).where(RestaurantSetting.restaurant_id == restaurant_id)
         return self.db.scalar(stmt)
-
-    def get_active_branches(self, restaurant_id: uuid.UUID) -> list[Branch]:
-        stmt = (
-            select(Branch)
-            .where(Branch.restaurant_id == restaurant_id, Branch.is_active.is_(True))
-            .order_by(Branch.is_main.desc(), Branch.name.asc())
-        )
-        return list(self.db.scalars(stmt).all())
 
     def get_active_categories(self, branch_id: uuid.UUID) -> list[Category]:
         """As categorias DAQUELA loja.
@@ -72,15 +63,29 @@ class MenuRepository:
         )
         return list(self.db.scalars(stmt).all())
 
-    def get_banners_by_type(self, restaurant_id: uuid.UUID, banner_type: str) -> list[RestaurantBanner]:
+    def get_banners_by_types(
+        self, restaurant_id: uuid.UUID, banner_types: tuple[str, ...]
+    ) -> list[RestaurantBanner]:
+        """Os banners ATIVOS de varios tipos, numa consulta so.
+
+        Era `get_banners_by_type`, no singular, e o `/menu` a chamava duas
+        vezes por abertura de cardapio — uma para `hero`, outra para
+        `highlight` (auditoria 5.2). E a rota publica mais chamada do sistema.
+
+        A ORDENACAO GANHOU `banner_type` NA FRENTE, e nao e cosmetica: quem
+        chama separa a lista por tipo em memoria, e sem o primeiro criterio as
+        duas fatias sairiam intercaladas — cada uma ainda em ordem de
+        `sort_order`, mas o `ORDER BY` deixaria de descrever o que a resposta
+        publica. Com ele, a fatia de cada tipo sai exatamente como saia antes.
+        """
         stmt = (
             select(RestaurantBanner)
             .where(
                 RestaurantBanner.restaurant_id == restaurant_id,
-                RestaurantBanner.banner_type == banner_type,
+                RestaurantBanner.banner_type.in_(banner_types),
                 RestaurantBanner.is_active.is_(True),
             )
-            .order_by(RestaurantBanner.sort_order.asc())
+            .order_by(RestaurantBanner.banner_type.asc(), RestaurantBanner.sort_order.asc())
         )
         return list(self.db.scalars(stmt).all())
 

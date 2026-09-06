@@ -26,24 +26,22 @@ class Branch(Base):
     city: Mapped[str] = mapped_column(Text, nullable=False)
     state: Mapped[str] = mapped_column(Text, nullable=False)
     zipcode: Mapped[str | None] = mapped_column(Text)
-    # --- Endereco: o conjunto MORTO. Nao escreva nestas. ---
+    # --- Endereco: o que SOBROU do conjunto morto ---
     #
-    # Resto do schema pre-Alembic (estao no `schema_baseline.sql`, e nenhuma
-    # revisao as toca). NADA no codigo escreve nelas, e ate a correcao do
-    # `_build_address` elas eram LIDAS PRIMEIRO — venciam o conjunto vivo. O
-    # efeito numa filial com elas preenchidas: o lojista corrigia o endereco
-    # no painel, o painel exibia o valor novo (ele le `address`) e o app do
-    # cliente continuava mostrando o antigo, sem erro e sem log.
+    # As outras cinco (`address_street`, `address_neighborhood`,
+    # `address_city`, `address_state`, `address_zipcode`) sairam do banco na
+    # revisao `20260905_0058`. Eram resto do schema pre-Alembic, ninguem
+    # escrevia nelas, e ate a correcao do `_build_address` elas eram LIDAS
+    # PRIMEIRO — venciam o conjunto vivo. O efeito numa filial com elas
+    # preenchidas: o lojista corrigia o endereco no painel, o painel exibia o
+    # valor novo (ele le `address`) e o app do cliente continuava mostrando o
+    # antigo, sem erro e sem log.
     #
-    # Hoje sao orfas e podem sair numa revisao futura — MENOS
-    # `address_number`, que continua sendo lida por nao ter par vivo: nao
-    # existe `branches.number` nem campo de numero no painel.
-    address_street: Mapped[str | None] = mapped_column(Text)
+    # `address_number` FICA, e continua sendo lida: ela nao tem par vivo. Nao
+    # existe `branches.number` nem campo de numero no painel, entao ela e a
+    # unica fonte do numero da casa. Tirar a sexta exige antes decidir ONDE o
+    # numero passa a ser escrito — e isso e mudanca de painel, nao de schema.
     address_number: Mapped[str | None] = mapped_column(Text)
-    address_neighborhood: Mapped[str | None] = mapped_column(Text)
-    address_city: Mapped[str | None] = mapped_column(Text)
-    address_state: Mapped[str | None] = mapped_column(Text)
-    address_zipcode: Mapped[str | None] = mapped_column(Text)
     phone: Mapped[str | None] = mapped_column(Text)
     whatsapp: Mapped[str | None] = mapped_column(Text)
     latitude: Mapped[Decimal | None] = mapped_column(Numeric)

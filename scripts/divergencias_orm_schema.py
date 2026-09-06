@@ -252,15 +252,19 @@ def main() -> int:
 def avisar_sobre_o_limite(total: int, limite: int) -> None:
     """Compara o total com o esperado e escreve UM aviso. Nunca falha.
 
-    POR QUE AVISO E NAO FALHA. As 42 divergencias de hoje sao herdadas: o
+    POR QUE AVISO E NAO FALHA. As divergencias que restam sao herdadas: o
     schema e mais velho que o ORM e nenhuma delas foi introduzida por um
     commit. Um portao vermelho contra divida herdada e um portao que se
     aprende a ignorar — e o dia em que ele acusar uma divergencia NOVA sera o
     dia em que alguem o desligar para conseguir entregar.
 
     O aviso resolve a coisa especifica que faltava: o numero nao cresce mais
-    calado. Passou de 42, aparece na aba de Summary do Actions e no diff da PR,
-    e quem escreveu a coluna ve na hora.
+    calado. Passou do `--limite` do `ci.yml`, aparece na aba de Summary do
+    Actions e no diff da PR, e quem escreveu a coluna ve na hora.
+
+    O numero NAO mora aqui de proposito — mora no YAML, onde muda-lo vira um
+    diff revisado. Repeti-lo neste docstring criaria a segunda copia que
+    envelhece sozinha, que foi exatamente o que aconteceu com o `42`.
 
     `::warning::` e `::notice::` sao as anotacoes do GitHub Actions. Fora do
     Actions os prefixos sao ruido inofensivo, e o texto depois deles continua

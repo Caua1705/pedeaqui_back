@@ -1,11 +1,22 @@
 """A UNICA escrita de status de pedido do sistema.
 
-Tres portas chegam aqui, e e de proposito que seja uma escrita so:
+CINCO portas chegam aqui, e e de proposito que seja uma escrita so:
 
   - `PATCH /admin/orders/{id}/status` — o lojista movendo o pedido;
   - `PATCH /admin/orders/{id}/cancel` — o lojista cancelando, com motivo;
   - `POST  /restaurants/{slug}/orders/track/{token}/cancel` — o CLIENTE
-    desistindo antes do preparo.
+    desistindo antes do preparo;
+  - `POST  /courier/{link}/orders/out-for-delivery` e `.../{id}/delivered` — o
+    ENTREGADOR saindo e entregando;
+  - `scripts/cancela_pedidos_sem_pagamento.py` — a varredura cancelando o
+    pedido cuja cobranca falhou ha mais de 30 minutos (armadilha 48). Ela nao
+    e rota, e por isso e a mais facil de esquecer ao contar as portas.
+
+**A linha e travada aqui dentro** (`lock_for_status_change`), e nao em cada
+porta. Cinco copias de um `FOR UPDATE` seriam quatro chances de faltar um — e
+a que faltasse seria justamente a que roda efeito colateral de dinheiro sem
+saber que outra transacao ja rodou o dele. O motivo inteiro esta no docstring
+daquele metodo.
 
 A regra que este arquivo existe para proteger ja estava escrita quando so
 havia as duas primeiras: *"cancelar nao e uma segunda escrita de status: ele
@@ -33,6 +44,7 @@ sempre igual.
 import logging
 from uuid import UUID
 
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.models.order_status_history_model import OrderStatusHistory
@@ -110,6 +122,32 @@ class OrderStatusChangeService:
         )
         if replayed is not None:
             return IdempotencyService.parse_stored_response(OrderDetailResponse, replayed)
+
+        # TRAVA a linha e recarrega, e as duas coisas na mesma chamada.
+        #
+        # O `order` que chegou foi lido pela PORTA, e entre aquela leitura e
+        # esta escrita cabe outra transacao inteira. Sem o lock, duas portas
+        # que leiam `ready` ao mesmo tempo passam as duas pela validacao
+        # abaixo e rodam os DOIS conjuntos de efeito colateral — cashback
+        # creditado e cupom estornado no mesmo pedido. O motivo completo esta
+        # no docstring de `lock_for_status_change`.
+        #
+        # Fica DEPOIS do replay pelo mesmo motivo que a validacao: um reenvio
+        # legitimo devolve a resposta gravada sem precisar travar nada.
+        #
+        # O que ele NAO cobre, e e desenho: a regra da PORTA
+        # (`ensure_customer_can_cancel`, `ensure_courier_can_set`, a
+        # confirmacao de pedido em preparo) roda antes daqui, sobre a leitura
+        # de la. Ela responde "esta pessoa pode?", e a resposta nao muda com o
+        # status; quem decide se a ESCRITA acontece e a validacao abaixo, e
+        # essa agora le a linha travada.
+        order = self.order_repository.lock_for_status_change(order_id, restaurant_id)
+        if order is None:
+            # So chega aqui se o pedido sumiu entre a porta e esta linha. 404
+            # e o mesmo codigo que as portas dao para "nao e seu".
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Pedido não encontrado"
+            )
 
         # A validacao da transicao vem DEPOIS do replay de proposito. Um
         # reenvio da mesma chave chega com o pedido ja no status de destino;

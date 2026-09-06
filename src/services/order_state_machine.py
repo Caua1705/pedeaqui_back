@@ -114,6 +114,40 @@ PAYMENT_STATUS_TRANSITIONS: dict[str, tuple[str, ...]] = {
     "refunded": (),
 }
 
+# ---------------------------------------------------------------------------
+# O NASCIMENTO, que nao e transicao — e por isso nao esta nos grafos acima
+# ---------------------------------------------------------------------------
+#
+# `create_order` grava o primeiro estado direto, e isso esta certo: nao ha
+# aresta chegando em `pending`, e inventar uma so para o INSERT passar por
+# `ensure_order_transition_allowed` seria abrir no grafo um caminho que
+# nenhuma porta usa.
+#
+# O que faltava era garantir que o valor gravado seja um estado que o grafo
+# CONHECE. Os dois nomes abaixo existem para isso, e sao lidos por
+# `OrderService.create_order` — nao sao uma segunda copia dos literais:
+# `tests/test_particao_dos_estados_iniciais.py` cobra que cada um esteja no
+# grafo correspondente, e o teste so tem dentes porque o service le daqui.
+
+#: O status em que todo pedido nasce.
+INITIAL_ORDER_STATUS = "pending"
+
+#: O `payment_status` de nascimento, por fluxo de pagamento. A chave e o que
+#: `OrderService._resolve_payment_flow` devolve; o valor e o que vai para a
+#: coluna.
+#:
+#: **Dicionario e nao `if/else`, e a diferenca e o dia em que aparecer um
+#: terceiro fluxo.** A forma antiga era
+#: `"pending" if payment_flow == "online" else "on_delivery"`, e ela decide
+#: por EXCLUSAO (armadilha 47): um fluxo novo cairia calado em
+#: `on_delivery` — o pedido nasceria como PAGO NA ENTREGA e iria direto para a
+#: cozinha sem ninguem ter cobrado. Aqui ele levanta `KeyError` no primeiro
+#: pedido, que e barulhento, imediato e no ambiente de quem esta mexendo.
+INITIAL_PAYMENT_STATUS_BY_FLOW: dict[str, str] = {
+    "online": "pending",
+    "delivery": "on_delivery",
+}
+
 # Prefixo usado ao registrar mudanca de PAGAMENTO em order_status_history.
 # A tabela guarda as duas maquinas, e sem o prefixo "paid" (pagamento) se
 # confundiria com um status operacional.

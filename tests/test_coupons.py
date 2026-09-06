@@ -714,6 +714,11 @@ class OrderCouponIntegrationTests(unittest.TestCase):
             def get_order_detail(self, order_id, restaurant):
                 return order
 
+            def lock_for_status_change(self, order_id, restaurant):
+                # Sem segunda transação aqui: o dublê do lock devolve o
+                # mesmo pedido. O lock de verdade tem teste próprio, `db`.
+                return order
+
             def update_status(self, current, new_status):
                 current.status = new_status
 

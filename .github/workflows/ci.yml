@@ -274,22 +274,6 @@ jobs:
       # limite, o `::warning::` aparece no Summary do Actions e na PR, com o
       # nome da coluna nova na saida logo acima.
       #
-      # O LIMITE DESCEU DE 41 PARA 22 EM 06/09/2026, e sao dois movimentos
-      # opostos no mesmo numero:
-      #
-      #   -21  as revisoes 20260905_0055 e 20260905_0056, aplicadas em
-      #        04/09/2026, alinharam o schema e o numero real caiu para 20 sem
-      #        ninguem baixar o limite. Limite folgado deixa a proxima
-      #        divergencia entrar de graca — e o proprio script pede para
-      #        travar o ganho;
-      #    +2  o assistente de voz saiu do CODIGO e o banco continua com
-      #        `ai_usage_events.voice_session_id` e
-      #        `restaurant_settings.voice_enabled`, agora sem mapeamento. E
-      #        deliberado e temporario: a revisao preparada 20260906_0060 as
-      #        derruba, e no dia em que ela for aplicada este numero volta a 20
-      #        (`tests/test_colunas_mapeadas_e_historico_db.py` cobra as duas
-      #        pelo nome, e falha quando elas sumirem).
-      #
       # O SCHEMA AQUI E O QUE O PASSO ANTERIOR DEIXOU. A fixture
       # `engine_de_teste` apaga e remonta o schema no SETUP e nao o derruba no
       # fim, entao depois de `pytest -m db` o banco esta em head. Nao ha
@@ -301,6 +285,24 @@ jobs:
       #
       # O limite mora aqui, no YAML, de proposito: mudar o numero esperado vira
       # um diff que alguem revisa.
+      #
+      # 41 -> 20 em 05/09/2026. As revisoes `20260905_0055` e `20260905_0056`
+      # (alinhamento ORM x schema, etapas 1 e 2) fecharam as 16 do lado da
+      # LEITURA e as 6 colunas que o ORM nao mapeava, e o limite ficou para
+      # tras — o CI vinha imprimindo o `::notice` de "baixe o limite" desde
+      # entao. As 20 que sobraram sao uma classe so: o banco diz NOT NULL e o
+      # ORM diz nullable, e so DUAS delas (`ai_product_embeddings.content` e
+      # `coupon_templates.image_path`) nao tem DEFAULT.
+      #
+      # 20 -> 22 em 06/09/2026, e este e o movimento CONTRARIO: o assistente de
+      # voz saiu do CODIGO e o banco continua com
+      # `ai_usage_events.voice_session_id` e `restaurant_settings.voice_enabled`,
+      # agora sem mapeamento no ORM. Sao as duas unicas da terceira classe, e
+      # sao deliberadas e temporarias — a revisao preparada `20260906_0060` as
+      # derruba, e no dia em que ela for aplicada este numero volta a 20.
+      # `tests/test_colunas_mapeadas_e_historico_db.py` cobra as duas PELO NOME
+      # e falha quando elas sumirem, entao nao ha como esse retorno passar
+      # despercebido.
       - name: Divergencias entre o ORM e o schema (aviso)
         if: always()
         continue-on-error: true

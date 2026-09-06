@@ -69,29 +69,49 @@ O compose **não expõe porta**: o Traefik roteia pela rede externa `n8n_default
 pelas labels em `docker-compose.yml`. O container roda como usuário sem
 privilégios (uid 10001) e com `/app` somente-leitura.
 
-São **cinco** serviços, e os três do meio são os fáceis de esquecer: ninguém
+São **seis** serviços, e os quatro do meio são os fáceis de esquecer: ninguém
 fala com eles, nenhum expõe porta, e nenhum aparece no `curl` acima.
 
 | Serviço | O que roda | Cadência |
 |---|---|---|
 | `pedeaqui-api` | a API, atrás do Traefik | — |
 | `redis` | rate limit e cache de estimativa de entrega | — |
-| `limpeza` | `cleanup_idempotency_keys.py` e `expire_cashback.py` | 24h |
-| `estorno` | `estorna_pedidos_cancelados.py` | 15 min |
+| `limpeza` | `cleanup_idempotency_keys.py` **e** `expire_cashback.py` | 24h |
+| `estorno` | `estorna_pedidos_cancelados.py` **e** `cancela_pedidos_sem_pagamento.py` | 15 min |
+| `whatsapp-reenvio` | `reenvia_avisos_de_whatsapp.py` | 2 min |
 | `reindex` | `reindex_worker.py`, o índice do Rapi | 1 min |
 
-As cadências são diferentes de propósito e não devem ser juntadas: na `limpeza`
-o atraso apaga uma linha vencida um dia depois, e no `estorno` o atraso é
-dinheiro de cliente parado na conta do restaurante.
+**Os três de cadência têm DOIS comandos encadeados por `&&`, ou um só**, e o
+encadeamento importa na hora de ler o log: se o primeiro script falhar, o
+segundo **não roda** e o container dorme o intervalo curto de nova tentativa
+(5 min na `limpeza` e no `estorno`, 30 s no `whatsapp-reenvio`). Um
+`expire_cashback.py` que nunca aparece no log pode ser um
+`cleanup_idempotency_keys.py` quebrado.
 
-Os três rodam com **`entrypoint: []`**, e isso não é detalhe: o
+O segundo comando do `estorno` é o da armadilha 48: ele cancela pedido que
+ficou sem pagamento por mais de 30 minutos. Sem ele, o pedido `pending` com
+`payment_status='failed'` cobra comissão, segura o cupom e o cashback do
+cliente e trava a exclusão de conta.
+
+As cadências são diferentes de propósito e não devem ser juntadas: na `limpeza`
+o atraso apaga uma linha vencida um dia depois; no `estorno` o atraso é
+dinheiro de cliente parado na conta do restaurante; e no `whatsapp-reenvio` é
+aviso de pedido que não chega — por isso ele é o mais rápido dos três.
+
+Os quatro rodam com **`entrypoint: []`**, e isso não é detalhe: o
 `docker-entrypoint.sh` roda `alembic upgrade head`, e só a API migra (§2). Sem
-o entrypoint vazio seriam quatro containers disputando a mesma migração a cada
+o entrypoint vazio seriam cinco containers disputando a mesma migração a cada
 deploy.
 
 Quando um deles morre, nada na API muda de aparência — o sintoma é indireto
-(saldo que não vence, dinheiro que não volta, Rapi respondendo com o cardápio de
-ontem). Os greps de cada um estão em §3.
+(saldo que não vence, dinheiro que não volta, aviso de pedido que não chega ao
+cliente, Rapi respondendo com o cardápio de ontem). Os greps de cada um estão
+em §3.
+
+**Container que não está nesta tabela é container que ninguém confere.** Foi o
+caso do `whatsapp-reenvio` entre 04/09 e 06/09/2026, e é o motivo de esta
+tabela existir: quem vem aqui às duas da manhã lê a lista, não o
+`docker-compose.yml`.
 
 ### Redis
 
